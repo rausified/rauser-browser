@@ -668,9 +668,9 @@ export BRAUSER_LOG=debug                           # optional; the default is in
 npm run logs -- --dir "$BRAUSER_LOG_DIR"
 ```
 
-- **Headless smoke.** The host wrapper starts the host and the service under `env -i` with a fixed list of names, so a `BRAUSER_LOG_DIR` in your shell does not reach them and the run writes no JSON log. Their warnings and errors still go to stderr: the service's to `service.log` in the run directory. *To keep JSON logs from a headless run, add `BRAUSER_LOG_DIR` (and `BRAUSER_LOG` if wanted) to the wrapper's `env -i` list in `scripts/smoke-macos.mjs`; not tried yet.*
-- **Guided and `--auto` smoke.** The normal build writes by default, and Chrome and the host inherit the runner's environment, with `HOME` set to the temporary home. Without `BRAUSER_LOG_DIR` the logs land in `<temporary home>/Library/Logs/Brauser/`, which the run removes; set `BRAUSER_LOG_DIR` before `npm run smoke:macos` to keep them. *Untested.*
-- **Rust integration tests.** `host/tests/service.rs` starts the binary with `env_clear()`, so its children write no JSON log either; to keep them, add `.env("BRAUSER_LOG_DIR", …)` to its `command()` while debugging. Unit tests never call `diag::init`, so they log nowhere unless a test installs its own subscriber.
+- **Headless smoke.** The host wrapper starts the host and the service under `env -i` with a fixed list of names that includes `BRAUSER_LOG_DIR=<run directory>/logs`, so every headless run keeps `host.jsonl` and `service.jsonl` beside its other artifacts, and the run ends by checking them (`checkDiagnostics`: every line is JSON, a forwarded `request_id` appears in both files, no line holds the fixture's page text). A `BRAUSER_LOG` in your shell does not reach them; add it to the wrapper's list for debug lines.
+- **Guided and `--auto` smoke.** The wrapper exports the same `BRAUSER_LOG_DIR=<run directory>/logs` for the host and the service it starts; Chrome's own extension log is in the profile and is not collected. *Untested in guided mode.*
+- **Rust integration tests.** `host/tests/service.rs` starts the binary with `env_clear()` and `BRAUSER_LOG_DIR` set to the test's temporary `logs` directory, so a failing test's logs are there while it runs. Unit tests never call `diag::init`; they capture logs with `diag::test_capture` (or a local subscriber where a test spans threads) and log nowhere otherwise.
 
 When diagnosing a failure:
 
@@ -937,13 +937,14 @@ dialog count; actual Chrome link opening still needs macOS verification.
   retains its original ID, snapshot and backoff. The failing-first worker
   regression covers both a false acknowledgement and an older-host error.
 
-- 2026-10-28: Diagnostics logs (DESIGN.md §15). A span's close line from
-  `tracing-subscriber`'s JSON layer, as diag.rs configures it, lists only the
-  closed span's parents, so it cannot say which span closed; the log reader
-  prints it as `close` and names the span only when a line also carries a
-  current `span`. Both the headless smoke wrapper and `host/tests/service.rs`
-  clear the environment, so `BRAUSER_LOG_DIR` must be passed explicitly to
-  keep their children's logs.
+- 2026-10-28: Diagnostics logs (DESIGN.md §15). Spans write no close lines
+  (a `tracing-subscriber` JSON close line lists only the closed span's
+  parents, so it could not say which span closed); each span ends with an
+  explicit `done`/`finished` event instead. Both the headless smoke wrapper
+  and `host/tests/service.rs` clear the environment, so they pass
+  `BRAUSER_LOG_DIR` explicitly; the headless smoke run then checks that a
+  `request_id` joins `host.jsonl` and `service.jsonl` and that no line holds
+  the fixture's page text (`checkDiagnostics` in scripts/smoke-macos.mjs).
 
 Individual recovered-note review (`brwr-kws`) is covered by the built-panel
 `individual recovery` cases and the editor's immutable-ID and memory-only

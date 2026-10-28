@@ -5,8 +5,9 @@
 //! directory (`host.jsonl`, `service.jsonl`, `cli.jsonl`), rotated to `.1`
 //! through `.3`. Every line carries the root `process` span (`proc`, `pid`,
 //! `build`), so lines from many short-lived host processes stay apart, and
-//! the spans the event happened in. A span's close line carries `time.busy`
-//! and `time.idle`; outcome events carry an explicit `elapsed_ms`. The
+//! the spans the event happened in. Spans write no open or close lines of
+//! their own: each ends with an explicit event (`request done`, `run
+//! finished`, `connection closed`) carrying its outcome and `elapsed_ms`. The
 //! extension's `request_id` and the service's `run_id` are span fields, so
 //! one request can be followed from the extension, through the host, into
 //! the service and its run.
@@ -30,7 +31,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, filter::LevelFilter};
@@ -99,7 +99,6 @@ pub fn init(process: Process) -> Option<Guard> {
             .json()
             .with_current_span(false)
             .with_span_list(true)
-            .with_span_events(FmtSpan::CLOSE)
             .with_writer(file)
             .with_filter(filter())
     });
@@ -294,7 +293,6 @@ pub(crate) mod test_capture {
     use std::sync::Once;
 
     use tracing_subscriber::filter::LevelFilter;
-    use tracing_subscriber::fmt::format::FmtSpan;
 
     thread_local! {
         /// This thread's capture, while one runs.
@@ -330,7 +328,6 @@ pub(crate) mod test_capture {
                 .json()
                 .with_current_span(false)
                 .with_span_list(true)
-                .with_span_events(FmtSpan::CLOSE)
                 .with_max_level(LevelFilter::DEBUG)
                 .with_writer(|| ThreadWriter)
                 .finish();

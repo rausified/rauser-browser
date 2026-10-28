@@ -90,9 +90,9 @@ pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore
 }
 
 /// Process requests until the browser closes the pipe, inside one
-/// `connection` span whose close line records `interactive`, the number of
-/// `requests`, and the `close` reason: `eof`, `oversized`, `io_error`
-/// (reading), or `write_error`. A `connection closed` event says the same.
+/// `connection` span that ends with a `connection closed` event recording
+/// `interactive`, the number of `requests`, and the `close` reason: `eof`,
+/// `oversized`, `io_error` (reading), or `write_error`.
 pub fn serve_with_context<R: Read, W: Write>(
     input: R,
     output: W,
@@ -303,7 +303,13 @@ fn dispatch_json(
         }
         _ => {
             span.record("outcome", "ok");
-            tracing::info!(outcome = "ok", elapsed_ms, "request done");
+            // The panel polls `get_run` while a run card is open; as in the
+            // service, a successful poll is `debug`.
+            if matches!(response, Response::RunFetched(_)) {
+                tracing::debug!(outcome = "ok", elapsed_ms, "request done");
+            } else {
+                tracing::info!(outcome = "ok", elapsed_ms, "request done");
+            }
         }
     }
     response

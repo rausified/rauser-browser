@@ -337,12 +337,12 @@ impl Server {
             span.record("error", error);
         }
         span.record("elapsed_ms", diag::elapsed_ms(started));
-        // A span's close line does not carry the span's own fields, so this
-        // line is where the outcome is read. A failed poll is `info` too.
+        // Spans write no close line (diag.rs), so this line, in the span's
+        // fields, is where the outcome is read. A failed poll is `info` too.
         if kind == "get_run" && outcome == "ok" {
-            tracing::debug!("request finished");
+            tracing::debug!("request done");
         } else {
-            tracing::info!("request finished");
+            tracing::info!("request done");
         }
         response
     }
@@ -1050,7 +1050,6 @@ mod tests {
             .json()
             .with_current_span(false)
             .with_span_list(true)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
             .with_max_level(tracing::Level::TRACE)
             .with_writer(move || writer.clone())
             .finish();
@@ -1128,7 +1127,7 @@ mod tests {
 
         // The start_run request: it finishes with its outcome, and the run
         // is queued inside it, so request_id meets run_id.
-        let request = line_in(&lines, "request finished", "request_id", "req-start-1").expect(&all);
+        let request = line_in(&lines, "request done", "request_id", "req-start-1").expect(&all);
         let span = &request["spans"].as_array().unwrap().last().unwrap();
         assert_eq!(span["kind"], "start_run", "{all}");
         assert_eq!(span["outcome"], "ok", "{all}");

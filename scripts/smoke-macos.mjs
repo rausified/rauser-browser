@@ -693,6 +693,32 @@ async function nativeHostPreflight(cdp, extensionId) {
 // Extraction must keep the article and drop the navigation.
 const articleText = (caseId) => `The smoke article body ${caseId}`;
 const ARTICLE_NAV_TEXT = "Smoke navigation link";
+const LOG_DIR_ENV = "BRAUSER_LOG_DIR";
+// Words every article paragraph carries; no diagnostics line may hold them.
+const ARTICLE_SENTINEL = "says what a reader came for";
+
+// The host and service logs (DESIGN.md §15) of a headless run: every line is
+// JSON, a request the host forwarded shows up under the same request_id in
+// both files, and no line carries page text.
+async function checkDiagnostics(logDir) {
+  const read = async (name) => {
+    const text = await readFile(path.join(logDir, name), "utf8").catch((error) => {
+      if (error.code === "ENOENT") throw new Error(`No ${name} in ${logDir}`);
+      throw error;
+    });
+    requireCondition(!text.includes(ARTICLE_SENTINEL), `${name} contains page text`);
+    return text.split("\n").filter(Boolean).map((line) => {
+      try { return JSON.parse(line); } catch { throw new Error(`${name} has a line that is not JSON: ${line}`); }
+    });
+  };
+  const ids = (lines) => new Set(lines.flatMap((line) => (line.spans ?? [])
+    .filter((span) => span.name === "request" && typeof span.request_id === "string")
+    .map((span) => span.request_id)));
+  const [host, service] = await Promise.all([read("host.jsonl"), read("service.jsonl")]);
+  const serviceIds = ids(service);
+  requireCondition([...ids(host)].some((id) => serviceIds.has(id)),
+    "No request_id appears in both host.jsonl and service.jsonl");
+}
 
 function articlePage(title, caseId) {
   const links = ["home", "news", "archive", "about"].map((name) =>
@@ -1261,11 +1287,15 @@ async function run() {
     const { fakeBin, argvLog } = await installFakeHarnesses(runDir);
     const openLog = path.join(runDir, "open.log");
     const hostPath = `${fakeBin}:/usr/bin:/bin`;
+    // Test builds write diagnostics only where BRAUSER_LOG_DIR says
+    // (DESIGN.md §15); keep them with the run's other artifacts.
+    const logDir = path.join(runDir, "logs");
     const wrapperBody = options.headless
       ? `exec /usr/bin/env -i HOME=${shellQuote(testHome)} PATH=${shellQuote(hostPath)} ` +
         `${SCRIPTED_DIALOGS_ENV}=${shellQuote(dialogs)} ${OPEN_LOG_ENV}=${shellQuote(openLog)} ` +
-        `${shellQuote(options.host)} "$@"\n`
-      : `export HOME=${shellQuote(testHome)}\nexport PATH=${shellQuote(hostPath)}\nexec ${shellQuote(options.host)} "$@"\n`;
+        `${LOG_DIR_ENV}=${shellQuote(logDir)} ${shellQuote(options.host)} "$@"\n`
+      : `export HOME=${shellQuote(testHome)}\nexport PATH=${shellQuote(hostPath)}\n` +
+        `export ${LOG_DIR_ENV}=${shellQuote(logDir)}\nexec ${shellQuote(options.host)} "$@"\n`;
     await writeFile(wrapper, `#!/bin/sh\n${wrapperBody}`, { mode: 0o700 });
     await chmod(wrapper, 0o700);
     const configPath = await commandOutput(wrapper, ["--config-path"]);
@@ -2865,6 +2895,10 @@ async function run() {
       requireCondition(cursor.toLowerCase() === "no", "A busy cursor persisted after a native dialog");
     }
 
+    if (options.headless) {
+      await checkDiagnostics(logDir);
+      console.log("Diagnostics logs joined by request_id with no page text passed.");
+    }
     requireCondition(!(await distRebuilt()), DIST_REBUILT);
     console.log(`\nPASS: ${options.headless ? "headless" : "guided"} macOS Chrome M2 step 1 smoke run completed.`);
   } catch (error) {
