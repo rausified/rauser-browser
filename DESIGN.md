@@ -824,6 +824,8 @@ A container's ID (§5.1) is a record key exactly like any other artifact's: a re
 
 As built in M1.5a, note loads derive the key in the host, consult indexed artifact URLs, and perform a bounded scan of the flat notes directory so a pre-adapter note on an alternate route is still listed. Responses carry at most 24 older-note identities and trim that metadata when needed to keep the current note within one native message. `save_note` echoes the loaded key as `expected_key`; a changed adapter identity produces `key_changed` and copy-out text instead of writing under the new key.
 
+When an external policy notification refreshes the panel to a different host config revision, it reloads the current page's note through the editor's serialized save/load queue before allowing the next edit. Pending or in-flight edits keep their original expected key and use the same conflict copy-out and durable recovery; the new note never receives them automatically. A refresh with the same host revision only retries a failed load.
+
 **Note keys outlive capture (2026-10-27).** When the capture policy does not
 recognize a URL, its note key comes from the note-only contracts still
 recorded: the superseded recognition contracts in `[[adapter_id_history]]`,
