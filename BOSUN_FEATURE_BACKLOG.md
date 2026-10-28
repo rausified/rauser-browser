@@ -265,6 +265,12 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
+- [ ] `brwr-rl2` **list_runs: site-draft runs can push summary runs out of
+  the restore window.** Filter by kind before LIST_LIMIT, or reserve summary
+  slots (Codex review of #170).
+- [ ] `brwr-sdc` **Capture Site: cancel a running AI draft when the review
+  goes stale.** A config change elsewhere leaves the run using a harness slot
+  for a result the revision check will refuse (Codex review of #170).
 - [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
   Step 6.7 shipped and Recent, the worklog and the artifact card did so
   without a shared helper. Open access runs are polled through `get_run`
