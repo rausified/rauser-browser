@@ -1432,15 +1432,15 @@ stop product work, and no history reset or production IPC change is called for.
   Establish the runner's exact wait before changing it; no engine was touched.
 
 
-### Platform evidence handoff (2026-10-28, rechecked at 8a430cfc)
+### Platform evidence handoff (2026-10-28, rechecked at 8916bfc6)
 
 - Health began clean: no quarantine notice or working-tree changes. All
   required local commands passed: protocol generation check, workspace build,
-  fmt, both Clippy configurations, offline npm installation, typecheck, lint,
+  fmt, both Clippy configurations, npm installation, typecheck, lint,
   extension build, all 15 extension test files and workspace Rust tests.
-  Rust reported 997 passing outcomes, including 43 explicit sandbox IPC
-  skips; these do not establish platform execution. Extras passed:
-  current-state/queue checks, both script test files and 10,696 inert
+  Rust reported 997 successful outcomes: 954 executed and 43 explicit
+  sandbox IPC early skips; these do not establish platform execution.
+  Extras passed: current-state/queue checks, both script test files and 10,696 inert
   Markdown renderings. The scripted-dialog test suite was not rerun this
   cycle; its Clippy build passed.
 - Both assigned beads remain blocked. `brwr-bzx` needs current Windows/macOS
