@@ -458,3 +458,22 @@ or authorization token: the usual `update_config` rechecks the revision and
 history independently. This additive pair leaves existing message shapes and
 the unknown-site `draft_site` / `check_site_draft` flow unchanged; an older host
 refuses it, leaving Save disabled.
+
+### Explicit preserved-note viewing (added within version 8)
+
+`list_preserved_notes` takes `url` and answers `preserved_notes_listed` with
+`notes`, at most 24 `OlderNote` metadata entries (all artifact keys), without
+bodies. The host scans up to 4,096 flat note files and 16 MiB with the existing
+vault scanner, verifying ownership at the key's real path. Only notes whose
+stored canonical creation URL exactly equals this page's URL after current
+`strip_params` qualify. No index or note contracts are consulted. The result
+is a limited search; omitted files do not imply no preserved note exists.
+
+`view_preserved_note` takes `url` and an explicit `key` from that list. It
+reopens only that artifact key's owned page note, rechecks the exact stored
+address, and returns the existing `note_loaded` shape with empty `older_notes`.
+A URL key, changed ownership/address, missing file or inaccessible vault is
+refused. These requests never authorize `save_note` or `use_artifact_note`:
+normal host-derived note identity still applies. A panel must keep the result
+outside the editor and clear it on navigation/collapse. No existing message
+changed shape; older v8 hosts may refuse these new requests.

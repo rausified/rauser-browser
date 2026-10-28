@@ -438,6 +438,103 @@ pub fn artifact_keyed_note_url(contents: &str, key: &RecordKey) -> Option<String
     Some(parsed.canonical_url)
 }
 
+/// Identity for explicit read-only discovery, never for resolving a page's
+/// autosave key. Reject duplicate ownership fields before using the ordinary
+/// page-note ownership check.
+fn preserved_identity(contents: &str) -> Option<(RecordKey, String)> {
+    let (frontmatter, _) = contents.strip_prefix("---\n")?.split_once("\n---\n")?;
+    if frontmatter
+        .lines()
+        .filter(|line| *line == FRONTMATTER_KEY)
+        .count()
+        != 1
+    {
+        return None;
+    }
+    let mut in_block = false;
+    let mut fields = std::collections::BTreeSet::new();
+    let mut artifact_id = None;
+    for line in frontmatter.lines() {
+        if line == FRONTMATTER_KEY {
+            in_block = true;
+        } else if in_block && line.starts_with("  ") {
+            let (name, value) = line.strip_prefix("  ")?.split_once(": ")?;
+            if !fields.insert(name) {
+                return None;
+            }
+            if name == "artifact_id" {
+                artifact_id = unquote(value);
+            }
+        } else {
+            in_block = false;
+        }
+    }
+    let key = RecordKey {
+        kind: RecordKeyKind::Artifact,
+        value: artifact_id?,
+    };
+    if key.value.is_empty() || key.value.chars().count() > 512 {
+        return None;
+    }
+    let url = artifact_keyed_note_url(contents, &key)?;
+    (url.chars().count() <= 8192).then_some((key, url))
+}
+
+/// Read only a verified artifact note whose *stored* address equals this
+/// page's canonical address. That equality permits viewing, never identity,
+/// migration, or saving. Reading the key's actual path also rules out copied
+/// front matter in an unrelated filename.
+pub fn load_preserved_note(
+    vault: &Vault,
+    canonical: &str,
+    key: &RecordKey,
+) -> Result<LoadedNote, NoteRequestError> {
+    let contents = vault.read_note(key, canonical)?.ok_or_else(not_owned)?;
+    let (stored_key, stored_url) = preserved_identity(&contents).ok_or_else(not_owned)?;
+    if stored_key != *key || stored_url != canonical {
+        return Err(not_owned());
+    }
+    let parsed = parse_owned_note(key, canonical, &contents).ok_or_else(not_owned)?;
+    if !body_fits_panel(&parsed.body) || !fits_in_response(&parsed.title, &parsed.body) {
+        return Err(too_large_on_disk());
+    }
+    Ok(LoadedNote {
+        exists: true,
+        revision: revision_for(&contents),
+        title: clamped_title(&parsed.title).to_owned(),
+        body: parsed.body,
+        key: key.clone(),
+        older_notes: Vec::new(),
+    })
+}
+
+pub fn preserved_notes(vault: &Vault, canonical: &str) -> Result<Vec<OlderNote>, NoteRequestError> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for contents in vault.note_candidates()? {
+        let Some((key, url)) = preserved_identity(&contents) else {
+            continue;
+        };
+        if url != canonical || !seen.insert(key.value.clone()) {
+            continue;
+        }
+        let Ok(loaded) = load_preserved_note(vault, canonical, &key) else {
+            continue;
+        };
+        result.push(OlderNote {
+            key,
+            canonical_url: url,
+            title: clamped_title(&loaded.title).to_owned(),
+            revision: loaded.revision,
+        });
+        if result.len() == 24 {
+            break;
+        }
+    }
+    trim_older_notes("", "", &mut result);
+    Ok(result)
+}
+
 /// Return a verified URL-keyed identity from a legacy page note. This is used
 /// only on bounded files from `Vault::note_candidates`; malformed, artifact-
 /// keyed, summary, and unrelated Markdown are ignored.
