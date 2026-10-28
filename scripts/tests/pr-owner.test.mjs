@@ -72,7 +72,9 @@ test("the CLI fails the job for a PR event without an owner and passes one with 
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { spawnSync } = await import("node:child_process");
-  const script = new URL("../pr-owner.mjs", import.meta.url).pathname;
+  const { fileURLToPath } = await import("node:url");
+  // .pathname would be "/D:/..." on Windows; fileURLToPath gives a real path.
+  const script = fileURLToPath(new URL("../pr-owner.mjs", import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), "pr-owner-"));
   const run = (pull_request) => {
     const path = join(dir, `event-${Math.random()}.json`);
