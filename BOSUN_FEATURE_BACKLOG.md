@@ -250,7 +250,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 - **M1.5b (§12.2 step 7.1–7.5)**: the rest of aliases, Tier 1 fields
   (`scripting`), worklog files, and the remaining starter adapters. Create
   adapter (7.6) and agent drafting (7.7) moved into Plan work above as
-  Capture Site (shipped; agent refinement `brwr-f45` remains), along with the re-keying part of
+  Capture Site (shipped, including agent refinement), along with the re-keying part of
   7.2 (`brwr-6x2`). DESIGN.md gates the rest on M1.5a being in daily use for
   a few weeks; John will lift the gate here when it's time.
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service (deferred).** The
@@ -335,17 +335,6 @@ strip_params note-identity follow-up has shipped (see Shipped).
   progress: no migration is enabled and the ID freeze stays enforced.
 
 
-- In progress in the Lane A session, not Cookie. Cookie must not claim these:
-- [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
-  Structural first, agent second: for unknown sites, "Improve with AI"
-  refines the structural draft by launching an agent job through the Brauser
-  service (the open access PR 2 service, shipped in #75, and PR 3 runners, shipped in #98;
-  spec above), not the old M2 step 8.2 harness path. Agent drafts are
-  untrusted and get the same per-rule host checks and plain-language review.
-  Capture Site must keep working with no agent configured.
-  As built (2026-10-28, `feat/capture-site-agent`): DESIGN.md §5.1 agent
-  drafter bullet and §12.2 step 7.7; plan
-  `docs/superpowers/plans/2026-10-28-capture-site-improve-with-ai.md`.
 
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   **Blocked on platform execution; implementation complete.** The built-page
