@@ -352,19 +352,9 @@ shipped (see Shipped).
   reloads after a failed load (note-editor.ts ~127), so the editor keeps the
   old record key and the next autosave gets `key_changed`. Reload the note
   when the config revision changed.
-- [ ] `brwr-mm0` **A delivery absorbed by Pause, Discard or Dismiss never
-  refreshes the card.** Only `panelTick` (extension/panel.ts ~539) compares
-  `delivered_batches`; the other `refreshStatus()` callers (~559/~581/~596)
-  overwrite it unchecked, so the card keeps stale totals.
 - [ ] `brwr-gob` **The pending-pause Why hint names a disabled button.**
   `whyPausedReason` (extension/panel.ts ~294) says "Use Pause capture" while
   `updateControls` (~406) disables it because the host is unreachable.
-- [ ] `brwr-b50` **The card keeps "native host is not connected" after the
-  host returns.** `render()` (extension/panel.ts ~456) runs on reconnect but
-  never calls `refreshArtifact`; refresh on a false-to-true transition.
-- [ ] `brwr-09c` **Stale panel wording.** "Capture is enabled for the listed
-  sites." (extension/panel.ts ~481) predates #69, and pages the panel cannot
-  see show "○ Not an artifact" (~155 via `showNoPage` ~820).
 - [ ] `brwr-5nq` **A config the host keeps for adapter repair cannot load in
   the extension.** `isAdapterDocument` (extension/protocol-shape.ts ~58)
   rejects format 0 or more than 64 adapters, which the host returns with
@@ -466,6 +456,10 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Describe capture and unreadable tabs accurately (2026-10-28).** Completed assigned `brwr-09c`. The enabled status reuses the settings wording about sites with adapters, including with no adapters configured. Chrome pages and tabs hidden by withdrawn access clear the artifact verdict and old card; readable unrecognized pages still say Not an artifact. **Metrics:** Four failing-first panel regressions pass; full local gate green, 883 exercised Rust tests and 43 explicit IPC skips, all 15 extension and two script files passing.
+- **Category:** Bug Fix. **Refresh artifact totals when the host reconnects (2026-10-28).** Completed assigned `brwr-b50`. A successful note autosave after an outage now refreshes the current artifact and clears the disconnected status while retaining an unsaved context draft. Ordinary subsequent saves send no extra artifact lookup. **Metrics:** One failing-first composed panel regression passes; full local gate green and all nine new panel cases pass.
+- **Category:** Bug Fix. **Refresh delivered activity after every status reader (2026-10-28).** Completed assigned `brwr-mm0`. Central session observation detects delivery generations seen by Dismiss, Pause and Discard as well as the poll, so those controls cannot absorb an update and leave stale totals. Each observed change refreshes the current card once; unchanged polls make no request. **Metrics:** Three failing-first action cases plus the normal-poll control pass; full local gate green, including 10,696 inert Markdown renderings.
 
 - **Category:** Bug Fix. **Name summaries for the current item after in-app navigation (2026-10-28).** Completed assigned `brwr-sti`. Extraction prefers a unique current main-page H1 over stale tab, document and Readability metadata, with existing fallbacks when headings are absent or ambiguous. A list-to-item SPA regression runs the real summarize entry point, verifies the item title reaches the run, and keeps URL-change refusal intact. **Metrics:** Full local gate green; four new extension regressions, all 15 extension and two script files passing, 883 exercised Rust tests plus 43 explicit IPC skips, and 10,696 inert Markdown renderings.
 - **Category:** Testing & Verification. **Keep capture fixtures stable across midnight (2026-10-28).** Completed assigned `brwr-mdn` and its duplicate `brwr-mdt`. Capture and native unit tests share one recent UTC noon per test thread, keeping independent events on the same log day without altering production clocks or delivery windows. A failing-first regression reruns the batch/recovery and full-log rejection scenarios at 23:59:59 and midnight in UTC-12, UTC and UTC+14. **Metrics:** Full required gate green; one new Rust regression, 883 exercised Rust tests (+1) plus 43 explicit IPC skips, all 15 extension and two script files passing.
@@ -823,8 +817,8 @@ stop product work, and no history reset or production IPC change is called for.
   checking cache totals alone could have hidden it. Old noncanonical records
   and partial intents are preserved for the focused `brwr-smu` follow-up.
 - The next assigned older-note batch (`brwr-v5t`, `brwr-w4k`) completed on
-  2026-10-28. Continue `bd ready --label assigned`; `brwr-09c` and `brwr-5nq`
-  are next in the driver order. Do not claim Lane A's work.
+  2026-10-28. Continue `bd ready --label assigned`; `brwr-09c` shipped in the panel
+  refresh batch below, and `brwr-5nq` remains ready. Do not claim Lane A's work.
 - The existing `brwr-ppn` worklog-curation proposal remains a valuable later
   capability: let someone select the work to share and annotate its purpose
   before copying. Reuse Recent and keep recorded measurements intact, with
@@ -867,3 +861,32 @@ stop product work, and no history reset or production IPC change is called for.
   `.git/index.lock` on the read-only Git mount. The complete green diff is
   left uncommitted for the driver; `.bosun_commit_msg` contains the exact
   subject and body. No retry, push or service action was attempted.
+
+
+### Cycle observations (2026-10-28 — assigned panel refresh batch)
+
+- Clean opening health on `043a88c5`, no quarantine report. Completed assigned
+  `brwr-09c`, `brwr-b50` and `brwr-mm0`; seven assigned items remain, with
+  `brwr-5nq` next in driver order. Keep following the assigned queue and leave
+  Lane A's work alone.
+- Eight new cases failed before the production fix and the poll control passed;
+  all nine now pass. Observe delivered generations where session changes are
+  rendered, because every status reader can consume the worker's new counter.
+  Keep connection and delivery observations advanced before host requests so
+  response notifications cannot loop. Reuse the existing artifact coalescer.
+- Full local gate passed: 926 reported Rust outcomes, comprising 883 exercised
+  tests and 43 explicit IPC skips; all 15 extension and two script files pass,
+  plus 10,696 inert Markdown renderings. Failing-first and final evidence is in
+  `target/cookie-panel-red-detail.log`, `target/cookie-panel-green-detail.log`
+  and `target/cookie-final-health.log`. Headless smoke refused this Linux VM.
+- Reviewed the complete code/test diff manually; no additional defect found.
+  The external Codex review was not invoked because this run forbids live API
+  calls and real harnesses. The driver's independent review remains required.
+- Product direction after assigned work: the existing `brwr-vny` explanation
+  of why a readable page is outside capture can make the neutral verdict
+  actionable. Pair it with the existing `brwr-1g2` incoming-trail view to help
+  someone understand both what this page is and how they reached it, using
+  already-validated history rather than collecting new page content.
+- The single commit attempt was refused at `git add` because `.git/index.lock`
+  is on the read-only Git mount. The complete green diff and excluded
+  `.bosun_commit_msg` remain for the driver; no retry or remote action occurred.
