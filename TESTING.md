@@ -162,6 +162,28 @@ zero opens across both. Queued activity uses seconds; live totals use
 milliseconds. Checking only live totals against 15 seconds made the old test
 fail whenever the real wall clock happened to cross an hour boundary.
 
+## Capture and index round trips
+
+`cargo test --locked -p brauser ids_survive_reindex` captures lowercase,
+uppercase and unhyphenated uppercase UUIDs through single activity, batch
+activity and Why delivery, reads the actual hex marker payloads, then rebuilds
+the index. It checks preserved measurements/context, canonical payload IDs,
+hash mismatch refusal and idempotent immediate index updates from the original
+request. Why fixtures first capture measured activity: context alone does not
+create an artifact. The regressions failed before the writer fix.
+
+`cargo test --locked -p brauser encoded_` rejects Unicode page, mode and trail
+URLs whose encoded spelling exceeds 8192 bytes, including a one-byte overflow.
+It exercises single/batch activity, legacy single/batch visits, Why and the
+shared summary writer, checking that no log or intent was created. The page
+and nested-URL regressions persisted before the bound fix. The companion
+`normalized_urls_at_the_capture_limit_survive_reindex` test accepts actual
+8192-byte serialized URLs in every activity URL field and checks rebuilt
+measurements. These use local temporary folders and no service, browser,
+dialog, credentials or external API. Historical noncanonical markers and
+partial intents are a separate recovery follow-up; these tests cover new
+writes and existing canonical IDs.
+
 ## Dialog reply fixture
 
 `dialog::tests::a_dialog_that_answers_in_time_keeps_its_reply` uses a shell
