@@ -268,6 +268,12 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
+- [ ] `brwr-u8r` **Replay existing v1 capture intents before the normalized-URL
+  bound rejects their event (P2).** From #139's review: a partial v1 intent left
+  by an older host for an event whose normalized URL exceeds 8192 bytes is now
+  rejected (`url_too_long`) before `record_authorized` can replay it, so the
+  worker drops the event and strands the log tail (host/src/capture.rs
+  `normalized_bounded_url`).
 - [ ] `brwr-srp` **Record which query parameters were stripped beside stored
   canonical URLs (P3).** Split from the shipped strip_params refusal, so stripped URLs can tell
   artifacts apart in history; changes the log and index formats.
