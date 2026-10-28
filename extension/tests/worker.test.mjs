@@ -55,7 +55,7 @@ function storageArea(entries) {
   return {
     async get(key) {
       const result = {};
-      for (const name of Array.isArray(key) ? key : [key]) {
+      for (const name of key === null ? [...entries.keys()] : Array.isArray(key) ? key : [key]) {
         if (entries.has(name)) result[name] = structuredClone(entries.get(name));
       }
       return result;
@@ -2341,6 +2341,84 @@ test("pressure coalescing never grows the queue past its byte cap", async () => 
   assert.ok(new TextEncoder().encode(JSON.stringify(after.items)).length <= MAX_QUEUE_BYTES);
 });
 
+test("link shapes are never sampled, buffered or sent in update_config", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  ports.length = 0;
+  const origin = "https://drafted-links.example";
+  values.set(storageKey("policy_v1"), lease(origin));
+  const LINK_SHAPES = [{ shape: "/linkonly/{num}", count: 3 }, { shape: "/elsewhere/{slug}", count: 1 }];
+  // A visited page on the enabled origin is sampled; the links on it are not.
+  tabs.set(61, { id: 61, url: `${origin}/wiki/pages/123`, title: "Page", incognito: false });
+  onCommitted({ tabId: 61, frameId: 0, documentLifecycle: "active", url: `${origin}/wiki/pages/123`, timeStamp: Date.now() });
+  await flush();
+  const visited = (await send({ kind: "get_site_patterns", origin })).map(({ shape, count }) => ({ shape, count }));
+  assert.deepEqual(visited, [{ shape: "/wiki/pages/{num}", count: 1 }]);
+  // There is no worker message that adds a sample.
+  for (const kind of ["record_site_patterns", "add_site_patterns", "set_site_patterns"]) {
+    await assert.rejects(send({ kind, origin, links: LINK_SHAPES }));
+  }
+
+  // The panel's draft, re-check and save, as Capture Site runs them.
+  const workerMessages = [];
+  const previousSendMessage = chrome.runtime.sendMessage;
+  chrome.runtime.sendMessage = async (request) => {
+    workerMessages.push(structuredClone(request));
+    return { ok: true, value: await send(request) };
+  };
+  const config = configResult({ request_id: "fixture" }, origin).config;
+  const session = new ConfigSession(() => undefined);
+  session.config = structuredClone(config);
+  session.revision = `host-revision:${origin}`;
+  const table = { type: "drafted.pages", origin, match: [{ path: "/wiki/pages/{num:int}" }], id: "drafted.pages:{host}/{num}" };
+  try {
+    const drafting = session.draftSite(origin, visited, LINK_SHAPES);
+    const port = ports[0];
+    let request = await sentOn(port, 1);
+    assert.equal(request.type, "draft_site");
+    port.reply({
+      type: "site_drafted", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+      revision: session.revision, drafter: "structural",
+      adapters: [{ adapter: table, scope: "not_shared", tenant: null, rules: [{ rule: 0, checked: true, unchecked_reason: null, visited: 1, links: 0, example: `${origin}/wiki/pages/1` }] }],
+      dropped: [], preview: [], taken_types: [], remapped: 0,
+    });
+    await drafting;
+    const checking = session.checkSiteDraft(origin, session.revision,
+      { adapters: [table], provenance: [["drafted"]], scope: [null] }, visited, LINK_SHAPES);
+    request = await sentOn(port, 2);
+    assert.equal(request.type, "check_site_draft");
+    port.reply({
+      type: "site_draft_checked", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+      revision: session.revision, rules: [[{ verdict: "kept", reason: null }]],
+      scope: [{ state: "not_shared", resolved: "not_shared", reason: null }], preview: [],
+    });
+    await checking;
+    const next = { ...config, adapters: { format: 1, artifacts: [...config.adapters.artifacts, table] } };
+    const saving = session.saveConfig(next, null);
+    request = await sentOn(port, 3);
+    assert.equal(request.type, "update_config");
+    port.reply({ type: "config_updated", protocol_version: PROTOCOL_VERSION, request_id: request.request_id, revision: "r2", config: next });
+    request = await sentOn(port, 4);
+    port.reply(configResult(request, origin, { revision: "r2", config: next }));
+    await saving;
+  } finally {
+    chrome.runtime.sendMessage = previousSendMessage;
+    session.host.disconnect();
+  }
+  const leaks = (text) => LINK_SHAPES.some(({ shape }) => text.includes(shape)) || /linkonly|elsewhere/.test(text);
+  const native = ports.flatMap((port) => port.sent);
+  for (const message of native.filter((message) => !["draft_site", "check_site_draft"].includes(message.type))) {
+    assert.equal(leaks(JSON.stringify(message)), false, `${message.type} carries a link shape`);
+  }
+  assert.equal(native.filter((message) => message.type === "update_config").length, 1);
+  assert.equal(leaks(JSON.stringify(workerMessages)), false, "no worker message carries a link shape");
+  assert.equal(leaks(JSON.stringify([...values.entries()])), false, "local storage holds no link shape");
+  assert.equal(leaks(JSON.stringify([...sessionValues.entries()])), false, "session storage holds no link shape");
+  assert.deepEqual((await send({ kind: "get_site_patterns", origin })).map(({ shape }) => shape), ["/wiki/pages/{num}"]);
+  assert.equal(values.get(storageKey("policy_v1")).revision, "r2");
+});
+
 for (const [timing, minute, second, liveMs, queuedMs] of [
   ["within the hour", 15, 0, 15_000, 0],
   ["across the hour", 59, 50, 5_000, 10_000],
@@ -2572,4 +2650,29 @@ test("worker wake and maintenance alarms expire samples without starting a host"
   onAlarm({ name: "brauser-sync" });
   await flush();
   assert.deepEqual(values.get(key), {});
+});
+
+test("expired capture-site drafts are deleted at startup and on maintenance", async () => {
+  const { DRAFT_HANDOFF_TTL_MS } = await import("../dist/capture-site-handoff.js");
+  const origin = "https://handoff.example";
+  const entry = (id, created) => ({
+    id, origin, created, adapters: [], baseline_rules: [], visited: [{ shape: "/pages/{num}", count: 1 }], links: [],
+  });
+  sessionValues.clear();
+  const fresh = entry("fresh", Date.now());
+  sessionValues.set("captureSiteDraft:fresh", fresh);
+  sessionValues.set("captureSiteDraft:old", entry("old", Date.now() - DRAFT_HANDOFF_TTL_MS - 1));
+  sessionValues.set("captureSiteDraft:bad", { id: "other" });
+  sessionValues.set("unrelated", { created: 0 });
+  onStartup();
+  await until(() => !sessionValues.has("captureSiteDraft:old"), "the startup sweep");
+  assert.equal(sessionValues.has("captureSiteDraft:bad"), false, "a malformed entry is deleted");
+  assert.deepEqual(sessionValues.get("captureSiteDraft:fresh"), fresh);
+  assert.deepEqual(sessionValues.get("unrelated"), { created: 0 });
+
+  sessionValues.set("captureSiteDraft:later", entry("later", Date.now() - DRAFT_HANDOFF_TTL_MS - 1));
+  onAlarm({ name: SYNC_ALARM });
+  await until(() => !sessionValues.has("captureSiteDraft:later"), "the maintenance sweep");
+  assert.ok(sessionValues.has("captureSiteDraft:fresh"));
+  sessionValues.clear();
 });

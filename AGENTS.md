@@ -281,9 +281,51 @@ close or collapse. The worker independently samples at most 20 visited shapes
 per actively enabled origin for seven days in trusted-only local storage;
 settings can show or clear them without the host. Private tabs are excluded,
 pauses/removals purge samples, and samples never enter delivery or the vault.
-This is the input/review slice of `brwr-t40`, not unknown-site capture: the
-host structural drafter, selected-rule enable flow and recurring-page hint
-remain unbuilt; starter live-tool certification remains human work.
+Those shapes are also the only page-derived input to unknown-site capture.
+
+Capture Site for unknown sites (`brwr-t40`, 2026-10-27, on
+`feat/capture-site-unknown`) adds two host-only request/response pairs
+within protocol v6, `draft_site`/`site_drafted` and
+`check_site_draft`/`site_draft_checked`; no existing message changed shape.
+Only the exact origin and private shapes cross (the current page's shape plus
+the worker sample, and at most 50 click-time link shapes); no raw URL, link
+`href`, or tab title reaches the host. The host's deterministic structural
+drafter (`adapter-templates/src/structural.rs`) runs Filter, Group, Keep, Map,
+Name and Rank, and every drafted rule then passes the per-rule checks
+`check_draft_rules` (`adapter-templates/src/draft.rs`): a failing drafted rule
+is dropped with its reason and the rest kept, a user-written rule only warns,
+and a shared origin with no agreeing scoped adapter gets pending scope rather
+than a refusal. Before a drafted rule's first identifier the anchor is a
+literal or the scoped shared-origin tenant (#126's scoped-capture anchor;
+`scope_anchored` rules cannot be saved unscoped). The review pre-fills the
+tenant from the tab's URL as "Capture for <tenant>", already chosen, so Save
+confirms it in one click (John, 2026-10-27), but only when a kept drafted rule
+scoped to that value records the tab's page (`tenantPrefill`). The probe paths, search and paging keys, blocked route words,
+mode words, fill values, starter types and shared-origin tenant/account-index
+positions are one host-owned catalog, `protocol/capture-site/catalog.json`,
+that the extension's tests pin. The panel's review is plain language with the
+real current page evaluated locally; scope, `unscoped` and a title entry are
+panel-owned overlays applied after `check_site_draft`, and scope travels as a
+separate field so it never trips `draft_forbidden_key`. The save re-checks the
+selection against the reviewed revision and then saves with the usual
+revision-checked `update_config`. On a configured origin a recurring-pages
+hint (an unrecognized sampled shape seen three times) drafts additions only;
+existing adapters are never edited. **Open advanced settings** hands the draft
+to the adapter editor through a 30-minute, read-once `storage.session` entry,
+where an edited rule becomes user-written. Drafted rules never re-map an
+already-recognized artifact: a shape the current policy or a recorded
+contract (retired or hand-removed) recognizes is listed as already captured,
+a rule that may overlap one is dropped, and `draft_site` refuses a draft
+whose `remapped` is not 0. Secret and capability query keys (catalog
+`secret_query_keys`) never become IDs, blocked route words are matched by
+their hyphen/underscore parts and plurals and at the shared-origin tenant
+position too, and a link shape never renames or reranks a visited kind. Known
+limits: a Notion page with no workspace segment is not drafted (workspace
+pages draft behind the scoped workspace, their anchor; `brwr-gf1` as
+revisited, DESIGN.md §5.1), and on a shared origin a short
+lowercase repository or namespace name stays a literal, so its rule covers
+that one name. Starter live-tool certification remains human work; agent
+drafting (`brwr-f45`) and re-learning (`brwr-6x2`) are not built.
 
 The service worker delivers buffered events and renews its policy lease
 itself, from `alarms` and at browser startup, so capture does not depend on
@@ -308,6 +350,8 @@ changes a contract.
 
 - `protocol/schema.json` defines native messages. Run `python3 protocol/generate.py` after changing it and commit the generated Rust and TypeScript files together.
 - `adapter-templates/` is the Rust crate implementing the adapter-template grammar specified in `adapter-templates.md`; `extension/adapter-templates.ts` is its TypeScript twin. Keep both in sync with the shared vectors in `protocol/adapter-templates/vectors.json` — run `npm run test:adapter-diff` (`scripts/adapter-templates-diff.mjs`) after changing either engine; CI also checks `adapter-templates/fuzz` compiles.
+- `adapter-templates/src/shape.rs` parses private URL shapes (the Rust twin of `isUrlShape`), `adapter-templates/src/structural.rs` is the Capture Site structural drafter, and `adapter-templates/src/policy.rs` holds `DraftPolicy`, the plain-struct form of the host catalog; the per-rule checks are `check_draft_rules` in `adapter-templates/src/draft.rs`. `host/src/capture_site.rs` parses the catalog and handles `draft_site` and `check_site_draft`.
+- `protocol/capture-site/` holds `catalog.json` (the host-owned drafting catalog) and `shapes.json` (real URL forms and their expected shapes, shared by the Rust parser and the in-page shaper's tests).
 - `protocol/strip-params/vectors.json` pins the `strip_params` matching rule shared by `matches_param` (host/src/capture.rs) and `stripsParam` (extension/adapter-review.ts); both test suites read it.
 - `host/` contains the native host. Keep host policy checks on the privileged side of the messaging boundary. `host/src/consent.rs` holds the purpose-bound folder-picker grants and the `update_config` field checks; `host/src/dialog.rs` runs the native folder picker, the only native dialog. There is no `privacy.rs`, `extension/grants.ts`, or `macos-alert/` crate any more (removed with protocol v6).
 - Every first-party crate is `#![forbid(unsafe_code)]`.

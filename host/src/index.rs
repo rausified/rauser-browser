@@ -32,7 +32,8 @@ use uuid::Uuid;
 
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::capture::{
-    activity_shape_is_valid, canonical_url, logged_activity_is_bounded, trail_transition_is_valid,
+    activity_shape_is_valid, canonical_url, logged_activity_is_bounded, parse_event_id,
+    trail_transition_is_valid,
 };
 use crate::markdown::{self, yaml_string};
 use crate::summary::SummaryEvent;
@@ -478,6 +479,7 @@ impl ArtifactIndex {
 
     pub fn record_why(&self, event: &WhyEvent, strip_params: &[String]) -> Result<()> {
         let mut event = event.clone();
+        event.event_id = parse_event_id(&event.event_id).map_err(anyhow::Error::msg)?;
         event.url = canonical_url(&event.url, strip_params)?;
         self.record_events([CachedEvent::Why(event)])
     }
@@ -1769,6 +1771,7 @@ fn normalized_activity(event: &ActivityEvent, strip_params: &[String]) -> Result
         bail!("invalid activity cannot enter the artifact index");
     }
     let mut event = event.clone();
+    event.event_id = parse_event_id(&event.event_id).map_err(anyhow::Error::msg)?;
     event.url = canonical_url(&event.url, strip_params)?;
     for mode in &mut event.modes {
         mode.url = canonical_url(&mode.url, strip_params)?;
@@ -3485,6 +3488,208 @@ mod tests {
 
     fn index(root: &TempDir, cache: &TempDir) -> ArtifactIndex {
         ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap()
+    }
+
+    fn capture_ids_survive_reindex(kind: &str) {
+        use crate::capture::{CaptureBatchEvent, CaptureOutcome, CapturePolicy, CaptureStore};
+
+        let canonical = "abcdef01-2345-4678-9abc-def012345678";
+        for raw_id in [
+            canonical.to_owned(),
+            canonical.to_uppercase(),
+            canonical.to_uppercase().replace('-', ""),
+        ] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let capture = CaptureStore::open_in(&storage(root.path()), None, cache.path()).unwrap();
+            let origins = ["https://example.com".to_owned()];
+            let policy = CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            };
+            let event = activity(
+                &raw_id,
+                "ABC",
+                "Keep this work",
+                &time::OffsetDateTime::now_utc()
+                    .replace_nanosecond(0)
+                    .unwrap()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
+            );
+            let why = WhyEvent {
+                event_id: raw_id.clone(),
+                artifact_id: event.artifact_id.clone(),
+                url: event.url.clone(),
+                occurred_at: event.occurred_at.clone(),
+                incognito: false,
+                text: "Prepare the release".into(),
+            };
+            if kind == "why" {
+                let seed = ActivityEvent {
+                    event_id: Uuid::new_v4().to_string(),
+                    ..event.clone()
+                };
+                assert!(matches!(
+                    capture.record_activity(policy, &seed),
+                    CaptureOutcome::Persisted { .. }
+                ));
+            }
+            let outcome = match kind {
+                "single" => capture.record_activity(policy, &event),
+                "batch" => {
+                    let (reply_id, outcome) = capture
+                        .record_batch(
+                            policy,
+                            &Uuid::new_v4().to_string(),
+                            &[CaptureBatchEvent::Activity(&event)],
+                            None,
+                        )
+                        .events
+                        .remove(0);
+                    assert_eq!(reply_id, raw_id, "acknowledge the caller's spelling");
+                    outcome
+                }
+                "why" => capture.record_why(policy, &why),
+                _ => unreachable!(),
+            };
+            let CaptureOutcome::Persisted { relative_path } = outcome else {
+                panic!("{kind} {raw_id}: {outcome:?}");
+            };
+            let markdown = fs::read_to_string(root.path().join(relative_path)).unwrap();
+            let index = index(&root, &cache);
+            index.reindex().unwrap();
+            let rebuilt = index.artifact(&event.artifact_id).unwrap().unwrap();
+            if kind == "why" {
+                assert_eq!(rebuilt.why.as_deref(), Some(why.text.as_str()));
+            } else {
+                assert_eq!(rebuilt.focused_seconds, event.focused_seconds);
+                assert_eq!(rebuilt.opens, event.opens);
+            }
+            let marker_kind = if kind == "why" {
+                " kind=why "
+            } else {
+                " kind=activity "
+            };
+            let marker = markdown
+                .lines()
+                .find(|line| line.starts_with(MARKER_PREFIX) && line.contains(marker_kind))
+                .unwrap();
+            let (prefix, data) = marker.split_once(" data=").unwrap();
+            let mut payload: serde_json::Value =
+                serde_json::from_slice(&hex::decode(data.strip_suffix(" -->").unwrap()).unwrap())
+                    .unwrap();
+            assert_eq!(payload["event_id"], canonical, "{kind} {raw_id}");
+            assert!(prefix.contains(&format!("id={}", sha256_hex(canonical.as_bytes()))));
+            let expected_count = if kind == "why" { 2 } else { 1 };
+            assert_eq!(parse_log(&markdown).len(), expected_count);
+
+            // A different, valid UUID must still fail the marker's hash check.
+            payload["event_id"] = Uuid::new_v4().to_string().into();
+            let forged = format!(
+                "{prefix} data={} -->",
+                hex::encode(serde_json::to_vec(&payload).unwrap())
+            );
+            assert!(parse_marker_event(&forged, "").is_none());
+
+            if kind == "why" {
+                // The native host also indexes the original request after capture.
+                index.record_why(&why, &[]).unwrap();
+            } else {
+                if kind == "batch" {
+                    index.record_activities([&event], &[]).unwrap();
+                } else {
+                    index.record_activity(&event, &[]).unwrap();
+                }
+            }
+            let state = index.load_current_state().unwrap().0;
+            assert_eq!(
+                state.events.len(),
+                expected_count,
+                "live updates must reuse the logged ID"
+            );
+            assert!(state.events.contains_key(canonical));
+            index.reindex().unwrap();
+            assert_eq!(
+                index.artifact(&event.artifact_id).unwrap().unwrap(),
+                rebuilt
+            );
+        }
+    }
+
+    #[test]
+    fn single_activity_ids_survive_reindex() {
+        capture_ids_survive_reindex("single");
+    }
+
+    #[test]
+    fn batch_activity_ids_survive_reindex() {
+        capture_ids_survive_reindex("batch");
+    }
+
+    #[test]
+    fn why_ids_survive_reindex() {
+        capture_ids_survive_reindex("why");
+    }
+
+    #[test]
+    fn normalized_urls_at_the_capture_limit_survive_reindex() {
+        use crate::capture::{CaptureBatchEvent, CaptureOutcome, CapturePolicy, CaptureStore};
+        for batched in [false, true] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let capture = CaptureStore::open_in(&storage(root.path()), None, cache.path()).unwrap();
+            let origins = ["https://example.com".to_owned()];
+            let policy = CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            };
+            let url = format!("https://example.com/{}", "ü".repeat(1362));
+            assert!(url.len() < 8192);
+            assert_eq!(canonical_url(&url, &[]).unwrap().len(), 8192);
+            let mut event = activity(
+                &Uuid::new_v4().to_string(),
+                "ABC",
+                "Unicode route",
+                &time::OffsetDateTime::now_utc()
+                    .replace_nanosecond(0)
+                    .unwrap()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
+            );
+            event.url = url.clone();
+            event.modes[0].url = url.clone();
+            event.trails.push(ActivityTrail {
+                transition: "link".into(),
+                from_artifact_id: Some("work:example.com/source".into()),
+                from_url: Some(url),
+            });
+            let outcome = if batched {
+                capture
+                    .record_batch(
+                        policy,
+                        &Uuid::new_v4().to_string(),
+                        &[CaptureBatchEvent::Activity(&event)],
+                        None,
+                    )
+                    .events
+                    .remove(0)
+                    .1
+            } else {
+                capture.record_activity(policy, &event)
+            };
+            assert!(
+                matches!(outcome, CaptureOutcome::Persisted { .. }),
+                "{outcome:?}"
+            );
+            let index = index(&root, &cache);
+            index.reindex().unwrap();
+            let rebuilt = index.artifact(&event.artifact_id).unwrap().unwrap();
+            assert_eq!(rebuilt.focused_seconds, event.focused_seconds);
+            assert_eq!(rebuilt.url, canonical_url(&event.url, &[]).unwrap());
+        }
     }
 
     #[test]

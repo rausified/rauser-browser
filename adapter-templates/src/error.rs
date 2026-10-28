@@ -10,7 +10,7 @@ use serde::Serialize;
 macro_rules! codes {
     ($(#[$meta:meta])* $name:ident { $($variant:ident => $text:literal,)* }) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum $name {
             $($variant,)*
         }
@@ -129,6 +129,12 @@ codes! {
         SearchCapture => "draft_search_capture",
         MatchesProbe => "draft_matches_probe",
         Overlap => "draft_overlap",
+        BlockedRoute => "draft_blocked_route",
+        PagingCapture => "draft_paging_capture",
+        SecretCapture => "draft_secret_capture",
+        InvalidRule => "draft_invalid_rule",
+        ScopePending => "draft_scope_pending",
+        ScopeChoice => "draft_scope_choice",
     }
 }
 

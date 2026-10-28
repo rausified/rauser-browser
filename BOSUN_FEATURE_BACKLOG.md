@@ -232,11 +232,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-gf1` **Resolve the bare-Notion draft-rule contradiction.** The
-  named Notion identity success case has no route literal before its first
-  identifier, while the draft checker requires one. Document and test a
-  consistent outcome before closing `brwr-t40`; keep the host's leading-route
-  safety requirement intact until an explicit, tested design replaces it.
 - [ ] `brwr-6x2` **Re-learn a site with automatic re-keying.** Users can't
   hand-fix a wrong machine-drafted ID. Add a Re-learn action that migrates
   existing activity, notes, and index rows through explicit append-only
@@ -253,7 +248,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 - **M1.5b (§12.2 step 7.1–7.5)**: the rest of aliases, Tier 1 fields
   (`scripting`), worklog files, and the remaining starter adapters. Create
   adapter (7.6) and agent drafting (7.7) moved into Plan work above as
-  Capture Site (`brwr-1hj`, `brwr-f45`), along with the re-keying part of
+  Capture Site (shipped; agent refinement `brwr-f45` remains), along with the re-keying part of
   7.2 (`brwr-6x2`). DESIGN.md gates the rest on M1.5a being in daily use for
   a few weeks; John will lift the gate here when it's time.
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service (deferred).** The
@@ -268,6 +263,12 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
+- [ ] `brwr-u8r` **Replay existing v1 capture intents before the normalized-URL
+  bound rejects their event (P2).** From #139's review: a partial v1 intent left
+  by an older host for an event whose normalized URL exceeds 8192 bytes is now
+  rejected (`url_too_long`) before `record_authorized` can replay it, so the
+  worker drops the event and strands the log tail (host/src/capture.rs
+  `normalized_bounded_url`).
 - [ ] `brwr-srp` **Record which query parameters were stripped beside stored
   canonical URLs (P3).** Split from the shipped strip_params refusal, so stripped URLs can tell
   artifacts apart in history; changes the log and index formats.
@@ -332,21 +333,13 @@ fix, and keep each fix to one cycle. If the test does not fail on current
 main, check the item off as "not reproduced" and say why. The decided
 strip_params note-identity follow-up has shipped (see Shipped).
 
-- [ ] `brwr-q7e` **Non-canonical event IDs are captured, then dropped on
-  rescan.** The marker's `id_hash` hashes `parse_event_id()`'s lowercase
-  hyphenated UUID, but the hex payload keeps the raw `event_id`, so
-  `parse_marker_event` (host/src/index.rs ~1403/1422) rejects the line.
-  Canonicalize `event_id` in the payload at capture for single and batch
-  activity and for why (host/src/capture.rs) the way `record_summary`
-  already does (capture.rs ~408-415). The lane C2 review re-confirmed this
-  (findings 18/25); writers are `record_activity` ~296/~337, `record_why`
-  ~373, and batch activity ~730/~764.
-- [ ] `brwr-u8n` **URLs that grow past 8192 bytes when normalized are
-  captured, then dropped on rescan.** Capture bounds the raw URL
-  (host/src/capture.rs ~627/~802, `activity_shape_is_valid` ~154/166) but
-  stores the normalized one, and the index's `safe_page_url` (index.rs ~1483)
-  bounds the stored value. Apply the bound after normalization to the page,
-  mode, and trail URLs and reject with `url_too_long`.
+- [ ] `brwr-smu` **Recover older noncanonical UUID markers and partial
+  intents.** New writes use canonical UUIDs (see Shipped); older uppercase or
+  unhyphenated payload IDs still fail reindex's raw hash check, and incomplete
+  v1 intents with those payloads cannot match the new rendering. Recover their
+  original bytes and canonical cache identity without rewriting logs or
+  weakening intent/hash/tail validation. Discovered during the UUID fix (see
+  Shipped).
 - [ ] `brwr-w4k` **Use as artifact note records the migration route as the
   note's URL.** `use_as_artifact_note` (host/src/note.rs ~622) renders the new
   note with `destination_url`, while `save_keyed_note` keeps the note's
@@ -366,8 +359,8 @@ None blocks deploy, so they are P3 bugs, and they wait behind the plan work
 above. Line numbers were re-checked on 0ab41f4; re-check them against current
 main. Same rules as the lane C list: write the regression test in the bead
 first, show it fails, then fix, one cycle each; if it does not fail, check the
-item off as "not reproduced" and say why. Findings 18 and 25 of this review
-were folded into `brwr-q7e` above rather than given their own item.
+item off as "not reproduced" and say why. The UUID findings 18 and 25 have
+shipped (see Shipped).
 
 - [ ] `brwr-jdi` **An adapter change made elsewhere costs the next note edit.**
   `scheduleReload` (extension/panel.ts ~507) calls `notes.retry()`, which only
@@ -445,16 +438,6 @@ were folded into `brwr-q7e` above rather than given their own item.
 ## In Progress / This Iteration
 
 - In progress in the Lane A session, not Cookie. Cookie must not claim these:
-- [ ] `brwr-t40` **Capture Site for unknown sites.** Complete the URL shaper,
-  bounded worker sample, top-frame link shapes, host structural drafter and
-  per-rule safety checks in DESIGN §5.1 and §12.2 step 7.6. Extend the same
-  panel review; all named planted-link, shared-origin and identity tests remain
-  required. This is the remaining portion of Capture Site after known sites.
-  **Cycle split (2026-10-27):** the private input layer and an inspectable,
-  review-only panel/settings surface shipped first (see Shipped). The parent remains
-  open for the host structural drafter, per-rule checks, shared-origin scope,
-  selected-rule capture and all named identity/flow cases. A pattern preview
-  must never imply that unknown-site capture is enabled.
 - [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
   Structural first, agent second: for unknown sites, "Improve with AI"
   refines the structural draft by launching an agent job through the Brauser
@@ -493,26 +476,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   missing, then close this item. `brwr-i1g` stays open for the interactive
   Windows acceptance.
 
-- [ ] `brwr-1hj` **Capture Site (P1 parent; step 7.6 moved forward; rescoped
-  2026-10-26).** One side-panel "Capture Site" button. Known starter sites
-  (Jira Cloud, SharePoint/OneDrive) produce the adapter from the URL alone;
-  GitHub prompts inline for the work-organization list; unknown sites use the
-  host's structural drafter (no agent) with every safety rule in DESIGN §5.1
-  and §12.2 step 7.6. The save goes through `update_config` under protocol v6:
-  no Chrome grants, no native confirmation, no ungranted-tab flow, and no
-  pending-grant expiry or rollback. Before the save, a plain-language review
-  shows what Brauser will remember here, with real example pages it matched,
-  and what it won't (search, dashboards, login, sharing). The JSON editor
-  stays an advanced view nobody has to open. Tier 1 is not required. It
-  absorbs the choose-and-scope part of the old first-tool setup proposal; keep
-  GitHub PR and issue owner scopes separate rather than inferring one shared
-  value. **Split in Cookie's cycle 1 (2026-10-27):** filed first as
-  `brwr-1hj.1` (known sites) and `brwr-1hj.2` (unknown sites), then refiled
-  under flat IDs. The known-site panel flow shipped as `brwr-qox` (see
-  Shipped); unknown-site URL shaping, samples, link shapes, host structural
-  drafting and all named safety/flow tests are `brwr-t40`. Keep this parent in progress until
-  `brwr-t40` completes. Re-learning remains the separate alias/re-key
-  migration (`brwr-6x2`), not a relaxation of frozen IDs.
 
 
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
@@ -520,6 +483,8 @@ were folded into `brwr-q7e` above rather than given their own item.
 ## Shipped
 
 - [x] `brwr-smr` **The smoke detects an extension rebuilt underneath it (2026-10-27).** PR #135's `timed out waiting for a new run card` and `Panel shows: null` stops came from `extension/dist` being rebuilt during the run by a codex review in the same worktree, not from CPU load or a product race. One build at the click reproduced the timeout exactly, with the panel saying it could not read the page, because `vendor/readability.js` was gone. One build at panel reopen reproduced the missing panel page. The smoke now refuses to start while `extension/.build` exists, and fails or annotates a run whose `dist` files changed. The run-card wait stops at once with the panel's own failure line. TESTING.md documents the rule. After PR 4 (#96) merged, `cardIn`, which PR 4's t53 `summarizeWithCodex()` also uses, moved onto `waitUntil`; on timeout it reports what the service says about the run. **Metrics:** before, 11 of 11 passed under load without a rebuild (6 at full load, 5 at 3x); after, 10 consecutive passes (5 idle, 5 under full load), and 11 more on the tree merged with PR 4 (5 idle, 6 under full load).
+- **Category:** Bug Fix. **Keep captured activity and context after rebuilding history (2026-10-28).** Activity and Why log payloads now use the same canonical UUID as their marker hash and immediate index update. Uppercase and unhyphenated valid IDs survive reindex without losing measurements or context or double-counting work, and batch replies echo the request ID so acknowledgements still correlate. Completes assigned `brwr-q7e`; historical marker and partial-intent recovery remains `brwr-smu`. **Metrics:** Three new UUID regression matrices plus a test-first batch-reply assertion; full gate green, 755 exercised Rust tests and 43 explicit IPC skips, all 15 extension and two script files.
+- **Category:** Bug Fix. **Reject encoded URLs that rebuilt history cannot retain (2026-10-28).** Capture checks the stored URL after authorization and normalization, refusing values over 8192 bytes as `url_too_long` before creating logs or intents. The same bound covers page, mode and trail URLs in single/batch capture and the shared Why/summary writer, while an exactly-at-limit Unicode URL survives reindex. Completes assigned `brwr-u8n`. **Metrics:** Three new URL regression tests, six new Rust functions across both fixes; 798 reported Rust outcomes (755 exercised, 43 IPC skips), all required checks, both Clippy configurations, 15 extension and two script files pass; macOS smoke unavailable on Linux.
 
 - **Category:** New Feature. `brwr-t43`, `brwr-t44`, `brwr-t45`, `brwr-t46`, `brwr-t47`, `brwr-t48`, `brwr-t49`, `brwr-t50`, `brwr-t51`, `brwr-t52`, `brwr-t53`, `brwr-t54`, `brwr-so4` **Open access PR 4: summary files, the summary log event, and summaries in the index and panel (2026-10-27).** Built on `feat/summary-outputs-pr4`, not yet merged; every plan task (43-54) is done, so `brwr-so4` is closed. The service's `SummaryFinisher` saves a validated answer under the configuration current at finish, following a key changed mid-run, with the answer's `answered_at` stamp (re-stamped when the daily log's window would refuse it) in the click's `requested_at` offset, so Retry save is idempotent; failures are plain reasons that say what to do. Summary files are rendered from the answer, written through the shared ownership-checked replace and never adopted; body text goes through a context-free escape (`&lt;`, `\!`, and backticks, `$`, tabs, `~~~` runs and code-length space runs as numeric entities) with wikilink and single-line rules, front matter is JSON-quoted YAML with no entities, and `npm run test:markdown-neutralizer` (a new CI step) renders the shared corpus with markdown-it, micromark and marked. The `summary` event gains `record_key`, `artifact_type` and `harness` and attaches to the adapter's artifact on recognized pages; the index cache is format 6 with an in-place format-5 migration, summaries never count as opens or opened days, artifact files gain a Summary line and date-ordered Timeline summary lines, and Recent rows, `get_artifact` (unrecognized pages too, quietly null on failure) and the worklog carry them. `open_summary` opens only an owned summary file with PR 3's opener, by the `summary_path` the Recent row, summary line or run card shows, so a later key change cannot send it to another record's file; the panel shows the page's saved summary, summarized Recent rows, and the run card's saved line with one retried lookup. The headless smoke (`brwr-t53`) covers the outputs against the fake harnesses: an answer carrying a Markdown image, an `<img>` tag, a Mermaid fence and a Dataview query reaches the summary file only in escaped form with plain YAML front matter, and the run checks the log event, `list_artifacts` (unrecognized and adapter-recognized pages), the worklog, artifact-file Summary links and Timeline order, Retry save over an unowned file, `reindex`, and **Open summary**. **Metrics:** 3 consecutive headless smoke passes (45 steps each, about 100 s). **[human]**: the neutralized corpus in Obsidian and VS Code preview (TESTING.md "Real-UI acceptance").
 - [x] `brwr-hnr` **Summary-only days no longer count as opened days (2026-10-27, open access PR 4).** Fixed by PR 4 Task 47 (697e515): the Summary arm of `derive` no longer inserts a day opened, so a summary never adds to `opens` or `days_opened` (it can still move first and last seen). Covered by Task 48's day-A/day-B regression `index::tests::an_m1_visit_and_a_later_summary_open_the_page_on_one_day` (an M1 legacy visit on day A plus a summary on day B is one open on one day, in the index, the artifact file and the worklog) and by `index::tests::a_summary_on_an_adapter_artifact_without_activity_creates_that_row` (a summary-only artifact shows `opens: 0` and `days_opened: 0`).
@@ -843,3 +808,29 @@ stop product work, and no history reset or production IPC change is called for.
   pass. Headless smoke refuses Linux; dialog accounting still compares the
   dynamic `dialogsShown` total with the host log, with no added steps or
   scripted answers in this cycle.
+
+
+### Cycle observations (2026-10-28 — capture/index round trips)
+
+- Opening gate on `46b46495` was clean; no quarantine file or unfinished work.
+  Capture Site parent `brwr-1hj` stays in progress because `brwr-t40` is
+  explicitly reserved for Lane A. Completed next assigned items `brwr-q7e`
+  and `brwr-u8n` with failing regressions before fixes, then the full gate.
+- Durable identity and reply correlation have different jobs: canonicalize
+  stored UUIDs and immediate index updates together, while replies echo the
+  request ID. Raw log payload assertions and rebuild checks caught the loss;
+  checking cache totals alone could have hidden it. Old noncanonical records
+  and partial intents are preserved for the focused `brwr-smu` follow-up.
+- Continue the authoritative assigned queue next: `brwr-v5t` and `brwr-w4k`
+  concern the same older-note migration flow and make a useful small batch.
+  Do not displace them with further internal capture hardening or claim Lane A.
+- The existing `brwr-ppn` worklog-curation proposal remains a valuable later
+  capability: let someone select the work to share and annotate its purpose
+  before copying. Reuse Recent and keep recorded measurements intact, with
+  local preview and explicit copy rather than an automatic external send.
+- Manual complete-diff review found the batch reply correlation gap; added
+  the failing assertion before fixing it. The external `codex exec review`
+  pass was not invoked because this unattended run forbids live external API
+  calls. The driver's independent reviewer remains required. Final logs are
+  in `target/overnight-health/cycle-20261028/review-final-*.log`; 43 Rust IPC
+  skips are explicit, and macOS headless smoke refuses Linux.

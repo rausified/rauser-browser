@@ -955,6 +955,237 @@ pub struct ServiceReady {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeCount {
+    pub shape: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftSiteRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub origin: String,
+    pub visited: Vec<ShapeCount>,
+    pub links: Vec<ShapeCount>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiteDrafter {
+    Structural,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DraftScopeState {
+    NotShared,
+    Copied,
+    Pending,
+    UnscopedOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UncheckedReason {
+    LinkOnly,
+    TokenOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DraftDropReason {
+    Root,
+    Probe,
+    SearchOrPaging,
+    SecretQuery,
+    BlockedRoute,
+    ParamName,
+    AlreadyRecognized,
+    NoRouteWord,
+    NoIdentifier,
+    Limit,
+    DraftForbiddenKey,
+    DraftNoScopeSource,
+    DraftScopeConflict,
+    DraftNoLeadingLiteral,
+    DraftRestSecond,
+    DraftIdNeedsTypedCapture,
+    DraftSearchCapture,
+    DraftMatchesProbe,
+    DraftOverlap,
+    DraftBlockedRoute,
+    DraftPagingCapture,
+    DraftSecretCapture,
+    DraftInvalidRule,
+    DraftScopePending,
+    DraftScopeChoice,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewSource {
+    Visited,
+    Link,
+    Probe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleProvenance {
+    Drafted,
+    UserWritten,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleVerdictKind {
+    Kept,
+    Dropped,
+    Warned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedScopeKind {
+    NotShared,
+    Scoped,
+    Unscoped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftTenantView {
+    pub segment: u32,
+    pub capture: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftedRuleView {
+    pub rule: u32,
+    pub checked: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub unchecked_reason: Option<UncheckedReason>,
+    pub visited: u32,
+    pub links: u32,
+    pub example: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftedAdapterView {
+    pub adapter: serde_json::Value,
+    pub scope: DraftScopeState,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub tenant: Option<DraftTenantView>,
+    pub rules: Vec<DraftedRuleView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DroppedView {
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub shape: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub adapter: Option<u32>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub rule: Option<u32>,
+    pub reason: DraftDropReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewRowView {
+    pub source: PreviewSource,
+    pub shape: String,
+    pub url: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub adapter: Option<u32>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub rule: Option<u32>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub artifact_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteDrafted {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub revision: String,
+    pub drafter: SiteDrafter,
+    pub adapters: Vec<DraftedAdapterView>,
+    pub dropped: Vec<DroppedView>,
+    pub preview: Vec<PreviewRowView>,
+    pub taken_types: Vec<String>,
+    pub remapped: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopeValues {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnscopedChoice {
+    Unscoped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ScopeChoiceView {
+    ScopeValues(ScopeValues),
+    UnscopedChoice(UnscopedChoice),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckSiteDraftRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub origin: String,
+    pub expected_revision: String,
+    pub adapters: Vec<serde_json::Value>,
+    pub provenance: Vec<Vec<RuleProvenance>>,
+    pub scope: Vec<Option<ScopeChoiceView>>,
+    pub visited: Vec<ShapeCount>,
+    pub links: Vec<ShapeCount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuleVerdictView {
+    pub verdict: RuleVerdictKind,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopeVerdictView {
+    pub state: DraftScopeState,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub resolved: Option<ResolvedScopeKind>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteDraftChecked {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub revision: String,
+    pub rules: Vec<Vec<RuleVerdictView>>,
+    pub scope: Vec<ScopeVerdictView>,
+    pub preview: Vec<PreviewRowView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
@@ -984,6 +1215,8 @@ pub enum Request {
     OpenPath(OpenPathRequest),
     OpenSummary(OpenSummaryRequest),
     GetAgentEnv(GetAgentEnvRequest),
+    DraftSite(DraftSiteRequest),
+    CheckSiteDraft(CheckSiteDraftRequest),
     ForgetAdoptedContracts(ForgetAdoptedContractsRequest),
     ServiceHello(ServiceHelloRequest),
 }
@@ -1017,6 +1250,8 @@ impl Request {
             Self::OpenPath(value) => value.protocol_version,
             Self::OpenSummary(value) => value.protocol_version,
             Self::GetAgentEnv(value) => value.protocol_version,
+            Self::DraftSite(value) => value.protocol_version,
+            Self::CheckSiteDraft(value) => value.protocol_version,
             Self::ForgetAdoptedContracts(value) => value.protocol_version,
             Self::ServiceHello(value) => value.protocol_version,
         }
@@ -1050,6 +1285,8 @@ impl Request {
             Self::OpenPath(value) => &value.request_id,
             Self::OpenSummary(value) => &value.request_id,
             Self::GetAgentEnv(value) => &value.request_id,
+            Self::DraftSite(value) => &value.request_id,
+            Self::CheckSiteDraft(value) => &value.request_id,
             Self::ForgetAdoptedContracts(value) => &value.request_id,
             Self::ServiceHello(value) => &value.request_id,
         }
@@ -1083,6 +1320,8 @@ pub enum Response {
     PathOpened(PathOpened),
     SummaryOpened(SummaryOpened),
     AgentEnvListed(AgentEnvListed),
+    SiteDrafted(SiteDrafted),
+    SiteDraftChecked(SiteDraftChecked),
     ServiceReady(ServiceReady),
     Error(ErrorResponse),
 }
@@ -1113,6 +1352,8 @@ impl Response {
             Self::PathOpened(value) => value.protocol_version,
             Self::SummaryOpened(value) => value.protocol_version,
             Self::AgentEnvListed(value) => value.protocol_version,
+            Self::SiteDrafted(value) => value.protocol_version,
+            Self::SiteDraftChecked(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
         }
@@ -1143,6 +1384,8 @@ impl Response {
             Self::PathOpened(value) => &value.request_id,
             Self::SummaryOpened(value) => &value.request_id,
             Self::AgentEnvListed(value) => &value.request_id,
+            Self::SiteDrafted(value) => &value.request_id,
+            Self::SiteDraftChecked(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,
             Self::Error(value) => &value.request_id,
         }

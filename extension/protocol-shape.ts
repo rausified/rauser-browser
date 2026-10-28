@@ -238,6 +238,119 @@ export function isConfig(value: unknown): boolean {
     isAdapterDocument(config.adapters);
 }
 
+// --- Capture Site drafting (additive v6) ---------------------------------
+// Every object has exactly its schema keys and every list its schema bound;
+// the panel renders this text, so a host speaking another shape is refused.
+
+const MESSAGE_KEYS = ["type", "protocol_version", "request_id"] as const;
+const DRAFT_SCOPE_STATES: ReadonlySet<string> = new Set([
+  "not_shared", "copied", "pending", "unscoped_only",
+]);
+const RESOLVED_SCOPES: ReadonlySet<string> = new Set(["not_shared", "scoped", "unscoped"]);
+const UNCHECKED_REASONS: ReadonlySet<string> = new Set(["link_only", "token_only"]);
+const PREVIEW_SOURCES: ReadonlySet<string> = new Set(["visited", "link", "probe"]);
+const RULE_VERDICTS: ReadonlySet<string> = new Set(["kept", "dropped", "warned"]);
+/** The structural `DropReason` values, then the `DraftErrorCode` values. */
+const DRAFT_DROP_REASONS: ReadonlySet<string> = new Set([
+  "root", "probe", "search_or_paging", "secret_query", "blocked_route", "param_name", "already_recognized",
+  "no_route_word", "no_identifier", "limit",
+  "draft_forbidden_key", "draft_no_scope_source", "draft_scope_conflict",
+  "draft_no_leading_literal", "draft_rest_second", "draft_id_needs_typed_capture",
+  "draft_search_capture", "draft_matches_probe", "draft_overlap", "draft_blocked_route",
+  "draft_paging_capture", "draft_secret_capture", "draft_invalid_rule", "draft_scope_pending", "draft_scope_choice",
+]);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBoundedList(value: unknown, max: number, item: (entry: unknown) => boolean): boolean {
+  return Array.isArray(value) && value.length <= max && value.every(item);
+}
+
+function isBoundedString(value: unknown, max: number, min = 0): boolean {
+  return typeof value === "string" && value.length >= min && value.length <= max;
+}
+
+function isOneOf(value: unknown, values: ReadonlySet<string>): boolean {
+  return typeof value === "string" && values.has(value);
+}
+
+function isIndexOrNull(value: unknown): boolean {
+  return value === null || isUnsignedInteger(value);
+}
+
+function isReasonOrNull(value: unknown): boolean {
+  return value === null || isBoundedString(value, 64);
+}
+
+function isMessage(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return hasExactKeys(value, [...MESSAGE_KEYS, ...keys]) && isBoundedString(value.revision, 128, 1);
+}
+
+function isDraftTenant(value: unknown): boolean {
+  return value === null || (isPlainObject(value) && hasExactKeys(value, ["segment", "capture"]) &&
+    isUnsignedInteger(value.segment) && isBoundedString(value.capture, 64, 1));
+}
+
+function isDraftedRule(value: unknown): boolean {
+  return isPlainObject(value) &&
+    hasExactKeys(value, ["rule", "checked", "unchecked_reason", "visited", "links", "example"]) &&
+    isUnsignedInteger(value.rule) && typeof value.checked === "boolean" &&
+    (value.unchecked_reason === null || isOneOf(value.unchecked_reason, UNCHECKED_REASONS)) &&
+    isUnsignedInteger(value.visited) && isUnsignedInteger(value.links) &&
+    isBoundedString(value.example, 8192);
+}
+
+function isDraftedAdapter(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ["adapter", "scope", "tenant", "rules"]) &&
+    isPlainObject(value.adapter) && isOneOf(value.scope, DRAFT_SCOPE_STATES) &&
+    isDraftTenant(value.tenant) && isBoundedList(value.rules, 16, isDraftedRule);
+}
+
+function isDropped(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ["shape", "adapter", "rule", "reason"]) &&
+    (value.shape === null || isBoundedString(value.shape, 2048)) &&
+    isIndexOrNull(value.adapter) && isIndexOrNull(value.rule) &&
+    isOneOf(value.reason, DRAFT_DROP_REASONS);
+}
+
+function isPreviewRow(value: unknown): boolean {
+  return isPlainObject(value) &&
+    hasExactKeys(value, ["source", "shape", "url", "adapter", "rule", "artifact_id"]) &&
+    isOneOf(value.source, PREVIEW_SOURCES) && isBoundedString(value.shape, 2048) &&
+    isBoundedString(value.url, 8192) && isIndexOrNull(value.adapter) &&
+    isIndexOrNull(value.rule) &&
+    (value.artifact_id === null || isBoundedString(value.artifact_id, 2048));
+}
+
+function isRuleVerdict(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ["verdict", "reason"]) &&
+    isOneOf(value.verdict, RULE_VERDICTS) && isReasonOrNull(value.reason);
+}
+
+function isScopeVerdict(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ["state", "resolved", "reason"]) &&
+    isOneOf(value.state, DRAFT_SCOPE_STATES) &&
+    (value.resolved === null || isOneOf(value.resolved, RESOLVED_SCOPES)) &&
+    isReasonOrNull(value.reason);
+}
+
+function isSiteDrafted(value: Record<string, unknown>): boolean {
+  return isMessage(value, [
+    "revision", "drafter", "adapters", "dropped", "preview", "taken_types", "remapped",
+  ]) && value.drafter === "structural" && isBoundedList(value.adapters, 8, isDraftedAdapter) &&
+    isBoundedList(value.dropped, 128, isDropped) && isBoundedList(value.preview, 128, isPreviewRow) &&
+    isBoundedList(value.taken_types, 160, (type) => isBoundedString(type, 64, 1)) &&
+    isUnsignedInteger(value.remapped);
+}
+
+function isSiteDraftChecked(value: Record<string, unknown>): boolean {
+  return isMessage(value, ["revision", "rules", "scope", "preview"]) &&
+    isBoundedList(value.rules, 8, (rules) => isBoundedList(rules, 16, isRuleVerdict)) &&
+    isBoundedList(value.scope, 8, isScopeVerdict) && isBoundedList(value.preview, 128, isPreviewRow);
+}
+
 export function isResponseShape(value: Record<string, unknown>): boolean {
   switch (value.type) {
     case "error":
@@ -319,6 +432,10 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "agent_env_listed":
       return Array.isArray(value.names) && value.names.length <= 64 &&
         isStringArray(value.names) && stringOrNull(value.problem);
+    case "site_drafted":
+      return isSiteDrafted(value);
+    case "site_draft_checked":
+      return isSiteDraftChecked(value);
     default:
       return false;
   }

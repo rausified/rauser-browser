@@ -76,10 +76,12 @@ function configWith(adapters, captureEnabled, stripParams = []) {
 
 function install({
   adapters = [], captureEnabled, stripParams = [], storage = {}, host = {}, worker = {}, workerStatus = {},
+  session = new Map(), hash = "",
 } = {}) {
   const elements = new Map();
   const state = {
     storage: new Map(Object.entries(storage)),
+    session,
     config: { ...configWith(adapters, captureEnabled, stripParams), adapters: { format: 1, artifacts: adapters } },
     revision: 1,
     configIssue: null,
@@ -163,6 +165,7 @@ function install({
     createElement: (tag) => new FakeElement(tag),
   };
   globalThis.window = { addEventListener() {} };
+  globalThis.location = { hash };
   globalThis.chrome = {
     runtime: {
       lastError: undefined,
@@ -208,6 +211,21 @@ function install({
         },
         async remove(keys) {
           for (const name of Array.isArray(keys) ? keys : [keys]) state.storage.delete(name);
+        },
+      },
+      session: {
+        async get(key) {
+          const result = {};
+          for (const name of Array.isArray(key) ? key : [key]) {
+            if (session.has(name)) result[name] = structuredClone(session.get(name));
+          }
+          return result;
+        },
+        async set(items) {
+          for (const [name, value] of Object.entries(items)) session.set(name, structuredClone(value));
+        },
+        async remove(keys) {
+          for (const name of Array.isArray(keys) ? keys : [keys]) session.delete(name);
         },
       },
       onChanged: { addListener(listener) { state.storageChanged.push(listener); } },
@@ -1427,6 +1445,149 @@ test("manual artifact refresh reports unowned path conflicts", async () => {
   assert.match(statusText(), /1 unowned path conflict remains/);
   assert.match(statusText(), /artifacts\/work\/item\.md/);
   assert.equal(state.requests.at(-1).type, "refresh_artifacts");
+});
+
+// --- Capture Site advanced-editor handoff ----------------------------------
+
+const { canonicalJson, DRAFT_HANDOFF_TTL_MS } = await import("../dist/capture-site-handoff.js");
+const WIKI = "https://wiki.example";
+const WIKI_TABLE = {
+  type: "wiki.pages", origin: WIKI,
+  match: [{ path: "/pages/{num:int}" }, { path: "/archive/{num:int}" }],
+  id: "wiki.pages:{host}/{num}",
+};
+const LINEAR_TABLE = {
+  type: "linear.issue", origin: "https://linear.app",
+  match: [{ path: "/{workspace:name|lower}/issue/{key:jira_key}" }],
+  id: "linear.issue:{host}/{workspace}/{key}",
+};
+const handoffKey = (id) => `captureSiteDraft:${id}`;
+
+function handoff(id, adapters, overrides = {}) {
+  return {
+    id, origin: adapters[0].origin, created: Date.now(), adapters: structuredClone(adapters),
+    baseline_rules: adapters.map((adapter) => adapter.match.map(canonicalJson)),
+    visited: [{ shape: "/pages/{num}", count: 3 }], links: [{ shape: "/archive/{num}", count: 4 }],
+    ...overrides,
+  };
+}
+
+// The host's check_site_draft: `verdict(provenance, adapter, rule)` judges
+// each rule; every scope choice is accepted.
+function checkHost(verdict = () => ({ verdict: "kept", reason: null })) {
+  return {
+    check_site_draft: (request, state) => ({
+      type: "site_draft_checked", revision: String(state.revision),
+      rules: request.provenance.map((rules, a) => rules.map((provenance, r) => verdict(provenance, a, r))),
+      scope: request.adapters.map(() => ({ state: "not_shared", resolved: "not_shared", reason: null })),
+      preview: [],
+    }),
+  };
+}
+
+async function openHandoff(entry, options = {}) {
+  const session = new Map([[handoffKey(entry.id), entry]]);
+  install({ session, hash: `#draft=${entry.id}`, ...options });
+  await openSettings();
+  return session;
+}
+
+function editDraft(adapters) {
+  env.elements.get("adapter-json").value = JSON.stringify(adapters, null, 2);
+  env.elements.get("adapter-json").dispatch("input");
+}
+
+const checks = () => env.requests.filter((request) => request.type === "check_site_draft");
+
+test("a handed-off draft opens in the adapter editor once and expires after 30 minutes", async () => {
+  const entry = handoff("draft-1", [WIKI_TABLE]);
+  const session = await openHandoff(entry);
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.match(env.elements.get("adapter-editor-heading").textContent, /wiki\.example/);
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), [WIKI_TABLE]);
+  assert.equal(session.size, 0, "the entry is read once and deleted");
+  assert.equal(env.elements.get("save-adapter").disabled, false);
+
+  // A second load with the same ID finds nothing.
+  install({ session, hash: "#draft=draft-1" });
+  await openSettings();
+  assert.equal(env.elements.get("adapter-editor").hidden, true);
+  assert.match(statusText(), /expired or was already opened/);
+
+  const expired = handoff("draft-2", [WIKI_TABLE], { created: Date.now() - DRAFT_HANDOFF_TTL_MS - 1 });
+  const left = await openHandoff(expired);
+  assert.equal(env.elements.get("adapter-editor").hidden, true);
+  assert.equal(left.size, 0, "an expired entry is deleted");
+  assert.match(statusText(), /expired or was already opened/);
+  assert.equal(env.requests.some((request) => request.type === "update_config"), false);
+});
+
+test("editing one rule makes only that rule user-written", async () => {
+  await openHandoff(handoff("draft-edit", [WIKI_TABLE]), { host: checkHost() });
+  const edited = structuredClone(WIKI_TABLE);
+  edited.match[1] = { path: "/archive/{num:int}/view" };
+  editDraft([edited]);
+  await saveOpenAdapter("the edited draft to save");
+  const [check] = checks();
+  assert.deepEqual(check.provenance, [["drafted", "user_written"]]);
+  assert.deepEqual(check.adapters, [edited]);
+  assert.deepEqual(check.scope, [null]);
+  assert.deepEqual(check.visited, [{ shape: "/pages/{num}", count: 3 }]);
+  assert.deepEqual(check.links, [{ shape: "/archive/{num}", count: 4 }]);
+  assert.equal(check.expected_revision, "1");
+  assert.deepEqual(lastUpdate().config.adapters.artifacts, [edited]);
+  assert.equal(env.config.capture_enabled, true);
+});
+
+test("user-written rule failures only warn while unedited drafted failures block save", async () => {
+  // A drafted rule the host now drops blocks the whole save.
+  await openHandoff(handoff("draft-drop", [WIKI_TABLE]), { host: checkHost((provenance, _a, r) =>
+    r === 1 ? { verdict: "dropped", reason: "draft_overlap" } : { verdict: "kept", reason: null }) });
+  env.elements.get("save-adapter").click();
+  await until(() => checks().length === 1 && idle(), "the refused check");
+  assert.equal(env.requests.some((request) => request.type === "update_config"), false);
+  assert.match(statusText(), /already captured by this site's rules/);
+  assert.equal(env.elements.get("adapter-editor").hidden, false, "the editor stays open to fix it");
+
+  // The same failure on the rule the user wrote only warns, and the full
+  // edited document is saved.
+  await openHandoff(handoff("draft-warn", [WIKI_TABLE]), { host: checkHost((provenance) =>
+    provenance === "user_written" ? { verdict: "warned", reason: "draft_matches_probe" } : { verdict: "kept", reason: null }) });
+  const edited = structuredClone(WIKI_TABLE);
+  edited.match[1] = { path: "/archive/{num:int}/view" };
+  editDraft([edited]);
+  await saveOpenAdapter("the warned draft to save");
+  assert.deepEqual(checks()[0].provenance, [["drafted", "user_written"]]);
+  assert.deepEqual(lastUpdate().config.adapters.artifacts, [edited]);
+  assert.match(statusText(), /saved/i);
+  assert.match(statusText(), /wiki\.pages rule 2.*sign-in, search, dashboard or sharing page/);
+});
+
+test("adding a title or choosing scope in the advanced editor does not trip draft_forbidden_key", async () => {
+  await openHandoff(handoff("draft-scope", [LINEAR_TABLE], {
+    visited: [{ shape: "/{slug}/issue/{key}", count: 1 }], links: [],
+  }), { host: checkHost() });
+  const edited = { ...structuredClone(LINEAR_TABLE), scope: { workspace: ["acme"] }, title: "{title} · Linear" };
+  editDraft([edited]);
+  await saveOpenAdapter("the scoped draft to save");
+  const [check] = checks();
+  assert.deepEqual(check.adapters, [LINEAR_TABLE], "title, scope and unscoped are stripped");
+  assert.deepEqual(check.provenance, [["drafted"]]);
+  assert.deepEqual(check.scope, [{ values: ["acme"] }]);
+  assert.deepEqual(lastUpdate().config.adapters.artifacts, [edited]);
+});
+
+test("an adapter with a hand-added path_case is user-written and its forbidden key only warns", async () => {
+  await openHandoff(handoff("draft-case", [WIKI_TABLE]), { host: checkHost((provenance) =>
+    provenance === "user_written" ? { verdict: "warned", reason: "draft_forbidden_key" } : { verdict: "dropped", reason: "draft_forbidden_key" }) });
+  const edited = { ...structuredClone(WIKI_TABLE), path_case: "insensitive" };
+  editDraft([edited]);
+  await saveOpenAdapter("the hand-edited draft to save");
+  const [check] = checks();
+  assert.deepEqual(check.adapters, [edited], "a hand-added key stays in the checked table");
+  assert.deepEqual(check.provenance, [["user_written", "user_written"]]);
+  assert.deepEqual(lastUpdate().config.adapters.artifacts, [edited]);
+  assert.match(statusText(), /it did not pass Brauser's safety checks/);
 });
 
 // GitHub PR and issue rules as a user configured them before repositories

@@ -1,7 +1,37 @@
 import { describe, element, worker } from "./settings.js";
-import { httpOrigin, inspectSitePatterns, readPatternResult, type SampledShape } from "./site-patterns.js";
+import {
+  httpOrigin, inspectSitePatterns, readPatternResult, type SampledShape, type SitePatterns,
+} from "./site-patterns.js";
 
 interface PatternPage { url: string; tabId: number | undefined }
+
+/** The click-time page inspection shared by Page patterns and Capture Site.
+ * It rechecks incognito and the active tab before reading any page hrefs,
+ * runs the link-shape function only in the top frame in the isolated world,
+ * and rechecks the tab afterwards. It returns null when the page changed or
+ * `isCurrent` says the caller moved on; it throws when the tab was already
+ * a different page or the page's patterns were unavailable. */
+export async function collectPagePatterns(
+  target: PatternPage,
+  isCurrent: () => boolean,
+): Promise<SitePatterns | null> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (target.tabId === undefined || !tab || tab.incognito !== false || tab.id !== target.tabId ||
+      tab.url !== target.url || !isCurrent()) {
+    throw new Error("The active page changed. Try again on the current page.");
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: target.tabId, frameIds: [0] }, world: "ISOLATED",
+    func: inspectSitePatterns, args: [target.url, true],
+  });
+  if (!isCurrent()) return null;
+  const patterns = readPatternResult(results.find((result) => result.frameId === 0)?.result);
+  const [current] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!isCurrent() || current?.incognito !== false || current.id !== target.tabId || current.url !== target.url) {
+    return null;
+  }
+  return patterns;
+}
 
 /** A click-only inspection. No grant, draft, config write or storage handoff
  * is created here. Navigating, canceling or closing drops all link shapes. */
@@ -59,17 +89,12 @@ export class SitePatternPanel {
     this.message.textContent = "Reviewing page patterns…";
     this.rows.replaceChildren();
     try {
-      // Recheck incognito and the active tab before reading any page hrefs.
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab || tab.incognito !== false || tab.id !== target.tabId || tab.url !== target.url || this.target !== target) {
-        throw new Error("The active page changed. Review the current page again.");
+      const isCurrent = (): boolean => this.target === target && this.samePage(this.page, target);
+      const patterns = await collectPagePatterns(target, isCurrent);
+      if (!patterns) {
+        if (this.target === target) this.cancel();
+        return;
       }
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: target.tabId!, frameIds: [0] }, world: "ISOLATED",
-        func: inspectSitePatterns, args: [target.url, true],
-      });
-      if (this.target !== target) return;
-      const patterns = readPatternResult(results.find((result) => result.frameId === 0)?.result);
       // Stored samples are optional here; a failure to read them must not
       // discard the page's own shapes.
       let samples: SampledShape[] = [];
@@ -79,9 +104,8 @@ export class SitePatternPanel {
       } catch (error) {
         samplesError = error;
       }
-      const [current] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (this.target !== target) return;
-      if (!this.samePage(this.page, target) || current?.incognito !== false || current.id !== target.tabId || current.url !== target.url) {
+      if (!isCurrent()) {
         this.cancel();
         return;
       }

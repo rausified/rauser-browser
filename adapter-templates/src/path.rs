@@ -91,6 +91,14 @@ pub(crate) fn is_anchor(s: &Segment) -> bool {
     }
 }
 
+/// §4.1, 7.9: a required path capture whose name `scoped` reports as a
+/// scope key anchors a template, because the scope list pins it the way a
+/// literal would. The validator (7.9) and the drafter (§10.4 step 4) share
+/// this one predicate.
+pub(crate) fn is_scope_anchor(s: &Segment, scoped: impl Fn(&str) -> bool) -> bool {
+    matches!(s, Segment::Capture { name, optional: false, .. } if scoped(name))
+}
+
 impl PathTemplate {
     /// Parses and structurally checks a path template. On error, returns the
     /// code and the character offset of the offending segment: for

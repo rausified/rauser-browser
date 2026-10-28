@@ -110,7 +110,8 @@ the artifact card can name what holds an artifact and what it holds:
 
 Totals are unchanged in meaning: a contained artifact's seconds count in its
 own view and once in its container's, and recent and worklog totals still
-count each second once. No message is added or removed.
+count each second once. No existing message is removed; version 7 also
+carries the Capture Site drafting messages below.
 
 Version 7 also carries summary outputs (open access PR 4), all additive:
 `SummaryView`; a required, nullable `summary` on `ArtifactListItem` and
@@ -248,6 +249,45 @@ extension does not accept `service_ready`.
 `ErrorCode` gains `service_unavailable`: the service is not installed, could
 not be started in time, or keeps reporting another build. Notes, capture, and
 settings never depend on the service.
+
+Version 7 additions: Capture Site drafting. Two request/response pairs, built
+additively within version 6 and moved onto version 7 (2026-10-27) when
+artifact containers took that version, so they ship with it; no existing
+message changed shape for them. `draft_site` asks the host's deterministic structural drafter for a
+capture policy on one exact HTTP(S) `origin`. Only the origin and private URL
+shapes cross: `visited` (at most 21 `ShapeCount`s, the current page's shape
+plus the worker's sample) and `links` (at most 50 click-only link shapes),
+each a `shape` of at most 2,048 characters and a `count` from 1 to 1,000,000.
+No raw URL, link `href`, or tab title is sent; the host refuses a value that
+is a URL rather than a shape, or any shape it cannot parse, as
+`invalid_request`. `site_drafted` returns the config `revision` it drafted
+against, the `drafter` (`structural`, the only value), at most 8
+`DraftedAdapterView`s (an adapter table with only Tier 0 keys, its scope
+state, the shared-origin tenant, and at most 16 rules, each with whether it
+starts checked and why not), at most 128 `dropped` shapes or rules with their
+reason, a `preview` of at most 128 rows (every visited and link shape filled
+to an illustrative URL, and every probe URL, with the rule that recognizes it
+ignoring scope; never a real URL), the `taken_types`, and `remapped`
+(always 0: the host answers `internal` rather than return a draft that
+would move pages the current policy or a recorded contract already names).
+`check_site_draft` re-checks the review's selection before the save: the
+checked `adapters` (at most 8 tables, before the scope, unscoped, and title
+overlays), one `provenance` list per adapter (`drafted` or `user_written`,
+at most 16), one `scope` choice per adapter in a separate field
+(`{ "values": [...] }` with 1 to 64 values of at most 128 characters,
+`"unscoped"`, or `null`), and the same shapes. There is no title field: a
+title entry comes from the tab title, which never reaches the host, and the
+panel adds it after the check. The host compares `expected_revision` with
+the current config and answers `conflict` when it differs; the extension
+then saves with the usual revision-checked `update_config`.
+`site_draft_checked` returns one `RuleVerdictView` (`kept`, `dropped`, or
+`warned`, with the draft check code) per rule, one `ScopeVerdictView` per
+adapter, and the preview. A scope verdict refuses `"unscoped"` as `draft_scope_choice`
+for an adapter with a rule whose only anchor is its scoped tenant
+(adapter-templates.md §10.4). A version 7 host built before these messages
+answers `invalid_request` for the unknown types, and the panel then asks for
+a host rebuild; a version 6 host refuses every version 7 request as
+`unsupported_protocol_version`. The host enforces every bound above at runtime.
 
 A site is on exactly when it has an adapter. The host records automatic
 capture only on the exact origins of a valid adapter document, and none while

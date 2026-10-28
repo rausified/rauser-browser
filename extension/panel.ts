@@ -918,6 +918,7 @@ captureSite = new CaptureSitePanel(session, {
     // The new adapter changes whether this page is an artifact.
     await refreshArtifact(true);
   },
+  openSettings,
 });
 
 function copyUnsavedText(): void {

@@ -4,7 +4,9 @@
 // another page has saved a different revision.
 import type {
   AdapterDocument, AdapterWarning, AdoptedState, AgentStatus, ConfigSnapshot, HarnessFound, HarnessId,
+  ShapeCount, SiteDraftChecked, SiteDrafted,
 } from "../protocol/ts/generated.js";
+import type { DraftChecked } from "./capture-site.js";
 import {
   POLICY_LEASE_MS,
   POLICY_STORAGE_KEY,
@@ -307,6 +309,49 @@ export class ConfigSession {
     }
     else await worker<WorkerStatus>({ kind: "suspend_policy" });
     await this.refreshStatus();
+  }
+
+  /**
+   * Capture Site drafting for an unknown origin. Only the origin and private
+   * URL shapes cross; the host drafts against its current config and returns
+   * the revision it drafted against. It writes nothing.
+   */
+  async draftSite(origin: string, visited: ShapeCount[], links: ShapeCount[]): Promise<SiteDrafted> {
+    return this.host.call({
+      type: "draft_site",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+      origin,
+      visited,
+      links,
+    }, "site_drafted");
+  }
+
+  /**
+   * Re-check the review's selection before the save: the checked tables
+   * (never the scope, unscoped, or title overlays), their provenance and the
+   * separate scope choices. A stale `expectedRevision` answers `conflict`.
+   * It writes nothing; the save is the usual revision-checked update_config.
+   */
+  async checkSiteDraft(
+    origin: string,
+    expectedRevision: string,
+    checked: DraftChecked,
+    visited: ShapeCount[],
+    links: ShapeCount[],
+  ): Promise<SiteDraftChecked> {
+    return this.host.call({
+      type: "check_site_draft",
+      protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(),
+      origin,
+      expected_revision: expectedRevision,
+      adapters: checked.adapters,
+      provenance: checked.provenance,
+      scope: checked.scope,
+      visited,
+      links,
+    }, "site_draft_checked");
   }
 
   /** The names agent.env sets, from the service. Values never leave it. */
