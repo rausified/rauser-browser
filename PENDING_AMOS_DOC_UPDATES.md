@@ -160,3 +160,12 @@
   preserve creation evidence, and frozen v1/v2 interrupted-write recovery is
   retained alongside new v3 intents. Ten new regression tests and the complete
   required/README gate pass (`brwr-srp`); macOS acceptance remains separate.
+
+- **Brauser — historical activity/context recovery:** Older uppercase and
+  unhyphenated UUID payloads now survive history rebuilds under a canonical
+  cache identity, retaining measurements and Why context without rewriting
+  daily logs. Pending v1 appends reconstruct their original queued UUID
+  spelling across all three historical renderers, and finish only with exact
+  intent hashes and tail bytes; edited or mismatched data remains untouched.
+  Two failing-first regression matrices cover 33 cases, and the full required
+  and README gates pass (`brwr-smu`). macOS browser acceptance stays separate.
