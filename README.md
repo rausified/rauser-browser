@@ -60,6 +60,12 @@ The panel updates when settings change, can send pending activity and pause capt
 
 The side panel and settings headers show the extension's build commit, with `-dirty` when tracked files had uncommitted changes, and the host's commit once it answers; a host built from a different commit is flagged, so rebuild both after pulling.
 
+The artifact card's **Recorded navigation** lists up to five incoming
+source/transition pairs with links and the last recorded day. It uses only
+known recorded artifacts; back/forward and missing sources do not invent an
+explanation. One source may appear under several navigation kinds. This
+requires the extension and host built together with protocol v8.
+
 If **Choose folder** is disabled and the settings page says "Native host unavailable," check that the extension ID in the native-host registration matches the ID shown on `chrome://extensions`, rebuild the host at the registered path, then reload the settings page and reopen the panel. The development host registration is per user; the guided macOS smoke run below sets up its own isolated profile automatically.
 
 For a guided macOS Chrome smoke run, build both components as above, then run:

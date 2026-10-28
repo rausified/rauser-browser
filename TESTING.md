@@ -723,6 +723,19 @@ installation. Panel tests hold and reorder preflight replies to verify that
 edits, invalid selections and closing/reopening cannot reuse an older verdict.
 These fixtures use local storage and scripted native replies only.
 
+Incoming navigation (`brwr-1g2`) is covered by the native request test
+`artifact_query_exposes_bounded_validated_incoming_sources` and index tests
+`incoming_trails_only_show_known_navigation_sources`,
+`incoming_trails_are_bounded_sorted_and_deduplicated_after_rebuild`, and
+`old_unknown_trail_transitions_preserve_activity_but_never_become_edges`.
+They cover known browser transitions, unresolved/self/back-forward sources,
+the five-pair cap, deterministic ordering, repeated observations and reindex
+from owned markers. The composed panel tests validate links and hostile
+text against scripted local source/target fixtures and simulate activating
+the linked source; the fake DOM does not implement a browser's anchor
+default action. The macOS smoke runner now uses protocol v8 with the same
+dialog count; actual Chrome link opening still needs macOS verification.
+
 - 2026-10-28: Independent review reproduced a standalone overflow retry
   starving every newer capture batch when its old log or timestamp is refused.
   Ready activity now drains before standalone retries, while the failed marker
