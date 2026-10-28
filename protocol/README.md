@@ -310,7 +310,8 @@ the TypeScript field is optional.
   when it forwards a `start_site_draft`, and refuses a `start_run` from the
   extension that carries a `kind`.
 - `RunView` gains two optional fields: `kind` (missing means `summary`, as in
-  an older service's record) and `site_draft`, a `SiteDraftAnswerView`
+  an older service's record; the service leaves it out for a summary run, so
+  an extension built before these additions still accepts summary runs) and `site_draft`, a `SiteDraftAnswerView`
   (`adapters`: 1 to 8 adapter tables) or `null`. These are the tables whose
   form the service validated, before any host check; the panel never renders
   them.

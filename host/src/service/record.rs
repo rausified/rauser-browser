@@ -222,7 +222,9 @@ impl RunStatusFile {
                 && !self.save_final
                 && result.is_some(),
             answer,
-            kind: Some(self.kind),
+            // Left out for a summary run, as `status.json` leaves it out: an
+            // extension built before run kinds rejects unknown keys.
+            kind: (!summary).then_some(self.kind),
             site_draft,
         }
     }
@@ -911,7 +913,12 @@ mod tests {
         assert!(written.get("kind").is_none(), "{written}");
         let status = store.status(id).unwrap();
         assert_eq!(status.kind, RunKind::Summary);
-        assert_eq!(status.view(0, None).kind, Some(RunKind::Summary));
+        // A summary run's view leaves `kind` out too, so a pre-`brwr-f45`
+        // version 7 extension, whose run-view check allows only its own
+        // keys, still accepts summary runs.
+        let view = serde_json::to_value(status.view(0, None)).unwrap();
+        assert!(view.get("kind").is_none(), "{view}");
+        assert!(view.get("site_draft").is_none(), "{view}");
 
         let mut site = status.clone();
         site.kind = RunKind::SiteDraft;
@@ -920,6 +927,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["kind"], "site_draft");
         assert_eq!(store.status(id).unwrap().kind, RunKind::SiteDraft);
+        assert_eq!(site.view(0, None).kind, Some(RunKind::SiteDraft));
     }
 
     #[test]
