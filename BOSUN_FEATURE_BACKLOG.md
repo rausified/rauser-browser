@@ -232,11 +232,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-gf1` **Resolve the bare-Notion draft-rule contradiction.** The
-  named Notion identity success case has no route literal before its first
-  identifier, while the draft checker requires one. Document and test a
-  consistent outcome before closing `brwr-t40`; keep the host's leading-route
-  safety requirement intact until an explicit, tested design replaces it.
 - [ ] `brwr-6x2` **Re-learn a site with automatic re-keying.** Users can't
   hand-fix a wrong machine-drafted ID. Add a Re-learn action that migrates
   existing activity, notes, and index rows through explicit append-only
@@ -253,7 +248,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 - **M1.5b (§12.2 step 7.1–7.5)**: the rest of aliases, Tier 1 fields
   (`scripting`), worklog files, and the remaining starter adapters. Create
   adapter (7.6) and agent drafting (7.7) moved into Plan work above as
-  Capture Site (`brwr-1hj`, `brwr-f45`), along with the re-keying part of
+  Capture Site (shipped; agent refinement `brwr-f45` remains), along with the re-keying part of
   7.2 (`brwr-6x2`). DESIGN.md gates the rest on M1.5a being in daily use for
   a few weeks; John will lift the gate here when it's time.
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service (deferred).** The
@@ -445,16 +440,6 @@ were folded into `brwr-q7e` above rather than given their own item.
 ## In Progress / This Iteration
 
 - In progress in the Lane A session, not Cookie. Cookie must not claim these:
-- [ ] `brwr-t40` **Capture Site for unknown sites.** Complete the URL shaper,
-  bounded worker sample, top-frame link shapes, host structural drafter and
-  per-rule safety checks in DESIGN §5.1 and §12.2 step 7.6. Extend the same
-  panel review; all named planted-link, shared-origin and identity tests remain
-  required. This is the remaining portion of Capture Site after known sites.
-  **Cycle split (2026-10-27):** the private input layer and an inspectable,
-  review-only panel/settings surface shipped first (see Shipped). The parent remains
-  open for the host structural drafter, per-rule checks, shared-origin scope,
-  selected-rule capture and all named identity/flow cases. A pattern preview
-  must never imply that unknown-site capture is enabled.
 - [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
   Structural first, agent second: for unknown sites, "Improve with AI"
   refines the structural draft by launching an agent job through the Brauser
@@ -494,26 +479,6 @@ were folded into `brwr-q7e` above rather than given their own item.
   missing, then close this item. `brwr-i1g` stays open for the interactive
   Windows acceptance.
 
-- [ ] `brwr-1hj` **Capture Site (P1 parent; step 7.6 moved forward; rescoped
-  2026-10-26).** One side-panel "Capture Site" button. Known starter sites
-  (Jira Cloud, SharePoint/OneDrive) produce the adapter from the URL alone;
-  GitHub prompts inline for the work-organization list; unknown sites use the
-  host's structural drafter (no agent) with every safety rule in DESIGN §5.1
-  and §12.2 step 7.6. The save goes through `update_config` under protocol v6:
-  no Chrome grants, no native confirmation, no ungranted-tab flow, and no
-  pending-grant expiry or rollback. Before the save, a plain-language review
-  shows what Brauser will remember here, with real example pages it matched,
-  and what it won't (search, dashboards, login, sharing). The JSON editor
-  stays an advanced view nobody has to open. Tier 1 is not required. It
-  absorbs the choose-and-scope part of the old first-tool setup proposal; keep
-  GitHub PR and issue owner scopes separate rather than inferring one shared
-  value. **Split in Cookie's cycle 1 (2026-10-27):** filed first as
-  `brwr-1hj.1` (known sites) and `brwr-1hj.2` (unknown sites), then refiled
-  under flat IDs. The known-site panel flow shipped as `brwr-qox` (see
-  Shipped); unknown-site URL shaping, samples, link shapes, host structural
-  drafting and all named safety/flow tests are `brwr-t40`. Keep this parent in progress until
-  `brwr-t40` completes. Re-learning remains the separate alias/re-key
-  migration (`brwr-6x2`), not a relaxation of frozen IDs.
 
 
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
