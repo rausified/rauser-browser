@@ -408,6 +408,9 @@ shipped (see Shipped).
   spec above), not the old M2 step 8.2 harness path. Agent drafts are
   untrusted and get the same per-rule host checks and plain-language review.
   Capture Site must keep working with no agent configured.
+  As built (2026-10-28, `feat/capture-site-agent`): DESIGN.md §5.1 agent
+  drafter bullet and §12.2 step 7.7; plan
+  `docs/superpowers/plans/2026-10-28-capture-site-improve-with-ai.md`.
 
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   Extend the existing built-page smoke check so it opens the artifact card,
