@@ -52,6 +52,7 @@ class FakeElement {
   focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
+  add(child) { this.append(child); }
   querySelector(selector) {
     return this.children.find((child) => child.tagName === selector.toUpperCase()) ?? new FakeElement(selector);
   }
@@ -118,6 +119,17 @@ function storageArea(entries) {
   };
 }
 
+function memoryStorage() {
+  const data = new Map();
+  return {
+    get length() { return data.size; },
+    key: (index) => [...data.keys()][index] ?? null,
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  };
+}
+
 let loads = 0;
 let teardown = [];
 
@@ -170,6 +182,7 @@ async function install({
   intercept = () => null, workerReply = () => undefined, agentStatus = NOT_SET_UP,
   executeScript = async () => { throw new Error("Cannot access contents of the page"); },
   local = new Map(), session = new Map(),
+  localStorage = memoryStorage(),
   script = async () => ({ current: "/items/{num}", links: [] }), patterns = [], patternsError = null,
 }) {
   const elements = pageElements();
@@ -182,7 +195,7 @@ async function install({
     contains,
     config: structuredClone(config), revision: "1", configIssue, adapterIssue,
     workerStatus: { ...statusFor(), ...workerStatus }, requests: [], workerRequests: [],
-    created: [], scripts: [],
+    created: [], scripts: [], copied: [], localStorage,
     counts: new Map(),
     added: [],
     removed: [],
@@ -202,9 +215,22 @@ async function install({
   };
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
     locks: { request: async (_name, _options, action) => action() },
+    clipboard: { async writeText(text) { state.copied.push(text); } },
   } });
+  let close;
   globalThis.window = {
-    addEventListener(type, listener) { if (type === "pagehide") teardown.push(listener); },
+    localStorage,
+    addEventListener(type, listener) {
+      if (type === "pagehide") {
+        let closed = false;
+        close = () => {
+          if (closed) return;
+          closed = true;
+          listener();
+        };
+        teardown.push(close);
+      }
+    },
     confirm: () => false,
   };
   const tabActivated = listeners();
@@ -230,6 +256,7 @@ async function install({
       connectNative() {
         const messageListeners = [];
         const disconnectListeners = [];
+        let disconnected = false;
         const port = {
           onMessage: { addListener(listener) { messageListeners.push(listener); } },
           onDisconnect: { addListener(listener) { disconnectListeners.push(listener); } },
@@ -262,12 +289,12 @@ async function install({
                 reply = { type: "note_saved", revision: "saved", key: request.expected_key, outcome: "created", relative_path: "pages/note.md" };
               }
               reply ??= hostReply(request);
-              for (const listener of messageListeners) {
+              for (const listener of disconnected ? [] : messageListeners) {
                 listener({ ...reply, protocol_version: PROTOCOL_VERSION, request_id: request.request_id });
               }
             }, 0);
           },
-          disconnect() {},
+          disconnect() { disconnected = true; },
         };
         state.ports.push(port);
         return port;
@@ -322,6 +349,7 @@ async function install({
   await import(`../dist/panel.js?load=${loads}`);
   return {
     state,
+    close: () => close(),
     created: state.created,
     navigate(url, id = state.tab?.id ?? 1) {
       state.tab = { ...state.tab, url, id, incognito: false };
@@ -386,6 +414,144 @@ async function until(condition, what) {
 
 // The panel has settled once its first tab refresh rendered the page area.
 const shownTitle = (page) => page.el("page-title").textContent;
+
+for (const phase of ["before hello", "during policy install", "after startup", "before policy failure"]) {
+  test(`Recent loads once when opened ${phase}`, async () => {
+    const waitForHello = phase.startsWith("before");
+    let releaseHello;
+    const hello = new Promise((resolve) => { releaseHello = resolve; });
+    let releasePolicy;
+    const policy = new Promise((resolve) => { releasePolicy = resolve; });
+    globalThis.Option = class extends FakeElement {
+      constructor(text, value) {
+        super("option");
+        this.textContent = text;
+        this.value = value;
+      }
+    };
+    const page = await install({
+      tab: { id: 1, url: "https://new.example/a", title: "A" },
+      intercept(request) {
+        if (request.type === "hello" && waitForHello) return hello;
+        if (request.type === "list_artifacts") return {
+          type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
+          items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title: "Brief review",
+            url: "https://new.example/a", local_date: "2026-10-27", focused_seconds: 30,
+            background_seconds: 20, opens: 1, why: null }],
+        };
+        if (request.type === "worklog") return {
+          type: "worklog_result", text: "Reviewed the release", artifact_count: 1,
+          start_date: request.start_date, end_date: request.end_date,
+        };
+        return null;
+      },
+      workerReply(request) {
+        if (request.kind === "install_policy" && phase === "during policy install") return policy;
+        if (request.kind === "install_policy" && phase === "before policy failure") {
+          return { ok: false, error: "Worker policy install failed" };
+        }
+      },
+    });
+    if (phase === "during policy install") {
+      await until(() => page.state.workerRequests.some((request) => request.kind === "install_policy"), "policy installation");
+    } else if (phase === "after startup") {
+      await until(() => page.sent("load_note").length > 0 && page.el("note-body").disabled === false, "connected note");
+    }
+    page.el("tab-recent").click();
+    try {
+      if (waitForHello) {
+        assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+        assert.equal(page.el("worklog-text").textContent, "Waiting for the host…");
+        assert.equal(page.el("copy-worklog").disabled, true);
+        assert.equal(page.sent("list_artifacts").length, 0);
+        assert.equal(page.sent("worklog").length, 0);
+      }
+    } finally {
+      releaseHello(hostReply({ type: "hello" }));
+      releasePolicy({ ok: true, value: statusFor() });
+      // Drain startup even if the waiting-state assertions fail.
+      if (phase === "before policy failure") {
+        await until(() => page.el("status").textContent.includes("Worker policy install failed"), "policy error");
+      } else {
+        await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+      }
+    }
+    await until(() => page.el("worklog-text").textContent === "Reviewed the release", "worklog result");
+    await until(() => page.el("recent-list").textContent.includes("Brief review"), "Recent result");
+    assert.equal(page.sent("list_artifacts").length, 1);
+    assert.equal(page.sent("worklog").length, 1);
+    assert.equal(page.el("copy-worklog").disabled, false);
+  });
+}
+
+test("Recent opened before hello loads once configuration arrives, while policy installation is still pending", async () => {
+  let releaseHello;
+  const hello = new Promise((resolve) => { releaseHello = resolve; });
+  let releasePolicy;
+  const policy = new Promise((resolve) => { releasePolicy = resolve; });
+  globalThis.Option = class extends FakeElement {
+    constructor(text, value) {
+      super("option");
+      this.textContent = text;
+      this.value = value;
+    }
+  };
+  const page = await install({
+    tab: { id: 1, url: "https://new.example/a", title: "A" },
+    intercept(request) {
+      if (request.type === "hello") return hello;
+      if (request.type === "list_artifacts") return {
+        type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
+        items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title: "Brief review",
+          url: "https://new.example/a", local_date: "2026-10-27", focused_seconds: 30,
+          background_seconds: 20, opens: 1, why: null }],
+      };
+      if (request.type === "worklog") return {
+        type: "worklog_result", text: "Reviewed the release", artifact_count: 1,
+        start_date: request.start_date, end_date: request.end_date,
+      };
+      return null;
+    },
+    workerReply(request) {
+      if (request.kind === "install_policy") return policy;
+    },
+  });
+  page.el("tab-recent").click();
+  assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+  releaseHello(hostReply({ type: "hello" }));
+  try {
+    await until(() => page.state.workerRequests.some((request) => request.kind === "install_policy"), "policy installation");
+    await until(() => page.el("worklog-text").textContent === "Reviewed the release", "worklog before policy install finishes");
+    await until(() => page.el("recent-list").textContent.includes("Brief review"), "Recent before policy install finishes");
+  } finally {
+    releasePolicy({ ok: true, value: statusFor() });
+  }
+  await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+  assert.equal(page.sent("list_artifacts").length, 1);
+  assert.equal(page.sent("worklog").length, 1);
+});
+
+test("Recent replaces its startup wait with setup guidance when no home folder is chosen", async () => {
+  let releaseHello;
+  const hello = new Promise((resolve) => { releaseHello = resolve; });
+  const page = await install({
+    tab: { id: 1, url: "https://new.example/a", title: "A" },
+    config: { ...CONFIG, storage: null },
+    intercept: (request) => request.type === "hello" ? hello : null,
+  });
+  page.el("tab-recent").click();
+  assert.equal(page.el("recent-status").textContent, "Waiting for the host…");
+  releaseHello(hostReply({ type: "hello" }));
+  await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
+  for (const clickAgain of [false, true]) {
+    if (clickAgain) page.el("tab-recent").click();
+    assert.match(page.el("recent-status").textContent, /home folder.*settings/i);
+    assert.match(page.el("worklog-text").textContent, /home folder.*settings/i);
+    assert.equal(page.el("copy-worklog").disabled, true);
+  }
+  assert.equal(page.sent("list_artifacts").length, 0);
+  assert.equal(page.sent("worklog").length, 0);
+});
 
 test("an HTTP(S) tab shows the note editor and no grant or address warning", async () => {
   const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, contains: true });
@@ -1624,4 +1790,88 @@ test("the panel restores run cards on load and shows a run the shortcut started"
   page.notify({ kind: "run_started", run_id: started.run_id, tab_id: 1, at: Date.now() });
   await until(() => page.el("run-area").textContent.includes("Shortcut run"), "the shortcut's card");
   assert.equal(page.el("run-area").textContent.split("Restored run").length, 2, "each run shows once");
+});
+
+const RECOVERY_TAB = { id: 1, url: "https://docs.example/a", title: "A" };
+async function notePanel(options = {}) {
+  const page = await install({ tab: RECOVERY_TAB, ...options });
+  await until(() => page.sent("load_note").length > 0 && !page.el("note-body").disabled,
+    "the note editor to load");
+  return page;
+}
+function editNote(page, text) {
+  page.el("note-body").value = text;
+  page.el("note-body").dispatch("input");
+}
+
+test("closing the built panel before debounce restores copy-only text and supports explicit Copy and Discard", async () => {
+  const first = await notePanel();
+  editNote(first, "pending <img src=x> text");
+  assert.equal(first.state.localStorage.length, 1, "recovery is synchronous before pagehide");
+  first.close();
+  const reopened = await notePanel({ localStorage: first.state.localStorage });
+  assert.equal(reopened.el("note-conflict").hidden, false);
+  assert.equal(reopened.el("note-unsaved").value, "pending <img src=x> text");
+  assert.equal(reopened.el("note-body").value, "");
+  assert.equal(reopened.sent("save_note").length, 0, "no automatic replay");
+  reopened.el("copy-unsaved").click();
+  assert.deepEqual(reopened.state.copied, ["pending <img src=x> text"]);
+  reopened.el("discard-unsaved").click();
+  assert.equal(reopened.el("note-conflict").hidden, true);
+  assert.equal(reopened.state.localStorage.length, 0);
+});
+
+test("closing during a built-panel save preserves newer typing after the old host save completes", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const first = await notePanel({ intercept: (request) => request.type === "save_note" ? held : undefined });
+  editNote(first, "first save");
+  await until(() => first.sent("save_note").length === 1, "the first autosave to start");
+  editNote(first, "first save plus newer typing");
+  first.close();
+  release({
+    type: "note_saved", revision: "r2", key: { kind: "url", value: RECOVERY_TAB.url },
+    outcome: "created", relative_path: "notes/a.md",
+  });
+  const reopened = await notePanel({
+    localStorage: first.state.localStorage,
+    intercept: (request) => request.type === "load_note" ? {
+      type: "note_loaded", exists: true, revision: "r2", title: "A", body: "first save",
+      key: { kind: "url", value: RECOVERY_TAB.url }, older_notes: [],
+    } : undefined,
+  });
+  assert.equal(reopened.el("note-body").value, "first save");
+  assert.equal(reopened.el("note-unsaved").value, "first save plus newer typing");
+  assert.equal(reopened.sent("save_note").length, 0);
+});
+
+test("a built-panel conflict including an empty deletion survives reopen and later confirmed edits", async () => {
+  const first = await notePanel({ intercept: (request) => request.type === "save_note" ? {
+    type: "note_conflict", revision: "other-r2", body: "another window's note", exists: true, title: "A",
+    key: { kind: "url", value: RECOVERY_TAB.url }, reason: "stale",
+  } : undefined });
+  editNote(first, "");
+  await until(() => !first.el("note-conflict").hidden, "the conflict copy to show");
+  assert.equal(first.el("note-unsaved").value, "");
+  first.close();
+  const reopened = await notePanel({ localStorage: first.state.localStorage });
+  assert.equal(reopened.el("note-conflict").hidden, false);
+  assert.equal(reopened.el("note-unsaved").value, "");
+  editNote(reopened, "a fresh edit");
+  await until(() => reopened.el("note-status").textContent === "Saved", "a confirmed new save");
+  assert.equal(reopened.state.localStorage.length, 1, "the conflict stays until explicit discard");
+  reopened.el("discard-unsaved").click();
+  assert.equal(reopened.state.localStorage.length, 0);
+});
+
+test("the built panel warns about recovery quota without preventing native autosave", async () => {
+  const localStorage = memoryStorage();
+  localStorage.setItem = () => { throw new Error("quota full"); };
+  const page = await notePanel({ localStorage });
+  editNote(page, "save through host");
+  assert.equal(page.el("note-recovery-warning").hidden, false);
+  assert.match(page.el("note-recovery-warning").textContent, /quota full/);
+  await until(() => page.el("note-status").textContent === "Saved", "the native save");
+  assert.equal(page.sent("save_note")[0].body, "save through host");
+  assert.equal(page.el("note-recovery-warning").hidden, false);
 });

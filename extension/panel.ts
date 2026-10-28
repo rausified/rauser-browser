@@ -17,6 +17,7 @@ import { SETUP_WARNING } from "./agent.js";
 import { summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards, runsMayExist } from "./run-card.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
+import { NoteRecovery } from "./note-recovery.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
 } from "./artifact-refresh.js";
@@ -60,6 +61,8 @@ const noteBody = element<HTMLTextAreaElement>("note-body");
 const noteConflict = element<HTMLDivElement>("note-conflict");
 const noteConflictMessage = noteConflict.querySelector("p")!;
 const noteUnsaved = element<HTMLTextAreaElement>("note-unsaved");
+const discardUnsavedButton = element<HTMLButtonElement>("discard-unsaved");
+const noteRecoveryWarning = element<HTMLParagraphElement>("note-recovery-warning");
 const copyUnsavedButton = element<HTMLButtonElement>("copy-unsaved");
 const artifactStatus = element<HTMLParagraphElement>("artifact-status");
 const artifactCard = element<HTMLElement>("artifact-card");
@@ -156,6 +159,8 @@ let runLine: { tabId: number; element: HTMLElement } | null = null;
 let shownNotice: string | null = null;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
 let recentLoadSeq = 0;
+let recentWaitingForHost = false;
+let worklogWaitingForHost = false;
 let worklogLoadSeq = 0;
 
 function show(message: string, warning = false): void {
@@ -529,6 +534,16 @@ function render(): void {
   renderSetupWarning();
   if (session.status) renderQueue(session.status);
   updateControls();
+  retryWaitingHistory();
+}
+
+// History needs only the host configuration, not the worker policy, so
+// Recent opened before the host answered loads as soon as the session
+// connects, even while policy installation is still pending or later fails.
+function retryWaitingHistory(): void {
+  if (!session.connected || recentView.hidden) return;
+  if (recentWaitingForHost) void loadRecent();
+  if (worklogWaitingForHost) void loadWorklog();
 }
 
 function openSettings(): void {
@@ -812,6 +827,10 @@ const notes = new NoteEditor({
   setEditable: (editable) => { noteBody.disabled = !editable; },
   setStatus: showNoteStatus,
   showUnsaved: showUnsavedText,
+  setRecoveryWarning: (message) => {
+    noteRecoveryWarning.textContent = message;
+    noteRecoveryWarning.hidden = !message;
+  },
   showOlderNotes: renderOlderNotes,
 }, {
   load: (url) => session.host.call({
@@ -826,7 +845,7 @@ const notes = new NoteEditor({
     request_id: newRequestId(),
     ...request,
   }, ["note_saved", "note_conflict"]),
-}, describe, NOTE_SAVE_DEBOUNCE_MS);
+}, describe, NOTE_SAVE_DEBOUNCE_MS, new NoteRecovery(() => window.localStorage));
 
 captureSite = new CaptureSitePanel(session, {
   isBusy: changing,
@@ -914,8 +933,18 @@ function renderRecent(items: readonly ArtifactListItem[]): void {
 }
 
 async function loadRecent(): Promise<void> {
-  if (!session.connected || !session.config?.storage) return;
   const seq = ++recentLoadSeq;
+  if (!session.connected) {
+    recentWaitingForHost = true;
+    recentStatus.textContent = "Waiting for the host…";
+    return;
+  }
+  recentWaitingForHost = false;
+  if (!session.config?.storage) {
+    recentStatus.textContent = "Choose a home folder in settings to view Recent.";
+    recentList.replaceChildren();
+    return;
+  }
   recentStatus.textContent = "Loading…";
   try {
     const response = await session.host.call({
@@ -941,8 +970,19 @@ async function loadRecent(): Promise<void> {
 }
 
 async function loadWorklog(): Promise<void> {
-  if (!session.connected || !session.config?.storage) return;
   const seq = ++worklogLoadSeq;
+  if (!session.connected) {
+    worklogWaitingForHost = true;
+    worklogText.textContent = "Waiting for the host…";
+    copyWorklogButton.disabled = true;
+    return;
+  }
+  worklogWaitingForHost = false;
+  if (!session.config?.storage) {
+    worklogText.textContent = "Choose a home folder in settings to generate a worklog.";
+    copyWorklogButton.disabled = true;
+    return;
+  }
   const range = worklogRange();
   worklogText.textContent = "Generating…";
   copyWorklogButton.disabled = true;
@@ -1085,6 +1125,7 @@ dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
 copyUnsavedButton.addEventListener("click", copyUnsavedText);
+discardUnsavedButton.addEventListener("click", () => notes.discardUnsaved());
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
@@ -1160,6 +1201,9 @@ void (async () => {
     busy = false;
     await session.refreshStatus().catch(() => undefined);
     updateControls();
+    // A worker-policy failure can follow a successful host config read.
+    // History can still load once connected, even if capture setup failed.
+    retryWaitingHistory();
   }
   await refreshActiveTab();
   // list_runs makes the host start the registered service, which runs on

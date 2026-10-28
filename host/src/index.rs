@@ -2900,6 +2900,14 @@ fn whole_minutes(seconds: u64) -> u64 {
     seconds / 60
 }
 
+fn displayed_minutes(seconds: u64) -> String {
+    if seconds < 60 {
+        "<1 min".into()
+    } else {
+        format!("{} min", whole_minutes(seconds))
+    }
+}
+
 fn safe_markdown(value: &str) -> String {
     crate::presentation::markdown_line(value, 2048)
 }
@@ -2978,10 +2986,10 @@ fn timeline_rollups(artifact: &ArtifactRow) -> Vec<Rollup> {
 fn measures(focused: u64, background: u64, opens: u64) -> String {
     let mut values = Vec::new();
     if focused > 0 {
-        values.push(format!("focused {} min", whole_minutes(focused)));
+        values.push(format!("focused {}", displayed_minutes(focused)));
     }
     if background > 0 {
-        values.push(format!("{} min in background", whole_minutes(background)));
+        values.push(format!("{} in background", displayed_minutes(background)));
     }
     if opens > 0 {
         values.push(format!("opened {opens}×"));
@@ -3406,6 +3414,48 @@ mod tests {
 
     fn index(root: &TempDir, cache: &TempDir) -> ArtifactIndex {
         ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap()
+    }
+
+    #[test]
+    fn sub_minute_measures_remain_visible() {
+        assert_eq!(measures(30, 20, 0), "focused <1 min · <1 min in background");
+        assert_eq!(measures(1, 59, 0), "focused <1 min · <1 min in background");
+        assert_eq!(measures(0, 0, 0), "seen");
+        assert_eq!(
+            measures(60, 119, 1),
+            "focused 1 min · 1 min in background · opened 1×"
+        );
+        assert_eq!(measures(120, 0, 0), "focused 2 min");
+    }
+
+    #[test]
+    fn sub_minute_activity_is_visible_in_worklog_and_timeline() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let mut event = activity(
+            "00000000-0000-4000-8000-000000000001",
+            "ABC",
+            "Brief review",
+            "2026-10-15T12:00:00-04:00",
+        );
+        event.focused_seconds = 30;
+        event.background_seconds = 20;
+        index.record_activities([&event], &[]).unwrap();
+        let day = parse_date("2026-10-15").unwrap();
+        let (worklog, _) = index.worklog(day, day).unwrap();
+        assert!(
+            worklog.contains("focused <1 min · <1 min in background"),
+            "{worklog}"
+        );
+        assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+        let markdown = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
+        assert!(
+            markdown.contains("2026-10-15 · focused <1 min · <1 min in background"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("  focused_min: 0\n"));
+        assert!(markdown.contains("  background_min: 0\n"));
     }
 
     #[test]

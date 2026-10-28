@@ -15,6 +15,14 @@ it could not save. The capture housekeeping controls from M1 collapsed into a
 one-line, expandable capture strip. The answer card, Summary section, and full
 omnibar are not built (M2/M3).
 
+Unacknowledged note edits now have synchronous browser-local recovery
+(`extension/note-recovery.ts`, `brwr-3nq`). Every snapshot has an immutable
+key, and native acknowledgements/discards only remove the exact snapshot
+they saw. Reopening shows recovered copies beside the current host note with
+Copy/Discard; they never enter the editor or autosave automatically. Storage
+failures warn without preventing host saves. Preserve that boundary when
+changing note identity, save sequencing or panel teardown.
+
 Open access (protocol version 6, PR 1 of
 `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`)
 removed the per-site grant wall. The manifest requests `http://*/*` and
