@@ -27,6 +27,10 @@ pub const KEEP_NEWEST: usize = 200;
 pub const ORPHAN_KILL_WINDOW: Duration = Duration::from_secs(60);
 /// The error a recovered run records.
 pub const SERVICE_RESTARTED: &str = "service restarted";
+/// The error a queued task records when the service restarts: a task is
+/// never resumed after a restart.
+pub const TASK_NOT_RESUMED: &str =
+    "The Brauser service restarted before this task ran. Run it again if you still want it.";
 
 /// Recover from a service process that ended with runs in flight. Every
 /// `running` record becomes `failed`/`service_restarted`; its process group is

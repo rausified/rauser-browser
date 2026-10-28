@@ -5,7 +5,9 @@
 
 /// Unicode 17 General_Category=Cf, checked against the local Node Unicode
 /// property data. Keep this complete table together when updating Unicode.
-fn is_format(ch: char) -> bool {
+/// Covers bidi embeddings, overrides and isolates, zero-width characters and
+/// the byte-order mark, which change how text reads without being seen.
+pub(crate) fn is_format(ch: char) -> bool {
     matches!(
         ch,
         '\u{00ad}'

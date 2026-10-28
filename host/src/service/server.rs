@@ -49,6 +49,10 @@ pub const NOT_CONFIGURED: &str = "Choose a notes folder in Brauser settings firs
 pub const SET_UP_HARNESS: &str = "Set up a summary harness in Brauser settings first.";
 pub const KNOWLEDGE_BASE_CHANGED: &str =
     "The knowledge base folder changed or is missing. Choose it again in settings.";
+/// Why a queued task failed when it left the queue: the folders its prompt
+/// names as Brauser's own are no longer the ones configured.
+pub const HOME_FOLDER_CHANGED: &str =
+    "Brauser's home folder changed while the task waited. Run it again.";
 
 /// Why [`serve`] returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,15 +80,25 @@ pub fn env_source(paths: &ServicePaths) -> EnvSource {
 /// The supervisor's [`CwdCheck`]: when a queued or resumed run starts, under
 /// the config lock, the folder it was queued for must still be the
 /// configured knowledge base folder with the identity recorded when the user
-/// picked it. `config` is the service's own store for this check.
+/// picked it. A task also brings the protected paths its prompt names, which
+/// must still be the ones the configuration gives now ([`protected_paths`]),
+/// so a home folder changed while it waited is never left unprotected.
+/// `config` is the service's own store for this check.
 pub fn cwd_check(config: ConfigStore) -> CwdCheck {
     let config = Mutex::new(config);
-    Arc::new(move |cwd: &Path| {
+    Arc::new(move |cwd: &Path, protected: Option<&[String]>| {
         let mut config = lock(&config);
         let (_config_lock, knowledge_base) =
             locked_knowledge_base(&mut config).map_err(|(_, message)| message.to_owned())?;
         if knowledge_base != cwd {
             return Err(KNOWLEDGE_BASE_CHANGED.to_owned());
+        }
+        if let Some(protected) = protected {
+            match configured_protected(&config) {
+                Ok(now) if now == protected => {}
+                Ok(_) => return Err(HOME_FOLDER_CHANGED.to_owned()),
+                Err((_, message)) => return Err(message.to_owned()),
+            }
         }
         Ok(())
     })
@@ -586,14 +600,7 @@ impl Server {
         let mut config = lock(&self.config);
         let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
         let (harness, timeout) = agent_setup(&config, requested)?;
-        // `locked_knowledge_base` already refused a missing home folder.
-        let root = config
-            .snapshot()
-            .storage
-            .as_ref()
-            .map(|storage| PathBuf::from(&storage.root))
-            .ok_or((ErrorCode::NotConfigured, NOT_CONFIGURED))?;
-        let protected = protected_paths(&root, config.dir(), config.cache_dir())?;
+        let protected = configured_protected(&config)?;
         Ok(RunSetup {
             harness,
             cwd: knowledge_base,
@@ -623,6 +630,19 @@ impl Server {
             protected: Vec::new(),
         })
     }
+}
+
+/// [`protected_paths`] for the home folder `config` names now. Call under the
+/// config lock, after `locked_knowledge_base` (which refuses a missing home
+/// folder).
+fn configured_protected(config: &ConfigStore) -> Result<Vec<String>, (ErrorCode, &'static str)> {
+    let root = config
+        .snapshot()
+        .storage
+        .as_ref()
+        .map(|storage| PathBuf::from(&storage.root))
+        .ok_or((ErrorCode::NotConfigured, NOT_CONFIGURED))?;
+    protected_paths(&root, config.dir(), config.cache_dir())
 }
 
 /// The absolute paths a task's prompt names as Brauser's own: the home
@@ -880,6 +900,12 @@ mod tests {
         /// entry followed by these extra tables; `knowledge_base` is a separately
         /// picked knowledge base folder, recorded with its current identity.
         fn configure(&self, agent: Option<&str>, knowledge_base: Option<&Path>) {
+            self.configure_home(&self.notes, agent, knowledge_base);
+        }
+
+        /// [`World::configure`] with `home` as Brauser's home folder in place
+        /// of the world's notes folder.
+        fn configure_home(&self, home: &Path, agent: Option<&str>, knowledge_base: Option<&Path>) {
             let quoted = |value: &str| toml::Value::String(value.to_owned()).to_string();
             let (storage_extra, keys) = knowledge_base.map_or_else(Default::default, |folder| {
                 let identity = crate::vault::selected_root_identity(folder).unwrap();
@@ -894,7 +920,7 @@ mod tests {
             });
             fixtures::write(
                 &self.support.join("config.toml"),
-                &self.notes,
+                home,
                 &storage_extra,
                 &keys,
                 &tables,
@@ -1469,24 +1495,33 @@ mod tests {
         config.refresh().unwrap();
         let queued_cwd = checked_knowledge_base(&config).unwrap();
         let check = cwd_check(world.config());
-        assert_eq!(check(&queued_cwd), Ok(()));
+        assert_eq!(check(&queued_cwd, None), Ok(()));
 
         // Replaced at the same path while the run waited: fails closed.
         let moved = world._temp.path().join("kb-old");
         std::fs::rename(&knowledge_base, &moved).unwrap();
         std::fs::create_dir(&knowledge_base).unwrap();
-        assert_eq!(check(&queued_cwd), Err(KNOWLEDGE_BASE_CHANGED.to_owned()));
+        assert_eq!(
+            check(&queued_cwd, None),
+            Err(KNOWLEDGE_BASE_CHANGED.to_owned())
+        );
         // Missing: fails closed.
         std::fs::remove_dir(&knowledge_base).unwrap();
-        assert_eq!(check(&queued_cwd), Err(KNOWLEDGE_BASE_CHANGED.to_owned()));
+        assert_eq!(
+            check(&queued_cwd, None),
+            Err(KNOWLEDGE_BASE_CHANGED.to_owned())
+        );
         // The picked folder back at its path passes again.
         std::fs::rename(&moved, &knowledge_base).unwrap();
-        assert_eq!(check(&queued_cwd), Ok(()));
+        assert_eq!(check(&queued_cwd, None), Ok(()));
         // A run queued for another folder than the one now configured.
-        assert_eq!(check(&world.notes), Err(KNOWLEDGE_BASE_CHANGED.to_owned()));
+        assert_eq!(
+            check(&world.notes, None),
+            Err(KNOWLEDGE_BASE_CHANGED.to_owned())
+        );
         // No notes folder at all.
         std::fs::remove_file(world.support.join("config.toml")).unwrap();
-        assert!(check(&queued_cwd).is_err());
+        assert!(check(&queued_cwd, None).is_err());
     }
 
     #[test]
@@ -2207,6 +2242,83 @@ mod tests {
         let fetched = start_task_run(&world);
         assert_task_ran_in(&world, &fetched, &knowledge_base);
         assert_eq!(fetched.run.harness, HarnessId::Claude);
+    }
+
+    /// A queued task is checked, when it starts, against the folders its
+    /// prompt was written to protect: a home folder changed while it waited
+    /// fails it; a summary is not checked against them.
+    #[test]
+    fn a_starting_task_rechecks_its_protected_paths() {
+        let world = World::unconfigured(&answer());
+        let knowledge_base = world._temp.path().join("kb");
+        std::fs::create_dir(&knowledge_base).unwrap();
+        world.configure(Some(""), Some(&knowledge_base));
+        let protected = expected_protected(&world, &world.notes);
+        let check = cwd_check(world.config());
+        assert_eq!(check(&knowledge_base, Some(protected.as_slice())), Ok(()));
+        assert_eq!(check(&knowledge_base, None), Ok(()));
+        // Another protected set than the one now configured.
+        let other = expected_protected(&world, &world._temp.path().join("elsewhere"));
+        assert_eq!(
+            check(&knowledge_base, Some(other.as_slice())),
+            Err(HOME_FOLDER_CHANGED.to_owned())
+        );
+        // The home folder changed while the task waited; the knowledge base
+        // did not.
+        let home = world._temp.path().join("n2");
+        std::fs::create_dir(&home).unwrap();
+        world.configure_home(&home, Some(""), Some(&knowledge_base));
+        assert_eq!(
+            check(&knowledge_base, Some(protected.as_slice())),
+            Err(HOME_FOLDER_CHANGED.to_owned())
+        );
+        assert_eq!(check(&knowledge_base, None), Ok(()));
+        assert_eq!(
+            check(
+                &knowledge_base,
+                Some(expected_protected(&world, &home).as_slice())
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_queued_task_whose_home_folder_changed_fails_closed() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::unconfigured(
+            "/bin/cat > \"$0.prompt\"\nwhile [ ! -e \"$0.release\" ]; do sleep 0.05; done\necho 'Done.'\n",
+        );
+        let knowledge_base = world._temp.path().join("kb");
+        std::fs::create_dir(&knowledge_base).unwrap();
+        world.configure(Some(""), Some(&knowledge_base));
+        world.start(Duration::from_secs(600));
+        let ids: Vec<String> = (0..2)
+            .map(
+                |_| match world.call(&Request::StartRun(task_start(Some(INSTRUCTION)))) {
+                    Response::RunStarted(started) => started.run.run_id,
+                    other => panic!("unexpected response: {other:?}"),
+                },
+            )
+            .collect();
+        // One task runs at a time, so the second waits in the queue.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while world.get_run(&ids[0]).run.state != RunState::Running {
+            assert!(Instant::now() < deadline, "the first task never started");
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(world.get_run(&ids[1]).run.state, RunState::Queued);
+        let home = world._temp.path().join("n2");
+        std::fs::create_dir(&home).unwrap();
+        world.configure_home(&home, Some(""), Some(&knowledge_base));
+        std::fs::write(world.program.with_extension("release"), "").unwrap();
+        let fetched = world.wait_finished(&ids[1]);
+        assert_eq!(fetched.run.state, RunState::Failed, "{fetched:?}");
+        assert_eq!(fetched.run.error.as_deref(), Some(HOME_FOLDER_CHANGED));
+        assert_eq!(fetched.run.started_at, None);
+        assert!(fetched.stream_text.is_empty(), "{fetched:?}");
+        world.wait_finished(&ids[0]);
     }
 
     #[test]

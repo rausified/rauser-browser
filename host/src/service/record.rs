@@ -113,9 +113,10 @@ pub fn list_instruction(text: &str) -> String {
     }
 }
 
-/// A task run's request, kept in `status.json` so a queued task resumes
-/// after a restart: the user's instruction and the absolute paths the
-/// prompt names as Brauser's own.
+/// A task run's request, kept in `status.json` for the run's view and the
+/// check when it leaves the queue: the user's instruction and the absolute
+/// paths the prompt names as Brauser's own. A queued task is never resumed
+/// after a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskStatus {
@@ -380,6 +381,11 @@ impl RunStore {
         fs::set_permissions(&runs, fs::Permissions::from_mode(0o700))
             .with_context(|| format!("securing {}", runs.display()))?;
         Ok(Self { runs })
+    }
+
+    /// The service's support folder, which holds `runs/` and `agent.env`.
+    pub fn support_dir(&self) -> &Path {
+        self.runs.parent().unwrap_or(&self.runs)
     }
 
     pub fn run_dir(&self, id: Uuid) -> PathBuf {

@@ -174,9 +174,11 @@ pub type EnvSource = Arc<dyn Fn() -> Result<Vec<(OsString, OsString)>, String> +
 /// Checks, when a run leaves the queue (including a queued run resumed after
 /// a restart), that the folder it was queued to run in is still the
 /// knowledge base folder the user picked, so a folder replaced or remounted
-/// at the same path while the run waited is never handed to a harness. The
-/// error is shown as the run's error.
-pub type CwdCheck = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+/// at the same path while the run waited is never handed to a harness. A
+/// task also passes the protected paths recorded for its prompt, which must
+/// still be the ones the configuration gives. The error is shown as the
+/// run's error.
+pub type CwdCheck = Arc<dyn Fn(&Path, Option<&[String]>) -> Result<(), String> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct ServiceOptions {
@@ -233,7 +235,8 @@ impl fmt::Debug for ServiceOptions {
 /// A task run (`kind: Task`) runs in the knowledge base like a summary,
 /// with the page written as `page.md`; its instruction and the paths its
 /// prompt names as Brauser's own come in `task` and are kept in
-/// `status.json`, so a queued task resumes after a restart.
+/// `status.json`, for the run's view and the check when it leaves the queue.
+/// A task still queued when the service restarts is failed, never resumed.
 #[derive(Debug, Clone)]
 pub struct StartRun {
     pub kind: RunKind,
@@ -274,6 +277,9 @@ struct Launch {
     kind: RunKind,
     cwd: PathBuf,
     vocabulary: SummaryVocabulary,
+    /// A task's protected paths, as its prompt will name them; `None` for
+    /// the other kinds.
+    protected: Option<Vec<String>>,
 }
 
 /// The in-memory side of one queued or running run.
@@ -497,7 +503,10 @@ impl Supervisor {
 
     /// Re-submit recovered queued runs. A run without a recorded working
     /// directory, or a second queued run for the same record key, cannot be
-    /// resumed and fails with "service restarted".
+    /// resumed and fails with "service restarted". A task is never resumed:
+    /// it can act on the user's files with full access, so an instruction
+    /// left waiting across a restart (perhaps for days) fails with
+    /// [`maintenance::TASK_NOT_RESUMED`] instead of running unattended.
     fn resume(&self, queued: Vec<Uuid>) {
         let inner = &self.inner;
         for id in queued {
@@ -506,8 +515,9 @@ impl Supervisor {
             };
             // A site draft always runs in its own run directory.
             let cwd = match status.kind {
-                RunKind::Summary | RunKind::Task => status.cwd.as_ref().map(PathBuf::from),
+                RunKind::Summary => status.cwd.as_ref().map(PathBuf::from),
                 RunKind::SiteDraft => Some(inner.store.run_dir(id)),
+                RunKind::Task => None,
             };
             let resumable = cwd.map(|cwd| {
                 let mut scheduler = lock(&inner.scheduler);
@@ -532,21 +542,26 @@ impl Supervisor {
                         kind: status.kind,
                         cwd,
                         vocabulary,
+                        protected: None,
                     };
                     let span = inner.run_span(id, status.harness, status.kind, &status.url);
                     span.in_scope(|| tracing::info!("run resumed"));
                     let control = RunControl::new(launch, timeout, span);
                     lock(&inner.runs).insert(id, Arc::new(control));
                 }
-                // A resumed task beyond the task limit cannot run either.
+                // A task is never resumed (`cwd` is `None` for it).
                 Some((Submit::Existing(_) | Submit::Full, _)) | None => {
                     tracing::warn!(run_id = %id, "run cannot be resumed after a restart");
                     // Its key stays taken until this end state is recorded.
                     lock(&inner.scheduler).hold(status.kind, &status.start_key, id);
+                    let message = match status.kind {
+                        RunKind::Task => maintenance::TASK_NOT_RESUMED,
+                        RunKind::Summary | RunKind::SiteDraft => maintenance::SERVICE_RESTARTED,
+                    };
                     inner.finish(id, |status| {
                         status.state = RunState::Failed;
                         status.error_kind = Some(RunErrorKind::ServiceRestarted);
-                        status.error = Some(maintenance::SERVICE_RESTARTED.to_string());
+                        status.error = Some(message.to_string());
                     });
                 }
             }
@@ -651,6 +666,7 @@ impl Supervisor {
                 kind: req.kind,
                 cwd,
                 vocabulary: req.vocabulary,
+                protected: status.task.as_ref().map(|task| task.protected.clone()),
             };
             // In the request's span, so its `request_id` meets the `run_id`.
             tracing::info!(
@@ -1053,7 +1069,7 @@ impl Inner {
         if let Some(Err(reason)) = launch
             .as_ref()
             .filter(|launch| launch.kind != RunKind::SiteDraft)
-            .map(|launch| (this.options.run_cwd)(&launch.cwd))
+            .map(|launch| (this.options.run_cwd)(&launch.cwd, launch.protected.as_deref()))
         {
             tracing::warn!(error = reason.as_str(), "knowledge base check failed");
             control.end_turn();
@@ -1167,7 +1183,13 @@ impl Inner {
                     return Driven::Failed(TASK_REQUEST_MISSING.to_string());
                 };
                 (
-                    task_prompt(&task.instruction, &page_path, &launch.cwd, &task.protected),
+                    task_prompt(
+                        &task.instruction,
+                        &page_path,
+                        &launch.cwd,
+                        self.store.support_dir(),
+                        &task.protected,
+                    ),
                     OutputSchema::Omit,
                     task_title(&task.instruction),
                 )
@@ -1882,6 +1904,11 @@ mod tests {
     /// A file in a fixture's temp directory that makes every folder check
     /// fail, as if no knowledge base were configured at all.
     const KNOWLEDGE_BASE_GONE: &str = "knowledge-base-gone";
+    /// A file in a fixture's temp directory that makes the folder check fail
+    /// for a run that brings protected paths (a task), as if Brauser's home
+    /// folder had changed while it waited.
+    const HOME_MOVED: &str = "home-moved";
+    const HOME_MOVED_ERROR: &str = "Brauser's home folder changed.";
 
     struct Fixture {
         dir: tempfile::TempDir,
@@ -2030,10 +2057,12 @@ mod tests {
                 idle_exit: Duration::from_secs(600),
                 service_pid: std::process::id(),
                 run_env: Arc::new(move || source.lock().unwrap().clone()),
-                run_cwd: Arc::new(move |cwd: &Path| {
+                run_cwd: Arc::new(move |cwd: &Path, protected: Option<&[String]>| {
                     if cwd.join(FOLDER_CHANGED).exists() || root.join(KNOWLEDGE_BASE_GONE).exists()
                     {
                         Err(FOLDER_CHANGED_ERROR.to_string())
+                    } else if protected.is_some() && root.join(HOME_MOVED).exists() {
+                        Err(HOME_MOVED_ERROR.to_string())
                     } else {
                         Ok(())
                     }
@@ -2608,7 +2637,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: std::process::id(),
             run_env: Arc::new(|| Ok(Vec::new())),
-            run_cwd: Arc::new(|_: &Path| Ok(())),
+            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>| Ok(())),
             opener: crate::open::default_opener(),
         };
         let own = Duration::from_secs(5);
@@ -3796,7 +3825,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: std::process::id().wrapping_add(1),
             run_env: Arc::new(|| Ok(Vec::new())),
-            run_cwd: Arc::new(|_: &Path| Ok(())),
+            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>| Ok(())),
             opener: crate::open::default_opener(),
         };
         let finisher = TestFinisher {
@@ -3852,7 +3881,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: std::process::id().wrapping_add(1),
             run_env: Arc::new(|| Ok(Vec::new())),
-            run_cwd: Arc::new(|_: &Path| Ok(())),
+            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>| Ok(())),
             opener: crate::open::default_opener(),
         };
         let finisher = TestFinisher {
@@ -3915,7 +3944,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: 1,
             run_env: Arc::new(|| Ok(vec![("API_KEY".into(), "secret-value".into())])),
-            run_cwd: Arc::new(|_: &Path| Ok(())),
+            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>| Ok(())),
             opener: crate::open::default_opener(),
         };
         let debug = format!("{options:?}");
@@ -4656,8 +4685,17 @@ mod tests {
                 INSTRUCTION,
                 &spec.page_path,
                 &spec.cwd,
+                fixture.dir.path(),
                 &fixture.protected()
             )
+        );
+        // The service folder holding `runs/` is named, with its agent.env.
+        assert!(
+            prompt.contains(&format!(
+                "Never read {}:",
+                fixture.path("agent.env").display()
+            )),
+            "{prompt}"
         );
         assert!(prompt.contains(&format!(
             "----- BEGIN USER REQUEST -----\n{INSTRUCTION}\n----- END USER REQUEST -----"
@@ -4788,12 +4826,10 @@ mod tests {
     }
 
     #[test]
-    fn a_queued_task_resumes_with_its_instruction_after_restart() {
+    fn a_queued_task_is_not_resumed_after_restart() {
         let mut queued = None;
-        let mut protected = Vec::new();
-        let script = "/bin/cat > \"$COUNT.prompt\"\necho 'Renamed the draft.'\n";
+        let script = "echo ran > \"$COUNT.ran\"\necho 'Renamed the draft.'\n";
         let fixture = Fixture::seeded(script, DEFAULT_RUN_TIMEOUT, |store, cwd| {
-            protected = vec![cwd.join("home/notes").display().to_string()];
             queued = Some(seed_task(
                 store,
                 cwd,
@@ -4801,47 +4837,65 @@ mod tests {
                 "2026-10-26T09:00:00.000000000Z",
                 Some(TaskStatus {
                     instruction: INSTRUCTION.to_string(),
-                    protected: protected.clone(),
+                    protected: vec![cwd.join("home/notes").display().to_string()],
                 }),
             ));
         });
         let id = queued.unwrap();
         let view = fixture.wait_finished(id);
-        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::ServiceRestarted));
+        assert_eq!(view.error.as_deref(), Some(maintenance::TASK_NOT_RESUMED));
         assert_eq!(view.kind, Some(RunKind::Task));
         assert_eq!(view.instruction.as_deref(), Some(INSTRUCTION));
-        assert_eq!(view.task_report.as_deref(), Some("Renamed the draft."));
-        let prompt = read(&fixture.path("count.prompt"));
-        assert!(prompt.starts_with(TASK_PROMPT_START), "{prompt}");
-        assert!(prompt.contains(INSTRUCTION), "{prompt}");
-        assert!(
-            prompt.contains(&format!("\n- {}\n", protected[0])),
-            "{prompt}"
-        );
+        assert_eq!(view.task_report, None);
+        assert_eq!(view.started_at, None);
+        assert!(!fixture.path("count.ran").exists(), "the harness ran");
         assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+        // A new task still runs.
+        let again = fixture.start_task("a", INSTRUCTION);
+        assert_eq!(fixture.wait_finished(again).state, RunState::Succeeded);
     }
 
     #[test]
-    fn a_task_record_without_its_request_fails_before_spawning() {
-        let mut queued = None;
-        let script = "echo ran > \"$COUNT.ran\"\necho 'Did it.'\n";
-        let fixture = Fixture::seeded(script, DEFAULT_RUN_TIMEOUT, |store, cwd| {
-            queued = Some(seed_task(
-                store,
-                cwd,
-                RunState::Queued,
-                "2026-10-26T09:00:00.000000000Z",
-                None,
-            ));
-        });
-        let view = fixture.wait_finished(queued.unwrap());
+    fn a_task_whose_protected_paths_changed_while_queued_fails_before_spawning() {
+        let (fixture, seen) = recording(&[TEST_ANSWER]);
+        std::fs::write(fixture.path(HOME_MOVED), "").unwrap();
+        let id = fixture.start_task("a", INSTRUCTION);
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error.as_deref(), Some(HOME_MOVED_ERROR));
+        assert_eq!(view.started_at, None);
+        assert!(
+            seen.lock().unwrap().starts.is_empty(),
+            "the harness started"
+        );
+        // A summary brings no protected paths, so the same check passes it.
+        let summary = fixture.start("b");
+        assert_eq!(fixture.wait_finished(summary).state, RunState::Succeeded);
+    }
+
+    #[test]
+    fn a_task_without_its_request_fails_before_spawning() {
+        let (fixture, seen) = recording(&["Did it."]);
+        let (view, _) = fixture
+            .supervisor
+            .start_run(StartRun {
+                task: None,
+                ..fixture.task_request("a", INSTRUCTION)
+            })
+            .unwrap();
+        let view = fixture.wait_finished(Uuid::parse_str(&view.run_id).unwrap());
         assert_eq!(view.state, RunState::Failed, "{view:?}");
         assert_eq!(view.error_kind, Some(RunErrorKind::HarnessFailed));
         assert_eq!(
             view.error.as_deref(),
             Some("The task's request is missing.")
         );
-        assert!(!fixture.path("count.ran").exists(), "the harness ran");
+        assert!(
+            seen.lock().unwrap().starts.is_empty(),
+            "the harness started"
+        );
     }
 
     #[test]

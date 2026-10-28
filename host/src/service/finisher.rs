@@ -53,6 +53,7 @@ use crate::index::ArtifactIndex;
 use crate::layout;
 use crate::markdown::link_style;
 use crate::native::{HOME_UNAVAILABLE, open_index, resolve_record_key, summary_artifact};
+use crate::presentation::is_format;
 use crate::site_draft_answer::parse_site_draft_answer;
 use crate::summary::{MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument, render_summary};
 use crate::vault::{FoundSummary, OwnedWrite, Vault};
@@ -455,8 +456,9 @@ pub const TASK_REPORT_SHORTENED: &str =
 /// writes nothing: the report stays in the run's `result.json` as
 /// `{"report": text}`, and no summary file, daily-log event, page note or
 /// config is written. Any non-empty text is accepted, because the agent may
-/// already have acted: control characters other than newline and tab become
-/// spaces, the text is trimmed, and a report longer than
+/// already have acted: control characters other than newline and tab, and
+/// invisible format characters (bidi controls, zero-width characters, the
+/// byte-order mark; [`is_format`]) become spaces, the text is trimmed, and a report longer than
 /// [`MAX_TASK_REPORT_BYTES`] is cut on a character boundary with
 /// [`TASK_REPORT_SHORTENED`] inside the cap. Only an empty reply is refused,
 /// which gives the run its one repair turn.
@@ -468,7 +470,7 @@ impl RunFinisher for TaskFinisher {
         let cleaned: String = final_text
             .chars()
             .map(|c| {
-                if c.is_control() && c != '\n' && c != '\t' {
+                if (c.is_control() && c != '\n' && c != '\t') || is_format(c) {
                     ' '
                 } else {
                     c
@@ -917,6 +919,25 @@ mod tests {
         // Not JSON: any final text is a report, even text that looks like JSON.
         let json_like = TaskFinisher.accept(&task, "{\"report\": 1}").unwrap();
         assert_eq!(kept_report(&json_like), "{\"report\": 1}");
+    }
+
+    #[test]
+    fn task_finisher_replaces_bidi_and_invisible_format_characters() {
+        let world = World::new();
+        let task = task_run(&world);
+        // Bidi embeddings, overrides and isolates, zero-width characters,
+        // the word joiner and a byte-order mark (General_Category=Cf).
+        let reply = "\u{feff}Renamed\u{200b}a\u{200c}b\u{200d}c\u{200e}d\u{200f}e\n\
+                     \u{202a}f\u{202b}g\u{202c}h\u{202d}i\u{202e}j\n\
+                     \u{2066}k\u{2067}l\u{2068}m\u{2069}n\u{2060}o\u{00ad}p";
+        let kept = TaskFinisher.accept(&task, reply).unwrap();
+        assert_eq!(
+            kept_report(&kept),
+            "Renamed a b c d e\n f g h i j\n k l m n o p"
+        );
+        // Visible right-to-left letters and accents survive.
+        let kept = TaskFinisher.accept(&task, "שלום café").unwrap();
+        assert_eq!(kept_report(&kept), "שלום café");
     }
 
     #[test]
