@@ -44,6 +44,21 @@
         </div>
       </section>
 
+      <section id="task-bar" class="task-bar" aria-labelledby="task-heading" hidden>
+        <h2 id="task-heading" class="visually-hidden">Task for the agent</h2>
+        <form id="task-form" class="inline-field">
+          <label for="task-input" class="visually-hidden">Task for the agent</label>
+          <textarea id="task-input" rows="2" maxlength="4000" autocomplete="off" spellcheck="true"
+            placeholder="Tell the agent what to do with this page…"></textarea>
+          <button id="task-run" type="submit" class="compact" aria-label="Run task">Run</button>
+        </form>
+        <p id="task-context" class="task-context"></p>
+        <p id="task-hint" class="task-hint" hidden><span id="task-hint-text"></span>
+          <button id="task-hint-settings" type="button" class="secondary compact" hidden>Open settings</button></p>
+        <p id="task-announce" class="visually-hidden" role="status" aria-live="polite"></p>
+        <div id="task-run-area" class="run-area"></div>
+      </section>
+
       <nav class="panel-tabs" aria-label="Panel views">
         <button id="tab-page" type="button" class="tab-button active" aria-selected="true">This page</button>
         <button id="tab-recent" type="button" class="tab-button" aria-selected="false">Recent</button>

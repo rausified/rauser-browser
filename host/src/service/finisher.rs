@@ -43,7 +43,7 @@ use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 
-use super::record::RunStatusFile;
+use super::record::{MAX_TASK_REPORT_BYTES, RunStatusFile, cap_bytes};
 use super::supervisor::{RunFinisher, SaveFailure, SavedRun, accept_summary_answer, timestamp};
 use crate::answer::SummaryAnswer;
 use crate::brand::APP_NAME;
@@ -53,6 +53,7 @@ use crate::index::ArtifactIndex;
 use crate::layout;
 use crate::markdown::link_style;
 use crate::native::{HOME_UNAVAILABLE, open_index, resolve_record_key, summary_artifact};
+use crate::presentation::is_format;
 use crate::site_draft_answer::parse_site_draft_answer;
 use crate::summary::{MAX_TITLE_BYTES, PageSummary, SessionLink, SummaryDocument, render_summary};
 use crate::vault::{FoundSummary, OwnedWrite, Vault};
@@ -443,11 +444,71 @@ impl RunFinisher for SiteDraftFinisher {
     }
 }
 
+/// Why a task's final message was refused: a fixed text that never quotes
+/// the reply, so it is safe to log and to show (decision 28).
+pub const TASK_REPORT_EMPTY: &str = "the final message was empty";
+/// Ends a report cut to [`MAX_TASK_REPORT_BYTES`]. It does not promise the
+/// full output: the activity stream stops at its own cap.
+pub const TASK_REPORT_SHORTENED: &str =
+    "\n… (report shortened; the activity stream above may hold more)";
+
+/// Accepts a task-bar agent's final message as its plain-text report and
+/// writes nothing: the report stays in the run's `result.json` as
+/// `{"report": text}`, and no summary file, daily-log event, page note or
+/// config is written. Any non-empty text is accepted, because the agent may
+/// already have acted: control characters other than newline and tab, and
+/// invisible format characters (bidi controls, zero-width characters, the
+/// byte-order mark; [`is_format`]) become spaces, the text is trimmed, and a report longer than
+/// [`MAX_TASK_REPORT_BYTES`] is cut on a character boundary with
+/// [`TASK_REPORT_SHORTENED`] inside the cap. Only an empty reply is refused,
+/// which gives the run its one repair turn.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TaskFinisher;
+
+impl RunFinisher for TaskFinisher {
+    fn accept(&self, _run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String> {
+        let cleaned: String = final_text
+            .chars()
+            .map(|c| {
+                if (c.is_control() && c != '\n' && c != '\t') || is_format(c) {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
+        let mut report = cleaned.trim().to_string();
+        if report.is_empty() {
+            return Err(TASK_REPORT_EMPTY.to_string());
+        }
+        if report.len() > MAX_TASK_REPORT_BYTES {
+            cap_bytes(
+                &mut report,
+                MAX_TASK_REPORT_BYTES - TASK_REPORT_SHORTENED.len(),
+            );
+            report.push_str(TASK_REPORT_SHORTENED);
+        }
+        Ok(serde_json::json!({ "report": report }))
+    }
+
+    fn save(
+        &self,
+        run: &RunStatusFile,
+        _result: &serde_json::Value,
+    ) -> Result<SavedRun, SaveFailure> {
+        Ok(SavedRun {
+            written_key: run.start_key.clone(),
+            summary_path: None,
+        })
+    }
+}
+
 /// The service's finisher: each run goes to the finisher of its kind, so a
-/// site-draft run never reaches the summary finisher.
+/// site-draft or task run never reaches the summary finisher.
 pub struct KindFinisher {
     summary: Box<dyn RunFinisher>,
     site_draft: SiteDraftFinisher,
+    task: TaskFinisher,
 }
 
 impl KindFinisher {
@@ -456,6 +517,7 @@ impl KindFinisher {
         Self {
             summary: Box::new(summary),
             site_draft: SiteDraftFinisher,
+            task: TaskFinisher,
         }
     }
 
@@ -463,6 +525,7 @@ impl KindFinisher {
         match run.kind {
             RunKind::Summary => self.summary.as_ref(),
             RunKind::SiteDraft => &self.site_draft,
+            RunKind::Task => &self.task,
         }
     }
 }
@@ -736,6 +799,7 @@ mod tests {
             first_answered_at: None,
             save_final: false,
             kind: RunKind::Summary,
+            task: None,
         }
     }
 
@@ -813,6 +877,135 @@ mod tests {
         let kept = finisher.accept(&site, &tables.to_string()).unwrap();
         finisher.save(&site, &kept).unwrap();
         assert_eq!(snapshot(world.dir.path()), before);
+    }
+
+    fn task_run(world: &World) -> RunStatusFile {
+        let mut status = run(world, PAGE, HarnessId::Codex);
+        status.kind = RunKind::Task;
+        status.task = Some(super::super::record::TaskStatus {
+            instruction: "Make a list of the links on this page.".into(),
+            protected: vec![world.root.join("notes").display().to_string()],
+        });
+        status
+    }
+
+    fn kept_report(value: &serde_json::Value) -> &str {
+        value["report"].as_str().expect("a report string")
+    }
+
+    #[test]
+    fn task_finisher_rejects_an_empty_or_blank_reply() {
+        let world = World::new();
+        let task = task_run(&world);
+        for reply in ["", "   ", "\n\t \n", "\u{1b}\r\u{7}"] {
+            let error = TaskFinisher.accept(&task, reply).unwrap_err();
+            // A fixed text: it never quotes the reply.
+            assert_eq!(error, TASK_REPORT_EMPTY);
+        }
+        let kept = TaskFinisher.accept(&task, "  Done.  ").unwrap();
+        assert_eq!(kept, serde_json::json!({ "report": "Done." }));
+    }
+
+    #[test]
+    fn task_finisher_replaces_control_characters_but_keeps_newlines_and_tabs() {
+        let world = World::new();
+        let task = task_run(&world);
+        let reply = "I did it.\r\n- one\tfile\u{1b}[31m\n- two\u{7}\u{85}end";
+        let kept = TaskFinisher.accept(&task, reply).unwrap();
+        assert_eq!(
+            kept_report(&kept),
+            "I did it. \n- one\tfile [31m\n- two  end"
+        );
+        // Not JSON: any final text is a report, even text that looks like JSON.
+        let json_like = TaskFinisher.accept(&task, "{\"report\": 1}").unwrap();
+        assert_eq!(kept_report(&json_like), "{\"report\": 1}");
+    }
+
+    #[test]
+    fn task_finisher_replaces_bidi_and_invisible_format_characters() {
+        let world = World::new();
+        let task = task_run(&world);
+        // Bidi embeddings, overrides and isolates, zero-width characters,
+        // the word joiner and a byte-order mark (General_Category=Cf).
+        let reply = "\u{feff}Renamed\u{200b}a\u{200c}b\u{200d}c\u{200e}d\u{200f}e\n\
+                     \u{202a}f\u{202b}g\u{202c}h\u{202d}i\u{202e}j\n\
+                     \u{2066}k\u{2067}l\u{2068}m\u{2069}n\u{2060}o\u{00ad}p";
+        let kept = TaskFinisher.accept(&task, reply).unwrap();
+        assert_eq!(
+            kept_report(&kept),
+            "Renamed a b c d e\n f g h i j\n k l m n o p"
+        );
+        // Visible right-to-left letters and accents survive.
+        let kept = TaskFinisher.accept(&task, "שלום café").unwrap();
+        assert_eq!(kept_report(&kept), "שלום café");
+    }
+
+    #[test]
+    fn task_finisher_shortens_a_long_report_on_a_char_boundary_with_the_note() {
+        let world = World::new();
+        let task = task_run(&world);
+        assert!(TASK_REPORT_SHORTENED.contains("the activity stream above may hold more"));
+        assert!(TASK_REPORT_SHORTENED.starts_with('\n'));
+
+        // Exactly at the cap: kept whole, no note.
+        let exact = "a".repeat(MAX_TASK_REPORT_BYTES);
+        let kept = TaskFinisher.accept(&task, &exact).unwrap();
+        assert_eq!(kept_report(&kept), exact);
+
+        // Over the cap with multibyte characters: cut on a boundary, the
+        // note inside the cap.
+        for unit in ["é", "€", "😀", "ab"] {
+            let long = unit.repeat(MAX_TASK_REPORT_BYTES);
+            let kept = TaskFinisher.accept(&task, &long).unwrap();
+            let report = kept_report(&kept);
+            assert!(report.len() <= MAX_TASK_REPORT_BYTES, "{unit}");
+            assert!(report.ends_with(TASK_REPORT_SHORTENED), "{unit}");
+            let body = report.strip_suffix(TASK_REPORT_SHORTENED).unwrap();
+            assert!(long.starts_with(body), "{unit}");
+            assert!(
+                body.len() + unit.len() + TASK_REPORT_SHORTENED.len() > MAX_TASK_REPORT_BYTES,
+                "{unit}: cut no more than needed"
+            );
+        }
+    }
+
+    /// A task save leaves the home folder, the knowledge base, the config
+    /// and the cache exactly as they were, through the real summary
+    /// finisher's dispatch.
+    #[test]
+    fn task_finisher_save_writes_nothing() {
+        let world = World::new();
+        let knowledge_base = world.dir.path().join("kb");
+        fs::create_dir(&knowledge_base).unwrap();
+        fs::write(knowledge_base.join("note.md"), "kept").unwrap();
+        fs::create_dir_all(world.config().cache_dir().unwrap()).unwrap();
+        let mut task = task_run(&world);
+        task.cwd = Some(knowledge_base.display().to_string());
+        let finisher = KindFinisher::new(world.finisher());
+        let before = snapshot(world.dir.path());
+        let kept = finisher.accept(&task, "I made the list.").unwrap();
+        let saved = finisher.save(&task, &kept).unwrap();
+        assert_eq!(saved.written_key, task.start_key);
+        assert_eq!(saved.summary_path, None);
+        // A retry save writes nothing either.
+        finisher.save(&task, &kept).unwrap();
+        assert_eq!(snapshot(world.dir.path()), before);
+    }
+
+    #[test]
+    fn kind_finisher_routes_tasks_to_the_task_finisher() {
+        let world = World::new();
+        let summary = Counting::default();
+        let finisher = KindFinisher::new(summary.clone());
+        let task = task_run(&world);
+        // The summary finisher would accept anything; the task finisher
+        // refuses an empty reply and keeps free text that is no summary.
+        assert_eq!(finisher.accept(&task, " ").unwrap_err(), TASK_REPORT_EMPTY);
+        let kept = finisher.accept(&task, "not a summary").unwrap();
+        assert_eq!(kept, serde_json::json!({ "report": "not a summary" }));
+        let saved = finisher.save(&task, &kept).unwrap();
+        assert_eq!(saved.summary_path, None);
+        assert_eq!(summary.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     /// Every file under `root` with its bytes.

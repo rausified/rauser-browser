@@ -48,6 +48,7 @@ fn harness_script(log: &Path) -> String {
 log='{log}'
 echo $$ > "$log/harness.pid"
 printf '%s\n' "$1" > "$log/page-arg.txt"
+printf '%s\n' "$@" > "$log/argv.txt"
 echo 'fake harness diagnostics' >&2
 mode=$(/bin/cat "$log/mode")
 case "$mode" in
@@ -576,4 +577,95 @@ fn a_host_older_than_the_binary_never_restarts_the_newer_service() {
     assert_eq!(world.service_pid(), Some(new_service));
     old_host.close();
     new_host.close();
+}
+
+/// Send one request straight to the running service's socket, as the native
+/// host forwards it.
+fn call_service(world: &World, mut request: Value) -> Value {
+    request["protocol_version"] = json!(PROTOCOL_VERSION);
+    request["request_id"] = json!("forwarded");
+    let request: Request = serde_json::from_value(request).unwrap();
+    let mut stream = std::os::unix::net::UnixStream::connect(world.socket()).unwrap();
+    write_request(&mut stream, &request).unwrap();
+    let body = read_frame(&mut stream).unwrap().unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+/// Every path under `dir`, sorted.
+fn listing(dir: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path.clone());
+            }
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths
+}
+
+/// A task run end to end through the built service and the fake harness.
+/// The host starts the service; the task is the `start_run` with `kind:
+/// task` and `instruction` that the host's `start_task` forwards, sent
+/// straight to the service socket. The instruction reaches the harness only
+/// in its prompt, never on its argv or in `page.md`, and the task writes
+/// nothing in the home folder.
+#[test]
+fn task_run_through_the_fake_harness_succeeds_with_a_report_and_no_argv_text() {
+    if brauser_host::ipc_test_guard::ipc_denied() {
+        return;
+    }
+    const INSTRUCTION: &str = "instruction-sentinel-83e1: tidy the notes\nand say what changed";
+    let world = World::new();
+    let mut host = world.serve();
+    let reply = host.call(json!({"type": "list_runs"}));
+    assert_eq!(reply["type"], "runs_listed", "{reply}");
+    let home = listing(&world.path("notes"));
+
+    let mut request = start_run_request();
+    request["kind"] = json!("task");
+    request["instruction"] = json!(INSTRUCTION);
+    request["record_key"] = json!({"kind": "url", "value": "https://example.com/article"});
+    let reply = call_service(&world, request);
+    assert_eq!(reply["type"], "run_started", "{reply}");
+    assert_eq!(reply["existing"], false, "{reply}");
+    assert_eq!(reply["run"]["kind"], "task", "{reply}");
+    let run_id = reply["run"]["run_id"].as_str().unwrap().to_owned();
+
+    let fetched = host.finished(&run_id);
+    let run = &fetched["run"];
+    assert_eq!(run["state"], "succeeded", "{fetched}");
+    assert_eq!(run["instruction"], INSTRUCTION, "{fetched}");
+    assert_eq!(run["task_report"], ANSWER, "{fetched}");
+    assert_eq!(run["title"], "An article", "{fetched}");
+    assert!(run.get("answer").is_none_or(Value::is_null), "{fetched}");
+    assert!(run["summary_path"].is_null(), "{fetched}");
+    assert_eq!(run["can_retry_save"], false, "{fetched}");
+    host.close();
+
+    let dir = world.run_dir(&run_id);
+    let result: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("result.json")).unwrap()).unwrap();
+    assert_eq!(result, json!({ "report": ANSWER }));
+    let page = fs::read_to_string(dir.join("page.md")).unwrap();
+    assert!(page.contains("Some text."), "{page}");
+    assert!(!page.contains("instruction-sentinel"), "{page}");
+    let prompt = fs::read_to_string(world.path("log").join("prompt.txt")).unwrap();
+    assert!(prompt.starts_with("Do a task for the user."), "{prompt}");
+    assert!(prompt.contains(INSTRUCTION), "{prompt}");
+    assert!(!prompt.contains("Some text."), "{prompt}");
+    // The harness's only argument is the run's own page file.
+    let argv = fs::read_to_string(world.path("log").join("argv.txt")).unwrap();
+    assert!(!argv.contains("instruction-sentinel"), "{argv}");
+    assert_eq!(argv.lines().count(), 1, "{argv}");
+    assert_eq!(
+        fs::canonicalize(argv.trim()).unwrap(),
+        fs::canonicalize(dir.join("page.md")).unwrap()
+    );
+    // Nothing was written in the home folder: no summary, log or note.
+    assert_eq!(listing(&world.path("notes")), home);
 }

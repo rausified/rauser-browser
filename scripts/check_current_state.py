@@ -90,6 +90,9 @@ def main() -> int:
         "agent drafting (`brwr-f45`) and re-learning (`brwr-6x2`) are not built"
     )
     stale_claims["DESIGN.md agent hint"] = "the hint's draft uses the agent when one is set up"
+    # Retired by the task bar (2026-10-28): the free-text agent row is built,
+    # so "the rest of the agent integration" no longer describes what is left.
+    stale_claims["AGENTS.md agent integration"] = "the rest of the agent integration"
     bodies = {
         "README.md drafting": readme + "\n" + readme_development,
         "DESIGN.md agent hint": design_text,
@@ -123,6 +126,7 @@ def main() -> int:
         "artifact activity": "offset-qualified hourly artifact activity",
         "unknown-site capture": "capture site for unknown sites (`brwr-t40`",
         "agent drafting": "improve with ai (`brwr-f45`",
+        "task bar": "| task bar | built:",
     }
     folded_agents = normalized(agents)
     for fact, wording in required_agents_facts.items():
@@ -131,6 +135,8 @@ def main() -> int:
 
     if "improve with ai" not in normalized(readme):
         errors.append("README.md Status no longer records shipped Improve with AI")
+    if "task bar" not in normalized(readme):
+        errors.append("README.md Status no longer records the shipped task bar")
     if "records hourly artifact activity" not in normalized(readme):
         errors.append("README.md Status no longer records shipped artifact activity")
     if "delivers day-bounded batches" not in normalized(readme):

@@ -134,19 +134,39 @@ function choosePage(
   return { top, content: chosen.content, selection };
 }
 
-/** Extracts every frame of `tab` with the bundled Readability, then starts
- * (or joins) its summary run with the frame content choosePage picks. A page
- * no frame of which yields text, or whose top frame cannot be read, throws
+/** The page a run sends: what readTab read from a tab. */
+export interface TabPage {
+  url: string;
+  title: string;
+  content: string;
+  selection: string | null;
+}
+
+/** Extracts every frame of `tab` with the bundled Readability and returns
+ * the frame content choosePage picks, every string well-formed. A page no
+ * frame of which yields text, or whose top frame cannot be read, throws
  * `HostError("unreadable")`; a top frame that by then holds another address
- * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`;
- * neither sends anything. */
-export async function summarizeTab(
+ * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`.
+ * It sends nothing to the host: Summarize & log and the task bar both read
+ * pages through it. */
+export async function readTab(
   tab: { id: number; url: string; title: string },
-  deps: SummarizeDeps,
-): Promise<{ run: RunView; existing: boolean }> {
+  deps: Pick<SummarizeDeps, "scripting" | "allFramesTimeoutMs">,
+): Promise<TabPage> {
   const target = { tabId: tab.id, allFrames: true };
+  const timeoutMs = deps.allFramesTimeoutMs ?? ALL_FRAMES_TIMEOUT_MS;
+  // Races `work` against the all-frames timeout, which then wins.
+  const withinTimeout = async <T>(work: Promise<T>): Promise<T | "timeout"> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+    return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
+  };
   try {
-    await deps.scripting.executeScript({ target, files: ["vendor/readability.js"] });
+    // A hung subframe holds the injection too; past the timeout the
+    // extractor runs without waiting for it.
+    await withinTimeout(deps.scripting.executeScript({ target, files: ["vendor/readability.js"] }));
   } catch {
     // The extractor falls back to body text where Readability did not load.
   }
@@ -160,11 +180,7 @@ export async function summarizeTab(
     // targeted; otherwise it drops every frame that failed, the top frame
     // included, from the results and resolves. A missing top frame result
     // (say, a navigation mid-injection) reads as unreadable below.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), deps.allFramesTimeoutMs ?? ALL_FRAMES_TIMEOUT_MS);
-    });
-    const all = await Promise.race([extract(target), timedOut]).finally(() => clearTimeout(timer));
+    const all = await withinTimeout(extract(target));
     // A slow or hung subframe holds the whole call, so the top frame is read
     // alone, as before every frame was.
     results = all === "timeout" ? await extract({ tabId: tab.id, frameIds: [0] }) : all;
@@ -176,16 +192,31 @@ export async function summarizeTab(
   // The run is keyed by `tab.url`, so its content must come from that page;
   // subframe addresses differ from it by design.
   if (!sameAddress(tab.url, page.top.href)) throw new HostError("page_changed", PAGE_CHANGED_MESSAGE);
-  const response = await deps.host.call({
-    type: "start_run",
-    protocol_version: PROTOCOL_VERSION,
-    request_id: newRequestId(),
+  return {
     // Every string is made well-formed again, since the tab title comes from
     // Chrome and a stale or older extractor may not have done it.
     url: wellFormed(tab.url),
     title: wellFormed(cutTitle(page.top.title || tab.title)),
     content: wellFormed(page.content),
     selection: page.selection === null ? null : wellFormed(page.selection),
+  };
+}
+
+/** Reads `tab` (readTab, which throws `unreadable` or `page_changed` before
+ * anything is sent), then starts or joins its summary run. */
+export async function summarizeTab(
+  tab: { id: number; url: string; title: string },
+  deps: SummarizeDeps,
+): Promise<{ run: RunView; existing: boolean }> {
+  const page = await readTab(tab, deps);
+  const response = await deps.host.call({
+    type: "start_run",
+    protocol_version: PROTOCOL_VERSION,
+    request_id: newRequestId(),
+    url: page.url,
+    title: page.title,
+    content: page.content,
+    selection: page.selection,
     harness: null,
     record_key: null,
     requested_at: localTimestamp(deps.now()),

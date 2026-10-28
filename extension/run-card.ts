@@ -1,5 +1,5 @@
-// The panel's summary run cards (spec §5): each polls its run in the Brauser
-// service and offers the controls that fit its state. The service owns the
+// The panel's summary and task run cards (spec §5): each polls its run in the
+// Brauser service and offers the controls that fit its state. The service owns the
 // run; a card only shows it, so closing the panel loses nothing, and the next
 // panel restores the cards from list_runs. Agent text is untrusted and is
 // rendered as text only (textContent), never as HTML.
@@ -30,9 +30,21 @@ export interface RunProgressDeps {
   visible(): boolean;
 }
 
+/** Which runs a set of cards shows: summary runs (the default) or tasks. */
+export type CardKind = "summary" | "task";
+
 export interface RunCardDeps extends RunProgressDeps {
   storage: ChromeStorageArea;
   openSettings(): void;
+  /** Which runs these cards show. Task cards show on every tab, so
+   * `follow` does nothing for them. */
+  kind?: CardKind;
+  /** A card saw its run go from unfinished to finished (tasks only), so the
+   * panel can announce it. A card restored already finished never calls it. */
+  onTerminal?(run: RunView): void;
+  /** Reuse on a finished task card: put this instruction, the full one the
+   * service stored, back in the task bar. */
+  reuse?(instruction: string): void;
   /** A card saw its run succeed and save a summary, so the page's own
    * Summary line can refresh: a summary event does not change the
    * worker's delivery count the panel otherwise refreshes on. */
@@ -71,7 +83,14 @@ export function stateText(run: RunView): string {
     case "running":
       return "Running";
     case "succeeded":
-      return run.kind === "site_draft" ? "Drafted" : "Summarized";
+      switch (run.kind) {
+        case "task":
+          return "Done";
+        case "site_draft":
+          return "Drafted";
+        default:
+          return "Summarized";
+      }
     case "failed":
       return `Failed: ${run.error ?? "the run did not finish"}`;
     case "canceled":
@@ -101,14 +120,16 @@ export function samePage(runUrl: string, pageUrl: string): boolean {
   return runUrl.split("#")[0] === pageUrl.split("#")[0];
 }
 
-/** The summary runs a newly opened panel shows: every queued or running run, then the
- * newest {@link MAX_RESTORED_FINISHED} finished in the last day that the user
- * has not dismissed. */
-export function restorable(runs: RunView[], now: number, dismissed: ReadonlySet<string>): RunView[] {
-  // A Capture Site draft run belongs to its review, never to a summary card.
-  const summaries = runs.filter((run) => run.kind !== "site_draft");
-  const active = summaries.filter((run) => !isTerminal(run));
-  const finished = summaries
+/** The runs of `kind` a newly opened panel shows: every queued or running
+ * run, then the newest {@link MAX_RESTORED_FINISHED} finished in the last day
+ * that the user has not dismissed. A run without a kind is a summary; a
+ * Capture Site draft run belongs to its review and is never a card. */
+export function restorable(
+  runs: RunView[], now: number, dismissed: ReadonlySet<string>, kind: CardKind = "summary",
+): RunView[] {
+  const ofKind = runs.filter((run) => (run.kind ?? "summary") === kind);
+  const active = ofKind.filter((run) => !isTerminal(run));
+  const finished = ofKind
     .filter((run) => isTerminal(run) && !dismissed.has(run.run_id))
     .map((run) => ({ run, at: run.finished_at === null ? NaN : Date.parse(run.finished_at) }))
     .filter(({ at }) => Number.isFinite(at) && now - at <= RESTORE_FINISHED_WITHIN_MS)
@@ -206,6 +227,11 @@ abstract class RunWatcher {
   /** Called after each fetch or action that may have finished the run. */
   protected settled(): void {}
 
+  /** Called with each view a get_run returned, even one too old to apply. */
+  protected fetchedView(run: RunView): void {
+    void run;
+  }
+
   protected done(): boolean {
     return this.gone || (isTerminal(this.view) && this.finalFetched);
   }
@@ -249,6 +275,7 @@ abstract class RunWatcher {
           this.offset = fetched.next_offset;
         }
         this.setView(fetched.run);
+        this.fetchedView(fetched.run);
         this.problem = null;
         // The final fetch is done only once a finished run's stream is all
         // here; a later page that fails is retried on the next poll.
@@ -342,10 +369,20 @@ abstract class RunWatcher {
   }
 }
 
+/** What {@link RunCards} needs from a card of either kind. */
+interface Card {
+  readonly element: HTMLElement;
+  readonly runId: string;
+  readonly url: string;
+  update(run: RunView): void;
+  start(): void;
+  dispose(): void;
+}
+
 /** One summary run's card. Beyond the shared progress it shows the
  * answer and the saved summary, and offers Open summary, Retry save, Copy
  * and Dismiss. */
-class RunCard extends RunWatcher {
+class RunCard extends RunWatcher implements Card {
   readonly element: HTMLDivElement;
   private readonly titleLine: HTMLParagraphElement;
   private readonly stateLine: HTMLParagraphElement;
@@ -370,7 +407,7 @@ class RunCard extends RunWatcher {
   constructor(
     view: RunView,
     private readonly deps: RunCardDeps,
-    private readonly onDismiss: (card: RunCard) => void,
+    private readonly onDismiss: (card: Card) => void,
   ) {
     super(view, deps);
     this.element = make("div", "run-card");
@@ -494,6 +531,115 @@ class RunCard extends RunWatcher {
   }
 }
 
+const HARNESS_NAMES: Record<RunView["harness"], string> = { codex: "Codex", claude: "Claude Code" };
+const CHANGES_STAY = "Changes the agent already made stay; check before running it again.";
+
+/** One task run's card (decision 20). The headline is the instruction, the
+ * subline the page and harness; on success it shows the agent's report. All
+ * of it is untrusted text, shown with textContent only. It offers Cancel,
+ * Copy report, Reuse, the harness's resume, Copy (the error) and Dismiss,
+ * and never Open summary or Retry save: a task writes nothing. */
+class TaskCard extends RunWatcher implements Card {
+  readonly element: HTMLDivElement;
+  private readonly headline: HTMLParagraphElement;
+  private readonly pageLine: HTMLParagraphElement;
+  private readonly stateLine: HTMLParagraphElement;
+  private readonly streamText: HTMLPreElement;
+  private readonly reportText: HTMLDivElement;
+  private readonly changesLine: HTMLParagraphElement;
+  private readonly problemLine: HTMLParagraphElement;
+  private readonly actions: HTMLDivElement;
+  // From get_run views only: list_runs cuts the instruction and leaves the
+  // report out, so a list view never replaces either.
+  private fullInstruction: string | null = null;
+  private report: string | null = null;
+  // Whether the card saw the run unfinished, so its finish is news.
+  private sawUnfinished: boolean;
+  private reported = false;
+
+  get url(): string {
+    return this.view.url;
+  }
+
+  constructor(
+    view: RunView,
+    private readonly deps: RunCardDeps,
+    private readonly onDismiss: (card: Card) => void,
+  ) {
+    super(view, deps);
+    this.sawUnfinished = !isTerminal(view);
+    this.element = make("div", "run-card task-card");
+    this.element.dataset.runId = view.run_id;
+    this.headline = make("p", "run-card-title run-card-instruction");
+    this.pageLine = make("p", "run-card-page");
+    this.stateLine = make("p", "run-card-state");
+    this.streamText = make("pre", "run-card-stream");
+    this.reportText = make("div", "run-card-report");
+    this.changesLine = make("p", "run-card-changes");
+    this.problemLine = make("p", "run-card-problem warning");
+    this.actions = make("div", "run-card-actions");
+    this.element.append(
+      this.headline, this.pageLine, this.stateLine, this.streamText, this.reportText, this.changesLine,
+      this.problemLine, this.actions,
+    );
+    this.render();
+  }
+
+  /** A newer view from outside the card, such as list_runs. */
+  update(run: RunView): void {
+    this.setView(run);
+    this.render();
+  }
+
+  protected override setView(run: RunView): void {
+    super.setView(run);
+    if (this.view === run && !isTerminal(run)) this.sawUnfinished = true;
+  }
+
+  protected override fetchedView(run: RunView): void {
+    if (typeof run.instruction === "string") this.fullInstruction = run.instruction;
+    if (typeof run.task_report === "string") this.report = run.task_report;
+  }
+
+  protected override settled(): void {
+    if (this.reported || this.disposed || !this.sawUnfinished || !isTerminal(this.view) || !this.done()) return;
+    this.reported = true;
+    this.deps.onTerminal?.(this.view);
+  }
+
+  protected render(): void {
+    const run = this.view;
+    this.headline.textContent = this.fullInstruction ?? run.instruction ?? "";
+    this.pageLine.textContent = `on ${run.title || run.url} · ${HARNESS_NAMES[run.harness]}`;
+    this.stateLine.textContent = this.stateLineText();
+    this.streamText.textContent = this.stream;
+    this.streamText.hidden = this.stream === "";
+    const report = run.state === "succeeded" ? this.report : null;
+    this.reportText.textContent = report ?? "";
+    this.reportText.hidden = report === null;
+    const changed = (run.state === "failed" || run.state === "canceled") && run.started_at !== null;
+    this.changesLine.textContent = changed ? CHANGES_STAY : "";
+    this.changesLine.hidden = !changed;
+    this.problemLine.textContent = this.problem ?? "";
+    this.problemLine.hidden = this.problem === null;
+
+    const buttons: HTMLButtonElement[] = [...this.cancelButtons()];
+    if (report !== null) buttons.push(actionButton("Copy report", () => this.copy(report)));
+    const instruction = this.fullInstruction;
+    const reuse = this.deps.reuse;
+    if (isTerminal(run) && instruction !== null && reuse) {
+      buttons.push(actionButton("Reuse", () => reuse(instruction)));
+    }
+    buttons.push(...this.resumeButtons());
+    if (run.state === "failed") {
+      buttons.push(actionButton("Copy", () => this.copy(this.view.error || this.stream)));
+    }
+    if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.onDismiss(this)));
+    for (const button of buttons) button.disabled = this.acting;
+    this.actions.replaceChildren(...buttons);
+  }
+}
+
 /**
  * A run's progress without the summary card's parts: the state line and
  * elapsed time, the streamed text (as text only), Cancel, and Open in Codex
@@ -559,54 +705,140 @@ export class RunProgress extends RunWatcher {
   }
 }
 
-/** The run cards in `container`, which they share with other panel content;
- * they add and remove only their own elements. */
+/** Every panel's dismissals write one after another, whichever cards they
+ * come from, so each read sees the last write and two quick dismissals (a
+ * summary and a task, say) both stay remembered. */
+let dismissWrites: Promise<void> = Promise.resolve();
+
+async function dismissedIds(storage: Pick<ChromeStorageArea, "get">): Promise<string[]> {
+  try {
+    const stored = (await storage.get(DISMISSED_RUNS_KEY))[DISMISSED_RUNS_KEY];
+    return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberDismissed(storage: ChromeStorageArea, runId: string): Promise<void> {
+  const write = dismissWrites.then(async () => {
+    const ids = (await dismissedIds(storage)).filter((id) => id !== runId);
+    ids.push(runId);
+    try {
+      await storage.set({ [DISMISSED_RUNS_KEY]: ids.slice(-MAX_DISMISSED_RUNS) });
+    } catch {
+      // The card is gone for this panel; a later panel may restore it.
+    }
+  });
+  dismissWrites = write;
+  return write;
+}
+
+// The restore notice each area shows, at most one.
+const notices = new WeakMap<HTMLElement, HTMLElement>();
+
+function removeChild(area: HTMLElement, element: HTMLElement): void {
+  area.replaceChildren(...Array.from(area.children).filter((child) => child !== element));
+}
+
+function showNotice(area: HTMLElement, text: string, openSettings: (() => void) | null): void {
+  clearNotice(area);
+  const box = make("div", "setup-warning run-notice");
+  const line = make("p", "");
+  line.textContent = text;
+  box.append(line);
+  if (openSettings) box.append(actionButton("Open settings", openSettings));
+  notices.set(area, box);
+  area.replaceChildren(box, ...Array.from(area.children));
+}
+
+function clearNotice(area: HTMLElement): void {
+  const notice = notices.get(area);
+  if (notice) removeChild(area, notice);
+  notices.delete(area);
+}
+
+/** What one restore for several card sets needs. */
+export type RestoreDeps = Pick<RunCardDeps, "host" | "now" | "storage" | "openSettings">;
+
+/**
+ * Lists the runs once and shows each card set the runs it should (see
+ * {@link restorable}). A failed list shows one notice, in `noticeArea`;
+ * a list that works clears it. The record that runs may exist is cleared
+ * only when no set shows a card.
+ */
+export async function restoreRunCards(
+  containers: readonly RunCards[], noticeArea: HTMLElement, deps: RestoreDeps,
+): Promise<void> {
+  let runs: RunView[];
+  const listedAt = deps.now();
+  try {
+    runs = (await deps.host.call({
+      type: "list_runs", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+    }, "runs_listed")).runs;
+  } catch (error) {
+    if (containers.some((cards) => cards.isDisposed)) return;
+    if (error instanceof HostError && error.code === "service_unavailable") {
+      showNotice(noticeArea, serviceSetupText(error.message), () => deps.openSettings());
+    } else {
+      showNotice(noticeArea, `Could not list agent runs: ${errorText(error)}`, null);
+    }
+    return;
+  }
+  const dismissed = new Set(await dismissedIds(deps.storage));
+  if (containers.some((cards) => cards.isDisposed)) return;
+  clearNotice(noticeArea);
+  let shown = 0;
+  for (const cards of containers) shown += cards.restoreFrom(runs, dismissed);
+  if (shown === 0) await clearRunsMayExist(deps.storage, listedAt);
+}
+
+/** The run cards of one kind in `container`, which they share with other
+ * panel content; they add and remove only their own elements. */
 export class RunCards {
-  private readonly cards = new Map<string, RunCard>();
-  private notice: HTMLElement | null = null;
+  private readonly cards = new Map<string, Card>();
+  private readonly kind: CardKind;
   private disposed = false;
   // The page the panel follows: only its cards show. Undefined until the
   // panel first follows a tab, when every card shows; null for no web page.
+  // Task cards ignore it and always show.
   private followed: string | null | undefined = undefined;
-  /** Dismissals write one after another, so each read sees the last write
-   * and two quick dismissals both stay remembered. */
-  private dismissWrites: Promise<void> = Promise.resolve();
 
-  constructor(private readonly container: HTMLElement, private readonly deps: RunCardDeps) {}
+  constructor(private readonly container: HTMLElement, private readonly deps: RunCardDeps) {
+    this.kind = deps.kind ?? "summary";
+  }
 
-  /** Shows `run` at the top, or updates its card if it has one. */
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
+  /** Shows `run` at the top, or updates its card if it has one. A run just
+   * started proves the host answers, so a restore failure notice in this
+   * set's container goes. */
   show(run: RunView): void {
+    if (this.disposed) return;
+    clearNotice(this.container);
     this.add(run, true);
   }
 
-  /** Shows the runs a new panel should (see {@link restorable}). */
-  async restore(): Promise<void> {
-    let runs: RunView[];
-    const listedAt = this.deps.now();
-    try {
-      runs = (await this.deps.host.call({
-        type: "list_runs", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-      }, "runs_listed")).runs;
-    } catch (error) {
-      if (this.disposed) return;
-      if (error instanceof HostError && error.code === "service_unavailable") {
-        this.showNotice(serviceSetupText(error.message), true);
-      } else {
-        this.showNotice(`Could not list summary runs: ${errorText(error)}`, false);
-      }
-      return;
-    }
-    const dismissed = new Set(await this.dismissedIds());
-    if (this.disposed) return;
-    this.clearNotice();
-    const shown = restorable(runs, this.deps.now(), dismissed);
-    for (const run of shown) this.add(run, false);
-    if (shown.length === 0 && this.cards.size === 0) await clearRunsMayExist(this.deps.storage, listedAt);
+  /** Lists the runs and shows the ones a new panel should, with any
+   * failure notice in this set's own container. */
+  restore(): Promise<void> {
+    return restoreRunCards([this], this.container, this.deps);
+  }
+
+  /** Shows the runs of this set's kind a new panel should, from one
+   * list_runs answer, and returns how many cards the set now holds. */
+  restoreFrom(runs: RunView[], dismissed: ReadonlySet<string>): number {
+    if (this.disposed) return 0;
+    for (const run of restorable(runs, this.deps.now(), dismissed, this.kind)) this.add(run, false);
+    return this.cards.size;
   }
 
   /** Shows only the cards for the page at `url` (null: no web page). The
-   * others stay, hidden and still polling, until their page is followed. */
+   * others stay, hidden and still polling, until their page is followed.
+   * Task cards show on every page, so for them this does nothing. */
   follow(url: string | null): void {
+    if (this.kind === "task") return;
     this.followed = url;
     for (const card of this.cards.values()) this.place(card);
   }
@@ -623,7 +855,10 @@ export class RunCards {
       existing.update(run);
       return;
     }
-    const card = new RunCard(run, this.deps, (dismissed) => void this.dismiss(dismissed));
+    const onDismiss = (dismissed: Card): void => void this.dismiss(dismissed);
+    const card: Card = this.kind === "task"
+      ? new TaskCard(run, this.deps, onDismiss)
+      : new RunCard(run, this.deps, onDismiss);
     this.place(card);
     const cardElements = new Set<Element>(Array.from(this.cards.values(), (other) => other.element));
     const children = Array.from(this.container.children);
@@ -638,54 +873,16 @@ export class RunCards {
     card.start();
   }
 
-  private place(card: RunCard): void {
+  private place(card: Card): void {
     const followed = this.followed;
-    card.element.hidden = followed !== undefined && (followed === null || !samePage(card.url, followed));
+    card.element.hidden = this.kind !== "task" && followed !== undefined &&
+      (followed === null || !samePage(card.url, followed));
   }
 
-  private remove(element: HTMLElement): void {
-    this.container.replaceChildren(...Array.from(this.container.children).filter((child) => child !== element));
-  }
-
-  private async dismissedIds(): Promise<string[]> {
-    try {
-      const stored = (await this.deps.storage.get(DISMISSED_RUNS_KEY))[DISMISSED_RUNS_KEY];
-      return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : [];
-    } catch {
-      return [];
-    }
-  }
-
-  private async dismiss(card: RunCard): Promise<void> {
+  private async dismiss(card: Card): Promise<void> {
     card.dispose();
     this.cards.delete(card.runId);
-    this.remove(card.element);
-    const write = this.dismissWrites.then(async () => {
-      const ids = (await this.dismissedIds()).filter((id) => id !== card.runId);
-      ids.push(card.runId);
-      try {
-        await this.deps.storage.set({ [DISMISSED_RUNS_KEY]: ids.slice(-MAX_DISMISSED_RUNS) });
-      } catch {
-        // The card is gone for this panel; a later panel may restore it.
-      }
-    });
-    this.dismissWrites = write;
-    await write;
-  }
-
-  private showNotice(text: string, withSettings: boolean): void {
-    this.clearNotice();
-    const box = make("div", "setup-warning run-notice");
-    const line = make("p", "");
-    line.textContent = text;
-    box.append(line);
-    if (withSettings) box.append(actionButton("Open settings", () => this.deps.openSettings()));
-    this.notice = box;
-    this.container.replaceChildren(box, ...Array.from(this.container.children));
-  }
-
-  private clearNotice(): void {
-    if (this.notice) this.remove(this.notice);
-    this.notice = null;
+    removeChild(this.container, card.element);
+    await rememberDismissed(this.deps.storage, card.runId);
   }
 }

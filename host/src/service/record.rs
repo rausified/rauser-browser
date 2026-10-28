@@ -76,6 +76,54 @@ pub fn check_start_run(
     Ok(())
 }
 
+/// The longest task-bar instruction, in characters, as the schema states.
+pub const MAX_TASK_INSTRUCTION_CHARS: usize = 4096;
+/// A task's instruction is cut to this many characters (plus "…") in
+/// `list_runs`, so twenty views fit one frame.
+pub const LIST_INSTRUCTION_CHARS: usize = 280;
+/// The longest task report kept and shown, in bytes.
+pub const MAX_TASK_REPORT_BYTES: usize = 16 * 1024;
+
+/// The task bar's instruction, as the host and the service both bound it:
+/// not blank once trimmed, at most [`MAX_TASK_INSTRUCTION_CHARS`]
+/// characters, and no control character but newline and tab. The refusal
+/// texts never quote the instruction, so they are safe to log.
+pub fn check_task_instruction(text: &str) -> Result<(), &'static str> {
+    if text.trim().is_empty() {
+        return Err("instruction is empty");
+    }
+    if text.chars().count() > MAX_TASK_INSTRUCTION_CHARS {
+        return Err("instruction is longer than 4096 characters");
+    }
+    if text
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err("instruction contains a control character");
+    }
+    Ok(())
+}
+
+/// A task's instruction as `list_runs` shows it: at most
+/// [`LIST_INSTRUCTION_CHARS`] characters, plus "…" when cut.
+pub fn list_instruction(text: &str) -> String {
+    match text.char_indices().nth(LIST_INSTRUCTION_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_string(),
+    }
+}
+
+/// A task run's request, kept in `status.json` for the run's view and the
+/// check when it leaves the queue: the user's instruction and the absolute
+/// paths the prompt names as Brauser's own. A queued task is never resumed
+/// after a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskStatus {
+    pub instruction: String,
+    pub protected: Vec<String>,
+}
+
 /// Cut `text` to at most `max` bytes on a character boundary.
 pub fn cap_bytes(text: &mut String, max: usize) {
     if text.len() <= max {
@@ -168,6 +216,10 @@ pub struct RunStatusFile {
     /// summary. Optional, and not forward compatible, as `answered_at`.
     #[serde(default = "summary_kind", skip_serializing_if = "is_summary")]
     pub kind: RunKind,
+    /// A task run's request; absent for every other kind. Optional, and
+    /// not forward compatible, as `kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskStatus>,
 }
 
 fn summary_kind() -> RunKind {
@@ -184,21 +236,42 @@ impl RunStatusFile {
     /// Retry save is offered only for a save failure a retry can fix whose
     /// validated answer is still on disk. A result that is not a [`SummaryAnswer`] (a PR 2
     /// record) shows no answer. A site-draft run never has an answer; its
-    /// view carries the validated tables as `site_draft` instead.
+    /// view carries the validated tables as `site_draft` instead. A task
+    /// run carries its full instruction and, once it has succeeded, its
+    /// report; it never offers Retry save, because a task saves nothing.
     pub fn view(&self, stream_bytes: u32, result: Option<&serde_json::Value>) -> RunView {
+        let mut answer = None;
+        let mut site_draft = None;
+        let mut instruction = None;
+        let mut task_report = None;
+        match self.kind {
+            RunKind::Summary => {
+                answer = result
+                    .and_then(|value| SummaryAnswer::deserialize(value).ok())
+                    .map(|answer| RunAnswer {
+                        document_type: answer.document_type,
+                        category: answer.category,
+                        importance: answer.importance.level,
+                        importance_reason: answer.importance.reason,
+                    });
+            }
+            RunKind::SiteDraft => {
+                site_draft = result.and_then(|value| SiteDraftAnswerView::deserialize(value).ok());
+            }
+            RunKind::Task => {
+                instruction = self.task.as_ref().map(|task| task.instruction.clone());
+                task_report = result
+                    .filter(|_| self.state == RunState::Succeeded)
+                    .and_then(|value| value.get("report"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|report| {
+                        let mut report = report.to_string();
+                        cap_bytes(&mut report, MAX_TASK_REPORT_BYTES);
+                        report
+                    });
+            }
+        }
         let summary = is_summary(&self.kind);
-        let site_draft = result
-            .filter(|_| !summary)
-            .and_then(|value| SiteDraftAnswerView::deserialize(value).ok());
-        let answer = result
-            .filter(|_| summary)
-            .and_then(|value| SummaryAnswer::deserialize(value).ok())
-            .map(|answer| RunAnswer {
-                document_type: answer.document_type,
-                category: answer.category,
-                importance: answer.importance.level,
-                importance_reason: answer.importance.reason,
-            });
         RunView {
             run_id: self.run_id.clone(),
             state: self.state,
@@ -217,7 +290,8 @@ impl RunStatusFile {
             session_id: self.session_id.clone(),
             summary_path: self.summary_path.clone(),
             stream_bytes,
-            can_retry_save: self.state == RunState::Failed
+            can_retry_save: self.kind != RunKind::Task
+                && self.state == RunState::Failed
                 && self.error_kind == Some(RunErrorKind::SaveFailed)
                 && !self.save_final
                 && result.is_some(),
@@ -226,6 +300,8 @@ impl RunStatusFile {
             // extension built before run kinds rejects unknown keys.
             kind: (!summary).then_some(self.kind),
             site_draft,
+            instruction,
+            task_report,
         }
     }
 
@@ -305,6 +381,11 @@ impl RunStore {
         fs::set_permissions(&runs, fs::Permissions::from_mode(0o700))
             .with_context(|| format!("securing {}", runs.display()))?;
         Ok(Self { runs })
+    }
+
+    /// The service's support folder, which holds `runs/` and `agent.env`.
+    pub fn support_dir(&self) -> &Path {
+        self.runs.parent().unwrap_or(&self.runs)
     }
 
     pub fn run_dir(&self, id: Uuid) -> PathBuf {
@@ -608,6 +689,7 @@ mod tests {
             first_answered_at: None,
             save_final: false,
             kind: RunKind::Summary,
+            task: None,
         }
     }
 
@@ -690,10 +772,38 @@ mod tests {
         .unwrap();
         let view = status.view(u32::MAX, Some(&answer));
         assert!(view.answer.is_some());
+        // A listed task view: its instruction cut for the list, in four-byte
+        // characters (the larger encoding), and no report.
+        let mut task = largest(task_sample(&"\u{1F600}".repeat(MAX_TASK_INSTRUCTION_CHARS)));
+        task.state = RunState::Failed;
+        task.error_kind = Some(RunErrorKind::HarnessFailed);
+        let mut task_view = task.view(u32::MAX, None);
+        task_view.instruction = task_view.instruction.as_deref().map(list_instruction);
+        task_view.task_report = None;
+        assert_eq!(
+            task_view.instruction.as_ref().unwrap().chars().count(),
+            LIST_INSTRUCTION_CHARS + 1
+        );
+        let mut runs = Vec::new();
+        for index in 0..crate::service::supervisor::LIST_LIMIT {
+            runs.push(if index % 2 == 0 {
+                view.clone()
+            } else {
+                task_view.clone()
+            });
+        }
         let listed = brauser_protocol::Response::RunsListed(brauser_protocol::RunsListed {
             protocol_version: brauser_protocol::PROTOCOL_VERSION,
             request_id: "r".repeat(128),
-            runs: vec![view; crate::service::supervisor::LIST_LIMIT],
+            runs,
+        });
+        let bytes = serde_json::to_vec(&listed).unwrap().len();
+        assert!(bytes <= crate::frame::MAX_OUTBOUND_BYTES, "{bytes}");
+        // Twenty listed task views fit as well.
+        let listed = brauser_protocol::Response::RunsListed(brauser_protocol::RunsListed {
+            protocol_version: brauser_protocol::PROTOCOL_VERSION,
+            request_id: "r".repeat(128),
+            runs: vec![task_view; crate::service::supervisor::LIST_LIMIT],
         });
         let bytes = serde_json::to_vec(&listed).unwrap().len();
         assert!(bytes <= crate::frame::MAX_OUTBOUND_BYTES, "{bytes}");
@@ -957,6 +1067,213 @@ mod tests {
         status.kind = RunKind::Summary;
         let view = status.view(0, Some(&kept));
         assert_eq!((view.answer, view.site_draft), (None, None));
+    }
+
+    fn task_sample(instruction: &str) -> RunStatusFile {
+        let mut status = sample(Uuid::new_v4());
+        status.kind = RunKind::Task;
+        status.task = Some(TaskStatus {
+            instruction: instruction.into(),
+            protected: vec!["/home/notes".into()],
+        });
+        status
+    }
+
+    #[test]
+    fn task_instruction_bounds() {
+        assert_eq!(check_task_instruction(""), Err("instruction is empty"));
+        assert_eq!(
+            check_task_instruction(" \n\t "),
+            Err("instruction is empty")
+        );
+        assert!(check_task_instruction("Summarize this").is_ok());
+        assert!(check_task_instruction("one\ntwo\tthree").is_ok());
+        let longest = "界".repeat(MAX_TASK_INSTRUCTION_CHARS);
+        assert!(check_task_instruction(&longest).is_ok());
+        assert_eq!(
+            check_task_instruction(&format!("{longest}x")),
+            Err("instruction is longer than 4096 characters")
+        );
+        for bad in ["a\rb", "a\u{1b}[31mb", "a\u{0}b", "a\u{85}b", "a\u{7f}b"] {
+            assert_eq!(
+                check_task_instruction(bad),
+                Err("instruction contains a control character"),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn task_view_carries_instruction_and_report_once_succeeded() {
+        let mut status = task_sample("Make a list of the steps");
+        let kept = serde_json::json!({ "report": "I made the list." });
+        let view = status.view(0, Some(&kept));
+        assert_eq!(view.kind, Some(RunKind::Task));
+        assert_eq!(
+            view.instruction.as_deref(),
+            Some("Make a list of the steps")
+        );
+        // Queued: no report yet, even with a result on disk.
+        assert_eq!(view.task_report, None);
+        status.state = RunState::Running;
+        assert_eq!(status.view(0, Some(&kept)).task_report, None);
+        status.state = RunState::Succeeded;
+        let view = status.view(0, Some(&kept));
+        assert_eq!(view.task_report.as_deref(), Some("I made the list."));
+        assert_eq!(view.answer, None);
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["kind"], "task");
+        assert_eq!(json["instruction"], "Make a list of the steps");
+        assert_eq!(json["task_report"], "I made the list.");
+        // A result that is not a report shows none.
+        assert_eq!(status.view(0, None).task_report, None);
+        let odd = serde_json::json!({ "report": 3 });
+        assert_eq!(status.view(0, Some(&odd)).task_report, None);
+        // A report kept longer than the cap is cut to fit the view.
+        let long = serde_json::json!({ "report": "é".repeat(MAX_TASK_REPORT_BYTES) });
+        let report = status.view(0, Some(&long)).task_report.unwrap();
+        assert!(report.len() <= MAX_TASK_REPORT_BYTES);
+        // A summary answer kept for a task is not an answer.
+        let summary = serde_json::from_str(crate::answer::TEST_ANSWER).unwrap();
+        let view = status.view(0, Some(&summary));
+        assert_eq!((view.answer, view.task_report), (None, None));
+    }
+
+    #[test]
+    fn task_view_never_parses_its_result_as_a_site_draft() {
+        let mut status = task_sample("Draft capture rules");
+        status.state = RunState::Succeeded;
+        let tables = serde_json::json!([
+            {"type": "tools.docs", "origin": "https://tools.example.com", "title": "{title}"}
+        ]);
+        let kept = serde_json::json!({ "adapters": tables, "report": "done" });
+        let view = status.view(0, Some(&kept));
+        assert_eq!(view.site_draft, None);
+        assert_eq!(view.answer, None);
+        assert_eq!(view.task_report.as_deref(), Some("done"));
+        let json = serde_json::to_value(&view).unwrap();
+        assert!(json.get("site_draft").is_none(), "{json}");
+        // And a site-draft run never shows a task's fields.
+        let mut site = status.clone();
+        site.kind = RunKind::SiteDraft;
+        let tables_only = serde_json::json!({ "adapters": tables });
+        let view = site.view(0, Some(&tables_only));
+        assert_eq!((view.instruction, view.task_report), (None, None));
+        assert!(view.site_draft.is_some());
+        // And a task never shows a valid site draft either.
+        let view = status.view(0, Some(&tables_only));
+        assert_eq!((view.site_draft, view.task_report), (None, None));
+    }
+
+    #[test]
+    fn summary_view_still_has_no_kind_instruction_or_report() {
+        let mut status = sample(Uuid::new_v4());
+        status.state = RunState::Succeeded;
+        // Even a summary record that somehow carries a task shows none of it.
+        status.task = task_sample("x").task;
+        let kept = serde_json::json!({ "report": "r" });
+        let view = serde_json::to_value(status.view(0, Some(&kept))).unwrap();
+        for key in ["kind", "instruction", "task_report", "site_draft"] {
+            assert!(view.get(key).is_none(), "{key}: {view}");
+        }
+    }
+
+    #[test]
+    fn older_status_files_without_task_still_read() {
+        let (_dir, store) = store();
+        let id = created(&store);
+        let path = store.run_dir(id).join(STATUS_FILE);
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.get("task").is_none(), "{written}");
+        assert_eq!(store.status(id).unwrap().task, None);
+
+        // A task record round-trips with its request.
+        let mut task = store.status(id).unwrap();
+        task.kind = RunKind::Task;
+        task.task = task_sample("Do it").task;
+        store.write_status(&task).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["kind"], "task");
+        assert_eq!(written["task"]["instruction"], "Do it");
+        assert_eq!(written["task"]["protected"][0], "/home/notes");
+        assert_eq!(store.status(id).unwrap(), task);
+
+        // Unknown fields inside the task are refused too.
+        let mut value = written;
+        value["task"]["surprise"] = serde_json::json!(true);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(store.status(id).is_err());
+    }
+
+    #[test]
+    fn a_task_view_never_offers_retry_save() {
+        let mut status = task_sample("Do it");
+        status.state = RunState::Failed;
+        status.error_kind = Some(RunErrorKind::SaveFailed);
+        status.save_final = false;
+        let kept = serde_json::json!({ "report": "r" });
+        assert!(!status.view(0, Some(&kept)).can_retry_save);
+        // The same record as a summary would offer it.
+        status.kind = RunKind::Summary;
+        assert!(status.view(0, Some(&kept)).can_retry_save);
+    }
+
+    /// The largest fields a run record can hold, each escaped as much as
+    /// JSON allows.
+    fn largest(mut status: RunStatusFile) -> RunStatusFile {
+        status.url = format!("https://e.com/{}", "\\".repeat(MAX_URL_BYTES - 14));
+        status.url.truncate(MAX_URL_BYTES);
+        let key = RecordKey {
+            kind: RecordKeyKind::Url,
+            value: "k".repeat(MAX_URL_BYTES),
+        };
+        status.start_key = key.clone();
+        status.written_key = Some(key);
+        status.title = "\"".repeat(MAX_TITLE_BYTES);
+        status.error = Some("\\".repeat(MAX_ERROR_BYTES));
+        status.cwd = Some("/".repeat(1024));
+        status.summary_path = Some("s".repeat(1024));
+        status.thread_id = Some("\\".repeat(MAX_SESSION_ID_BYTES));
+        status.session_id = Some("\\".repeat(MAX_SESSION_ID_BYTES));
+        status
+    }
+
+    #[test]
+    fn largest_task_get_run_fits_one_outbound_frame() {
+        // Four-byte characters are written raw (16 KiB); 4096 `"` would
+        // escape to only 8 KiB.
+        let wide = "\u{1F600}".repeat(MAX_TASK_INSTRUCTION_CHARS);
+        assert!(wide.len() > 2 * MAX_TASK_INSTRUCTION_CHARS);
+        assert!(check_task_instruction(&wide).is_ok());
+        let mut status = largest(task_sample(&wide));
+        status.state = RunState::Succeeded;
+        let report = "\"".repeat(MAX_TASK_REPORT_BYTES);
+        let kept = serde_json::json!({ "report": report });
+        let view = status.view(u32::MAX, Some(&kept));
+        assert_eq!(view.instruction.as_deref(), Some(wide.as_str()));
+        assert_eq!(view.task_report.as_deref(), Some(report.as_str()));
+        // A stream page whose every byte escapes six-fold (`\u0001`).
+        let fetched = brauser_protocol::Response::RunFetched(brauser_protocol::RunFetched {
+            protocol_version: brauser_protocol::PROTOCOL_VERSION,
+            request_id: "r".repeat(128),
+            run: view,
+            stream_text: "\u{1}".repeat(STREAM_PAGE_BYTES),
+            next_offset: u32::MAX,
+            more: true,
+        });
+        let bytes = serde_json::to_vec(&fetched).unwrap().len();
+        assert!(bytes <= crate::frame::MAX_OUTBOUND_BYTES, "{bytes}");
+    }
+
+    #[test]
+    fn list_instruction_cuts_to_its_limit_plus_an_ellipsis() {
+        assert_eq!(list_instruction("short"), "short");
+        let exact = "界".repeat(LIST_INSTRUCTION_CHARS);
+        assert_eq!(list_instruction(&exact), exact);
+        let cut = list_instruction(&format!("{exact}more"));
+        assert_eq!(cut, format!("{exact}…"));
     }
 
     #[test]

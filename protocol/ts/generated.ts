@@ -578,7 +578,7 @@ export interface HarnessFound {
 
 export type HarnessId = "codex" | "claude";
 
-export type RunKind = "summary" | "site_draft";
+export type RunKind = "summary" | "site_draft" | "task";
 
 export interface SiteDraftAnswerView {
   adapters: Record<string, unknown>[];
@@ -619,6 +619,8 @@ export interface RunView {
   answer: RunAnswer | null;
   kind?: RunKind;
   site_draft?: SiteDraftAnswerView | null;
+  instruction?: string;
+  task_report?: string | null;
 }
 
 export interface StartRunRequest {
@@ -633,6 +635,7 @@ export interface StartRunRequest {
   record_key: RecordKey | null;
   requested_at: string;
   kind?: RunKind;
+  instruction?: string;
 }
 
 export interface RunStarted {
@@ -779,6 +782,19 @@ export interface StartSiteDraftRequest {
   requested_at: string;
 }
 
+export interface StartTaskRequest {
+  type: "start_task";
+  protocol_version: 8;
+  request_id: string;
+  url: string;
+  title: string;
+  content: string;
+  selection: string | null;
+  instruction: string;
+  harness: HarnessId | null;
+  requested_at: string;
+}
+
 export type SiteDrafter = "structural" | "agent";
 
 export type DraftScopeState = "not_shared" | "copied" | "pending" | "unscoped_only";
@@ -919,6 +935,6 @@ export interface SiteDraftChecked {
   preview: PreviewRowView[];
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | CheckSiteDraftRequest | WorklogReportRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | CheckSiteDraftRequest | WorklogReportRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
 
 export type Response = PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;

@@ -202,3 +202,16 @@
   with seven Rust regressions, eleven panel cases, the full required Linux
   gate green (997 Rust outcomes, all 15 extension files) and 859 scripted-build
   outcomes. Platform evidence for brwr-bzx/brwr-9xg remains blocked externally.
+
+- **Brauser — Task bar:** The side panel now has a free-text task bar under
+  the page: the user types any instruction, presses Enter, and the configured
+  full-access Codex or Claude Code carries it out through the Brauser service,
+  with the open page as untrusted context it reads from a file. The typed
+  request is the only directive; page steps run only when the request asks
+  for them, and the prompt names Brauser's own folders as off limits. A task
+  card streams progress and ends with a plain-text report, Copy report and
+  Reuse; Brauser writes no record for a task. One task runs at a time beside
+  summaries, at most four are active, the instruction and report never reach
+  diagnostics logs, and the change is additive within protocol v8 (host and
+  extension deploy together). Real-harness and hostile-page canary checks
+  remain [human] work; notifications and task history are follow-ups.

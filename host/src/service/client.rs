@@ -667,6 +667,8 @@ pub(crate) mod fake {
             answer: None,
             kind: None,
             site_draft: None,
+            instruction: None,
+            task_report: None,
         }
     }
 

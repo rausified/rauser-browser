@@ -192,6 +192,7 @@ fn start_run_kind_is_optional_and_bounded_to_the_run_kinds() {
     for (kind, expected) in [
         ("summary", RunKind::Summary),
         ("site_draft", RunKind::SiteDraft),
+        ("task", RunKind::Task),
     ] {
         let mut with_kind = ok.clone();
         with_kind["kind"] = json!(kind);

@@ -134,9 +134,21 @@ const RUN_VIEW_KEYS: readonly string[] = [
   "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id",
   "summary_path", "stream_bytes", "can_retry_save", "answer",
 ];
-/** The additive v7 `RunView` keys an older service's view omits. */
-const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft"];
-const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft"]);
+/** The additive v7 and v8 `RunView` keys an older service's view omits.
+ * `instruction` and `task_report` belong to task views only. */
+const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report"];
+const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft", "task"]);
+
+/** A task view carries its instruction as a string, and its report as a
+ * string or null; no other kind carries either key. The service omits the
+ * instruction from the failed view of a task whose request record is
+ * missing, so a missing one is accepted and the card shows none. */
+function taskKeysFit(run: Record<string, unknown>): boolean {
+  const task = run.kind === "task";
+  if (!task) return !Object.hasOwn(run, "instruction") && !Object.hasOwn(run, "task_report");
+  return (!Object.hasOwn(run, "instruction") || typeof run.instruction === "string") &&
+    (!Object.hasOwn(run, "task_report") || run.task_report === null || typeof run.task_report === "string");
+}
 
 /** A site-draft run's service-validated tables: 1 to 8 objects. The panel
  * never renders them; the host judges them on `draft_site` with `run_id`. */
@@ -168,6 +180,7 @@ export function isRunView(value: unknown): boolean {
   if (!RUN_VIEW_KEYS.every((key) => keys.includes(key))) return false;
   if (!keys.every((key) => RUN_VIEW_KEYS.includes(key) || RUN_VIEW_OPTIONAL_KEYS.includes(key))) return false;
   if (Object.hasOwn(run, "kind") && !(typeof run.kind === "string" && RUN_KINDS.has(run.kind))) return false;
+  if (!taskKeysFit(run)) return false;
   if (Object.hasOwn(run, "site_draft") && run.site_draft !== null && !isSiteDraftAnswer(run.site_draft)) {
     return false;
   }

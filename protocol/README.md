@@ -28,8 +28,9 @@ different commit; nothing else depends on its format.
 
 Protocol version 8 covers host discovery, configuration, native folder
 selection, visit and artifact-activity capture, record-keyed whole-file page notes, artifact index
-queries, the AI-harness readiness gate, and format-versioned artifact-adapter
-configuration. `get_config` returns a
+queries, the AI-harness readiness gate, format-versioned artifact-adapter
+configuration, and agent runs (summaries, Capture Site drafts, and task-bar
+tasks). `get_config` returns a
 `revision` that the extension must send as `expected_revision` with its full
 `update_config` snapshot. A successful update returns a new `revision`; a stale
 revision returns a `conflict` error. The revision is `missing` when no config
@@ -340,7 +341,8 @@ the TypeScript field is optional.
   raw URL, link `href`, tab title, page text, structural draft, or agent
   input is sent: the host re-runs the structural drafter and builds the
   agent's untrusted-data block from its own draft.
-- `RunKind` is `summary` or `site_draft`. `StartRunRequest.kind` is host to
+- `RunKind` is `summary` or `site_draft` (and, since the task bar, `task`;
+  see "Agent tasks" below). `StartRunRequest.kind` is host to
   service only; a missing `kind` means `summary`. The host sets `site_draft`
   when it forwards a `start_site_draft`, and refuses a `start_run` from the
   extension that carries a `kind`.
@@ -542,3 +544,40 @@ Retry marker IDs deduplicate; distinct IDs remain separate. Results sort by
 first instant, last instant, then marker ID. See DESIGN.md §5.1 for copy choice,
 truncation and cache/reindex semantics. An older host returns `invalid_request`;
 the panel cannot copy a stale report after that refusal.
+
+### Agent tasks (added within version 8)
+
+The side panel's task bar runs the configured harness on the user's typed
+instruction, with the open page as untrusted context. All of it is additive.
+
+- `start_task` carries `url`, `title`, `content`, `selection` (the same bounds
+  as `start_run`), `instruction` (1 to 4,096 characters), the nullable
+  `harness`, and the `requested_at` click time `start_run` uses. It has no
+  `kind` and no `record_key`: the extension cannot choose either. It is
+  answered with the existing `run_started`, and `existing` is always false.
+- The host bounds the instruction with the same check the service runs again:
+  not blank after trimming, at most 4,096 characters, and no control
+  character other than newline and tab. It then checks the page fields and
+  `requested_at` as for `start_run`, resolves the page's record key itself,
+  and forwards a `start_run` with `kind: "task"`, that `record_key`, and the
+  `instruction`. `StartRunRequest.instruction` is host to service only, like
+  `kind`: present exactly when `kind` is `task`. The host refuses a
+  `start_run` from the extension that carries an `instruction`, and the
+  service refuses a task without one or an instruction on any other kind.
+- `RunKind` gains `task`. A task never joins another run, even for the same
+  page. At most one task runs at a time, so summaries and site drafts keep a
+  slot, and at most four tasks are queued or running; a fifth is refused with
+  `conflict`.
+- `RunView` gains two optional fields, both left out for other kinds:
+  `instruction` (the full instruction from `get_run`; cut to 280 characters
+  plus `…` in `list_runs`) and `task_report` (a succeeded task's plain-text
+  report, at most 16,384 characters; missing or `null` before then and always
+  missing in `list_runs`). A task view also carries `kind: "task"`, a `null`
+  `answer`, and no `site_draft`. A task writes no summary file, log event,
+  note or config.
+
+A version 8 host built before these additions answers `invalid_request`
+("invalid or unsupported request JSON") for `start_task`, and the panel then
+asks for a host rebuild. An extension built before them rejects a
+`runs_listed` or `run_fetched` that holds a task view, so the extension and
+the host deploy together.

@@ -7,7 +7,7 @@ import vm from "node:vm";
 // it in the page, so each test runs its source text in a fresh context that
 // holds only the fakes it is given.
 const { EXTRACT_LIMITS, extractReadablePage } = await import("../dist/extract.js");
-const { summarizeTab, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
+const { readTab, summarizeTab, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
 
 // The host refuses a frame over this many bytes (`frame::MAX_INBOUND_BYTES`).
 const MAX_INBOUND_BYTES = 4 * 1024 * 1024;
@@ -356,6 +356,32 @@ test("summarizeTab injects Readability and the extractor into every frame", asyn
   assert.deepEqual(injections[1].args, [EXTRACT_LIMITS]);
 });
 
+test("readTab reads the page summarizeTab would send, and sends nothing", async () => {
+  const frames = [
+    { frameId: 0, result: framePage({ title: "Top\uD800 title", content: "" }) },
+    { frameId: 3, result: framePage({ content: "Office text\uDC00", selection: "picked" }) },
+  ];
+  const read = framesDeps(frames);
+  const page = await readTab(TAB, read.deps);
+  assert.deepEqual(page, { url: TAB.url, title: "Top\uFFFD title", content: "Office text\uFFFD", selection: "picked" });
+  assert.equal(read.requests.length, 0);
+  assert.deepEqual(read.injections.map((injection) => injection.files ?? injection.args), [
+    ["vendor/readability.js"], [EXTRACT_LIMITS],
+  ]);
+  const summarized = framesDeps(frames);
+  await summarizeTab(TAB, summarized.deps);
+  const { url, title, content, selection } = summarized.requests[0];
+  assert.deepEqual({ url, title, content, selection }, page);
+
+  const untitled = framesDeps([{ frameId: 0, result: framePage({ title: "", content: "Body" }) }]);
+  assert.equal((await readTab(TAB, untitled.deps)).title, TAB.title);
+  const empty = framesDeps([{ frameId: 0, result: framePage({ content: " " }) }]);
+  await assert.rejects(readTab(TAB, empty.deps), (error) => error.code === "unreadable" && error.message === UNREADABLE_MESSAGE);
+  const moved = framesDeps([{ frameId: 0, result: framePage({ content: "Body", href: "https://elsewhere.example/" }) }]);
+  await assert.rejects(readTab(TAB, moved.deps),
+    (error) => error.code === "page_changed" && error.message === PAGE_CHANGED_MESSAGE);
+});
+
 test("an empty top frame summarizes the Office subframe's text under the top frame's title", async () => {
   const doc = "Quarterly plan\n\n" + "The document body. ".repeat(40);
   const { deps, requests } = framesDeps([
@@ -507,6 +533,20 @@ test("a hung subframe falls back to reading the top frame alone", async () => {
     { tabId: 9, allFrames: true }, { tabId: 9, allFrames: true }, { tabId: 9, frameIds: [0] },
   ]);
   assert.equal(requests[0].content, "Top text");
+});
+
+test("a hung Readability injection is given up on and the page is read without it", async () => {
+  const { deps, requests, injections } = framesDeps(
+    [{ frameId: 0, result: framePage({ content: "Body text" }) }],
+    { readability: () => new Promise(() => {}) },
+  );
+  deps.allFramesTimeoutMs = 20;
+  await summarizeTab(TAB, deps);
+  assert.deepEqual(injections.map((injection) => [injection.target, injection.files ?? injection.func]), [
+    [{ tabId: 9, allFrames: true }, ["vendor/readability.js"]],
+    [{ tabId: 9, allFrames: true }, extractReadablePage],
+  ]);
+  assert.equal(requests[0].content, "Body text");
 });
 
 test("the all-frames timeout is ten seconds", async () => {

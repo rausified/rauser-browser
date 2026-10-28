@@ -58,7 +58,7 @@ test("serviceSetupText puts the setup instructions before the host's message", (
 
 test("the setup warning is the exact full-access text", () => {
   assert.equal(SETUP_WARNING,
-    "Summaries run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Summarize pages you trust.");
+    "Summaries and tasks run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Use them on pages you trust.");
 });
 
 test("agentStateText_describes_each_state", () => {
@@ -243,6 +243,53 @@ test("isRunView requires answer and rejects an unknown importance", () => {
   assert.equal(updated({ ...view, answer: { ...view.answer, extra: 1 } }), false);
   assert.equal(updated({ ...view, answer: { ...view.answer, document_type: 7 } }), false);
   assert.equal(updated({ ...view, answer: "high" }), false);
+});
+
+test("isRunView accepts task views and rejects task keys on other kinds", () => {
+  const view = {
+    run_id: "00000000-0000-4000-8000-000000000001", state: "succeeded", harness: "codex",
+    record_key: { kind: "url", value: "https://a.example/x" }, written_record_key: null,
+    url: "https://a.example/x", title: "T", cwd: "/kb",
+    created_at: "2026-10-26T14:00:00-07:00", started_at: null, finished_at: null,
+    error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+    stream_bytes: 0, can_retry_save: false, answer: null,
+  };
+  const updated = (run) => isResponseShape({ type: "run_updated", run });
+  const task = { ...view, kind: "task", instruction: "List the links", task_report: "Done." };
+  assert.equal(updated(task), true);
+  assert.equal(updated({ ...task, task_report: null }), true);
+  const { task_report: _report, ...noReport } = task;
+  assert.equal(updated(noReport), true);
+  assert.equal(updated({ ...task, instruction: 7 }), false);
+  assert.equal(updated({ ...task, task_report: 7 }), false);
+  assert.equal(updated({ ...task, task_report: { report: "x" } }), false);
+  assert.equal(updated({ ...task, kind: "tasks" }), false);
+  // Task keys belong to task views only.
+  for (const kind of [undefined, "summary", "site_draft"]) {
+    const other = kind === undefined ? { ...view } : { ...view, kind };
+    assert.equal(updated(other), true);
+    assert.equal(updated({ ...other, instruction: "List the links" }), false);
+    assert.equal(updated({ ...other, task_report: null }), false);
+    assert.equal(updated({ ...other, task_report: "Done." }), false);
+  }
+});
+
+test("a task view without instruction (a corrupt record's failed view) is accepted", () => {
+  const view = {
+    run_id: "00000000-0000-4000-8000-000000000001", state: "queued", harness: "claude",
+    record_key: { kind: "url", value: "https://a.example/x" }, written_record_key: null,
+    url: "https://a.example/x", title: "T", cwd: "/kb",
+    created_at: "2026-10-26T14:00:00-07:00", started_at: null, finished_at: null,
+    error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+    stream_bytes: 0, can_retry_save: false, answer: null, kind: "task", task_report: null,
+  };
+  assert.equal(isResponseShape({ type: "run_updated", run: view }), true);
+  assert.equal(isResponseShape({ type: "run_updated", run: { ...view, instruction: "Go" } }), true);
+  assert.equal(isResponseShape({ type: "runs_listed", runs: [view, { ...view, instruction: "Go" }] }), true);
+  // Present, it is still a string.
+  for (const instruction of [null, 7, ["Go"]]) {
+    assert.equal(isResponseShape({ type: "runs_listed", runs: [{ ...view, instruction }] }), false, String(instruction));
+  }
 });
 
 test("path_opened and agent_env_listed responses are checked", () => {
