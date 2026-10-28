@@ -417,3 +417,19 @@ is a `conflict` error, and the file is never adopted or overwritten.
 The host remains responsible for runtime validation of string lengths,
 absolute paths, adapter origins, storage confinement, picker-token authority,
 and whether a requested config change is authorized.
+
+### Capture Site starter preflight (added in version 7)
+
+`check_capture_site` takes `expected_revision` and the complete proposed
+`adapters` document. It takes the config lock, refreshes config and the
+host-owned adopted-contract record, validates the document and its transition
+against active, retired and hand-removed contracts, and returns
+`capture_site_checked` with that revision. A stale revision is `conflict`;
+a policy or identity conflict is `invalid_config` and names the recorded
+contract. The request has no page URL or title and exports no retired history.
+The panel disables the starter review's Save until this check passes for its
+current selection. This response is a read-only preview, with no policy write
+or authorization token: the usual `update_config` rechecks the revision and
+history independently. This additive pair leaves existing message shapes and
+the unknown-site `draft_site` / `check_site_draft` flow unchanged; an older host
+refuses it, leaving Save disabled.

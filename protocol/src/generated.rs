@@ -1144,6 +1144,23 @@ pub enum ScopeChoiceView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CheckCaptureSiteRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub adapters: AdapterDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureSiteChecked {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckSiteDraftRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1217,6 +1234,7 @@ pub enum Request {
     GetAgentEnv(GetAgentEnvRequest),
     DraftSite(DraftSiteRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
+    CheckCaptureSite(CheckCaptureSiteRequest),
     ForgetAdoptedContracts(ForgetAdoptedContractsRequest),
     ServiceHello(ServiceHelloRequest),
 }
@@ -1252,6 +1270,7 @@ impl Request {
             Self::GetAgentEnv(value) => value.protocol_version,
             Self::DraftSite(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
+            Self::CheckCaptureSite(value) => value.protocol_version,
             Self::ForgetAdoptedContracts(value) => value.protocol_version,
             Self::ServiceHello(value) => value.protocol_version,
         }
@@ -1287,6 +1306,7 @@ impl Request {
             Self::GetAgentEnv(value) => &value.request_id,
             Self::DraftSite(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
+            Self::CheckCaptureSite(value) => &value.request_id,
             Self::ForgetAdoptedContracts(value) => &value.request_id,
             Self::ServiceHello(value) => &value.request_id,
         }
@@ -1322,6 +1342,7 @@ pub enum Response {
     AgentEnvListed(AgentEnvListed),
     SiteDrafted(SiteDrafted),
     SiteDraftChecked(SiteDraftChecked),
+    CaptureSiteChecked(CaptureSiteChecked),
     ServiceReady(ServiceReady),
     Error(ErrorResponse),
 }
@@ -1354,6 +1375,7 @@ impl Response {
             Self::AgentEnvListed(value) => value.protocol_version,
             Self::SiteDrafted(value) => value.protocol_version,
             Self::SiteDraftChecked(value) => value.protocol_version,
+            Self::CaptureSiteChecked(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
         }
@@ -1386,6 +1408,7 @@ impl Response {
             Self::AgentEnvListed(value) => &value.request_id,
             Self::SiteDrafted(value) => &value.request_id,
             Self::SiteDraftChecked(value) => &value.request_id,
+            Self::CaptureSiteChecked(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,
             Self::Error(value) => &value.request_id,
         }

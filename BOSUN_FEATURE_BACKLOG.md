@@ -351,13 +351,18 @@ shipped (see Shipped).
   Original report: host/src/service/supervisor.rs ~116/~119; use
   `server::NOT_CONFIGURED`. **2026-10-28 triage:** the named type and wording
   have been removed; SummaryFinisher already names settings and Retry save,
-  covered by its missing-folder test. Bead stays open to reconcile criteria.
-- [ ] `brwr-t8m` **Capture Site promises a save that retired adapter history
-  will refuse.** `planCaptureSite` (extension/capture-site.ts ~35) cannot see
-  `[[adapter_id_history]]`, so the host's frozen-ID check (host/src/config.rs
-  `validate_adapter_transition_with_history` ~2105) fails at commit. Re-check
-  against #85's retired-contract recording first.
+  covered by its missing-folder test. **Blocked for operator reconciliation:**
+  the assigned failing-first acceptance names deleted code; no closure claimed.
+
 ### Cookie's own proposals (only after the plan work above)
+
+- [ ] `brwr-cua` **Restore a removed site's recorded capture rules from the panel.**
+  After a starter conflict, offer a plain-language review of usable recorded
+  rules, with their original identity and account scope, followed by an
+  explicit revision-checked save. Keep ambiguous or damaged history refused;
+  never silently replace a custom identity or erase recorded contracts. This
+  product follow-up surfaced in the starter preflight and waits behind
+  assigned/plan work.
 
 - [ ] `brwr-kws` **Review recovered note copies individually.** Let a person
   recover one page's text or discard one copy without handling the whole set.
@@ -439,6 +444,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Bug Fix. **Check recorded identities before Capture Site offers Save (2026-10-28).** Completed assigned `brwr-t8m`. Starter reviews now wait for the host to check the proposed rules against active, retired and hand-removed contracts, then name a conflicting recorded type and ID template before Save is available. Edited selections and closed reviews discard older replies; an unsupported host or mismatched response leaves Save disabled. Existing revision-checked saves remain authoritative, and a fresh site still enables in one click. **Metrics:** 7 new panel cases, 1 native regression and 1 protocol round trip; 134 panel cases, all 15 extension and 2 script files pass; 929 Rust outcomes (886 exercised, 43 explicit IPC sandbox skips); full required gate and 10,696 inert Markdown renderings green.
 
 - **Category:** Bug Fix. **Reload the current note after an external adapter change (2026-10-28).** Completed assigned `brwr-jdi`. The panel compares host config revisions and reloads the note through the editor's serialized save/load queue before the next edit uses its current key. Pending and in-flight drafts retain old-key conflict copy-out and durable recovery, including newer typing; a successful later save keeps the conflict copy. An unchanged revision leaves the editor and debounce alone. **Metrics:** 4 new panel cases; 159 panel/editor cases and all 15 extension files pass; 927 Rust outcomes (884 exercised, 43 explicit sandbox IPC skips); complete local build, format, clippy, typecheck, lint, script and Markdown gates green.
 
@@ -948,3 +955,42 @@ stop product work, and no history reset or production IPC change is called for.
   creating `.git/index.lock` on the read-only mount. No retry was attempted;
   the green diff, queue export and excluded `.bosun_commit_msg` are ready for
   the driver.
+
+
+### Cycle observations (2026-10-28 — Capture Site history preflight)
+
+- Opening health on `44504d7e445a` was clean, with no quarantine report or
+  unfinished diff. Completed assigned `brwr-t8m` with host and panel failures
+  recorded before the production change. The first host control incorrectly
+  used two config filenames in one support directory as two installations;
+  corrected it to use a separate directory because adopted history is shared
+  there. The complete required gate then passed. No production changes
+  followed that gate.
+- `brwr-iqx` is now blocked for operator reconciliation, retaining its assigned
+  label. Its named VaultCheckFinisher and confirm wording are deleted; the
+  replacement SummaryFinisher's existing missing-folder regression passes.
+  Do not recreate obsolete code just to satisfy a stale acceptance test, or
+  claim a failing-first fix that never happened. No actionable assigned item
+  remains in this cycle.
+- The preflight shares host transition checks instead of exporting history or
+  copying the Rust overlap policy into TypeScript. It grants no token and
+  cannot bypass the save's independent revision/history checks. Unknown-site
+  drafting retains its own existing check. A late response cannot enable a
+  changed selection, invalid organization field or reopened review.
+- Validation: 929 reported Rust outcomes, 886 exercised with 43 explicit IPC
+  sandbox skips; 134 composed panel cases, all 15 extension and two script
+  files, and 10,696 inert Markdown renderings pass. macOS headless smoke
+  refuses this Linux VM. Evidence is in `target/cookie-t8m-*.log`. Complete
+  source, generated-wire, test and documentation diff reviewed manually;
+  external Codex review was not invoked because this run forbids live APIs.
+  The driver's independent reviewer remains the publication gate.
+- New proposal `brwr-cua` makes the refusal actionable: restore a removed
+  site's recorded custom rules through a plain-language review and explicit
+  save. Preserve original identity/scope and fail closed on ambiguity. This
+  complements the existing curated-worklog and focus-session proposals; it
+  must wait behind assigned work and the ordered DESIGN plan.
+
+- Commit handoff: the single `git add -A` / commit attempt failed creating
+  `.git/index.lock` because the Git mount is read-only. The complete green
+  diff, exported queue and excluded `.bosun_commit_msg` remain for the
+  driver. No retry, remote operation or live-service action was attempted.

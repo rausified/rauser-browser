@@ -652,3 +652,14 @@ This standard is meant to improve with use. When you change it:
   their global Chrome/DOM stubs and produces unrelated failures. The normal
   `npm run test:extension` keeps each file isolated. Linux still cannot run
   the macOS headless smoke runner.
+
+Capture Site starter history is covered by
+`native::tests::capture_site_preflight_checks_removed_contracts_before_save`
+and the built-panel cases in `extension/tests/panel.test.mjs`. The native
+fixture removes a custom Jira contract through settings and by hand, checks
+the starter before save, permits restoration, and checks an independent fresh
+support directory. Adopted contracts belong to the support directory, not a
+config filename; another config file in the same directory is not a fresh
+installation. Panel tests hold and reorder preflight replies to verify that
+edits, invalid selections and closing/reopening cannot reuse an older verdict.
+These fixtures use local storage and scripted native replies only.
