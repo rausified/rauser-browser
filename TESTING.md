@@ -19,6 +19,19 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Retired adapter history budget
+
+`cargo test --locked -p brauser adapter_history` exercises real config.toml
+fixtures at the 32 KiB history budget and near the 64 KiB whole-file cap.
+It covers pausing capture and adding a disjoint site without changing history,
+refused growth with byte-for-byte preservation, Capture Site preflight, and
+safe duplicate/exact-restoration pruning. A restart checks that restored and
+still-retired routes keep their artifact identities. Native dispatch tests
+both budget and total-file refusals as actionable `invalid_config` replies.
+Restoration must precede retirement of a different same-type ID; the existing
+ID freeze still applies. All fixtures use disposable folders and no browser,
+network, native dialog, or user config.
+
 ## Capture fixture clocks
 
 Capture and native unit-test event helpers share `capture::fixtures::event_time`:
@@ -489,6 +502,11 @@ This standard is meant to improve with use. When you change it:
 - If a change alters the hard rule, confirm it with the user first.
 
 ## Learning log
+
+- 2026-10-28 (`brwr-2iz`): Size history fixtures with pretty TOML, rather than
+  JSON, because repeated table headers contribute to the persisted cap.
+  Check both the store error and native reply: an otherwise helpful size
+  error becomes a generic internal failure without a typed dispatch mapping.
 
 - 2026-10-27: Branch `feat/capture-site-unknown` (`brwr-t40`). Unknown-site Capture Site pins the host catalog and real URL shapes in `protocol/capture-site/` and reads them from both the Rust and extension suites, so neither side keeps a private copy of the probe list, fill values or shaper expectations ("Unknown-site drafting" above). Scope, `unscoped` and title overlays are tested on both sides of `check_site_draft`: the checked request never carries them, and a table that does is still refused. `scripts/check_current_state.py` now rejects the retired "Unknown-site automatic drafting is still in development" claim. After merging #126 (protocol v7), the drafter's scoped-tenant anchor is pinned on both sides: `validate.drafted.*` vectors (rust, ts) show a drafted shared-origin adapter whose only anchor is its tenant validating scoped and failing `no_literal_segment` unscoped in both engines, plus the drafted Notion adapter and the ID-less rule (`id_unknown_capture`); `draft_rules` vectors and host `check_site_draft` tests show the same tables kept, `scope_anchored`, and refused unscoped as `draft_scope_choice`. The step 7.6 shared-origin panel test now expects the tab's tenant pre-filled and chosen as "Capture for <tenant>" (one-click Save), and a tab with no tenant in its URL still waiting for a choice.
 - 2026-10-27: Branch `fix/strip-params-read-by-adapters` (`brwr-f4s`).

@@ -104,3 +104,12 @@
   folder identity and owned-log checks still apply, and the extension supplies
   no URL or path. Three worker cases and four Rust regressions pass with the
   full local gate (`brwr-m64`); macOS Chrome smoke remains human/CI work.
+
+
+- **Brauser — Reserve config space for ordinary settings (2026-10-28).**
+  Retired adapter history now has a 32 KiB growth budget within config.toml's
+  64 KiB cap. Older larger histories remain usable for unchanged or shrinking
+  writes, and exact restoration or duplicate pruning preserves note identity.
+  Settings receives specific budget/whole-file recovery guidance instead of a
+  generic failure. Four new Rust regressions and the full local gate pass
+  (`brwr-2iz`); no interactive macOS verification was performed on Linux.

@@ -412,9 +412,11 @@ fn dispatch(
                 Err(save_error) => match (
                     save_error.downcast_ref::<crate::layout::Refusal>(),
                     save_error.downcast_ref::<config::StripParamsRefusal>(),
+                    save_error.downcast_ref::<config::ConfigSizeRefusal>(),
                 ) {
-                    (Some(crate::layout::Refusal(message)), _)
-                    | (_, Some(config::StripParamsRefusal(message))) => {
+                    (Some(crate::layout::Refusal(message)), _, _)
+                    | (_, Some(config::StripParamsRefusal(message)), _)
+                    | (_, _, Some(config::ConfigSizeRefusal(message))) => {
                         error(&value.request_id, ErrorCode::InvalidConfig, message)
                     }
                     _ => error(
@@ -2725,6 +2727,49 @@ mod tests {
         }
         assert_eq!(config.revision(), revision);
         assert!(config.snapshot().strip_params.is_empty());
+    }
+
+    #[test]
+    fn update_config_reports_full_adapter_history_with_recovery_steps() {
+        for (history_bytes, expected) in [
+            (32 * 1024, "Capture off"),
+            (62 * 1024, "summary vocabulary"),
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("config.toml");
+            config::fixtures::with_adapter_history(&path, folder.path(), history_bytes);
+            let mut config = ConfigStore::for_test(path.clone());
+            config.refresh().unwrap();
+            let before = std::fs::read(&path).unwrap();
+            let revision = config.revision().to_owned();
+            let mut next = config.snapshot().clone();
+            if history_bytes == 32 * 1024 {
+                next.adapters.artifacts.clear();
+            } else {
+                next.summary_vocabulary.categories = (0..64)
+                    .map(|n| format!("{n:02}{}", "x".repeat(62)))
+                    .collect();
+            }
+            match dispatch(
+                update_request(&revision, next),
+                &mut config,
+                &mut ConsentAuthority::new(),
+                &SetupContext::new(),
+            ) {
+                Response::Error(value) => {
+                    assert_eq!(value.code, ErrorCode::InvalidConfig);
+                    assert!(
+                        value.message.contains("Retired adapter history"),
+                        "{}",
+                        value.message
+                    );
+                    assert!(value.message.contains(expected), "{}", value.message);
+                }
+                other => panic!("expected actionable history refusal, got {other:?}"),
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert_eq!(config.revision(), revision);
+        }
     }
 
     fn configured_store(root: &std::path::Path) -> ConfigStore {
