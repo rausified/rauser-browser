@@ -1,5 +1,6 @@
 import type { AdapterObject } from "./adapter-review.js";
 import { canonicalCapture, compileDocument } from "./adapter-templates.js";
+import { canonicalJson } from "./capture-site-handoff.js";
 
 export type StarterKind = "jira" | "sharepoint" | "github";
 
@@ -232,6 +233,66 @@ export function starterOffers(origin: string, githubOrganizations: string[]): St
     ];
   }
   return [];
+}
+
+/** One entry of an adapter's `match` list. */
+export type AdapterRule = Record<string, unknown>;
+
+// Config validation caps rules per adapter (adapter-templates.md §10.3).
+const MAX_RULES = 16;
+
+function ownersOf(adapter: AdapterObject): string[] {
+  const scope = adapter.scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return [];
+  const owner = (scope as Record<string, unknown>).owner;
+  return Array.isArray(owner) ? owner.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/** The current starter `adapter` was saved from: same origin, type, and `id`
+ * template string. A GitHub starter is built with the adapter's own
+ * organizations, so its scope never decides the match. */
+export function matchingStarter(adapter: AdapterObject): StarterOffer | null {
+  if (typeof adapter.origin !== "string") return null;
+  return starterOffers(adapter.origin, ownersOf(adapter)).find((offer) =>
+    offer.adapter !== null && offer.adapter.type === adapter.type &&
+    offer.adapter.id === adapter.id) ?? null;
+}
+
+const MODE_CAPTURE = /\{mode\??:\(([^)}]*)\)\}/g;
+
+/**
+ * `adapter` brought up to its starter's current rules, when it was saved from
+ * a starter whose rules have since grown: the current starter's rules that
+ * equal none of its own are appended after them. Everything else stays the
+ * user's — their older and hand-added rules, scope, `within`, title and every
+ * other key — except that `modes` gains the entries a new rule's `mode`
+ * capture needs and the adapter lacks. `null` when nothing is missing, or
+ * when the result would pass the 16-rule cap or fail to compile on its own.
+ */
+export function starterRuleUpdate(adapter: AdapterObject): { adapter: AdapterObject; added: AdapterRule[] } | null {
+  const current = matchingStarter(adapter)?.adapter;
+  if (!current || !Array.isArray(adapter.match) || !Array.isArray(current.match)) return null;
+  const saved = new Set((adapter.match as unknown[]).map(canonicalJson));
+  const added = (current.match as AdapterRule[]).filter((rule) => !saved.has(canonicalJson(rule)));
+  if (!added.length || adapter.match.length + added.length > MAX_RULES) return null;
+  const updated: AdapterObject = { ...adapter, match: [...adapter.match, ...added] };
+  const own = adapter.modes && typeof adapter.modes === "object" && !Array.isArray(adapter.modes)
+    ? adapter.modes as Record<string, unknown>
+    : {};
+  const starterModes = (current.modes ?? {}) as Record<string, unknown>;
+  const missingModes: Record<string, unknown> = {};
+  for (const rule of added) {
+    if (typeof rule.path !== "string") continue;
+    for (const [, literals] of rule.path.matchAll(MODE_CAPTURE)) {
+      for (const literal of literals!.split("|")) {
+        if (!Object.hasOwn(own, literal) && Object.hasOwn(starterModes, literal)) {
+          missingModes[literal] = starterModes[literal];
+        }
+      }
+    }
+  }
+  if (Object.keys(missingModes).length) updated.modes = { ...own, ...missingModes };
+  return compileDocument({ format: 1, artifacts: [updated] }).ok ? { adapter: updated, added } : null;
 }
 
 export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): boolean {

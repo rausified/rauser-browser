@@ -45,8 +45,10 @@ import {
   hasAdapter,
   linkedToPresentContainers,
   orderContainedFirst,
+  matchingStarter,
   parseGitHubOrganizations,
   starterOffers,
+  starterRuleUpdate,
   withContainerLinks,
   type StarterOffer,
 } from "./starter-adapters.js";
@@ -75,6 +77,7 @@ const refreshArtifactsButton = element<HTMLButtonElement>("refresh-artifacts");
 const starterGallery = element<HTMLDivElement>("starter-gallery");
 const adapterEditor = element<HTMLDivElement>("adapter-editor");
 const adapterEditorHeading = element<HTMLHeadingElement>("adapter-editor-heading");
+const adapterEditorReview = element<HTMLDivElement>("adapter-editor-review");
 const adapterJson = element<HTMLTextAreaElement>("adapter-json");
 const adapterValidation = element<HTMLOutputElement>("adapter-validation");
 const adapterPreviewUrl = element<HTMLInputElement>("adapter-preview-url");
@@ -534,6 +537,14 @@ function renderAdapters(): void {
     edit.textContent = "Edit and preview";
     edit.addEventListener("click", () => beginAdapterEdit(index));
     actions.append(edit);
+    if (starterRuleUpdate(adapter)) {
+      const update = document.createElement("button");
+      update.type = "button";
+      update.className = "secondary";
+      update.textContent = "Update to current rules";
+      update.addEventListener("click", () => beginStarterUpdate(index));
+      actions.append(update);
+    }
     for (const [label, offset] of [["Move up", -1], ["Move down", 1]] as const) {
       const move = document.createElement("button");
       move.type = "button";
@@ -738,10 +749,26 @@ function refreshAdapterEditor(): void {
   updateControls();
 }
 
-function openAdapterEditor(edit: AdapterEdit, adapter: AdapterObject | AdapterObject[], heading: string): void {
+/** A line above the JSON saying what an editor opened with, and its list. */
+function showEditorReview(review: { line: string; items: string[] } | null): void {
+  adapterEditorReview.replaceChildren();
+  adapterEditorReview.hidden = review === null;
+  if (review === null) return;
+  addText(adapterEditorReview, "p", review.line);
+  const list = document.createElement("ul");
+  list.className = "plain-list";
+  for (const item of review.items) addText(list, "li", item);
+  adapterEditorReview.append(list);
+}
+
+function openAdapterEditor(
+  edit: AdapterEdit, adapter: AdapterObject | AdapterObject[], heading: string,
+  review: { line: string; items: string[] } | null = null,
+): void {
   adapterEdit = edit;
   adapterEditor.hidden = false;
   adapterEditorHeading.textContent = heading;
+  showEditorReview(review);
   adapterJson.value = JSON.stringify(adapter, null, 2);
   adapterPreviewUrl.value = exampleUrl(Array.isArray(adapter) ? adapter[0]! : adapter);
   adapterPreviewTitle.value = "";
@@ -767,9 +794,30 @@ function beginAdapterEdit(index: number | "new"): void {
     : `Edit and review ${adapterLabel(adapter, index)}`);
 }
 
+/** Open a saved starter adapter in the editor with the current starter's
+ * missing rules appended. Saving is the usual edit of that adapter. */
+function beginStarterUpdate(index: number): void {
+  if (!session.config || busy) return;
+  const adapter = session.config.adapters.artifacts[index];
+  const update = adapter ? starterRuleUpdate(adapter) : null;
+  const label = adapter ? matchingStarter(adapter)?.label : undefined;
+  if (!adapter || !update || label === undefined) return;
+  const count = update.added.length;
+  openAdapterEditor(
+    { kind: "existing", identity: adapterIdentity(adapter)!, snapshot: adapterSnapshot(adapter) },
+    update.adapter,
+    `Update ${adapterLabel(adapter, index)} to current rules`,
+    {
+      line: `Adds ${count} rule${count === 1 ? "" : "s"} from the current ${label} starter:`,
+      items: update.added.map((rule) => textValue(rule.path, "(no path)")),
+    },
+  );
+}
+
 function closeAdapterEditor(): void {
   adapterEdit = null;
   adapterEditor.hidden = true;
+  showEditorReview(null);
   adapterJson.value = "";
   adapterValidation.textContent = "";
   adapterPreview.replaceChildren();

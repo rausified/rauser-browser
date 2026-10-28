@@ -106,7 +106,7 @@ function install({
     ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["strip-conflicts", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
-    ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-json", "textarea"],
+    ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-editor-review", "div"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
     ["cancel-adapter", "button"],
@@ -952,8 +952,10 @@ test("a pull request or issue rule cannot be moved below its repository rule", a
   const state = install({ adapters: [pr, issue, repo] });
   await openSettings();
   const held = "A pull request or issue rule must stay ahead of its repository rule.";
-  // Each card has Edit, Move up, Move down, Remove.
-  const buttons = () => env.elements.get("adapter-list").querySelectorAll("button");
+  // Each card has Edit, Move up, Move down, Remove. The PR rule predates the
+  // starter's mode-tab rule, so its card also offers an update, skipped here.
+  const buttons = () => env.elements.get("adapter-list").querySelectorAll("button")
+    .filter((button) => button.textContent !== "Update to current rules");
   assert.equal(buttons()[2].disabled, false, "PR and issue may swap");
   assert.equal(buttons()[6].disabled, true, "the issue cannot move below the repository");
   assert.equal(buttons()[6].title, held);
@@ -1877,3 +1879,63 @@ for (const { name, response } of ADAPTER_REPAIR_CASES) {
     assert.match(statusText(), /adapter rules removed/);
   });
 }
+
+const ONEDRIVE = "https://cisco-my.sharepoint.com";
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+function staleOneDrive() {
+  return {
+    type: "sharepoint.doc", origin: ONEDRIVE, path_case: "insensitive",
+    match: [
+      { path: "/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+      { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+      { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+    ],
+    id: "sharepoint:{host}/{doc}",
+  };
+}
+const updateButtons = () => env.elements.get("adapter-list").querySelectorAll("button")
+  .filter((button) => button.textContent === "Update to current rules");
+
+test("a stale starter adapter offers Update to current rules; an up-to-date one does not", async () => {
+  install({ adapters: [staleOneDrive(), artifactFor("https://a.com")] });
+  await openSettings();
+  assert.equal(updateButtons().length, 1);
+  const [card] = env.elements.get("adapter-list").children;
+  const actions = card.children.find((child) => child.className === "adapter-actions");
+  assert.deepEqual(actions.children.slice(0, 2).map((button) => button.textContent),
+    ["Edit and preview", "Update to current rules"]);
+
+  install({ adapters: [{ ...staleOneDrive(), match: [...staleOneDrive().match, SHARE_RULE] }] });
+  await openSettings();
+  assert.equal(updateButtons().length, 0);
+});
+
+test("Update to current rules reviews the added rules and saves them only on Save", async () => {
+  const saved = { ...staleOneDrive(), title: "{title}.docx" };
+  const saves = [];
+  const state = install({
+    adapters: [saved],
+    host: { update_config: (request) => { saves.push(request); return null; } },
+  });
+  await openSettings();
+  updateButtons()[0].click();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), { ...saved, match: [...saved.match, SHARE_RULE] });
+  const review = env.elements.get("adapter-editor-review");
+  assert.equal(review.hidden, false);
+  assert.match(nodeText(review), /Adds 1 rule from the current OneDrive for work documents starter:/);
+  assert.match(nodeText(review), /\/\(:w:\|:x:\|:p:\)\/\(r\|g\)\/\(sites\|personal\)\/\{_\}\/_layouts\/15\/Doc\.aspx/);
+  assert.equal(saves.length, 0, "opening the review saves nothing");
+
+  await saveOpenAdapter("the starter update");
+  assert.equal(saves.length, 1);
+  const [adapter] = saves[0].config.adapters.artifacts;
+  assert.deepEqual(adapter, { ...saved, match: [...saved.match, SHARE_RULE] });
+  assert.deepEqual(state.config.adapters.artifacts, [adapter]);
+  assert.equal(env.elements.get("adapter-editor").hidden, true);
+  assert.equal(updateButtons().length, 0, "an up-to-date adapter offers no update");
+
+  // Editing another adapter afterwards shows no stale review line.
+  env.elements.get("adapter-list").querySelectorAll("button")[0].click();
+  assert.equal(env.elements.get("adapter-editor-review").hidden, true);
+});

@@ -10,6 +10,7 @@ const {
   parseGitHubOrganizations,
   starterKind,
   starterOffers,
+  starterRuleUpdate,
   withContainerLinks,
   containerLinks,
 } = await import("../dist/starter-adapters.js");
@@ -215,4 +216,101 @@ test("withContainerLinks links only rules whose linked copy compiles, and leaves
   assert.equal(linked[2], otherOrigin);
   assert.equal(linked[3], elsewhere);
   assert.deepEqual(containerLinks(artifacts, { ...repo, type: "github.other" }), { linked: 0, skipped: 0 });
+});
+
+const ONEDRIVE = "https://cisco-my.sharepoint.com";
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+// The SharePoint/OneDrive starter as saved before sharing links covered OneDrive.
+const staleOneDrive = () => ({
+  type: "sharepoint.doc",
+  origin: ONEDRIVE,
+  path_case: "insensitive",
+  match: [
+    { path: "/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+    { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+    { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
+  ],
+  id: "sharepoint:{host}/{doc}",
+});
+
+test("a saved OneDrive starter gains only the missing current rule and keeps its old ones", () => {
+  const saved = staleOneDrive();
+  const update = starterRuleUpdate(saved);
+  assert.ok(update);
+  assert.deepEqual(update.added, [SHARE_RULE]);
+  assert.deepEqual(update.adapter, { ...saved, match: [...saved.match, SHARE_RULE] });
+  assert.deepEqual(saved, staleOneDrive(), "the saved adapter is not mutated");
+});
+
+test("the real OneDrive sharing link matches the updated adapter", () => {
+  const { adapter } = starterRuleUpdate(staleOneDrive());
+  const result = compileDocument({ format: 1, artifacts: [adapter] });
+  assert.equal(result.ok, true);
+  const url = `${ONEDRIVE}/:w:/r/personal/havishwa_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B8BAF1543-CDBF-4003-A48F-D4A939774FC0%7D&file=x.docx`;
+  const before = compileDocument({ format: 1, artifacts: [staleOneDrive()] });
+  assert.equal(evaluate(before.doc, url).match, false);
+  const found = evaluate(result.doc, url);
+  assert.equal(found.match, true);
+  assert.equal(found.artifact_id, "sharepoint:cisco-my.sharepoint.com/8baf1543-cdbf-4003-a48f-d4a939774fc0");
+});
+
+test("an up-to-date starter, a non-starter type, or another ID template has no update", () => {
+  for (const offer of [
+    ...starterOffers(ONEDRIVE, []),
+    ...starterOffers("https://acme.atlassian.net", []),
+    ...starterOffers("https://github.com", ["acme-corp"]),
+  ]) assert.equal(starterRuleUpdate(offer.adapter), null, offer.key);
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), type: "sharepoint.page" }), null);
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), id: "sharepoint:{doc}" }), null);
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), origin: "https://example.com" }), null);
+  assert.equal(starterRuleUpdate({ ...staleOneDrive(), match: "nonsense" }), null);
+});
+
+test("a GitHub pull request update keeps the user's own scope and within and adds missing modes", () => {
+  const within = { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" };
+  const saved = {
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["cisco-sbg", "rausified"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+    modes: { files: "edit" },
+    id: "github.pr:{host}/{owner}/{repo}/{number}",
+    within,
+  };
+  const update = starterRuleUpdate(saved);
+  assert.ok(update);
+  const [current] = starterOffers("https://github.com", ["cisco-sbg", "rausified"]);
+  assert.deepEqual(update.added, current.adapter.match);
+  assert.deepEqual(update.adapter.scope, saved.scope);
+  assert.deepEqual(update.adapter.within, within);
+  // The user's own mode mapping stays; only the absent ones are added.
+  assert.deepEqual(update.adapter.modes, { files: "edit", commits: "view", checks: "view" });
+  assert.deepEqual(Object.keys(update.adapter).sort(), Object.keys(saved).sort());
+  assert.equal("title" in update.adapter, false);
+  assert.equal("refs" in update.adapter, false);
+});
+
+test("a hand-added rule is preserved, and an update past 16 rules is not offered", () => {
+  const extra = { path: "/:b:/r/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+  const saved = { ...staleOneDrive(), match: [...staleOneDrive().match, extra] };
+  const update = starterRuleUpdate(saved);
+  assert.deepEqual(update.adapter.match, [...saved.match, SHARE_RULE]);
+  assert.deepEqual(update.added, [SHARE_RULE]);
+
+  const filler = Array.from({ length: 13 }, (_, at) =>
+    ({ path: `/extra${at}/_layouts/15/Doc.aspx`, query: { sourcedoc: "{doc:uuid}" } }));
+  const fifteen = { ...staleOneDrive(), match: [...staleOneDrive().match.slice(0, 2), ...filler] };
+  assert.equal(fifteen.match.length, 15);
+  // 15 saved rules, two missing starter rules: 17 would exceed the cap.
+  assert.equal(starterRuleUpdate(fifteen), null);
+  const fourteen = { ...fifteen, match: fifteen.match.slice(0, 14) };
+  assert.equal(starterRuleUpdate(fourteen).adapter.match.length, 16);
+});
+
+test("an update that would not compile is not offered", () => {
+  // A scope on a capture the current starter rules do not bind fails compile.
+  const saved = {
+    ...staleOneDrive(), scope: { site: ["finance"] },
+    match: [{ path: "/sites/{site:name}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } }],
+  };
+  assert.equal(compileDocument({ format: 1, artifacts: [saved] }).ok, true, "the saved adapter itself compiles");
+  assert.equal(starterRuleUpdate(saved), null);
 });
