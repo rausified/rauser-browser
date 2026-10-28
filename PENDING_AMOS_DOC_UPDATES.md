@@ -169,3 +169,13 @@
   intent hashes and tail bytes; edited or mismatched data remains untouched.
   Two failing-first regression matrices cover 33 cases, and the full required
   and README gates pass (`brwr-smu`). macOS browser acceptance stays separate.
+
+- **Brauser — offline identity-correction preview:** Developers and agents can
+  now rehearse alias chains, moves back and pairwise corrections with
+  `brauser adapters aliases-preview`. The host derives endpoint identities
+  from supplied adapter policies, checks scope and stripped-query evidence,
+  and shows canonical groups separately from suggestions. It reads no live
+  settings or vault and cannot apply a migration. Fifteen new regressions
+  and the complete required/README gate pass (`brwr-sq9`). This is the first
+  Re-learn prerequisite; impact planning (`brwr-hq8`), durable migration and
+  panel review remain under parent `brwr-6x2`.

@@ -229,16 +229,16 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   surfaced `SQLITE_BUSY`, no lost or duplicated rows, and no double
   regeneration. **Dependency-blocked:** `brwr-b2e` first requires human
   `brwr-mff`; bundled `rusqlite` is still absent from the manifest, lockfile,
-  and local crate cache as of `3397bb43dce3` (2026-10-28).
+  and local crate cache as of `5fb15210` (2026-10-28).
 - [ ] `brwr-5yn` **[human] M1.5a step 6.8 — Certify the three starter adapters.** Check
   the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
   record the date in `docs/adapters/`. Needs John on macOS with real accounts;
   Cookie must not change the "development draft" label or mark 6.8 done.
-- [ ] `brwr-6x2` **Re-learn a site with automatic re-keying.** Users can't
-  hand-fix a wrong machine-drafted ID. Add a Re-learn action that migrates
-  existing activity, notes, and index rows through explicit append-only
-  alias/re-key events (the needed part of step 7.2). This replaces the
-  conservative ID freeze instead of relaxing it.
+- [ ] `brwr-hq8` **Plan re-learning impact before migrating identities.**
+  Next prerequisite of `brwr-6x2`: derive a revision-bound plan from recorded
+  evidence; report splits, merges and key reuse, reject insufficient query
+  provenance, and inspect existing notes/summaries without changing them.
+  The offline rehearsal is complete; durable apply remains later.
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** After
   Windows CI, record an isolated real-Chrome run with source and OS/browser
   versions, native registration, the folder picker, standing HTTP(S) access,
@@ -301,24 +301,6 @@ fix, and keep each fix to one cycle. If the test does not fail on current
 main, check the item off as "not reproduced" and say why. The decided
 strip_params note-identity follow-up has shipped (see Shipped).
 
-### Cross-PR seam review defects (lane C2, 2026-10-27)
-
-A 2026-10-27 review of the seams between the PRs merged that night (main at
-6ad6020) confirmed each of these with a probe test that fails on that commit.
-None blocks deploy, so they are P3 bugs, and they wait behind the plan work
-above. Line numbers were re-checked on 0ab41f4; re-check them against current
-main. Same rules as the lane C list: write the regression test in the bead
-first, show it fails, then fix, one cycle each; if it does not fail, check the
-item off as "not reproduced" and say why. The UUID findings 18 and 25 have
-shipped (see Shipped).
-
-- [ ] `brwr-iqx` **The run finisher still says "confirm a notes folder".**
-  Original report: host/src/service/supervisor.rs ~116/~119; use
-  `server::NOT_CONFIGURED`. **2026-10-28 triage:** the named type and wording
-  have been removed; SummaryFinisher already names settings and Retry save,
-  covered by its missing-folder test. **Blocked for operator reconciliation:**
-  the assigned failing-first acceptance names deleted code; no closure claimed.
-
 ### Cookie's own proposals (only after the plan work above)
 
 - [ ] `brwr-cua` **Restore a removed site's recorded capture rules from the panel.**
@@ -342,6 +324,14 @@ shipped (see Shipped).
   asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
+
+- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.**
+  Cookie claimed the highest-priority ready item after the coordinator cleared
+  the assigned queue. The [four-stage plan](docs/superpowers/plans/2026-10-28-capture-relearning.md)
+  starts with offline alias rehearsal, then revision-bound impact planning,
+  durable migration/rebuild, and the panel review. The parent remains in
+  progress: no migration is enabled and the ID freeze stays enforced.
+
 
 - In progress in the Lane A session, not Cookie. Cookie must not claim these:
 - [ ] `brwr-f45` **Agent-refined Capture Site (step 7.7 moved forward).**
@@ -387,6 +377,9 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** New Capability. **Preview artifact identity corrections offline (2026-10-28).** `brauser adapters aliases-preview` derives endpoint identities from supplied old and proposed adapter documents, then shows canonical groups and pending suggestions for confirmed, suggested and unalias operations. Chains, moves back and pairwise corrections replay deterministically; forged IDs, out-of-scope endpoints, cross-type links and insufficient stripped-query evidence refuse the rehearsal. It reads no settings or vault and grants no migration authority. Completes `brwr-sq9`; parent Re-learn (`brwr-6x2`) remains in progress for impact planning, durable migration and panel review. **Metrics:** 987 reported Rust passes (+15 tests, including 3 real CLI isolation cases; guarded IPC skips included), 15 extension files, both Clippy configurations and all required/README gates green.
+
 
 - **Category:** Bug Fix. **Recover older activity and context without rewriting history (2026-10-28).** Historical uppercase and unhyphenated UUID payloads now survive reindex with canonical cache identities, preserving measured work and Why context. Older v1 interrupted appends reconstruct the original queued UUID spelling across all three historical renderers and resume only with the exact intent hash and torn tail; edited tails and mismatched payloads remain refused. Completes assigned `brwr-smu`. **Metrics:** Two failing-first regression matrices (33 cases); 972 workspace Rust outcomes (43 IPC skips), 835 scripted-dialog outcomes (53 IPC skips, one ignored doctest), 15 extension files, two script files, and 10,696 Markdown renderings; full required/README gate green.
 
@@ -1333,29 +1326,37 @@ stop product work, and no history reset or production IPC change is called for.
   ran. The complete green diff, closed/exported bead and excluded
   `.bosun_commit_msg` are ready for the driver to commit as Cookie.
 
-### Assigned-work blocker handoff (2026-10-28, base 3397bb43dce3)
+### Re-learning preview handoff (2026-10-28, starting at 5fb15210)
 
-- Opening tree was clean and no commit-gate failure file existed. The required
-  health gate passed: 972 reported Rust outcomes (including sandbox IPC skips),
-  15 extension test files, both Clippy configurations, build, fmt, generation,
-  npm install, typecheck and lint. README extras passed too: current-state and
-  queue checks, two script files, and 10,696 inert Markdown renderings.
-  Headless macOS smoke refused Linux before setup; browser acceptance remains
-  untested here. No product code changed or feature shipped this cycle.
-- Both assignments are externally blocked. To unblock `brwr-7vf`, complete
-  human `brwr-mff` (add/lock bundled rusqlite, check cargo-deny, warm the cache),
-  then implement `brwr-b2e` before the concurrent-host acceptance test. Neither
-  rusqlite nor libsqlite3-sys is cached locally. `brwr-iqx` needs operator
-  reconciliation of its deleted VaultCheckFinisher target; the missing-folder regression
-  passed. Evidence was appended to both beads and exported; no assigned label,
-  acceptance criterion, dependency or human gate changed.
-- Queue review found no actionable assigned work. Keep the existing larger
-  product proposals (`brwr-ued` focus sessions and `brwr-ppn` worklog curation)
-  for when assigned work clears; no duplicate proposal or internal hardening
-  task was added to fill a blocked cycle. DESIGN.md's contracts are unchanged.
-  CookieFeature.md and pending feature briefings remain unchanged because
-  there is no shipped feature to document. No remote review or API ran; the
-  driver supplies the independent review and unrestricted IPC checks.
-- The single commit attempt failed at `git add` because `.git/index.lock`
-  is read-only. The reviewed diff and excluded `.bosun_commit_msg` are ready
-  for the driver; no retry, push or merge ran.
+- The opening tree was clean, with no gate-failure file. All required opening
+  checks passed: 972 reported Rust passes (including guarded IPC skips), 15
+  extension files, both Clippy configurations, generation, build, fmt, offline
+  npm install, typecheck and lint. README checks also passed: current-state,
+  queue consistency, two script files and 10,696 inert Markdown renderings.
+- During this run the coordinator closed obsolete `brwr-iqx` and removed the
+  assigned label from dependency-blocked `brwr-7vf`. Cookie preserved those
+  external decisions in the export and reconciled this markdown. Bundled
+  rusqlite is still absent; real SQLite and concurrent index work still need
+  human `brwr-mff`, followed by `brwr-b2e`. No human gate was bypassed.
+- With no assigned work left, plain `bd ready` selected P2 `brwr-6x2` ahead of
+  the P3 proposals. The full feature is deliberately split into coherent
+  stages; alias rehearsal is an inspectable developer tool, not a claim that
+  the panel can re-learn or that any stored note identity has changed.
+- Next implement a revision-bound migration impact planner, explicitly handling
+  splits, simultaneous key reuse/swaps, existing notes on both sides and
+  stripped-query evidence. A sequential alias chain is not sufficient proof
+  that a simultaneous policy replacement should merge those records. Preserve
+  canonical-address versus autosave-identity separation and local note recovery.
+- The existing larger product proposals (focus sessions `brwr-ued` and worklog
+  curation `brwr-ppn`) remain useful after the plan work. Do not add duplicate
+  proposals or another internal status view to fill the queue.
+- Final gate passed with 987 reported Rust passes (+15), all 15 extension
+  files, both Clippy configurations and README extras. The full diff was read
+  fresh, including queue-field changes and new files; the documented JSON
+  example also ran through the real binary. No remote/API review ran; the
+  driver provides independent review. Evidence: `target/cookie-relearn-gate.log`.
+  The next ready prerequisite is `brwr-hq8`, and parent `brwr-6x2` stays in
+  progress. No macOS/browser acceptance was claimed on Linux.
+- The single commit attempt failed at `git add`: `.git/index.lock` is
+  read-only. No retry, push or merge ran. The complete green working tree,
+  exported queue and excluded `.bosun_commit_msg` are ready for the driver.
