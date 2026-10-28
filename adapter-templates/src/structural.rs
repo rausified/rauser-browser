@@ -1754,7 +1754,15 @@ fn bound_tenant(
 ///    agent's table order. A dropped rule is reported in `dropped_rules`
 ///    with its code, a table refused whole with `rule: None`, and a table
 ///    left with no rule is removed.
-/// 4. **Review fields** come from [`describe_rules`] on the kept rules.
+/// 4. **Structural refusals**: a kept rule that captures an input shape
+///    the structural Keep step refuses (a blocked route word in any path
+///    segment, or a search, paging or secret query with no identifier) is
+///    dropped as `draft_blocked_route`, `draft_search_capture` or
+///    `draft_secret_capture`, whatever capture, `{_}`, alternation or
+///    `{*}` let it reach that page.
+/// 5. **Review fields** come from [`describe_rules`] on the kept rules,
+///    and a rule that also captures a link shape none of its visited
+///    shapes is starts `link_only`, so it is never checked by default.
 pub fn check_agent_draft(
     origin: &str,
     existing: &Document,
@@ -1801,6 +1809,7 @@ pub fn check_agent_draft(
         })
         .collect();
     let reports = check_in_rank_order(existing, recorded, policy, &tables);
+    let refused = refused_shapes(origin, existing, recorded, input, policy);
     let mut site = SiteDraft::default();
     for (index, (table, report)) in tables.iter().zip(reports).enumerate() {
         let report = match report {
@@ -1816,21 +1825,49 @@ pub fn check_agent_draft(
             }
         };
         let mut keep = Vec::new();
+        let rules = table
+            .get("match")
+            .and_then(Value::as_array)
+            .unwrap_or_default();
         for (rule, verdict) in report.rules.iter().enumerate() {
-            match verdict {
-                RuleVerdict::Dropped(code) => site.dropped_rules.push(DroppedRule {
+            // A kept rule that captures a page the structural Keep step
+            // refuses is dropped with that page's check code.
+            let refused = || {
+                let document = rules
+                    .get(rule)
+                    .and_then(|r| matching_document(table, r, policy))?;
+                refused
+                    .iter()
+                    .find(|(url, _)| matches_url(&document, url))
+                    .map(|(_, code)| *code)
+            };
+            let code = match verdict {
+                RuleVerdict::Dropped(code) => Some(*code),
+                RuleVerdict::Kept | RuleVerdict::Warned(_) => refused(),
+            };
+            match code {
+                Some(reason) => site.dropped_rules.push(DroppedRule {
                     table: index,
                     rule: Some(rule),
-                    reason: *code,
+                    reason,
                 }),
-                RuleVerdict::Kept | RuleVerdict::Warned(_) => keep.push(rule),
+                None => keep.push(rule),
             }
         }
         if keep.is_empty() {
             continue;
         }
         let adapter = with_match(table, &keep);
-        let rules = describe_rules(&adapter, input, policy);
+        let mut rules = describe_rules(&adapter, input, policy);
+        // A rule that also captures a link shape none of its visited shapes
+        // is starts unchecked as link-only: the agent may not widen capture
+        // to pages only the page's links suggested (Decision 4).
+        for (rule, uncovered) in rules
+            .iter_mut()
+            .zip(uncovered_links(&adapter, input, policy))
+        {
+            rule.link_only |= uncovered;
+        }
         site.adapters.push(DraftedAdapter {
             tenant: bound_tenant(report.document.as_ref(), origin, policy),
             adapter,
@@ -1966,6 +2003,101 @@ fn id_token_only(adapter: &Adapter) -> bool {
     identifiers.peek().is_some() && identifiers.all(|base| base == BaseType::Token)
 }
 
+/// Whether the first adapter of `document` matches the prepared URL,
+/// ignoring scope.
+fn matches_prepared(document: &Document, prepared: &Prepared) -> bool {
+    document.adapters.first().is_some_and(|adapter| {
+        prepared.origin == adapter.origin
+            && prepared.segments.as_deref().is_some_and(|segments| {
+                adapter
+                    .rules
+                    .iter()
+                    .any(|rule| match_rule(adapter, rule, segments, &prepared.query).is_some())
+            })
+    })
+}
+
+/// Whether the first adapter of `document` matches `url`, ignoring scope.
+fn matches_url(document: &Document, url: &str) -> bool {
+    Prepared::new(url).is_ok_and(|prepared| matches_prepared(document, &prepared))
+}
+
+/// The input shapes the structural Keep step refuses as a page no drafted
+/// rule may capture, each filled with the catalog's examples, with the
+/// draft check code an agent rule matching it is dropped with: a blocked
+/// route word anywhere in the path, or a search, paging or secret query
+/// with no identifier (the [`filter`] verdicts).
+fn refused_shapes(
+    origin: &str,
+    existing: &Document,
+    recorded: &[Document],
+    input: &ShapeInput,
+    policy: &DraftPolicy,
+) -> Vec<(String, DraftErrorCode)> {
+    let (_, dropped) = filter(origin, existing, recorded, input, policy);
+    let code = |reason| match reason {
+        DropReason::BlockedRoute => Some(DraftErrorCode::BlockedRoute),
+        DropReason::SearchOrPaging => Some(DraftErrorCode::SearchCapture),
+        DropReason::SecretQuery => Some(DraftErrorCode::SecretCapture),
+        _ => None,
+    };
+    let refused: BTreeMap<String, DraftErrorCode> = dropped
+        .into_iter()
+        .filter_map(|d| code(d.reason).map(|code| (d.shape, code)))
+        .collect();
+    input
+        .visited
+        .iter()
+        .chain(&input.links)
+        .filter_map(|(shape, _)| {
+            refused
+                .get(&shape.to_string())
+                .map(|code| (shape.fill(origin, policy), *code))
+        })
+        .collect()
+}
+
+/// For each rule of `table`, whether it captures a link shape that is not
+/// also one of the visited shapes it captures: a page only the page's links
+/// suggested, which the structural drafter would have kept out of a visited
+/// rule. Shapes count toward the first rule that matches, as in
+/// [`describe_rules`].
+fn uncovered_links(table: &Value, input: &ShapeInput, policy: &DraftPolicy) -> Vec<bool> {
+    let origin = table
+        .get("origin")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let rules = table
+        .get("match")
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    let documents: Vec<Option<Document>> = rules
+        .iter()
+        .map(|rule| matching_document(table, rule, policy))
+        .collect();
+    let first_rule = |shape: &UrlShape| {
+        let url = shape.fill(origin, policy);
+        documents
+            .iter()
+            .position(|d| d.as_ref().is_some_and(|d| matches_url(d, &url)))
+    };
+    let mut visited: Vec<BTreeSet<String>> = vec![BTreeSet::new(); rules.len()];
+    for (shape, _) in &input.visited {
+        if let Some(index) = first_rule(shape) {
+            visited[index].insert(shape.to_string());
+        }
+    }
+    let mut uncovered = vec![false; rules.len()];
+    for (shape, _) in &input.links {
+        if let Some(index) = first_rule(shape)
+            && !visited[index].contains(&shape.to_string())
+        {
+            uncovered[index] = true;
+        }
+    }
+    uncovered
+}
+
 /// The review fields of every rule of an adapter table, from the shapes it
 /// matches: each visited and link shape is filled with the catalog's
 /// examples and matched against the rule without scope. `visited` and
@@ -1992,16 +2124,9 @@ pub fn describe_rules(table: &Value, input: &ShapeInput, policy: &DraftPolicy) -
         .collect();
     let first_rule = |prepared: &Prepared| {
         documents.iter().position(|document| {
-            document.as_ref().is_some_and(|document| {
-                document.adapters.first().is_some_and(|adapter| {
-                    prepared.origin == adapter.origin
-                        && prepared.segments.as_deref().is_some_and(|segments| {
-                            adapter.rules.iter().any(|rule| {
-                                match_rule(adapter, rule, segments, &prepared.query).is_some()
-                            })
-                        })
-                })
-            })
+            document
+                .as_ref()
+                .is_some_and(|document| matches_prepared(document, prepared))
         })
     };
     let mut described: Vec<DraftedRule> = (0..rules.len())
@@ -4045,6 +4170,88 @@ mod tests {
         // The unseen rule's example is its own fill, never a visited URL.
         assert_eq!(rules[1].example, format!("{TOOLS}/tickets/123456"));
         assert_eq!(rules[0].example, format!("{TOOLS}/docs/123456"));
+    }
+
+    /// Whether a rule the review starts checked captures `url`.
+    fn checked_rule_matches(site: &SiteDraft, url: &str) -> bool {
+        let policy = test_catalog();
+        site.adapters.iter().any(|adapter| {
+            let rules = adapter
+                .adapter
+                .get("match")
+                .and_then(Value::as_array)
+                .unwrap_or_default();
+            adapter.rules.iter().any(|r| {
+                !(r.link_only || r.token_only || r.unseen)
+                    && matching_document(&adapter.adapter, &rules[r.rule], &policy)
+                        .is_some_and(|document| matches_url(&document, url))
+            })
+        })
+    }
+
+    #[test]
+    fn agent_rule_widened_over_planted_link_shapes_is_dropped_or_starts_unchecked() {
+        let policy = test_catalog();
+        let cases: [(&str, &[&str], &[&str], Option<DraftErrorCode>); 3] = [
+            (
+                "/wiki/{n:int}/{*}",
+                &["/wiki/{num}"],
+                &["/wiki/{num}/share/{slug}", "/wiki/{num}/invite/{hex32}"],
+                Some(DraftErrorCode::BlockedRoute),
+            ),
+            (
+                "/wiki/{_}/{n:int}",
+                &["/wiki/doc/{num}"],
+                &["/wiki/share/{num}", "/wiki/reset/{num}"],
+                Some(DraftErrorCode::BlockedRoute),
+            ),
+            (
+                "/wiki/(doc|page)/{n:int}",
+                &["/wiki/doc/{num}"],
+                &["/wiki/page/{num}"],
+                None,
+            ),
+        ];
+        for (path, visited, links, drop) in cases {
+            let input = input(visited, links);
+            // Only the widened table: no narrow rule before it to overlap.
+            let tables = [tier0(TOOLS, "tools.wiki", &[path], &["n"])];
+            let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+            assert_eq!(site.rejected, None, "{path}: {site:?}");
+            for (shape, _) in &input.links {
+                let url = shape.fill(TOOLS, &policy);
+                assert!(
+                    !checked_rule_matches(&site, &url),
+                    "{path}: a checked rule captures the planted {url}: {site:?}"
+                );
+            }
+            match drop {
+                Some(code) => {
+                    assert!(site.adapters.is_empty(), "{path}: {site:?}");
+                    assert_eq!(
+                        site.dropped_rules,
+                        [DroppedRule {
+                            table: 0,
+                            rule: Some(0),
+                            reason: code
+                        }],
+                        "{path}"
+                    );
+                }
+                None => {
+                    let rule = &site.adapters[0].rules[0];
+                    assert!(rule.link_only, "{path}: {rule:?}");
+                    assert_eq!((rule.visited, rule.links), (1, 1), "{path}");
+                }
+            }
+        }
+        // A link shape the rule's own visited shapes cover leaves it checked.
+        let input = input(&["/wiki/{num}"], &["/wiki/{num}"]);
+        let tables = [tier0(TOOLS, "tools.wiki", &["/wiki/{n:int}"], &["n"])];
+        let site = agent(TOOLS, &Document::default(), &[], &input, &[], &tables);
+        let rule = &site.adapters[0].rules[0];
+        assert!(!(rule.link_only || rule.unseen), "{rule:?}");
+        assert_eq!((rule.visited, rule.links), (1, 1));
     }
 
     #[test]

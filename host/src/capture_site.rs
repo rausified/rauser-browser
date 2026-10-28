@@ -3701,6 +3701,68 @@ mod handler_tests {
         }
 
         #[test]
+        fn host_agent_widened_rule_alone_never_checks_a_planted_link() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            // Each widened table alone, with no narrow rule before it that
+            // would drop it as an overlap.
+            let cases: [(&str, &[&str], &[&str], &[&str], Option<DraftDropReason>); 3] = [
+                (
+                    "/wiki/{n:int}/{*}",
+                    &["/wiki/{num}"],
+                    &["/wiki/{num}/share/{slug}", "/wiki/{num}/invite/{hex32}"],
+                    &[
+                        "https://tools.example.com/wiki/42/share/team-notes",
+                        "https://tools.example.com/wiki/42/invite/0123456789abcdef0123456789abcdef",
+                    ],
+                    Some(DraftDropReason::DraftBlockedRoute),
+                ),
+                (
+                    "/wiki/{_}/{n:int}",
+                    &["/wiki/doc/{num}"],
+                    &["/wiki/share/{num}", "/wiki/reset/{num}"],
+                    &[
+                        "https://tools.example.com/wiki/share/42",
+                        "https://tools.example.com/wiki/reset/42",
+                    ],
+                    Some(DraftDropReason::DraftBlockedRoute),
+                ),
+                (
+                    "/wiki/(doc|page)/{n:int}",
+                    &["/wiki/doc/{num}"],
+                    &["/wiki/page/{num}"],
+                    &["https://tools.example.com/wiki/page/42"],
+                    None,
+                ),
+            ];
+            for (path, visited, links, planted, drop) in cases {
+                let tables = vec![json!({
+                    "type": "tools.wiki",
+                    "origin": TOOLS,
+                    "match": [{"path": path}],
+                    "id": "tools.wiki:{host}/{n}",
+                })];
+                let site = judge(&mut setup(""), &tables, visited, links);
+                assert_not_captured(&site, planted);
+                for rule in site.adapters.iter().flat_map(|a| &a.rules) {
+                    assert_eq!(rule.checked, rule.unchecked_reason.is_none(), "{rule:?}");
+                }
+                match drop {
+                    Some(reason) => {
+                        assert!(site.adapters.is_empty(), "{path}: {site:?}");
+                        assert_dropped(&site, &tables, &[(path, reason)]);
+                    }
+                    None => {
+                        let rule = kept(&site, path);
+                        assert!(!rule.checked, "{path}: {rule:?}");
+                        assert_eq!(rule.unchecked_reason, Some(UncheckedReason::LinkOnly));
+                    }
+                }
+            }
+        }
+
+        #[test]
         fn host_agent_planted_blocked_route_word_is_dropped() {
             if crate::ipc_test_guard::ipc_denied() {
                 return;
