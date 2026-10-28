@@ -345,49 +345,26 @@ strip_params note-identity follow-up has shipped (see Shipped).
   Capture Site must keep working with no agent configured.
 
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
-  Extend the existing built-page smoke check so it opens the artifact card,
-  saves context, filters Recent, changes and copies a worklog, migrates an
-  older note, and refreshes after background delivery. Cover close/reopen
-  during debounce and an in-flight save, retaining any lost edits in durable
-  recovery. This P2 stabilization gate precedes M2; use only isolated local
-  fixtures and preserve setup smoke and dialog counts.
-  **2026-10-28:** still awaiting actual macOS Chrome evidence. This Linux VM
-  refuses `smoke:macos:headless` before launching Chrome; local built-panel
-  tests pass. No browser acceptance or dialog-count evidence is claimed.
-  **This cycle:** marked blocked for isolated macOS Chrome execution; its
-  implementation is complete and must not be rebuilt in another Linux cycle.
+  **Blocked on platform execution; implementation complete.** The built-page
+  smoke covers artifact/context interactions, Recent filters, worklog Copy,
+  older-note migration, background refresh and close/reopen recovery during
+  debounce and an in-flight save. Run `npm run smoke:macos:headless` on an
+  isolated macOS checkout, retaining the existing scripted-dialog assertions,
+  and record the tested commit and result before closing. On this Linux VM
+  the runner refuses before setup and no Chrome executable was found on PATH;
+  mocked panel regressions cannot supply browser acceptance. Do not rebuild
+  this implementation or port the runner merely to replace macOS evidence.
 
-- [ ] `brwr-bzx` **Windows CI.** Add a `windows-latest` job for the host build,
-  tests, and clippy, plus the extension checks. Fix code and tests that have
-  assumed macOS/Unix since 2026-10-15, and keep the existing Windows code
-  paths. Interactive Windows checks are separate **[human]** work.
-  **2026-10-27:** open access PR 1 carries the CI matrix from #63/#64
-  (`macos-15` and `windows-latest` build jobs plus the required "Build and
-  check" gate job), and Windows clippy is clean locally. What remains: get the
-  `windows-latest` job green on GitHub, fix any Windows-only test failures
-  (Windows `cargo test` and the extension tests have not run yet), and gate
-  any test that cannot run on Windows with a stated reason.
-  **Already on main (2026-10-27, later):** open access PR 1 merged as #69, so
-  the `macos-15` + `windows-latest` matrix and the required "Build and check"
-  gate are on `main`, and the `windows-latest` job is green there (CI run
-  40481905465 at `5a80dda`: Rust build, `cargo test`, clippy, scripted-dialogs
-  test and clippy, typecheck, lint, extension build and tests, adapter diff,
-  npm audit; only the headless smoke and fuzz-compile steps are macOS-only).
-  Don't re-add CI or redo that work. The only remainder: confirm main stays
-  green on both platforms, check that each test skipped on Windows (for
-  example `cfg(unix)`-gated tests) states why, add the reason where it is
-  missing, then close this item. `brwr-i1g` stays open for the interactive
-  Windows acceptance.
-  **2026-10-28:** current cross-platform CI cannot be verified from this
-  isolated Linux run (remote/API access is prohibited). Existing jobs remain
-  intact; retain this item for current Windows/macOS evidence and the final
-  Windows skip-reason audit.
-
-  **2026-10-28, this cycle:** skip-reason audit complete: POSIX mode denial,
-  symlink/inode and shell fixtures state their exclusions, and plist lint
-  names its macOS dependency. The bead is blocked only for current macOS and
-  Windows CI evidence, which this Linux/no-live-network cycle cannot obtain.
-
+- [ ] `brwr-bzx` **Restore Windows CI for the native host and extension.**
+  **Blocked on current platform results; implementation and skip audit
+  complete.** The reusable `build-os.yml` already covers Windows/macOS Rust
+  build, tests, both Clippy builds and extension checks. Operator evidence
+  records Windows green at `5a80dda` (run 40481905465); that historical result
+  does not establish current status. POSIX permission, symlink/inode, shell
+  and macOS launchctl/plist exclusions have documented reasons. The remaining
+  action is to record current Windows and macOS green CI against a named
+  commit, then close. This Linux cycle cannot access those runners or live
+  APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
 
 
 Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
@@ -1453,3 +1430,38 @@ stop product work, and no history reset or production IPC change is called for.
   reports `spawnSync /usr/bin/node EPERM`. This comparison is not counted as
   passed; required gates, real Markdown renderers and script tests are green.
   Establish the runner's exact wait before changing it; no engine was touched.
+
+
+### Platform evidence handoff (2026-10-28, baseline c2b13e0c)
+
+- Health began clean: no quarantine notice or working-tree changes. Required
+  local checks passed, using cached/offline npm installation: 997 workspace
+  Rust outcomes (43 explicit IPC-denial skips), 860 scripted-dialog outcomes
+  (53 explicit IPC skips, one ignored doctest), all 15 extension files and
+  both Clippy configurations. README extras passed: two script files, 10,696
+  inert Markdown renderings, current-state and queue consistency checks.
+  Evidence is in `target/cookie-platform-health.log` and
+  `target/cookie-platform-extra-checks.log` (local, untracked build output).
+- Both assigned beads remain blocked. `brwr-bzx` needs current Windows/macOS
+  CI results; `brwr-9xg` needs actual isolated macOS Chrome execution. The
+  smoke command refused Linux before setup and no Chrome/Chromium executable
+  was found on PATH. No browser, platform CI or dialog-count acceptance was
+  inferred from unit tests. The backlog now removes obsolete implementation
+  instructions and states the exact remaining evidence; existing bead notes
+  were preserved and the queue exported. No assigned label or status changed.
+- No source change or feature shipped. Fresh review covered the entire
+  documentation/queue diff and checked that only these two beads' notes and
+  timestamps changed. No API-based Codex review ran under the no-live-API
+  rule; independent review remains with the driver. No human gate, deployment,
+  service, credential or git remote was touched.
+- Scheduling observation: the driver should obtain platform evidence or
+  supply runnable assigned work before repeating this Linux-only cycle.
+  Rebuilding completed smoke/CI machinery cannot resolve an absent macOS or
+  Windows result. Existing focus sessions (`brwr-ued`) and curated worklogs
+  (`brwr-ppn`) remain useful later product directions; no duplicate proposal
+  was added and neither was started ahead of the assigned queue.
+- The single commit attempt stopped at `git add -A`: Git could not create
+  `.git/index.lock` on its read-only mount. No retry or remote operation ran.
+  The reviewed documentation/queue diff and excluded `.bosun_commit_msg`
+  remain ready for the driver's commit; the cycle summary is appended to
+  the local `overnight-run.log`.
