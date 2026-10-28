@@ -310,9 +310,9 @@ impl CaptureStore {
                     reason: "mode_site_not_allowed".into(),
                 };
             }
-            mode.url = match normalize_url(source, policy.strip_params) {
+            mode.url = match normalize_capture_url(source, policy.strip_params) {
                 Ok(normalized) => normalized,
-                Err(message) => return CaptureOutcome::Retryable { message },
+                Err(outcome) => return outcome,
             };
         }
         for trail in &mut payload.trails {
@@ -328,9 +328,9 @@ impl CaptureStore {
                     reason: "trail_site_not_allowed".into(),
                 };
             }
-            trail.from_url = match normalize_url(source, policy.strip_params) {
+            trail.from_url = match normalize_capture_url(source, policy.strip_params) {
                 Ok(normalized) => Some(normalized),
-                Err(message) => return CaptureOutcome::Retryable { message },
+                Err(outcome) => return outcome,
             };
         }
         let visit = VisitEvent {
@@ -699,12 +699,18 @@ impl CaptureStore {
                 reason: "site_not_allowed".into(),
             });
         }
-        let normalized = normalize_url(original, policy.strip_params)
-            .map_err(|message| CaptureOutcome::Retryable { message })?;
+        let normalized = normalize_capture_url(original, policy.strip_params)?;
         let marker_metadata = match marker_payload {
             Some((kind, mut payload)) => {
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("url".into(), serde_json::Value::String(normalized.clone()));
+                    // Use the same spelling as the marker hash and live index.
+                    if matches!(kind, "activity" | "why") {
+                        object.insert(
+                            "event_id".into(),
+                            serde_json::Value::String(event_id.clone()),
+                        );
+                    }
                 }
                 let json = serde_json::to_vec(&payload).map_err(|_| CaptureOutcome::Rejected {
                     reason: "invalid_event_metadata".into(),
@@ -726,7 +732,9 @@ impl CaptureStore {
         );
         let legacy_entry = pre_sanitizer_entry(&entry, event, false);
         Ok(BatchEntry {
-            event_id,
+            // Replies correlate to the original request; only durable identity
+            // and the payload use the canonical spelling above.
+            event_id: event.event_id.clone(),
             event_hash,
             timestamp,
             entry,
@@ -778,8 +786,7 @@ impl CaptureStore {
                     reason: "mode_site_not_allowed".into(),
                 });
             }
-            mode.url = normalize_url(source, policy.strip_params)
-                .map_err(|message| CaptureOutcome::Retryable { message })?;
+            mode.url = normalize_capture_url(source, policy.strip_params)?;
         }
         for trail in &mut payload.trails {
             let Some(raw_source) = trail.from_url.as_deref() else {
@@ -792,10 +799,7 @@ impl CaptureStore {
                     reason: "trail_site_not_allowed".into(),
                 });
             }
-            trail.from_url = Some(
-                normalize_url(source, policy.strip_params)
-                    .map_err(|message| CaptureOutcome::Retryable { message })?,
-            );
+            trail.from_url = Some(normalize_capture_url(source, policy.strip_params)?);
         }
         let body = format!(
             "{} — {} — {}",
@@ -898,9 +902,9 @@ impl CaptureStore {
                 reason: "site_not_allowed".into(),
             };
         }
-        let normalized = match normalize_url(original, policy.strip_params) {
+        let normalized = match normalize_capture_url(original, policy.strip_params) {
             Ok(value) => value,
-            Err(message) => return CaptureOutcome::Retryable { message },
+            Err(outcome) => return outcome,
         };
         let exact_replay = marker_payload
             .as_ref()
@@ -909,6 +913,13 @@ impl CaptureStore {
             Some((kind, mut payload)) => {
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("url".into(), serde_json::Value::String(normalized.clone()));
+                    // Use the same spelling as the marker hash and live index.
+                    if matches!(kind, "activity" | "why") {
+                        object.insert(
+                            "event_id".into(),
+                            serde_json::Value::String(event_id.clone()),
+                        );
+                    }
                     if kind == "summary" {
                         let artifact_id = match summary_marker_artifact_id(object, &normalized) {
                             Ok(value) => value,
@@ -1480,7 +1491,7 @@ impl CaptureStore {
     }
 }
 
-fn parse_event_id(value: &str) -> std::result::Result<String, String> {
+pub(crate) fn parse_event_id(value: &str) -> std::result::Result<String, String> {
     let parsed = Uuid::parse_str(value).map_err(|_| "invalid_event_id".to_owned())?;
     Ok(parsed.hyphenated().to_string())
 }
@@ -1568,6 +1579,23 @@ fn summary_marker_artifact_id(
 fn is_authorized(url: &Url, origins: &[String]) -> bool {
     let origin = url.origin().ascii_serialization();
     origins.iter().any(|allowed| allowed == &origin)
+}
+
+/// Bound the stored spelling, after authorization and tracking removal.
+/// URL serialization can expand a short Unicode route through percent encoding;
+/// acknowledging it above the index's URL limit would lose it on a rebuild.
+fn normalize_capture_url(
+    url: Url,
+    strip_params: &[String],
+) -> std::result::Result<String, CaptureOutcome> {
+    let normalized = normalize_url(url, strip_params)
+        .map_err(|message| CaptureOutcome::Retryable { message })?;
+    if normalized.len() > MAX_URL_BYTES {
+        return Err(CaptureOutcome::Rejected {
+            reason: "url_too_long".into(),
+        });
+    }
+    Ok(normalized)
 }
 
 fn normalize_url(mut url: Url, strip_params: &[String]) -> std::result::Result<String, String> {
@@ -2808,6 +2836,148 @@ mod tests {
                 reason: "invalid_activity".into()
             }
         );
+    }
+
+    #[test]
+    fn encoded_page_urls_over_the_limit_are_rejected_before_writing() {
+        let origins = ["https://example.com".to_owned()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        for extra in ["a", &"ü".repeat(1638)] {
+            let url = format!("https://example.com/{}{extra}", "ü".repeat(1362));
+            assert!(url.len() < MAX_URL_BYTES);
+            assert!(canonical_url(&url, &[]).unwrap().len() > MAX_URL_BYTES);
+            for kind in [
+                "visit",
+                "batch_visit",
+                "activity",
+                "batch_activity",
+                "why",
+                "summary",
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let state = tempfile::tempdir().unwrap();
+                let store = CaptureStore::open_at(&storage(root.path(), "log"), None, state.path())
+                    .unwrap();
+                let visit = VisitEvent {
+                    url: url.clone(),
+                    ..event()
+                };
+                let activity = ActivityEvent {
+                    url: url.clone(),
+                    ..activity()
+                };
+                let why = WhyEvent {
+                    event_id: visit.event_id.clone(),
+                    artifact_id: activity.artifact_id.clone(),
+                    url: url.clone(),
+                    occurred_at: visit.occurred_at.clone(),
+                    incognito: false,
+                    text: "Keep the context".into(),
+                };
+                let outcome = match kind {
+                    "visit" => store.record(policy, &visit),
+                    "batch_visit" => {
+                        store
+                            .record_batch(
+                                policy,
+                                &Uuid::new_v4().to_string(),
+                                &[CaptureBatchEvent::Visit(&visit)],
+                                None,
+                            )
+                            .events
+                            .remove(0)
+                            .1
+                    }
+                    "activity" => store.record_activity(policy, &activity),
+                    "batch_activity" => {
+                        store
+                            .record_batch(
+                                policy,
+                                &Uuid::new_v4().to_string(),
+                                &[CaptureBatchEvent::Activity(&activity)],
+                                None,
+                            )
+                            .events
+                            .remove(0)
+                            .1
+                    }
+                    "why" => store.record_why(policy, &why),
+                    "summary" => store.record_summary(policy, &adapter_summary(&url)).0,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    outcome,
+                    CaptureOutcome::Rejected {
+                        reason: "url_too_long".into()
+                    },
+                    "{kind}, encoded length {}",
+                    canonical_url(&url, &[]).unwrap().len()
+                );
+                assert!(!root.path().join("log").exists(), "{kind}: nothing logged");
+                assert!(
+                    !state.path().join("visit-ids").exists(),
+                    "{kind}: no intent"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encoded_mode_and_trail_urls_over_the_limit_are_rejected_before_writing() {
+        for batched in [false, true] {
+            for field in ["mode", "trail"] {
+                let root = tempfile::tempdir().unwrap();
+                let state = tempfile::tempdir().unwrap();
+                let store = CaptureStore::open_at(&storage(root.path(), "log"), None, state.path())
+                    .unwrap();
+                let origins = ["https://example.com".to_owned()];
+                let policy = CapturePolicy {
+                    enabled: true,
+                    origins: &origins,
+                    strip_params: &[],
+                };
+                let url = format!("https://example.com/{}a", "ü".repeat(1362));
+                assert!(url.len() < MAX_URL_BYTES);
+                assert_eq!(canonical_url(&url, &[]).unwrap().len(), MAX_URL_BYTES + 1);
+                let mut event = activity();
+                if field == "mode" {
+                    event.modes[0].url = url;
+                } else {
+                    event.trails.push(brauser_protocol::ActivityTrail {
+                        transition: "link".into(),
+                        from_artifact_id: Some("web:example/source".into()),
+                        from_url: Some(url),
+                    });
+                }
+                let outcome = if batched {
+                    store
+                        .record_batch(
+                            policy,
+                            &Uuid::new_v4().to_string(),
+                            &[CaptureBatchEvent::Activity(&event)],
+                            None,
+                        )
+                        .events
+                        .remove(0)
+                        .1
+                } else {
+                    store.record_activity(policy, &event)
+                };
+                assert_eq!(
+                    outcome,
+                    CaptureOutcome::Rejected {
+                        reason: "url_too_long".into()
+                    },
+                    "{field}, batched={batched}"
+                );
+                assert!(!root.path().join("log").exists());
+                assert!(!state.path().join("visit-ids").exists());
+            }
+        }
     }
 
     #[test]
