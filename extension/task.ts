@@ -31,7 +31,7 @@ export const TASK_REBUILD_HOST_MESSAGE = `Rebuild the ${APP_NAME} host to use th
 export const TASK_MAY_HAVE_STARTED_MESSAGE = "The task may have started — check below before running it again.";
 // What an older host's parse_envelope answers for a request type it does
 // not know, such as start_task.
-const UNSUPPORTED_REQUEST_TEXT = "invalid or unsupported request JSON";
+export const UNSUPPORTED_REQUEST_TEXT = "invalid or unsupported request JSON";
 // The host's texts for a service whose answer it lost (its EXCHANGE_TIMEOUT
 // or a closed connection) and for a reply it could not use.
 const HOST_NO_ANSWER_TEXT = "The Brauser service stopped before answering. Try again in a moment.";

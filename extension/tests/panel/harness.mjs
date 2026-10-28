@@ -20,6 +20,8 @@ export const { starterOffers: starterOffersFor } = await import("../../dist/star
 // host, a stub worker, and a fake Chrome whose site access can be withdrawn
 // and restored as the user would in chrome://extensions.
 export const PANEL_HTML = readFileSync(new URL("../../dist/panel.html", import.meta.url), "utf8");
+// The Tasks page, for tests that load tasks.js against its own markup.
+export const TASKS_HTML = readFileSync(new URL("../../dist/tasks.html", import.meta.url), "utf8");
 const SITE_ACCESS = ["http://*/*", "https://*/*"];
 
 export class FakeElement {
@@ -73,20 +75,21 @@ export class FakeElement {
   }
 }
 
-// Every element with an id in panel.html, with its initial `hidden` state and
-// static text, so the panel fails with "Missing page element" for markup that
-// is not there. The text is the markup up to the first matching end tag,
-// which is exact for elements that do not nest their own tag.
-function pageElements() {
+// Every element with an id in `html` (panel.html by default), with its
+// initial `hidden` state and static text, so the page fails with "Missing
+// page element" for markup that is not there. The text is the markup up to
+// the first matching end tag, which is exact for elements that do not nest
+// their own tag.
+export function pageElements(html = PANEL_HTML) {
   const elements = new Map();
-  for (const match of PANEL_HTML.matchAll(/<([a-z0-9]+)\b([^>]*?)\bid="([^"]+)"([^>]*)>/g)) {
+  for (const match of html.matchAll(/<([a-z0-9]+)\b([^>]*?)\bid="([^"]+)"([^>]*)>/g)) {
     const [, tag, before, id, after] = match;
     const element = new FakeElement(tag, /(^|\s)hidden(\s|\/|$)/.test(`${before} ${after}`));
     element.checked = /(^|\s)checked(\s|\/|$)/.test(`${before} ${after}`);
     const start = match.index + match[0].length;
-    const end = PANEL_HTML.indexOf(`</${tag}>`, start);
+    const end = html.indexOf(`</${tag}>`, start);
     if (end !== -1) {
-      element.ownText = PANEL_HTML.slice(start, end).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+      element.ownText = html.slice(start, end).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
     }
     elements.set(id, element);
   }
@@ -114,10 +117,10 @@ export const CONFIG = {
   adapters: { format: 1, artifacts: [] },
 };
 
-const NOT_SET_UP = { state: "not_set_up", harness_version: null, message: "Set up an AI harness." };
+export const NOT_SET_UP = { state: "not_set_up", harness_version: null, message: "Set up an AI harness." };
 export const READY = { state: "ready", harness_version: "1.0.0", message: null };
 
-function storageArea(entries) {
+export function storageArea(entries) {
   return {
     async get(keys) {
       const result = {};
