@@ -367,6 +367,7 @@ Live beads with no `backlog_section` (for example discovered work filed with
 queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
+- [ ] `brwr-dc7` **Extractor: keep visibility filtering when body has no box (display: contents).** Codex review of PR #186 (P2). extension/extract.ts: when document.body has no client rect, the fallback walks a script-stripped clone instead of innerText. A page with body { display: contents } has no body rect but renders its children, so this path ignores display:none /… _(P2; labels: extraction, task-bar)_
 <!-- END GENERATED section=new -->
 
 ## In Progress / This Iteration
