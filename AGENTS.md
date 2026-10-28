@@ -266,7 +266,11 @@ Name and Rank, and every drafted rule then passes the per-rule checks
 `check_draft_rules` (`adapter-templates/src/draft.rs`): a failing drafted rule
 is dropped with its reason and the rest kept, a user-written rule only warns,
 and a shared origin with no agreeing scoped adapter gets pending scope rather
-than a refusal. The probe paths, search and paging keys, blocked route words,
+than a refusal. Before a drafted rule's first identifier the anchor is a
+literal or the scoped shared-origin tenant (#126's scoped-capture anchor;
+`scope_anchored` rules cannot be saved unscoped). The review pre-fills the
+tenant from the tab's URL as "Capture for <tenant>", already chosen, so Save
+confirms it in one click (John, 2026-10-27). The probe paths, search and paging keys, blocked route words,
 mode words, fill values, starter types and shared-origin tenant/account-index
 positions are one host-owned catalog, `protocol/capture-site/catalog.json`,
 that the extension's tests pin. The panel's review is plain language with the
@@ -286,8 +290,9 @@ whose `remapped` is not 0. Secret and capability query keys (catalog
 `secret_query_keys`) never become IDs, blocked route words are matched by
 their hyphen/underscore parts and plurals and at the shared-origin tenant
 position too, and a link shape never renames or reranks a visited kind. Known
-limits: Notion workspace pages have no route word before their ID and are
-refused (`brwr-gf1`, DESIGN.md §5.1), and on a shared origin a short
+limits: a Notion page with no workspace segment is not drafted (workspace
+pages draft behind the scoped workspace, their anchor; `brwr-gf1` as
+revisited, DESIGN.md §5.1), and on a shared origin a short
 lowercase repository or namespace name stays a literal, so its rule covers
 that one name. Starter live-tool certification remains human work; agent
 drafting (`brwr-f45`) and re-learning (`brwr-6x2`) are not built.

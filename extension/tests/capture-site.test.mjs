@@ -131,7 +131,7 @@ test("invalid future documents and the whole-document adapter limit refuse a pla
 // --- Drafted Capture Site (unknown sites) -----------------------------------
 
 const {
-  captureMode, draftRequest, planDraftedSite, tenantPrefill,
+  captureMode, draftRequest, planDraftedSite, tenantAnchoredRule, tenantPrefill,
 } = await import("../dist/capture-site.js");
 
 const WIKI = "https://wiki.example.com";
@@ -316,6 +316,40 @@ test("scope prefill comes from the current tab's tenant position, never from the
   for (const route of ["auth", "invite", "share", "login", "sign-in", "invitations"]) {
     assert.equal(tenantPrefill(`${LINEAR}/${route}/callback/abc`, tenant), "", route);
   }
+  // On GitHub, #126's owner reading also rules out GitHub's own routes.
+  const owner = { segment: 0, capture: "owner" };
+  assert.equal(tenantPrefill(`${GITHUB}/Acme-Corp/widgets/issues/7`, owner), "acme-corp");
+  for (const route of ["settings", "notifications", "orgs", "marketplace"]) {
+    assert.equal(tenantPrefill(`${GITHUB}/${route}/acme`, owner), "", route);
+  }
+});
+
+const NOTION = "https://www.notion.so";
+const notionDraft = () => drafted([{
+  adapter: {
+    type: "notion.page", origin: NOTION,
+    match: [{ path: "/{workspace:name|lower}/{hex:hex(32)@tail}" }],
+    id: "notion.page:{host}/{workspace}/{hex}",
+  },
+  scope: "pending", tenant: { segment: 0, capture: "workspace" },
+  rules: [rule(0, `${NOTION}/example/0123456789abcdef0123456789abcdef`)],
+}]);
+
+test("a tenant-anchored rule is saved only for the workspaces chosen, never unscoped", () => {
+  assert.equal(tenantAnchoredRule({ path: "/{workspace:name|lower}/{hex:hex(32)@tail}" }), true);
+  assert.equal(tenantAnchoredRule({ path: "/{workspace:name|lower}/issue/{key:jira_key}" }), false);
+  assert.equal(tenantAnchoredRule({ path: "/(a|b)/{_}/{id:uuid}" }), true);
+  assert.equal(tenantAnchoredRule({ path: "/pages/{num:int}" }), false);
+  const draft = notionDraft();
+  const url = `${NOTION}/acme/Release-Plan-0123456789abcdef0123456789abcdef`;
+  const scoped = drafts(draft, select(draft, { scope: [{ values: tenantPrefill(url, draft.adapters[0].tenant) }] }), url);
+  assert.deepEqual(added(scoped)[0].scope, { workspace: ["acme"] });
+  assert.equal(scoped.current.result.match, true);
+  const unscoped = drafting(draft, select(draft, { scope: ["unscoped"] }), url);
+  assert.equal(unscoped.ok, false);
+  assert.match(unscoped.message, /by their workspace or account/);
+  // A rule with a route word may still record every account.
+  assert.equal(drafting(linearDraft(), select(linearDraft(), { scope: ["unscoped"] }), `${LINEAR}/acme/issue/ABC-12`).ok, true);
 });
 
 test("rename must keep types unique and valid", () => {

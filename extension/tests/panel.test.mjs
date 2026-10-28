@@ -1374,26 +1374,37 @@ test("a page that navigated before links were read cancels the draft without cal
   assert.equal(stale.el("capture-site-save").disabled, true);
 });
 
-test("a shared origin with pending scope keeps Save disabled until the user chooses", async () => {
+// Step 7.6's shared-origin flow, as John decided on 2026-10-27: the tenant
+// is pre-filled from this tab's URL and shown as "Capture for <tenant>", so
+// one click on Save confirms it; it stays editable, and the every-account
+// statement stays the alternative. This replaced "scope pending, Enable
+// disabled until the user chooses" (DESIGN §5.1, §12.2 step 7.6).
+test("a shared origin pre-fills this tab's tenant as Capture for <tenant> and saves with one click", async () => {
   const page = await draftReview(LINEAR_URL, { draft: () => linearDraft(),
     script: async () => ({ current: "/{slug}/issue/{key}", links: [] }) });
   await drafted(page);
   assert.equal(page.el("capture-site-scope").hidden, false);
   assert.equal(page.el("capture-site-scope-values").value, "acme", "prefilled from this tab's URL");
-  assert.equal(page.el("capture-site-scoped").checked, false);
+  assert.equal(page.el("capture-site-scoped").checked, true, "the pre-filled tenant is already chosen");
+  assert.equal(page.el("capture-site-scoped-text").textContent, "Capture for acme");
+  assert.match(page.el("capture-site-scope-intro").textContent, /filled in acme from this page/);
   assert.equal(page.el("capture-site-unscoped").checked, false);
-  assert.equal(page.el("capture-site-save").disabled, true);
-  assert.match(page.el("capture-site-message").textContent, /workspaces or accounts/);
+  assert.equal(page.el("capture-site-scope-values").disabled, false, "the tenant stays editable");
+  assert.equal(page.el("capture-site-save").disabled, false, "Save is the one-click confirmation");
+  assert.match(page.el("capture-site-preview").textContent, /This page: will be captured/);
+  assert.match(page.el("capture-site-preview").textContent, /Records pages only for: acme\./);
   assert.match(page.el("capture-site-scope").textContent, /every account in this Chrome profile/);
   assert.match(page.el("capture-site-scope").textContent, /separate Chrome profile for work/);
   // The prefill never came from the host: the draft's example names a stand-in.
   assert.doesNotMatch(JSON.stringify(page.sent("draft_site")), /acme/);
-  page.el("capture-site-scoped").checked = true;
-  page.el("capture-site-scoped").dispatch("input");
+  // Editing the list changes what is confirmed.
+  page.el("capture-site-scope-values").value = "acme, partner";
+  page.el("capture-site-scope-values").dispatch("input");
+  assert.equal(page.el("capture-site-scoped-text").textContent, "Capture for acme and partner");
   assert.equal(page.el("capture-site-save").disabled, false);
-  assert.match(page.el("capture-site-preview").textContent, /This page: will be captured/);
   page.el("capture-site-scope-values").value = "";
   page.el("capture-site-scope-values").dispatch("input");
+  assert.equal(page.el("capture-site-scoped-text").textContent, "Only these workspaces or accounts");
   assert.equal(page.el("capture-site-save").disabled, true);
   page.el("capture-site-unscoped").checked = true;
   page.el("capture-site-unscoped").dispatch("input");
@@ -1403,6 +1414,20 @@ test("a shared origin with pending scope keeps Save disabled until the user choo
   page.el("capture-site-unscoped").checked = false;
   page.el("capture-site-unscoped").dispatch("input");
   assert.equal(page.el("capture-site-save").disabled, true);
+  assert.equal(updates(page).length, 0, "nothing is saved before Save");
+
+  // A tab whose URL names no tenant at that position pre-fills nothing, so
+  // the user still chooses before Save.
+  const invite = await draftReview("https://linear.app/invite/abc123", { draft: () => linearDraft(),
+    script: async () => ({ current: "/invite/{id}", links: [] }) });
+  await drafted(invite);
+  assert.equal(invite.el("capture-site-scope-values").value, "");
+  assert.equal(invite.el("capture-site-scoped").checked, false);
+  assert.equal(invite.el("capture-site-scoped-text").textContent, "Only these workspaces or accounts");
+  assert.equal(invite.el("capture-site-scope-intro").textContent,
+    "This site holds many workspaces and accounts. Choose which ones Brauser remembers.");
+  assert.equal(invite.el("capture-site-save").disabled, true);
+  assert.match(invite.el("capture-site-message").textContent, /workspaces or accounts/);
 
   // A not-shared origin shows no scope controls.
   const wiki = await draftReview();
@@ -1485,8 +1510,8 @@ test("the advanced handoff stores only the drafted adapters and shapes for 30 mi
 
 test("the advanced handoff with no valid plan keeps only checked rules", async () => {
   const { canonicalJson } = await import("../dist/capture-site-handoff.js");
-  // Pending scope left unchosen, so the review has no plan; one rule is
-  // link-only and one adapter is token-only, both unchecked by the host.
+  // The pre-filled workspace cleared, so the review has no plan; one rule
+  // is link-only and one adapter is token-only, both unchecked by the host.
   const linear = linearDraft();
   linear.adapters[0].adapter.match.push({ path: "/{workspace:name|lower}/project/{key:jira_key}" });
   linear.adapters[0].rules.push(draftRule(1, "https://linear.app/example/project/ABC-123",
@@ -1499,7 +1524,9 @@ test("the advanced handoff with no valid plan keeps only checked rules", async (
   const page = await draftReview(LINEAR_URL, { draft: () => linear,
     script: async () => ({ current: "/{slug}/issue/{key}", links: [] }) });
   await drafted(page);
-  assert.equal(page.el("capture-site-save").disabled, true, "scope is still pending");
+  page.el("capture-site-scope-values").value = "";
+  page.el("capture-site-scope-values").dispatch("input");
+  assert.equal(page.el("capture-site-save").disabled, true, "no workspace is chosen");
   page.el("capture-site-advanced").click();
   await until(() => page.state.created.length === 1, "advanced settings to open");
   const [key] = [...page.state.session.keys()].filter((name) => name.startsWith("captureSiteDraft:"));
@@ -1738,8 +1765,8 @@ test("a check_site_draft refusal at save time saves nothing", async () => {
 test("saving a pending-scope shared-origin draft with chosen scope succeeds", async () => {
   const page = await draftedSave(LINEAR_URL, { draft: () => linearDraft(), scopes: ["pending"],
     script: async () => ({ current: "/{slug}/issue/{key}", links: [] }) });
-  page.el("capture-site-scoped").checked = true;
-  page.el("capture-site-scoped").dispatch("input");
+  // One click: the tab's tenant is already chosen.
+  assert.equal(page.el("capture-site-scoped").checked, true);
   assert.equal(page.el("capture-site-scope-values").value, "acme");
   await saveCapture(page);
   const [check] = checks(page);

@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Work only in this worktree on `feat/capture-site-unknown`. Never `git stash`, push, open PRs, or spawn agents from a task. Bead statuses are not changed by this plan; the orchestrator owns `brwr-t40`, `brwr-1hj` and `brwr-gf1` closure.
-- Protocol stays **6** (`brauser_protocol::PROTOCOL_VERSION == 6`, TS `PROTOCOL_VERSION = 6 as const`). New messages are needed: no existing request carries shapes to the host or returns a draft. The drafter and draft checks are host-only by contract (protocol/adapter-templates/README.md marks `draft` cases `["rust"]`). The messages are therefore **additive within v6**, following the precedent of `start_run`/`discover_harnesses` in open access PRs 2–3. Existing requests and responses do not change shape.
+- Protocol stays **6** (`brauser_protocol::PROTOCOL_VERSION == 6`, TS `PROTOCOL_VERSION = 6 as const`). **Updated 2026-10-27:** merging `origin/main` brought #126's protocol version 7, and these messages moved onto version 7 with it; they are still additive and no existing message changed shape for them. New messages are needed: no existing request carries shapes to the host or returns a draft. The drafter and draft checks are host-only by contract (protocol/adapter-templates/README.md marks `draft` cases `["rust"]`). The messages are therefore **additive within v6**, following the precedent of `start_run`/`discover_harnesses` in open access PRs 2–3. Existing requests and responses do not change shape.
 - No new dependencies. The `adapter-templates` crate stays `serde` + `url` only (no `serde_json` outside dev-dependencies). The host parses JSON with its existing `serde_json`. No npm packages.
 - Keep the `SetupContext` and `crate::open::Opener` shapes unchanged. The new handlers take `(value, config)` like `fn get_artifact`.
 - Tests never run a real harness, `launchctl` or `/usr/bin/open`. They never touch the real HOME, `work/rauserBrowser` or other worktrees, and they never mutate the test process's environment. Host tests use `ConfigStore::for_test` and temp dirs.
@@ -60,7 +60,7 @@ DESIGN §5.1 and §12.2 step 7.6 still describe pre-v6 flows. Open access (plan 
 | Final native confirmation names the origin and repeats the counts of visited and link shapes matched | The plain-language review names the origin and shows "matches N of M visited patterns and K of L link patterns". The save is `check_site_draft` plus revision-checked `update_config` under `withConfigMutationLock` | `the review lists what will and will not be captured with the real current page`, `a revision change between draft and save refuses without rebasing` (Tasks 10–11) |
 | "The extension is untrusted, so the origin is acceptable only because the native confirmation names it" | The review heading names the origin. The host drafts only for the request's exact origin and never adds one. User-written config is trusted (§4.2), so the save carries the user's authority, as any settings save does since v6 | `draft_site_never_adds_or_changes_an_origin` (Task 8) |
 | Agent denylist applies to the origin | Removed in v6. No agent runs in this plan | — |
-| "Enabling or widening needs the native confirmation" (§7.2), "Widening a scope needs the native confirmation" (adapter-templates §6) | The review must be shown and saved explicitly, and unscoped needs its own checkbox with the statement | `a shared origin with pending scope keeps Save disabled until the user chooses` (Task 10) |
+| "Enabling or widening needs the native confirmation" (§7.2), "Widening a scope needs the native confirmation" (adapter-templates §6) | The review must be shown and saved explicitly, and unscoped needs its own checkbox with the statement | `a shared origin pre-fills this tab's tenant as Capture for <tenant> and saves with one click` (was `a shared origin with pending scope keeps Save disabled until the user chooses`; superseded 2026-10-27) (Task 10) |
 | Step 7.6 flow test "starting from the context menu on an ungranted tab" | Starting from the panel on an unknown tab with no permission request | Task 10 |
 | Step 7.6 flow test "a canceled or expired flow removing the newly granted origin but keeping it when a note was taken there meanwhile" | Cancel/expiry saves nothing and leaves notes untouched; an expired advanced-editor handoff is deleted | Tasks 10, 12 |
 
@@ -74,6 +74,16 @@ The leading-literal rule stays as it is (adapter-templates.md §10.4). On `https
 - `notion_workspace_pages_are_refused_without_a_route_word`: the Notion form is grouped and then refused with that reason.
 
 DESIGN §5.1 (the `brwr-gf1` paragraph) and §12.2 step 7.6 are updated in Task 15. No checker is weakened. This plan does not close the bead.
+
+**Revisited 2026-10-27, after merging #126.** #126 made a required path capture a `scope` key restricts count as an anchor in both engines (adapter-templates.md §4.1, §6), for any shared origin with a tenant capture. The drafter's Keep step and `check_draft_rules` now use that rule rather than a drafter-only tenant/leading-literal rule: the anchor before a drafted rule's first identifier is a literal or a scope-restricted capture, which on a shared origin is the tenant (the pending stand-in or a copied scope). Fixed-shape captures and plain alternations still do not anchor a draft. Notion workspace pages can therefore be drafted safely, and are: `/acme/Release-Plan-<hex32>` and `/acme/<hex32>` become one `notion.page` rule, `/{workspace:name|lower}/{hex:hex(32)@tail}`, recorded only for the workspaces the review scopes. Such a rule is `scope_anchored`, so `resolve_scope_choice` refuses `unscoped` for it (`draft_scope_choice`), since unscoped would leave it with no anchor, and the panel says so before the save. A workspace-less `/<hex32>` page is still not drafted. The named tests became `notion_workspace_pages_draft_behind_the_scoped_workspace` (structural), `notion_workspace_pages_are_anchored_by_the_scoped_tenant` (draft.rs) and the `draft_rules`/`validate.drafted.*` vectors.
+
+## Superseded step: scope pending until the user chooses (2026-10-27)
+
+John decided on 2026-10-27: "make adapter creation as easy as possible and do the work on our side", and tenants are pre-filled from the current tab's URL and shown as "Capture for <tenant>" for the user to confirm, not typed in an inline prompt. This replaces the step "scope pending, Enable disabled until the user chooses" (DESIGN §5.1, §12.2 step 7.6) for unknown-site drafts on shared origins with a tenant position (Linear, Notion, GitHub and any catalog shared origin with one):
+
+- The panel reads the tenant from the real page URL at the host's tenant position (`tenantPrefill`; on GitHub it also requires #126's `githubOwnerFromUrl` to agree, which rules out GitHub's own routes), pre-fills the list and checks "Capture for <tenant>". Save is the one-click confirmation; the review adds "Records pages only for: <tenants>."
+- The list stays editable, the every-account statement stays the alternative (except for a `scope_anchored` rule), and every check is unchanged: `check_site_draft` still judges the scope choice, and the scope still never enters the checked table.
+- When the URL names no tenant at that position, nothing is pre-filled and Save stays disabled until the user chooses, as before.
 
 ## Contract decision: scope, unscoped and title are panel-owned overlays applied after the check
 
@@ -101,7 +111,7 @@ These are the six failure modes most likely to slip through, each pinned by a na
 
 1. **Planted links steering the draft wider.** Pinned by the nine `planted_*` tests and `link_only_alternative_never_widens_visited_rule` (Tasks 4, 6).
 2. **A dropped rule surviving into the save.** The panel's selection is re-checked against the then-current config before `update_config`. Pinned by `a check_site_draft refusal at save time saves nothing` (Task 11) and `check_site_draft_rejects_drafted_rule_that_now_overlaps` (Task 8).
-3. **Pending scope saved as unscoped or as an empty scope.** Pinned by `pending scope blocks the plan until scope or unscoped is chosen` (Task 9) and `a shared origin with pending scope keeps Save disabled until the user chooses` (Task 10).
+3. **Pending scope saved as unscoped or as an empty scope.** Pinned by `pending scope blocks the plan until scope or unscoped is chosen` (Task 9) and `a shared origin pre-fills this tab's tenant as Capture for <tenant> and saves with one click` (was `a shared origin with pending scope keeps Save disabled until the user chooses`; superseded 2026-10-27) (Task 10).
 4. **Raw page data reaching the host.** Pinned by `the draft request carries shapes and origin only` (Task 9) and `draft_site_refuses_invalid_shapes_and_raw_urls` (Task 8).
 5. **Non-deterministic or colliding IDs.** Pinned by `draft_is_deterministic_for_permuted_input` and `taken_types_get_numeric_suffix_and_ids_never_collide` (Task 5), and `draft_site_counts_recorded_contract_types_as_taken` (Task 8).
 6. **Panel-owned overlays tripping, or bypassing, the forbidden-key check.** A chosen scope or a title entry must not turn a valid save into a `draft_forbidden_key` refusal, and an overlay left inside a checked table must still fail closed. Pinned by `saving a pending-scope shared-origin draft with chosen scope succeeds` and `a title entry does not trip draft_forbidden_key at save` (Task 11), `check_site_draft_accepts_pending_scope_with_chosen_scope` and `check_site_draft_still_refuses_a_table_carrying_scope_or_title` (Task 8).
@@ -518,7 +528,7 @@ Read DESIGN.md §5.7 and `panel.css` first.
   - `dropped rules and safety probes are listed in plain words`
   - `canceling, closing or switching tabs discards the draft and its link shapes and saves nothing`
   - `a page that navigated before links were read cancels the draft without calling draft_site`
-  - `a shared origin with pending scope keeps Save disabled until the user chooses`
+  - `a shared origin pre-fills this tab's tenant as Capture for <tenant> and saves with one click` (was `a shared origin with pending scope keeps Save disabled until the user chooses`; superseded 2026-10-27)
   - `an empty draft explains why and offers advanced settings`
   - `the tab title is shown only in the review and never sent to the drafter`
   - `an older host without draft_site asks for a host rebuild`

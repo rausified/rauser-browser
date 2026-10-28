@@ -267,7 +267,9 @@ the current config and answers `conflict` when it differs; the extension
 then saves with the usual revision-checked `update_config`.
 `site_draft_checked` returns one `RuleVerdictView` (`kept`, `dropped`, or
 `warned`, with the draft check code) per rule, one `ScopeVerdictView` per
-adapter, and the preview. A version 7 host built before these messages
+adapter, and the preview. A scope verdict refuses `"unscoped"` as `draft_scope_choice`
+for an adapter with a rule whose only anchor is its scoped tenant
+(adapter-templates.md §10.4). A version 7 host built before these messages
 answers `invalid_request` for the unknown types, and the panel then asks for
 a host rebuild; a version 6 host refuses every version 7 request as
 `unsupported_protocol_version`. The host enforces every bound above at runtime.

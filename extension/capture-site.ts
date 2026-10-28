@@ -15,7 +15,7 @@ import {
   MAX_SHAPE_COUNT, MAX_SITE_SHAPES, httpOrigin, isUrlShape, type SampledShape, type SitePatterns,
 } from "./site-patterns.js";
 import {
-  linkedToPresentContainers, orderContainedFirst, parseGitHubOrganizations, parseTenantList, starterKind,
+  githubOwnerFromUrl, linkedToPresentContainers, orderContainedFirst, parseGitHubOrganizations, parseTenantList, starterKind,
   starterOffers, type StarterOffer,
 } from "./starter-adapters.js";
 
@@ -213,16 +213,45 @@ export function draftRequest(origin: string, patterns: SitePatterns, samples: re
  * only the position; the value never comes from the host. */
 export function tenantPrefill(url: string, tenant: DraftTenantView | null): string {
   if (!tenant) return "";
+  let parsed: URL;
   let segments: string[] | null;
   try {
-    segments = urlSegments(new URL(url).pathname);
+    parsed = new URL(url);
+    segments = urlSegments(parsed.pathname);
   } catch {
     return "";
   }
   const value = segments?.[tenant.segment];
   const canonical = value === undefined ? null : canonicalCapture("name|lower", value);
   // A sign-in, invite or sharing route at the tenant position is no tenant.
-  return canonical === null || isBlockedRouteWord(canonical) ? "" : canonical;
+  if (canonical === null || isBlockedRouteWord(canonical)) return "";
+  // On GitHub the starter's owner reading (#126) also knows GitHub's own
+  // routes (settings, notifications, …), which are never an organization.
+  if (starterKind(parsed.origin) === "github" && githubOwnerFromUrl(url) !== canonical) return "";
+  return canonical;
+}
+
+const IDENTIFIER_TYPES = new Set(["int", "hex", "uuid", "jira_key", "token"]);
+
+/** Whether a drafted rule's only anchor before its first identifier capture
+ * is the shared-origin tenant: its path has no literal there. The host's
+ * check (`check_draft_rules`, adapter-templates §4.1, §10.4) is the
+ * authority and refuses such a rule unscoped; the review uses this only to
+ * say so before the save. */
+export function tenantAnchoredRule(rule: unknown): boolean {
+  if (typeof rule !== "object" || rule === null || typeof (rule as { path?: unknown }).path !== "string") return false;
+  for (const segment of (rule as { path: string }).path.split("/").slice(1)) {
+    if (!segment.startsWith("{")) {
+      if (!segment.startsWith("(")) return false;
+      continue;
+    }
+    const body = segment.slice(1, -1);
+    if (body === "_" || body === "*") continue;
+    const colon = body.indexOf(":");
+    const type = colon < 0 ? "token" : /^[a-z_]*/.exec(body.slice(colon + 1))![0];
+    if (IDENTIFIER_TYPES.has(type)) return true;
+  }
+  return true;
 }
 
 /** The review's choices, one entry per drafted adapter (and per rule in
@@ -351,6 +380,9 @@ export function planDraftedSite(
     let tenantValue: string | null = null;
     if (view.scope === "pending") {
       if (choice === "unscoped") {
+        if (rules.some((entry) => tenantAnchoredRule(match[entry.rule]))) {
+          return fail(`Brauser recognizes ${renamed} pages by their workspace or account, so it cannot record every account. Capture for the workspaces or accounts you list instead.`);
+        }
         sent = "unscoped";
         overlay.unscoped = "acknowledged";
       } else {

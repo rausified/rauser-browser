@@ -8,7 +8,7 @@ import {
   type CaptureMode, type CapturePlan, type DraftPlan, type DraftRequest, type DraftSelection,
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
-import { githubOwnerFromUrl, starterKind } from "./starter-adapters.js";
+import { githubOwnerFromUrl, parseTenantList, starterKind } from "./starter-adapters.js";
 import { SitePatternPanel, collectPagePatterns } from "./site-pattern-panel.js";
 import { draftHandoff, handoffKey, storeDraftHandoff } from "./capture-site-handoff.js";
 
@@ -32,6 +32,9 @@ interface CaptureActions {
 const STARTER_SOURCE = "Development starter draft · live-tool certification is still pending.";
 const DRAFT_SOURCE = "Drafted by Brauser from this site's page patterns. No agent and no page content were used; review each kind of page before saving.";
 const STALE = "Settings changed. Cancel and open Capture Site again to review the current settings.";
+const SCOPE_INTRO = "This site holds many workspaces and accounts. Choose which ones Brauser remembers.";
+const SCOPED_TEXT = "Only these workspaces or accounts";
+const MAX_TENANTS = 64;
 
 const UNCHECKED_LABELS: Record<UncheckedReason, string> = {
   link_only: "seen only in links on this page",
@@ -163,6 +166,8 @@ export class CaptureSitePanel {
   private readonly scopeArea = element<HTMLElement>("capture-site-scope");
   private readonly scopedLabel = element<HTMLElement>("capture-site-scoped-label");
   private readonly scoped = element<HTMLInputElement>("capture-site-scoped");
+  private readonly scopedText = element<HTMLElement>("capture-site-scoped-text");
+  private readonly scopeIntro = element<HTMLElement>("capture-site-scope-intro");
   private readonly scopeValuesLabel = element<HTMLElement>("capture-site-scope-values-label");
   private readonly scopeValues = element<HTMLInputElement>("capture-site-scope-values");
   private readonly unscoped = element<HTMLInputElement>("capture-site-unscoped");
@@ -348,6 +353,8 @@ export class CaptureSitePanel {
     this.scoped.checked = false;
     this.unscoped.checked = false;
     this.scopeValues.value = "";
+    this.scopedText.textContent = SCOPED_TEXT;
+    this.scopeIntro.textContent = SCOPE_INTRO;
     this.titleArea.hidden = true;
     this.titleCurrent.textContent = "";
     this.titleSuffix.value = "";
@@ -440,10 +447,17 @@ export class CaptureSitePanel {
     const unscopedOnly = draft.adapters.some((view) => view.scope === "unscoped_only");
     this.scopeArea.hidden = !pending && !unscopedOnly;
     for (const node of [this.scopedLabel, this.scoped, this.scopeValuesLabel, this.scopeValues]) node.hidden = !pending;
-    this.scoped.checked = false;
+    // The tenant is read from this tab's own URL at the host's position and
+    // pre-filled as "Capture for <tenant>", already chosen: Save is the
+    // one-click confirmation, and the list stays editable. With no tenant in
+    // the URL the user still chooses (John, 2026-10-27; DESIGN §5.1).
+    const prefill = pending ? tenantPrefill(target.url, pending.tenant) : "";
+    this.scopeValues.value = prefill;
+    this.scoped.checked = prefill !== "";
     this.unscoped.checked = false;
-    // The prefill is read from this tab's own URL at the host's position.
-    this.scopeValues.value = pending ? tenantPrefill(target.url, pending.tenant) : "";
+    this.scopeIntro.textContent = prefill
+      ? `This site holds many workspaces and accounts. Brauser filled in ${prefill} from this page; confirm it with Save, or change the list.`
+      : SCOPE_INTRO;
     this.titleArea.hidden = draft.adapters.length === 0;
     this.titleCurrent.textContent = `This tab's title: ${target.title ?? ""}`;
     this.titleSuffix.value = "";
@@ -559,6 +573,8 @@ export class CaptureSitePanel {
       const name = view.type.value.trim() || String(draft.adapters[a]!.adapter.type);
       view.heading.textContent = `${kept.length ? "Brauser will remember" : "Not remembered"}: ${name} — pages like ${shown.join(" or ")}`;
     }
+    const tenants = parseTenantList(this.scopeValues.value, MAX_TENANTS);
+    this.scopedText.textContent = tenants ? `Capture for ${joinRecordedTypes(tenants)}` : SCOPED_TEXT;
     this.preview.replaceChildren();
     const result = planDraftedSite(config, draft, selection, target.url, target.title ?? "");
     this.draftPlan = result.ok ? result.plan : null;
@@ -570,6 +586,8 @@ export class CaptureSitePanel {
       const plan = result.plan;
       const { visited, visitedTotal, links, linksTotal } = plan.counts;
       child(this.preview, "p", "Recognized pages contribute titles, opens and measured focused/background time to your local worklog.");
+      const scoped = selection.scope.some((choice) => choice !== null && choice !== "unscoped");
+      if (scoped && tenants) child(this.preview, "p", `Records pages only for: ${tenants.join(", ")}.`);
       child(this.preview, "p", `Matches ${visited} of ${visitedTotal} visited patterns and ${links} of ${linksTotal} link patterns.`);
       child(this.preview, "p", `This page: ${plan.current.result.match ? "will be captured" : "will not be captured"} — ${plan.current.url}`);
       const examples = child(this.preview, "ul", "", "plain-list");
