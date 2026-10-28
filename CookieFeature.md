@@ -485,3 +485,25 @@ Two regressions cover fifteen new-write/recovery scenarios, including restart,
 a cut inside a multibyte title, refused changed text and edited tails, retained
 unrelated rows and duplicate retries. All required local checks pass; the
 macOS browser smoke runner cannot run on this Linux VM (`brwr-2za`).
+
+
+## 2026-10-28 — Review recovered note copies one at a time
+
+Returning to unsaved notes from several pages now presents a separate recovery
+card for each copy instead of combining everything into one text box. Each
+card shows the page address, why the text was kept, a read-only preview, and
+its own Copy and Discard buttons. Copy preserves exactly that note's text,
+including whitespace; an empty edit is explicitly described as clearing the
+note and copies an empty string. Clipboard errors stay beside the relevant
+copy so the person can retry without losing it.
+
+Discard selects the copy's immutable snapshot ID and removes only that copy.
+This also works for conflicts kept only in memory when local storage is
+unavailable. Other recovered notes, current typing and newer snapshots from
+another panel remain intact, and a storage refusal leaves the chosen copy
+visible and retryable. Recovery still never fills the editor or sends a save
+automatically. Four failing-first built-panel tests and two additional editor
+regressions cover the interaction; the existing teardown, conflict and
+acknowledgement tests now exercise the individual controls. The smoke check
+uses the new card selector, with the same three expected folder-picker
+responses; a real Chrome/macOS pass remains separate verification.

@@ -158,9 +158,7 @@
         <p id="note-recovery-warning" class="warning" role="status" hidden></p>
         <div id="note-conflict" class="setup-warning" hidden>
           <p>Recovered note text. Check the current note before copying it back:</p>
-          <textarea id="note-unsaved" rows="4" readonly></textarea>
-          <button id="copy-unsaved" type="button" class="secondary">Copy</button>
-          <button id="discard-unsaved" type="button" class="secondary">Discard recovery copies</button>
+          <ul id="note-recovery-list" class="note-recovery-list" aria-label="Recovered note copies"></ul>
         </div>
         <div id="older-notes" hidden>
           <h3>Older notes on this artifact</h3>

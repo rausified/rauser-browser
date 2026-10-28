@@ -803,3 +803,15 @@ dialog count; actual Chrome link opening still needs macOS verification.
   Ready activity now drains before standalone retries, while the failed marker
   retains its original ID, snapshot and backoff. The failing-first worker
   regression covers both a false acknowledgement and an older-host error.
+
+Individual recovered-note review (`brwr-kws`) is covered by the built-panel
+`individual recovery` cases and the editor's immutable-ID and memory-only
+conflict tests. Fixtures include several pages, several copies at one address,
+empty edits, exact whitespace and hostile text, stale controls, newer snapshots
+from another panel, live typing, clipboard refusal/retry and blocked local
+discard/retry. They assert review never sends a save or fills the editor.
+Run `npm run build:extension` first, then `node extension/tests/note-editor.test.mjs`
+and `node extension/tests/panel.test.mjs` separately for detailed case counts.
+The macOS smoke's refused-save check reads the first recovery-card textarea;
+its steps and expected dialog count are unchanged.
+Actual Chrome layout and clipboard behavior still need macOS verification.

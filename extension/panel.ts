@@ -20,8 +20,8 @@ import { SETUP_WARNING } from "./agent.js";
 import { summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards, runsMayExist } from "./run-card.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
-import { NoteEditor, type UnsavedText } from "./note-editor.js";
-import { NoteRecovery } from "./note-recovery.js";
+import { NoteEditor } from "./note-editor.js";
+import { NoteRecovery, type RecoveryText } from "./note-recovery.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
 } from "./artifact-refresh.js";
@@ -64,11 +64,8 @@ const noteStatus = element<HTMLSpanElement>("note-status");
 const noteEditor = element<HTMLDivElement>("note-editor");
 const noteBody = element<HTMLTextAreaElement>("note-body");
 const noteConflict = element<HTMLDivElement>("note-conflict");
-const noteConflictMessage = noteConflict.querySelector("p")!;
-const noteUnsaved = element<HTMLTextAreaElement>("note-unsaved");
-const discardUnsavedButton = element<HTMLButtonElement>("discard-unsaved");
+const noteRecoveryList = element<HTMLUListElement>("note-recovery-list");
 const noteRecoveryWarning = element<HTMLParagraphElement>("note-recovery-warning");
-const copyUnsavedButton = element<HTMLButtonElement>("copy-unsaved");
 const artifactStatus = element<HTMLParagraphElement>("artifact-status");
 const captureExplanation = element<HTMLDivElement>("capture-explanation");
 const captureExplanationText = element<HTMLParagraphElement>("capture-explanation-text");
@@ -1075,14 +1072,49 @@ async function showStoredNotice(dropOthers: boolean): Promise<void> {
 
 // --- Page area and note (§5.3, §5.7) ---------------------------------------
 
-function showUnsavedText(entries: readonly UnsavedText[]): void {
-  const only = entries.length === 1 ? entries[0]! : null;
-  noteConflictMessage.textContent = only
-    ? `${only.reason} Copy your text for ${only.url} back in below:`
-    : "Some note text could not be saved. Copy it back in below:";
-  noteUnsaved.value = only
-    ? only.text
-    : entries.map((entry) => `${entry.url}\n${entry.reason}\n\n${entry.text}`).join("\n\n");
+function showUnsavedText(entries: readonly RecoveryText[]): void {
+  noteRecoveryList.replaceChildren();
+  for (const entry of entries) {
+    const row = document.createElement("li");
+    const page = document.createElement("p");
+    page.className = "page-url";
+    page.textContent = entry.url;
+    const reason = document.createElement("p");
+    reason.textContent = entry.reason;
+    const text = document.createElement("textarea");
+    text.rows = 4;
+    text.readOnly = true;
+    text.setAttribute("aria-label", `Recovered note text for ${entry.url}`);
+    text.value = entry.text;
+    row.append(page, reason, text);
+    if (entry.text === "") {
+      const empty = document.createElement("p");
+      empty.textContent = "Empty edit: this copy would clear the note.";
+      row.append(empty);
+    }
+    const status = document.createElement("p");
+    status.setAttribute("role", "status");
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "secondary compact";
+    copy.textContent = "Copy";
+    copy.setAttribute("aria-label", `Copy recovered note for ${entry.url}`);
+    copy.addEventListener("click", () => {
+      void navigator.clipboard.writeText(entry.text).then(() => {
+        status.textContent = "Copied";
+      }).catch((error: unknown) => {
+        status.textContent = `Could not copy: ${describe(error)}`;
+      });
+    });
+    const discard = document.createElement("button");
+    discard.type = "button";
+    discard.className = "secondary compact";
+    discard.textContent = "Discard";
+    discard.setAttribute("aria-label", `Discard recovered note for ${entry.url}`);
+    discard.addEventListener("click", () => notes.discardUnsaved(entry.id));
+    row.append(copy, discard, status);
+    noteRecoveryList.append(row);
+  }
   noteConflict.hidden = entries.length === 0;
 }
 
@@ -1128,12 +1160,6 @@ captureSite = new CaptureSitePanel(session, {
   },
   openSettings,
 });
-
-function copyUnsavedText(): void {
-  void navigator.clipboard.writeText(noteUnsaved.value).catch((error: unknown) => {
-    showNoteStatus(`Could not copy: ${describe(error)}`, true);
-  });
-}
 
 function localDate(date: Date): string {
   const year = date.getFullYear();
@@ -1427,8 +1453,6 @@ discardButton.addEventListener("click", () => void discardPendingVisits());
 dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
-copyUnsavedButton.addEventListener("click", copyUnsavedText);
-discardUnsavedButton.addEventListener("click", () => notes.discardUnsaved());
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
