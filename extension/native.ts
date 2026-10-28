@@ -2,6 +2,7 @@ import type {
   ErrorCode, PROTOCOL_VERSION as GENERATED_PROTOCOL_VERSION, Request, Response,
 } from "../protocol/ts/generated.js";
 import { NATIVE_HOST_NAME } from "./brand.js";
+import { diag } from "./diag.js";
 import { isResponseShape } from "./protocol-shape.js";
 
 // A value import would pull the generated module out of the flat dist layout;
@@ -28,6 +29,34 @@ interface Pending {
   resolve(response: Response): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+// Chrome's lastError text when no native host manifest is installed.
+const HOST_NOT_FOUND = /native messaging host not found/i;
+
+/**
+ * Log one settled native request: its request_id (the join key with the
+ * host's host.jsonl and service.jsonl lines), kind, elapsed time, and outcome.
+ * Success is debug detail; an error answer is info; a timeout, a disconnect,
+ * or an unusable reply is warn.
+ */
+function logRequest(request: Request, started: number, settled: Response | Error): void {
+  const fields: Record<string, unknown> = {
+    request_id: request.request_id,
+    kind: request.type,
+    elapsed_ms: Math.round(performance.now() - started),
+  };
+  const runId = (request as { run_id?: unknown }).run_id ??
+    (settled instanceof Error ? undefined : (settled as { run_id?: unknown }).run_id);
+  if (typeof runId === "string") fields.run_id = runId;
+  if (settled instanceof Error) {
+    const code = settled instanceof HostError ? settled.code : "post_failed";
+    diag.warn("native request failed", { ...fields, outcome: code, error: settled.message });
+  } else if (settled.type === "error") {
+    diag.info("native request failed", { ...fields, outcome: settled.code, error: settled.message });
+  } else {
+    diag.debug("native request", { ...fields, outcome: "ok" });
+  }
 }
 
 /** A version mismatch is the one error a host out of step with this build
@@ -154,6 +183,7 @@ export class HostClient {
     port.onDisconnect.addListener(() => {
       if (this.port === port) this.onDisconnect();
     });
+    diag.debug("native host started", { restart: this.started });
     if (this.started) for (const listener of this.restartListeners) listener();
     this.started = true;
     return port;
@@ -163,7 +193,16 @@ export class HostClient {
     if (this.disposed) {
       return Promise.reject(new HostError("disconnected", "Native host is not connected"));
     }
-    return new Promise<Response>((resolve, reject) => {
+    const started = performance.now();
+    return new Promise<Response>((settleOk, settleError) => {
+      const resolve = (response: Response): void => {
+        logRequest(request, started, response);
+        settleOk(response);
+      };
+      const reject = (error: Error): void => {
+        logRequest(request, started, error);
+        settleError(error);
+      };
       const timer = setTimeout(() => {
         this.pending.delete(request.request_id);
         reject(new HostError("timeout", "Native host did not respond in time"));
@@ -193,6 +232,9 @@ export class HostClient {
     if (record.request_id === "") {
       if (record.type === "error" && record.protocol_version === PROTOCOL_VERSION &&
           isResponseShape(record)) {
+        diag.warn("native host rejected an unreadable frame", {
+          outcome: record.code as string, error: record.message as string, pending: this.pending.size,
+        });
         this.rejectAll(new HostError(record.code as ErrorCode, record.message as string));
       }
       return;
@@ -218,6 +260,10 @@ export class HostClient {
     this.reachable = this.answered;
     this.port = null;
     const detail = chrome.runtime.lastError?.message ?? "Native host disconnected";
+    const fields = { answered: this.answered, pending: this.pending.size, error: detail };
+    if (!this.answered && HOST_NOT_FOUND.test(detail)) diag.warn("native host not found", fields);
+    else if (this.pending.size > 0 || !this.answered) diag.warn("native host disconnected", fields);
+    else diag.debug("native host exited", fields);
     this.rejectAll(new HostError("disconnected", detail));
     for (const listener of this.exitListeners) listener();
     this.notify();

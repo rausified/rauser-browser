@@ -21,7 +21,8 @@ import {
   type WorkerRequest,
   type WorkerStatus,
 } from "./model.js";
-import { APP_NAME, BINARY_NAME, storageKey } from "./brand.js";
+import { BINARY_NAME, storageKey } from "./brand.js";
+import { diag, initDiag } from "./diag.js";
 import { evaluate, type EvaluateResult } from "./adapter-templates.js";
 import { withLatestHostState } from "./coordination.js";
 import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
@@ -37,6 +38,9 @@ import {
   recordNavigation, removeTab, replaceTab, setIdle, settleActivity,
   type ActivityState,
 } from "./activity.js";
+
+// First, so errors in the rest of the worker are logged.
+initDiag("worker");
 
 const QUEUE_KEY = storageKey("queue_v1");
 const POLICY_KEY = POLICY_STORAGE_KEY;
@@ -111,7 +115,7 @@ async function purgeSitePatterns(lease: PolicyLease | null): Promise<void> {
 }
 
 function patternFailure(): void {
-  console.warn(`${APP_NAME} site patterns unavailable`);
+  diag.warn("site patterns unavailable");
 }
 
 function activitySessionStorage(): ChromeStorageArea {
@@ -1102,6 +1106,11 @@ async function deliverPending(host: HostClient): Promise<string | null> {
       if (response.batch_id !== batch.batch_id) {
         throw new Error("Host acknowledged a different capture batch");
       }
+      diag.debug("capture batch delivered", {
+        batch_id: batch.batch_id, events: batch.items.length,
+        retryable: response.results.filter((result) => result.outcome === "retryable").length,
+        overflow_recorded: response.overflow_recorded,
+      });
       await serialize(async () => {
         await ackBatch(batch, response.results, response.overflow_recorded);
         await chrome.storage.local.set({ [DELIVERED_KEY]: await readDeliveredBatches() + 1 });
@@ -1126,6 +1135,8 @@ async function runSync(): Promise<void> {
   // One host process per sync; it exits when this port closes.
   const host = new HostClient();
   let failure: string | null = null;
+  const started = performance.now();
+  diag.info("host sync started", { renew: needs.renew, deliver: needs.deliver });
   try {
     // A failed renewal still leaves the current lease, if it has not
     // expired, good enough to deliver under.
@@ -1136,6 +1147,9 @@ async function runSync(): Promise<void> {
     failure ??= describe(error);
   } finally {
     host.disconnect();
+    const fields = { outcome: failure === null ? "ok" : "failed", elapsed_ms: Math.round(performance.now() - started) };
+    if (failure === null) diag.info("host sync finished", fields);
+    else diag.warn("host sync finished", { ...fields, error: failure });
     await chrome.storage.local.set({ [HOST_ERROR_KEY]: failure });
   }
 }
@@ -1145,7 +1159,7 @@ let syncing: Promise<void> | null = null;
 /** Start a sync, or join the one already running. Never rejects. */
 function syncWithHost(): Promise<void> {
   syncing ??= runSync()
-    .catch((error: unknown) => console.warn(`${APP_NAME} host sync failed:`, describe(error)))
+    .catch((error: unknown) => diag.warn("host sync failed", { error }))
     .finally(() => { syncing = null; });
   return syncing;
 }
@@ -1267,9 +1281,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const before = message.kind === "sync_now" ? syncWithHost() : Promise.resolve();
   void before.then(() => serialize(() => handleMessage(message)))
     .then((value) => sendResponse({ ok: true, value, error: null } satisfies WorkerReply<unknown>))
-    .catch((error: unknown) =>
-      sendResponse({ ok: false, value: null, error: describe(error) } satisfies WorkerReply<null>),
-    );
+    .catch((error: unknown) => {
+      diag.info("worker request failed", { kind: message.kind, error });
+      sendResponse({ ok: false, value: null, error: describe(error) } satisfies WorkerReply<null>);
+    });
   return true;
 });
 
@@ -1296,13 +1311,13 @@ async function captureAndDeliver(details: ChromeNavigationDetails, useCurrentTit
 
 const onCommitted = (details: ChromeNavigationDetails): void => {
   void captureAndDeliver(details, false).catch((error: unknown) => {
-    console.warn(`${APP_NAME} navigation capture paused:`, describe(error));
+    diag.warn("navigation capture paused", { error });
   });
 };
 
 const onHistoryStateUpdated = (details: ChromeNavigationDetails): void => {
   void captureAndDeliver(details, true).catch((error: unknown) => {
-    console.warn(`${APP_NAME} SPA capture paused:`, describe(error));
+    diag.warn("SPA capture paused", { error });
   });
 };
 
@@ -1316,7 +1331,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   const title = changeInfo.title;
   if (title === undefined) return;
   void serialize(() => patchTitle(tabId, title)).catch((error: unknown) => {
-    console.warn(`${APP_NAME} title update skipped:`, describe(error));
+    diag.warn("title update skipped", { error });
   });
 });
 
@@ -1325,7 +1340,7 @@ chrome.tabs.onActivated.addListener((info) => {
     const activity = await readActivity();
     activateTab(activity, info.tabId, info.windowId, Date.now(), () => crypto.randomUUID());
     await writeActivity(activity);
-  }).catch((error: unknown) => console.warn(`${APP_NAME} tab attention update skipped:`, describe(error)));
+  }).catch((error: unknown) => diag.warn("tab attention update skipped", { error }));
 });
 
 chrome.tabs.onRemoved?.addListener((tabId) => {
@@ -1333,7 +1348,7 @@ chrome.tabs.onRemoved?.addListener((tabId) => {
     const activity = await readActivity();
     removeTab(activity, tabId, Date.now(), () => crypto.randomUUID());
     await writeActivity(activity);
-  }).catch((error: unknown) => console.warn(`${APP_NAME} tab removal update skipped:`, describe(error)));
+  }).catch((error: unknown) => diag.warn("tab removal update skipped", { error }));
 });
 
 const moveActivityTab = (added: number, removed: number): void => {
@@ -1341,7 +1356,7 @@ const moveActivityTab = (added: number, removed: number): void => {
     const activity = await readActivity();
     replaceTab(activity, added, removed);
     await writeActivity(activity);
-  }).catch((error: unknown) => console.warn(`${APP_NAME} discarded-tab update skipped:`, describe(error)));
+  }).catch((error: unknown) => diag.warn("discarded-tab update skipped", { error }));
 };
 chrome.tabs.onReplaced?.addListener(moveActivityTab);
 chrome.webNavigation.onTabReplaced?.addListener((details) =>
@@ -1352,7 +1367,7 @@ chrome.webNavigation.onCreatedNavigationTarget?.addListener((details) => {
     const activity = await readActivity();
     createdNavigationTarget(activity, details.sourceTabId, details.tabId);
     await writeActivity(activity);
-  }).catch((error: unknown) => console.warn(`${APP_NAME} trail source skipped:`, describe(error)));
+  }).catch((error: unknown) => diag.warn("trail source skipped", { error }));
 });
 
 chrome.windows?.onFocusChanged.addListener((windowId) => {
@@ -1361,7 +1376,7 @@ chrome.windows?.onFocusChanged.addListener((windowId) => {
     focusWindow(activity, windowId === chrome.windows?.WINDOW_ID_NONE ? null : windowId,
       Date.now(), () => crypto.randomUUID());
     await writeActivity(activity);
-  }).catch((error: unknown) => console.warn(`${APP_NAME} window attention update skipped:`, describe(error)));
+  }).catch((error: unknown) => diag.warn("window attention update skipped", { error }));
 });
 
 chrome.idle?.setDetectionInterval(300);
@@ -1370,14 +1385,14 @@ chrome.idle?.onStateChanged.addListener((state) => {
     const activity = await readActivity();
     setIdle(activity, state !== "active", Date.now(), () => crypto.randomUUID());
     await writeActivity(activity);
-  }).catch((error: unknown) => console.warn(`${APP_NAME} idle update skipped:`, describe(error)));
+  }).catch((error: unknown) => diag.warn("idle update skipped", { error }));
 });
 
 // Capture Site's advanced-editor handoffs expire after 30 minutes. Settings
 // deletes the one it opens; worker start and maintenance delete the rest.
 function pruneCaptureSiteDrafts(): void {
   void pruneDraftHandoffs(chrome.storage.session, Date.now())
-    .catch((error: unknown) => console.warn(`${APP_NAME} capture-site draft cleanup skipped:`, describe(error)));
+    .catch((error: unknown) => diag.warn("capture-site draft cleanup skipped", { error }));
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -1448,16 +1463,16 @@ export function queueActivityMapRebuild(): Promise<void> {
 // Queue behind this pass so a navigation waking the worker cannot race a
 // missing-map rebuild. Chrome APIs that older test doubles omit simply skip it.
 void queueActivityMapRebuild().catch((error: unknown) =>
-  console.warn(`${APP_NAME} activity-map rebuild skipped:`, describe(error)));
+  diag.warn("activity-map rebuild skipped", { error }));
 
 // Registering the alarm again would restart its period on every wake.
 void chrome.alarms.get(SYNC_ALARM).then(async (existing) => {
   if (!existing) await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_PERIOD_MINUTES });
 })
-  .catch((error: unknown) => console.warn(`${APP_NAME} sync alarm setup failed:`, describe(error)));
+  .catch((error: unknown) => diag.warn("sync alarm setup failed", { error }));
 
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error: unknown) => {
-  console.warn(`${APP_NAME} side panel setup failed:`, describe(error));
+  diag.warn("side panel setup failed", { error });
 });
 
 // --- Summarize & log from the shortcut and the context menu ----------------
@@ -1517,9 +1532,9 @@ function summarizeFromGesture(tab: ChromeTab | undefined): void {
   // Chrome opens the side panel only inside the user's gesture, which ends at
   // the first await, so this call comes before any.
   void chrome.sidePanel.open({ tabId }).catch((error: unknown) =>
-    console.warn(`${APP_NAME} could not open the side panel:`, describe(error)));
+    diag.warn("could not open the side panel", { error }));
   void summaryNotice(tab, tabId).then(publishNotice).catch((error: unknown) =>
-    console.warn(`${APP_NAME} summary notice failed:`, describe(error)));
+    diag.warn("summary notice failed", { error }));
 }
 
 chrome.commands.onCommand.addListener((command, tab) => {
@@ -1532,7 +1547,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 function runMigration(): Promise<void> {
   return serialize(migratePendingRemovals).catch((error: unknown) =>
-    console.warn(`${APP_NAME} pending site removal migration failed:`, describe(error)));
+    diag.warn("pending site removal migration failed", { error }));
 }
 
 // Earlier builds added a "note" page context-menu item and stored per-origin
@@ -1545,12 +1560,12 @@ chrome.runtime.onInstalled.addListener((details) => {
       { id: SUMMARIZE_MENU_ID, title: SUMMARIZE_MENU_TITLE, contexts: ["page", "selection"] },
       () => {
         const error = chrome.runtime.lastError;
-        if (error) console.warn(`${APP_NAME} context menu setup failed:`, error.message);
+        if (error) diag.warn("context menu setup failed", { error: error.message });
       },
     );
   });
   void chrome.storage.local.remove(LEGACY_NOTE_ORIGINS_KEY).catch((error: unknown) =>
-    console.warn(`${APP_NAME} note grant cleanup failed:`, describe(error)));
+    diag.warn("note grant cleanup failed", { error }));
   if (details?.reason === "update") void runMigration();
 });
 

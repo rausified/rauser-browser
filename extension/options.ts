@@ -18,6 +18,7 @@ import { APP_NAME } from "./brand.js";
 import { sitePatternControls } from "./site-pattern-settings.js";
 import { AdoptedStateControls } from "./adopted-state-settings.js";
 import { hostBuildText } from "./build-info.js";
+import { DIAG_STORAGE_KEY, diag, diagnosticsText, initDiag } from "./diag.js";
 import {
   SETUP_WARNING,
   agentEnvText,
@@ -55,12 +56,17 @@ import {
 import { checkReason, type DraftChecked } from "./capture-site.js";
 import { canonicalJson, takeDraftHandoff, type DraftHandoff } from "./capture-site-handoff.js";
 
+initDiag("options");
+
 const status = element<HTMLDivElement>("status");
 const buildId = element<HTMLSpanElement>("build-id");
 const hostBuild = element<HTMLSpanElement>("host-build");
 
-function showHostBuild(hostVersion: string): void {
-  hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hostVersion);
+let hostVersion: string | null = null;
+
+function showHostBuild(version: string): void {
+  hostVersion = version;
+  hostBuild.textContent = hostBuildText(buildId.textContent ?? "", version);
 }
 const folderPath = element<HTMLOutputElement>("folder-path");
 const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
@@ -1461,6 +1467,57 @@ siteOrigin.addEventListener("input", () => {
   updateControls();
 });
 session.watchPolicy(scheduleReload);
+
+// --- Diagnostics -------------------------------------------------------------
+// Local only: they never need the host, so they stay usable while it is
+// missing or the page is busy.
+const diagCount = element<HTMLParagraphElement>("diag-count");
+const copyDiagnosticsButton = element<HTMLButtonElement>("copy-diagnostics");
+const clearDiagnosticsButton = element<HTMLButtonElement>("clear-diagnostics");
+
+function diagCountText(count: number): string {
+  return count === 0 ? "No diagnostics recorded." : `${count} diagnostic ${count === 1 ? "entry" : "entries"} recorded.`;
+}
+
+async function refreshDiagnosticsCount(): Promise<void> {
+  diagCount.textContent = diagCountText((await diag.entries()).length);
+}
+
+async function copyDiagnostics(): Promise<void> {
+  copyDiagnosticsButton.disabled = true;
+  try {
+    const entries = await diag.entries();
+    const text = diagnosticsText({
+      extension_version: chrome.runtime.getManifest?.()?.version ?? "unknown",
+      build_id: buildId.textContent ?? "unknown",
+      protocol_version: PROTOCOL_VERSION,
+      ...(hostVersion === null ? {} : { host_version: hostVersion }),
+    }, entries);
+    await navigator.clipboard.writeText(text);
+    diagCount.textContent = `${diagCountText(entries.length)} Copied.`;
+  } catch (error) {
+    diagCount.textContent = `Could not copy diagnostics: ${describe(error)}`;
+  } finally {
+    copyDiagnosticsButton.disabled = false;
+  }
+}
+
+async function clearDiagnostics(): Promise<void> {
+  clearDiagnosticsButton.disabled = true;
+  try {
+    await diag.clear();
+    await refreshDiagnosticsCount();
+  } finally {
+    clearDiagnosticsButton.disabled = false;
+  }
+}
+
+copyDiagnosticsButton.addEventListener("click", () => void copyDiagnostics());
+clearDiagnosticsButton.addEventListener("click", () => void clearDiagnostics());
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && DIAG_STORAGE_KEY in changes) void refreshDiagnosticsCount();
+});
+void refreshDiagnosticsCount();
 window.addEventListener("pagehide", () => {
   if (reloadTimer !== null) clearTimeout(reloadTimer);
   session.host.disconnect();
