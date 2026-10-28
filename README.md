@@ -33,6 +33,7 @@ npm run build:extension
 npm run test:extension
 npm run test:markdown-neutralizer
 npm run test:scripts
+npm run test:queue
 ```
 
 To rehearse artifact identity changes offline, use
