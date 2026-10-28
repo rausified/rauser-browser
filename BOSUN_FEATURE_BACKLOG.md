@@ -290,13 +290,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
-- [ ] `brwr-2za` **Neutralize `$` math in daily-log titles and Why text.**
-  `safe_markdown_line` (host/src/capture.rs) still allows `$` math there.
-  Moving them to `markdown::inline` needs a second frozen renderer generation
-  so intent-journal recovery (`pre_sanitizer_entry`) still matches lines
-  journaled byte-exact in the old form. DESIGN.md §5.2 and spec §7.1 record
-  the gap. From Lane E / PR 4. New v2 intents now retain prepared bytes;
-  the second frozen generation is still needed for older hash-only intents.
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
 
@@ -410,6 +403,8 @@ shipped (see Shipped).
 - None. Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, #75) are merged, with PR 2's launchd checks left as **[human]** work, and PR 3 (`brwr-sr3`, #98) is merged with its real-harness checks left as **[human]** work; open access PR 4 (`brwr-so4`) is built on `feat/summary-outputs-pr4`, headless smoke (`brwr-t53`) included, with its Obsidian and VS Code preview check left as **[human]** work. `brwr-5yn` remains a human-only live-tool gate.
 
 ## Shipped
+
+- **Category:** Security & Privacy. **Keep daily-log titles and context inert in Markdown (2026-10-28).** Completed assigned `brwr-2za`. New visit/activity titles and Why text use the shared inline escaper so page-supplied math and code stay text. Both historical v1 renderer generations are frozen for recovery, with whole-entry hash and exact torn-byte checks; machine markers and existing rows remain unchanged. **Metrics:** Two new Rust regressions cover 15 delivery/recovery scenarios; all 54 capture tests, 933 workspace Rust outcomes, 821 scripted-dialogs outcomes (plus one ignored doctest), 15 extension files, two script files and 10,696 Markdown renderings pass.
 
 - **Category:** User Experience. **Explain why the current page is outside capture (2026-10-28).** Completed assigned `brwr-vny`. The panel distinguishes host and browser-local pauses, pending site removals, workspace/account scope exclusions and unmatched page rules, with settings or the existing Capture Site review as the next action. It reuses the revision-cached policy compiler and ordered evaluator, follows navigation and policy/status changes, clears on unreadable/private tabs, and never inspects links or changes capture or note identity. **Metrics:** 14 new composed-panel cases; all 158 panel cases and 15 extension files pass; 956 workspace Rust outcomes (43 explicit IPC skips), scripted-dialogs suite, full required/README gates and 10,696 inert Markdown renderings green.
 
@@ -1218,4 +1213,41 @@ stop product work, and no history reset or production IPC change is called for.
 - The required single commit attempt failed at `git add` because
   `.git/index.lock` is on a read-only filesystem. No retry or remote operation
   was attempted. The green working tree, closed/exported queue and excluded
+  `.bosun_commit_msg` are ready for the driver to commit as Cookie.
+
+### Cycle 14 — Inert daily-log text with historical recovery (2026-10-28)
+
+- Health started clean: no quarantine notice and no incomplete working tree.
+  The required baseline passed before Cookie claimed the first ready assigned
+  bead, `brwr-2za`. It is now closed and exported; continue assigned work with
+  `bd ready --label assigned` next cycle (`brwr-srp` is next unless the driver
+  changes priorities). Do not take blocked index work ahead of its dependency.
+- The title regression first failed with live `$x$` and code syntax. New prose
+  uses the existing inline escaper. Historical v1 recovery now has two frozen
+  renderer generations, including a frozen Unicode table: this deliberate
+  duplication is part of the on-disk compatibility contract, so do not merge
+  it back into live presentation helpers. V2 prepared-byte recovery and
+  summary rendering did not change. Old rows stay append-only.
+- Fresh full-diff review covered current and historical renderers, prefix
+  reconstruction, payload hashes, exact tails, fallback text, limits and
+  single/batch paths. Two independent historical literals cover ten restart
+  recovery scenarios; five new-write scenarios cover inert output and original
+  marker text. Changed payloads and edited torn bytes remain untouched.
+- Required and README gates pass: 933 workspace Rust outcomes and 821
+  scripted-dialogs outcomes (plus one ignored doctest), including all 54
+  capture tests; 15 extension files, two script files, and 10,696 inert
+  Markdown renderings. Some IPC tests return explicit sandbox-denial skips
+  within those Rust outcomes; the driver/CI supplies unrestricted verification.
+  The macOS smoke runner refuses Linux. No remote Codex review ran under the
+  no-live-API instruction; the driver supplies independent review.
+- Product direction: the next assigned parameter-provenance work should store
+  parameter names without retaining stripped values, and preserve the rule
+  that a stored canonical URL cannot establish autosave identity. Individual
+  recovered-copy review (`brwr-kws`) remains the visible follow-up for note
+  recovery; timestamps and separate copy/discard actions can help a person
+  choose a draft without introducing automatic restore. Reuse those existing
+  beads rather than duplicating proposals or adding another diagnostic view.
+- The one authorized commit attempt stopped at `git add`: `.git/index.lock`
+  is on a read-only filesystem. No retry or remote operation was attempted.
+  The green complete diff, closed/exported bead, cycle log and excluded
   `.bosun_commit_msg` are ready for the driver to commit as Cookie.

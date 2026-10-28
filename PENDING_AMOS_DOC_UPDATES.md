@@ -132,3 +132,12 @@
 - **Brauser — isolate scripted host lifecycle tests across platforms:** Debug scripted-dialogs builds can use an explicit temporary config path, keeping configuration and cache state away from real user settings even when Windows Known Folders ignores HOME. Host-kill and knowledge-base picker fixtures use the seam; ordinary builds ignore it and release builds cannot enable it. Four process-level regressions cover loading, path refusal and cache placement (`brwr-3rt`); macOS smoke conventions and dialog counts are unchanged.
 
 - **Brauser — explain skipped capture from the current page:** The panel now distinguishes pauses, pending site removals, excluded workspaces/accounts and unmatched page rules, with an existing settings or Capture Site review action. Explanations use the current compiled policy without inspecting links, inventing visits or changing capture. Fourteen new composed-panel cases cover policy changes, navigation and local status updates (`brwr-vny`); actual macOS Chrome interaction remains human verification.
+
+- **Brauser — keep daily-log titles and Why context as literal text:** New
+  visit/activity titles and Why text use the shared inline escaper so math
+  and code syntax cannot activate a Markdown viewer's secondary engines.
+  Both historical v1 renderer generations remain frozen for exact interrupted
+  write recovery, while machine payloads and completed rows stay unchanged.
+  Two regressions cover fifteen delivery/recovery scenarios, and the full
+  required/README gate passes (`brwr-2za`). macOS browser verification remains
+  outside this Linux run.
