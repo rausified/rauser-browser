@@ -65,6 +65,7 @@ interface ChromeContextMenuClickInfo {
 interface ChromeInjectionTarget {
   tabId: number;
   frameIds?: number[];
+  allFrames?: boolean;
 }
 
 interface ChromeInjectionResult<T> {

@@ -113,8 +113,11 @@ the setup warning, `agent.env` names, and the vocabulary. Every HTTP(S) page
 gets **Summarize & log** in the panel, a `summarize` command
 (Command+Shift+9 on macOS) and a "Summarize with Brauser" context-menu item:
 the extension injects the pinned, hash-checked Readability 0.6.0
-(`dist/vendor/readability.js`) and a self-contained extractor in the top
-frame, caps the text in encoded bytes, and sends `start_run`. A polling run
+(`dist/vendor/readability.js`) and a self-contained extractor into every
+frame (`allFrames: true`; `extension/summarize.ts` `choosePage` keeps the top
+frame's text unless it is short and a subframe, such as Word for the web's
+editor iframe, holds more; the title and address check stay top-frame), caps
+the text in encoded bytes, and sends `start_run`. A polling run
 card shows state, elapsed time, the streamed text as text only, Cancel,
 Retry save, Copy, Open in Codex or Copy resume command, and the
 type/category/importance line, and cards return from `list_runs` when the
