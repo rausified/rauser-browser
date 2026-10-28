@@ -5148,6 +5148,16 @@ id = "work:{host}/{id}"
         OPENED.with(|opened| std::mem::take(&mut *opened.borrow_mut()))
     }
 
+    /// The absolute path the host opens for a `/`-separated wire path, built
+    /// one segment at a time so Windows gets its own separators.
+    fn opened_path(root: &std::path::Path, relative: &str) -> String {
+        relative
+            .split('/')
+            .fold(root.to_path_buf(), |path, segment| path.join(segment))
+            .to_string_lossy()
+            .into_owned()
+    }
+
     fn open_summary_with(
         config: &mut ConfigStore,
         url: &str,
@@ -5257,7 +5267,7 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected summary_opened, got {other:?}"),
         }
-        let absolute = notes.join(&relative).to_string_lossy().into_owned();
+        let absolute = opened_path(&notes, &relative);
         assert_eq!(take_opened(), vec![vec!["--".to_owned(), absolute]]);
     }
 
@@ -5297,10 +5307,7 @@ id = "work:{host}/{id}"
         ));
         assert_eq!(
             take_opened(),
-            vec![vec![
-                "--".to_owned(),
-                root.join(&relative).to_string_lossy().into_owned()
-            ]]
+            vec![vec!["--".to_owned(), opened_path(&root, &relative)]]
         );
     }
 
@@ -5331,10 +5338,7 @@ id = "work:{host}/{id}"
         }
         assert_eq!(
             take_opened(),
-            vec![vec![
-                "--".to_owned(),
-                notes.join(&relative).to_string_lossy().into_owned()
-            ]]
+            vec![vec!["--".to_owned(), opened_path(&notes, &relative)]]
         );
     }
 
