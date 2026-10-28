@@ -1878,15 +1878,15 @@ test("Summarize & log shows on any HTTP(S) tab and needs a ready harness", async
   assert.equal(other.el("summarize").hidden, true);
 });
 
-test("clicking Summarize extracts in the top frame then sends start_run with no record key and a local requested_at", async () => {
+test("clicking Summarize extracts in every frame then sends start_run with no record key and a local requested_at", async () => {
   const page = await summarizePanel({ local: new Map([[WARNING_SEEN_KEY, true]]) });
   await until(() => page.el("summarize").disabled === false, "the button to enable");
   page.el("summarize").click();
   await until(() => page.sent("start_run").length === 1, "start_run");
 
   const [library, extract] = page.state.injections;
-  assert.deepEqual(library, { target: { tabId: 1, frameIds: [0] }, files: ["vendor/readability.js"] });
-  assert.deepEqual(extract.target, { tabId: 1, frameIds: [0] });
+  assert.deepEqual(library, { target: { tabId: 1, allFrames: true }, files: ["vendor/readability.js"] });
+  assert.deepEqual(extract.target, { tabId: 1, allFrames: true });
   assert.equal(extract.func.name, "extractReadablePage");
   assert.deepEqual(extract.args, [EXTRACT_LIMITS]);
 

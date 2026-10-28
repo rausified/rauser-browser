@@ -7,7 +7,7 @@ import vm from "node:vm";
 // it in the page, so each test runs its source text in a fresh context that
 // holds only the fakes it is given.
 const { EXTRACT_LIMITS, extractReadablePage } = await import("../dist/extract.js");
-const { summarizeTab } = await import("../dist/summarize.js");
+const { summarizeTab, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
 
 // The host refuses a frame over this many bytes (`frame::MAX_INBOUND_BYTES`).
 const MAX_INBOUND_BYTES = 4 * 1024 * 1024;
@@ -108,12 +108,12 @@ test("summarizeTab sends the item title after list-to-item SPA navigation with s
   const deps = {
     scripting: {
       async executeScript(request) {
-        assert.deepEqual(request.target, { tabId: 7, frameIds: [0] });
+        assert.deepEqual(request.target, { tabId: 7, allFrames: true });
         if (request.files) {
           assert.deepEqual(request.files, ["vendor/readability.js"]);
           return [];
         }
-        return [{ result: vm.runInNewContext(`(${request.func})(${JSON.stringify(request.args[0])})`, scope) }];
+        return [{ frameId: 0, result: vm.runInNewContext(`(${request.func})(${JSON.stringify(request.args[0])})`, scope) }];
       },
     },
     host: {
@@ -309,4 +309,207 @@ test("the vendored license ships with the bundle", () => {
   assert.ok(existsSync(new URL("readability.LICENSE.md", dist)));
   assert.match(readFileSync(new URL("readability.LICENSE.md", dist), "utf8"), /Apache License/);
   assert.match(readFileSync(new URL("readability.js", dist), "utf8"), /function Readability\(doc, options\)/);
+});
+
+// Summarize reads every frame: Word for the web and similar editors render
+// the document in a cross-origin iframe, so the top frame holds no text.
+const TAB = { id: 9, url: "https://cisco-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=x", title: "Plan.docx" };
+const framePage = (fields) => ({
+  title: "", content: "", selection: null, truncated: false, readable: false, href: TAB.url, ...fields,
+});
+
+// Deps whose executeScript answers the extractor with `frames` (Chrome's
+// per-frame results) and records every injection.
+function framesDeps(frames, { readability = async () => [] } = {}) {
+  const injections = [];
+  const requests = [];
+  return {
+    injections,
+    requests,
+    deps: {
+      scripting: {
+        async executeScript(injection) {
+          injections.push(injection);
+          if (injection.files) return readability(injection);
+          return typeof frames === "function" ? frames(injection) : frames;
+        },
+      },
+      host: {
+        async call(request) {
+          requests.push(request);
+          return { run: { title: request.title, url: request.url }, existing: false };
+        },
+      },
+      storage: { async set() {} },
+      now: () => new Date("2026-10-28T10:00:00Z"),
+    },
+  };
+}
+
+test("summarizeTab injects Readability and the extractor into every frame", async () => {
+  const { deps, injections } = framesDeps([{ frameId: 0, result: framePage({ content: "Body" }) }]);
+  await summarizeTab(TAB, deps);
+  assert.equal(injections.length, 2);
+  assert.deepEqual(injections[0], { target: { tabId: 9, allFrames: true }, files: ["vendor/readability.js"] });
+  assert.deepEqual(injections[1].target, { tabId: 9, allFrames: true });
+  assert.equal(injections[1].func, extractReadablePage);
+  assert.deepEqual(injections[1].args, [EXTRACT_LIMITS]);
+});
+
+test("an empty top frame summarizes the Office subframe's text under the top frame's title", async () => {
+  const doc = "Quarterly plan\n\n" + "The document body. ".repeat(40);
+  const { deps, requests } = framesDeps([
+    { frameId: 0, result: framePage({ title: "Plan.docx", href: TAB.url }) },
+    { frameId: 3, result: framePage({ title: "Word", content: doc, readable: true, href: "https://word-edit.officeapps.live.com/we/wordeditorframe.aspx?ui=en-US" }) },
+  ]);
+  await summarizeTab(TAB, deps);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].content, doc);
+  assert.equal(requests[0].title, "Plan.docx");
+  assert.equal(requests[0].url, TAB.url);
+
+  // With no top-frame title, the tab's title stands in, never the iframe's.
+  const untitled = framesDeps([
+    { frameId: 0, result: framePage({}) },
+    { frameId: 3, result: framePage({ title: "Word", content: doc, href: "https://word-edit.officeapps.live.com/x" }) },
+  ]);
+  await summarizeTab(TAB, untitled.deps);
+  assert.equal(untitled.requests[0].title, "Plan.docx");
+});
+
+test("a top frame with article text wins over a small ad frame", async () => {
+  const article = "Article paragraph. ".repeat(20);
+  const { deps, requests } = framesDeps([
+    { frameId: 0, result: framePage({ title: "Article", content: article, readable: true }) },
+    { frameId: 5, result: framePage({ title: "Ad", content: "Buy now ".repeat(100), href: "https://ads.example/frame" }) },
+  ]);
+  await summarizeTab(TAB, deps);
+  assert.equal(requests[0].content, article);
+  assert.equal(requests[0].title, "Article");
+
+  // A short top frame still wins a tie, and when it is the longest.
+  const tie = framesDeps([
+    { frameId: 0, result: framePage({ content: "Short top" }) },
+    { frameId: 5, result: framePage({ content: "Short sub", href: "https://ads.example/frame" }) },
+  ]);
+  await summarizeTab(TAB, tie.deps);
+  assert.equal(tie.requests[0].content, "Short top");
+});
+
+test("the selection comes from the frame where the user selected text", async () => {
+  const doc = "The document body. ".repeat(40);
+  const { deps, requests } = framesDeps([
+    { frameId: 0, result: framePage({}) },
+    { frameId: 3, result: framePage({ content: doc, selection: "picked words", href: "https://word-edit.officeapps.live.com/x" }) },
+  ]);
+  await summarizeTab(TAB, deps);
+  assert.equal(requests[0].selection, "picked words");
+
+  // A selection in another frame than the content still travels.
+  const article = "Article paragraph. ".repeat(20);
+  const other = framesDeps([
+    { frameId: 0, result: framePage({ content: article }) },
+    { frameId: 5, result: framePage({ content: "x", selection: "from the frame", href: "https://embed.example/" }) },
+  ]);
+  await summarizeTab(TAB, other.deps);
+  assert.equal(other.requests[0].content, article);
+  assert.equal(other.requests[0].selection, "from the frame");
+});
+
+test("a frame that refuses injection or returns nothing is skipped", async () => {
+  const doc = "The document body. ".repeat(40);
+  const { deps, requests } = framesDeps([
+    { frameId: 0, result: framePage({}) },
+    { frameId: 2, error: new Error("Cannot access a chrome-extension:// URL of different extension") },
+    { frameId: 4 },
+    { frameId: 6, result: null },
+    { frameId: 7, result: { content: 42 } },
+    { frameId: 3, result: framePage({ content: doc, href: "https://word-edit.officeapps.live.com/x" }) },
+  ], { readability: async () => { throw new Error("Cannot access contents of the page"); } });
+  await summarizeTab(TAB, deps);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].content, doc);
+});
+
+test("no frame with text is unreadable, and a missing top frame is too", async () => {
+  const empty = framesDeps([
+    { frameId: 0, result: framePage({ content: "   " }) },
+    { frameId: 3, result: framePage({ content: "", href: "https://word-edit.officeapps.live.com/x" }) },
+  ]);
+  await assert.rejects(summarizeTab(TAB, empty.deps),
+    (error) => error.code === "unreadable" && error.message === UNREADABLE_MESSAGE);
+  assert.equal(empty.requests.length, 0);
+
+  const noTop = framesDeps([
+    { frameId: 3, result: framePage({ content: "Text", href: "https://word-edit.officeapps.live.com/x" }) },
+  ]);
+  await assert.rejects(summarizeTab(TAB, noTop.deps), (error) => error.code === "unreadable");
+
+  const refused = framesDeps(() => { throw new Error("Cannot access contents of the page"); });
+  await assert.rejects(summarizeTab(TAB, refused.deps), (error) => error.code === "unreadable");
+  assert.equal(noTop.requests.length + refused.requests.length, 0);
+});
+
+test("only the top frame's address must still name the tab's page", async () => {
+  const doc = "The document body. ".repeat(40);
+  const moved = framesDeps([
+    { frameId: 0, result: framePage({ href: "https://cisco-my.sharepoint.com/other" }) },
+    { frameId: 3, result: framePage({ content: doc, href: TAB.url }) },
+  ]);
+  await assert.rejects(summarizeTab(TAB, moved.deps),
+    (error) => error.code === "page_changed" && error.message === PAGE_CHANGED_MESSAGE);
+  assert.equal(moved.requests.length, 0);
+});
+
+test("a selection borrowed from another frame never pushes start_run past the cap", async () => {
+  const room = EXTRACT_LIMITS.maxRequestBytes - Buffer.byteLength(JSON.stringify(null));
+  // The top frame's content filled its own cap, measured with no selection.
+  const content = "a".repeat(room - 2);
+  const { deps, requests } = framesDeps([
+    { frameId: 0, result: framePage({ content }) },
+    { frameId: 5, result: framePage({ content: "x", selection: "picked", href: "https://embed.example/" }) },
+  ]);
+  await summarizeTab(TAB, deps);
+  const [request] = requests;
+  const bytes = Buffer.byteLength(JSON.stringify(request.content)) + Buffer.byteLength(JSON.stringify(request.selection));
+  assert.ok(bytes <= EXTRACT_LIMITS.maxRequestBytes);
+});
+
+test("a non-article top frame yields to a subframe with five times its text", async () => {
+  const chrome = "Suite bar Sign in Footer ".repeat(16).slice(0, 400);
+  const doc = "The document body. ".repeat(300).slice(0, 5000);
+  const sub = (content, readable = true) => ({
+    frameId: 3, result: framePage({ content, readable, href: "https://word-edit.officeapps.live.com/x" }),
+  });
+  const chromeTop = framesDeps([{ frameId: 0, result: framePage({ title: "Plan.docx", content: chrome }) }, sub(doc)]);
+  await summarizeTab(TAB, chromeTop.deps);
+  assert.equal(chromeTop.requests[0].content, doc);
+  assert.equal(chromeTop.requests[0].title, "Plan.docx");
+
+  // An article top frame wins whatever its subframes hold.
+  const articleTop = framesDeps([{ frameId: 0, result: framePage({ content: chrome, readable: true }) }, sub(doc)]);
+  await summarizeTab(TAB, articleTop.deps);
+  assert.equal(articleTop.requests[0].content, chrome);
+
+  // Under five times the top frame's text, the top frame stays.
+  const close = framesDeps([{ frameId: 0, result: framePage({ content: chrome }) }, sub(doc.slice(0, 1000))]);
+  await summarizeTab(TAB, close.deps);
+  assert.equal(close.requests[0].content, chrome);
+});
+
+test("a hung subframe falls back to reading the top frame alone", async () => {
+  const { deps, requests, injections } = framesDeps((injection) => injection.target.allFrames
+    ? new Promise(() => {})
+    : [{ frameId: 0, result: framePage({ content: "Top text" }) }]);
+  deps.allFramesTimeoutMs = 20;
+  await summarizeTab(TAB, deps);
+  assert.deepEqual(injections.map((injection) => injection.target), [
+    { tabId: 9, allFrames: true }, { tabId: 9, allFrames: true }, { tabId: 9, frameIds: [0] },
+  ]);
+  assert.equal(requests[0].content, "Top text");
+});
+
+test("the all-frames timeout is ten seconds", async () => {
+  const { ALL_FRAMES_TIMEOUT_MS } = await import("../dist/summarize.js");
+  assert.equal(ALL_FRAMES_TIMEOUT_MS, 10_000);
 });
