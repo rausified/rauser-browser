@@ -1349,3 +1349,212 @@ test("dismissing a summary and a task together keeps both ids", async () => {
   assert.equal(cards(page.summaryArea).length + cards(page.taskArea).length, 0);
   page.dispose();
 });
+
+const { TaskDetail } = await import("../dist/run-card.js");
+
+// A TaskDetail with a scripted host; `reply` answers get_run.
+function detailSetup(initial, { reply = () => null, storage = storageArea() } = {}) {
+  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  const requests = [];
+  const copied = [];
+  const reused = [];
+  const opened = [];
+  const dismissed = [];
+  const changed = [];
+  const host = {
+    async call(request, expected) {
+      requests.push(structuredClone(request));
+      const answer = await reply(request);
+      if (answer instanceof Error) throw answer;
+      if (!answer) throw new HostError("internal", `unexpected ${request.type}`);
+      assert.equal(answer.type, expected);
+      return answer;
+    },
+  };
+  const detail = new TaskDetail(initial, {
+    host,
+    now: () => NOW,
+    copy: async (text) => { copied.push(text); },
+    visible: () => true,
+    storage,
+    reuse: (instruction) => reused.push(instruction),
+    openPage: (url) => opened.push(url),
+    dismissed: (runId) => dismissed.push(runId),
+    changed: (run) => changed.push(structuredClone(run)),
+  });
+  return { detail, requests, copied, reused, opened, dismissed, changed, storage };
+}
+
+function output(detail) {
+  return byClass(detail.element, "task-detail-output");
+}
+
+test("TaskDetail shows Running with live output open, then Done with the report and output closed", async () => {
+  const pages = [
+    { run: taskView({ thread_id: "thread-1" }), stream_text: "working", next_offset: 7, more: false },
+    {
+      run: taskView({ thread_id: "thread-1", state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "Three links." }),
+      stream_text: " done", next_offset: 12, more: false,
+    },
+  ];
+  const page = detailSetup(taskView(), { reply: (request) => request.type === "get_run" ? { type: "run_fetched", ...pages.shift() } : null });
+  const { detail } = page;
+  const started = new Date("2026-10-27T15:59:30.000000000Z").toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  assert.equal(output(detail).tagName, "DETAILS");
+  assert.equal(output(detail).open, true);
+  detail.start();
+  await settle();
+  const classes = detail.element.children.map((child) => child.className.split(" ")[0]);
+  assert.deepEqual(classes, [
+    "task-detail-instruction", "task-detail-meta", "run-card-actions", "run-card-problem", "task-detail-note",
+    "task-detail-report-label", "task-detail-report", "task-detail-output",
+  ]);
+  assert.equal(byClass(detail.element, "task-detail-instruction").tagName, "H2");
+  assert.equal(byClass(detail.element, "task-detail-meta").textContent,
+    `on A readable article · Codex · started ${started} · Running · 30s`);
+  assert.equal(byClass(detail.element, "task-detail-report").hidden, true);
+  assert.equal(byClass(detail.element, "task-detail-report-label").hidden, true);
+  assert.equal(output(detail).open, true);
+  assert.equal(output(detail).children[0].tagName, "SUMMARY");
+  assert.equal(output(detail).children[0].textContent, "Agent output");
+  assert.equal(byClass(detail.element, "run-card-stream").textContent, "working");
+  assert.deepEqual(buttonTexts(detail.element), ["Cancel", "Open in Codex", "Open page"]);
+  await tick();
+  assert.equal(byClass(detail.element, "task-detail-meta").textContent,
+    `on A readable article · Codex · started ${started} · Done · 40s`);
+  const report = byClass(detail.element, "task-detail-report");
+  assert.equal(report.hidden, false);
+  assert.equal(report.textContent, "Three links.");
+  assert.equal(byClass(detail.element, "task-detail-report-label").textContent, "Report");
+  assert.equal(output(detail).open, false);
+  assert.equal(byClass(detail.element, "run-card-stream").textContent, "working done");
+  assert.equal(byClass(detail.element, "task-detail-note").hidden, true);
+  assert.deepEqual(buttonTexts(detail.element), ["Copy report", "Reuse", "Open in Codex", "Open page", "Dismiss"]);
+  button(detail.element, "Copy report").click();
+  await settle();
+  assert.deepEqual(page.copied, ["Three links."]);
+  assert.equal(detail.run.state, "succeeded");
+  assert.deepEqual(page.changed.map((run) => run.state), ["running", "succeeded"]);
+  detail.dispose();
+
+  // A queued task has no start time yet; a canceled one after it started notes that changes stay.
+  const queued = detailSetup(taskView({ state: "queued", started_at: null, harness: "claude", title: "" }));
+  assert.equal(byClass(queued.detail.element, "task-detail-meta").textContent,
+    "on https://read.example/a · Claude Code · Queued");
+  queued.detail.dispose();
+  const canceled = taskView({ state: "canceled", finished_at: "2026-10-27T16:00:10Z", error: "Canceled.", error_kind: "canceled" });
+  const stopped = detailSetup(canceled, {
+    reply: () => ({ type: "run_fetched", run: canceled, stream_text: "partial", next_offset: 7, more: false }),
+  });
+  assert.equal(output(stopped.detail).open, false);
+  stopped.detail.start();
+  await settle();
+  const note = byClass(stopped.detail.element, "task-detail-note");
+  assert.equal(note.hidden, false);
+  assert.equal(note.textContent, "Changes the agent already made stay; check before running it again.");
+  assert.deepEqual(buttonTexts(stopped.detail.element), ["Copy", "Reuse", "Open page", "Dismiss"]);
+  button(stopped.detail.element, "Copy").click();
+  await settle();
+  assert.deepEqual(stopped.copied, ["Canceled."]);
+  stopped.detail.dispose();
+});
+
+test("TaskDetail renders the instruction, title, report and stream as text only", async () => {
+  const hostile = "<img src=x onerror=alert(1)> [x](javascript:alert(1))";
+  const done = taskView({
+    instruction: hostile, title: hostile, state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: hostile,
+  });
+  const page = detailSetup(done, {
+    reply: () => ({ type: "run_fetched", run: done, stream_text: hostile, next_offset: hostile.length, more: false }),
+  });
+  page.detail.start();
+  await settle();
+  for (const name of ["task-detail-instruction", "task-detail-report", "run-card-stream"]) {
+    const element = byClass(page.detail.element, name);
+    assert.equal(element.textContent, hostile, name);
+    assert.deepEqual(element.children, [], name);
+  }
+  const meta = byClass(page.detail.element, "task-detail-meta");
+  assert.ok(meta.textContent.startsWith(`on ${hostile} · Codex`));
+  assert.deepEqual(meta.children, []);
+  button(page.detail.element, "Open page").click();
+  assert.deepEqual(page.opened, ["https://read.example/a"]);
+  page.detail.dispose();
+});
+
+test("TaskDetail Reuse passes the full get_run instruction, not the list cut", async () => {
+  const full = `${"a".repeat(300)} and then the end`;
+  const cut = `${"a".repeat(280)}…`;
+  const finished = taskView({ instruction: full, state: "succeeded", finished_at: "2026-10-27T15:59:50Z", task_report: "Report." });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const page = detailSetup({ ...finished, instruction: cut, task_report: null }, {
+    reply: async () => {
+      await gate;
+      return { type: "run_fetched", run: finished, stream_text: "", next_offset: 0, more: false };
+    },
+  });
+  page.detail.start();
+  await settle();
+  // Until get_run answers there is no full instruction, so no Reuse.
+  assert.ok(!buttonTexts(page.detail.element).includes("Reuse"));
+  assert.equal(byClass(page.detail.element, "task-detail-instruction").textContent, cut);
+  release();
+  await settle();
+  assert.equal(byClass(page.detail.element, "task-detail-instruction").textContent, full);
+  button(page.detail.element, "Reuse").click();
+  assert.deepEqual(page.reused, [full]);
+  page.detail.dispose();
+});
+
+test("TaskDetail Open page opens the run url", async () => {
+  const running = taskView({ url: "https://read.example/b#section" });
+  const page = detailSetup(running, {
+    reply: () => ({ type: "run_fetched", run: running, stream_text: "see https://evil.example", next_offset: 24, more: false }),
+  });
+  page.detail.start();
+  await settle();
+  button(page.detail.element, "Open page").click();
+  assert.deepEqual(page.opened, ["https://read.example/b#section"]);
+  page.detail.dispose();
+});
+
+test("TaskDetail Dismiss remembers the run and reports it", async () => {
+  const done = taskView({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "ok" });
+  const storage = storageArea(new Map([[DISMISSED_KEY, ["00000000-0000-4000-8000-000000000009"]]]));
+  const page = detailSetup(done, {
+    storage, reply: () => ({ type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false }),
+  });
+  page.detail.start();
+  await settle();
+  button(page.detail.element, "Dismiss").click();
+  await settle();
+  assert.deepEqual(storage.entries.get(DISMISSED_KEY), ["00000000-0000-4000-8000-000000000009", done.run_id]);
+  assert.deepEqual(page.dismissed, [done.run_id]);
+  page.detail.dispose();
+});
+
+test("TaskDetail keeps the output toggle the user chose after finishing", async () => {
+  let current = taskView();
+  const page = detailSetup(current, {
+    reply: () => ({ type: "run_fetched", run: current, stream_text: "", next_offset: 0, more: false }),
+  });
+  page.detail.start();
+  await settle();
+  // The user closes it while it runs; it stays closed.
+  output(page.detail).open = false;
+  await tick();
+  assert.equal(output(page.detail).open, false);
+  // The user opens it again; the finish closes it once.
+  output(page.detail).open = true;
+  current = taskView({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "ok" });
+  await tick();
+  assert.equal(output(page.detail).open, false);
+  // The user opens it after the finish; later renders keep it open.
+  output(page.detail).open = true;
+  await tick(POLL_MS * 3);
+  button(page.detail.element, "Copy report").click();
+  await settle();
+  assert.equal(output(page.detail).open, true);
+  page.detail.dispose();
+});

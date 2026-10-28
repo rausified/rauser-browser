@@ -534,12 +534,54 @@ class RunCard extends RunWatcher implements Card {
 const HARNESS_NAMES: Record<RunView["harness"], string> = { codex: "Codex", claude: "Claude Code" };
 const CHANGES_STAY = "Changes the agent already made stay; check before running it again.";
 
+/** What a task view shares, on the panel's card and the Tasks page: the
+ * full instruction and the report, both from get_run views only (list_runs
+ * cuts the instruction and leaves the report out, so a list view never
+ * replaces either), and the buttons built from them. All of it is
+ * untrusted text, shown with textContent only. */
+abstract class TaskWatcher extends RunWatcher {
+  protected fullInstruction: string | null = null;
+  private report: string | null = null;
+
+  protected override fetchedView(run: RunView): void {
+    if (typeof run.instruction === "string") this.fullInstruction = run.instruction;
+    if (typeof run.task_report === "string") this.report = run.task_report;
+  }
+
+  /** The instruction to show: the full one once a get_run has it. */
+  protected instructionText(): string {
+    return this.fullInstruction ?? this.view.instruction ?? "";
+  }
+
+  /** The agent's report, once the run succeeded with one. */
+  protected shownReport(): string | null {
+    return this.view.state === "succeeded" ? this.report : null;
+  }
+
+  /** Whether the run failed or was canceled after the agent started. */
+  protected changesMayStay(): boolean {
+    const run = this.view;
+    return (run.state === "failed" || run.state === "canceled") && run.started_at !== null;
+  }
+
+  protected copyReportButtons(): HTMLButtonElement[] {
+    const report = this.shownReport();
+    return report === null ? [] : [actionButton("Copy report", () => this.copy(report))];
+  }
+
+  /** Reuse, on a finished task once a get_run gave its full instruction. */
+  protected reuseButtons(reuse: ((instruction: string) => void) | undefined): HTMLButtonElement[] {
+    const instruction = this.fullInstruction;
+    if (!isTerminal(this.view) || instruction === null || !reuse) return [];
+    return [actionButton("Reuse", () => reuse(instruction))];
+  }
+}
+
 /** One task run's card (decision 20). The headline is the instruction, the
- * subline the page and harness; on success it shows the agent's report. All
- * of it is untrusted text, shown with textContent only. It offers Cancel,
- * Copy report, Reuse, the harness's resume, Copy (the error) and Dismiss,
- * and never Open summary or Retry save: a task writes nothing. */
-class TaskCard extends RunWatcher implements Card {
+ * subline the page and harness; on success it shows the agent's report. It
+ * offers Cancel, Copy report, Reuse, the harness's resume, Copy (the error)
+ * and Dismiss, and never Open summary or Retry save: a task writes nothing. */
+class TaskCard extends TaskWatcher implements Card {
   readonly element: HTMLDivElement;
   private readonly headline: HTMLParagraphElement;
   private readonly pageLine: HTMLParagraphElement;
@@ -549,10 +591,6 @@ class TaskCard extends RunWatcher implements Card {
   private readonly changesLine: HTMLParagraphElement;
   private readonly problemLine: HTMLParagraphElement;
   private readonly actions: HTMLDivElement;
-  // From get_run views only: list_runs cuts the instruction and leaves the
-  // report out, so a list view never replaces either.
-  private fullInstruction: string | null = null;
-  private report: string | null = null;
   // Whether the card saw the run unfinished, so its finish is news.
   private sawUnfinished: boolean;
   private reported = false;
@@ -596,11 +634,6 @@ class TaskCard extends RunWatcher implements Card {
     if (this.view === run && !isTerminal(run)) this.sawUnfinished = true;
   }
 
-  protected override fetchedView(run: RunView): void {
-    if (typeof run.instruction === "string") this.fullInstruction = run.instruction;
-    if (typeof run.task_report === "string") this.report = run.task_report;
-  }
-
   protected override settled(): void {
     if (this.reported || this.disposed || !this.sawUnfinished || !isTerminal(this.view) || !this.done()) return;
     this.reported = true;
@@ -609,32 +642,147 @@ class TaskCard extends RunWatcher implements Card {
 
   protected render(): void {
     const run = this.view;
-    this.headline.textContent = this.fullInstruction ?? run.instruction ?? "";
+    this.headline.textContent = this.instructionText();
     this.pageLine.textContent = `on ${run.title || run.url} · ${HARNESS_NAMES[run.harness]}`;
     this.stateLine.textContent = this.stateLineText();
     this.streamText.textContent = this.stream;
     this.streamText.hidden = this.stream === "";
-    const report = run.state === "succeeded" ? this.report : null;
+    const report = this.shownReport();
     this.reportText.textContent = report ?? "";
     this.reportText.hidden = report === null;
-    const changed = (run.state === "failed" || run.state === "canceled") && run.started_at !== null;
+    const changed = this.changesMayStay();
     this.changesLine.textContent = changed ? CHANGES_STAY : "";
     this.changesLine.hidden = !changed;
     this.problemLine.textContent = this.problem ?? "";
     this.problemLine.hidden = this.problem === null;
 
-    const buttons: HTMLButtonElement[] = [...this.cancelButtons()];
-    if (report !== null) buttons.push(actionButton("Copy report", () => this.copy(report)));
-    const instruction = this.fullInstruction;
-    const reuse = this.deps.reuse;
-    if (isTerminal(run) && instruction !== null && reuse) {
-      buttons.push(actionButton("Reuse", () => reuse(instruction)));
-    }
-    buttons.push(...this.resumeButtons());
+    const buttons: HTMLButtonElement[] = [
+      ...this.cancelButtons(), ...this.copyReportButtons(), ...this.reuseButtons(this.deps.reuse),
+      ...this.resumeButtons(),
+    ];
     if (run.state === "failed") {
       buttons.push(actionButton("Copy", () => this.copy(this.view.error || this.stream)));
     }
     if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.onDismiss(this)));
+    for (const button of buttons) button.disabled = this.acting;
+    this.actions.replaceChildren(...buttons);
+  }
+}
+
+/** What the Tasks page's {@link TaskDetail} needs. */
+export interface TaskDetailDeps extends RunProgressDeps {
+  storage: ChromeStorageArea;
+  /** Puts the full instruction back in the panel's task bar. */
+  reuse(instruction: string): void;
+  /** Opens the run's own `url` (never a URL from agent text). */
+  openPage(url: string): void;
+  /** The run was dismissed, and its id remembered. */
+  dismissed(runId: string): void;
+  /** Each new view of the run, so the page can update its list row. */
+  changed(run: RunView): void;
+}
+
+/** The local start time of a run, or null before it starts. */
+function startedText(run: RunView): string | null {
+  const start = run.started_at === null ? NaN : Date.parse(run.started_at);
+  if (!Number.isFinite(start)) return null;
+  return new Date(start).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * One task on the Tasks page: the full instruction as the headline, the
+ * meta line, the actions, then the report and a collapsible Agent output.
+ * The output starts open while the run is unfinished and closes once when
+ * it finishes; after that the user's toggle stays. Actions are the task
+ * card's plus Open page. All agent text is shown with textContent only.
+ */
+export class TaskDetail extends TaskWatcher {
+  readonly element: HTMLDivElement;
+  private readonly headline: HTMLHeadingElement;
+  private readonly metaLine: HTMLParagraphElement;
+  private readonly actions: HTMLDivElement;
+  private readonly problemLine: HTMLParagraphElement;
+  private readonly noteLine: HTMLParagraphElement;
+  private readonly reportLabel: HTMLHeadingElement;
+  private readonly reportText: HTMLDivElement;
+  private readonly output: HTMLDetailsElement;
+  private readonly streamText: HTMLPreElement;
+  // Whether the output has been closed for the finish (or started closed).
+  private outputSettled: boolean;
+
+  constructor(view: RunView, private readonly deps: TaskDetailDeps) {
+    super(view, deps);
+    this.element = make("div", "task-detail");
+    this.element.dataset.runId = view.run_id;
+    this.headline = make("h2", "task-detail-instruction");
+    this.metaLine = make("p", "task-detail-meta");
+    this.actions = make("div", "run-card-actions");
+    this.problemLine = make("p", "run-card-problem warning");
+    this.noteLine = make("p", "task-detail-note");
+    this.reportLabel = make("h3", "task-detail-report-label");
+    this.reportLabel.textContent = "Report";
+    this.reportText = make("div", "task-detail-report");
+    this.output = make("details", "task-detail-output");
+    const summary = make("summary", "");
+    summary.textContent = "Agent output";
+    this.streamText = make("pre", "run-card-stream");
+    this.output.append(summary, this.streamText);
+    this.outputSettled = isTerminal(view);
+    this.output.open = !this.outputSettled;
+    this.element.append(
+      this.headline, this.metaLine, this.actions, this.problemLine, this.noteLine, this.reportLabel,
+      this.reportText, this.output,
+    );
+    this.render();
+  }
+
+  /** The run as last seen. */
+  get run(): RunView {
+    return this.view;
+  }
+
+  protected override setView(run: RunView): void {
+    super.setView(run);
+    if (this.view === run) this.deps.changed(run);
+  }
+
+  private dismiss(): void {
+    const runId = this.view.run_id;
+    void rememberDismissed(this.deps.storage, runId).then(() => this.deps.dismissed(runId));
+  }
+
+  protected render(): void {
+    const run = this.view;
+    this.headline.textContent = this.instructionText();
+    const started = startedText(run);
+    const elapsed = elapsedText(run, this.deps.now());
+    this.metaLine.textContent = [
+      `on ${run.title || run.url}`, HARNESS_NAMES[run.harness], started === null ? "" : `started ${started}`,
+      stateText(run), elapsed,
+    ].filter((part) => part !== "").join(" · ");
+    this.problemLine.textContent = this.problem ?? "";
+    this.problemLine.hidden = this.problem === null;
+    const changed = this.changesMayStay();
+    this.noteLine.textContent = changed ? CHANGES_STAY : "";
+    this.noteLine.hidden = !changed;
+    const report = this.shownReport();
+    this.reportText.textContent = report ?? "";
+    this.reportText.hidden = report === null;
+    this.reportLabel.hidden = report === null;
+    this.streamText.textContent = this.stream;
+    if (!this.outputSettled && isTerminal(run)) {
+      this.outputSettled = true;
+      this.output.open = false;
+    }
+
+    const buttons: HTMLButtonElement[] = [...this.cancelButtons(), ...this.copyReportButtons()];
+    const failure = run.state === "failed" || run.state === "canceled" ? run.error || this.stream : "";
+    if (failure !== "") buttons.push(actionButton("Copy", () => this.copy(failure)));
+    buttons.push(
+      ...this.reuseButtons((instruction) => this.deps.reuse(instruction)), ...this.resumeButtons(),
+      actionButton("Open page", () => this.deps.openPage(this.view.url)),
+    );
+    if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.dismiss()));
     for (const button of buttons) button.disabled = this.acting;
     this.actions.replaceChildren(...buttons);
   }
