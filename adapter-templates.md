@@ -182,7 +182,7 @@ Some origins host many unrelated tenants: every GitHub organization, every Googl
 
 The host owns a list of **shared origins**. Format version 1 lists `https://github.com`, `https://docs.google.com`, `https://www.notion.so`, `https://www.figma.com`, and `https://linear.app`. The list is host-owned config and can grow in later releases.
 
-For drafting (§10.4), each entry also records where the URL names the tenant, if it does: `owner` in the first path segment on GitHub, and `workspace` in the first path segment on Notion and Linear. Google Docs and Figma record none, so drafts there can only be `unscoped`. An entry can also mark account-index positions, such as Google's `/u/<n>/`, which a draft never captures.
+For drafting (§10.4), each entry also records where the URL names the tenant, if it does: `owner` in the first path segment on GitHub, and `workspace` in the first path segment on Notion and Linear. Google Docs and Figma record none, so drafts there can only be `unscoped`. An entry can also mark account-index positions, such as Google's `/u/<n>/`, which a draft never captures. As built (2026-10-27, `brwr-t40`), the tenant and account-index positions live in the host-owned drafting catalog, `protocol/capture-site/catalog.json` (`shared_origins`: per origin, `tenant: {segment, capture}` or `null`, and `account_index: [{literal, segment}]`); the host's tests check that its origins equal this list.
 
 An adapter on a shared origin must have one of:
 
@@ -330,6 +330,18 @@ A drafted adapter is written in this language, whether the host's structural dra
 - The host drops each rule that matches the origin root or any probe URL, and still shows the match preview before the native confirmation. A rule whose only identifier capture is a `token` starts unchecked in the review (DESIGN.md §5.1).
 
 The instruction to the agent includes this specification's grammar, and the host parses every draft, from either drafter, with the same parser as any config. A draft that does not parse is discarded without being shown.
+
+**As built (2026-10-27, `brwr-t40`).** The per-rule checks are `check_draft_rules` in `adapter-templates/src/draft.rs`, with the order and verdicts in protocol/adapter-templates/README.md (`draft_rules`). `check_draft` and its `draft` vectors are kept unchanged for compatibility.
+
+- **Per rule.** A failing drafted rule is dropped with its `draft_*` code and the others are kept; a failing user-written rule is kept with a warning. An adapter with no rule left is removed, and `draft_id_needs_typed_capture` on the survivors and `draft_forbidden_key` still refuse a whole adapter that has a drafted rule. For an adapter whose rules are all user-written (the user added `alias`, `fields` or `path_case` by hand), the forbidden key only warns.
+- **Checked tables and overlays.** The checked table holds only the Tier 0 keys (`type`, `origin`, `match`, `id`, `modes`, `refs`). Scope, `unscoped` and a title entry chosen in the review are applied after the check and never enter it; the scope choice is judged separately by `resolve_scope_choice`, so it never changes a rule verdict.
+- **Pending scope instead of a refusal.** On a shared origin with no scoped adapter, or with scoped adapters that disagree, the scope state is pending (naming the catalog's tenant capture) rather than `draft_no_scope_source` or `draft_scope_conflict`. A pending choice needs `unscoped` or one to 64 canonical `name|lower` values (`draft_scope_pending` when missing or empty, `draft_scope_choice` when invalid). An origin with no tenant position accepts only `unscoped`, and copied or non-shared scope accepts no choice.
+- **Blocked route words.** A path literal or alternative that is a catalog `blocked_route_words` entry (the search, sign-in, dashboard, sharing and capability words that the probe paths also cover), compared with ASCII folding, drops the rule as `draft_blocked_route`.
+- **Search and paging lists.** An ID capture bound from a `search_keys` parameter (`q`, `query`, `search`, `jql`, `filter`) is `draft_search_capture`; one from a `paging_keys` parameter (`page`, `offset`, `start`, `cursor`, `limit`, `sort`, `order`, `tab`, `view`) is `draft_paging_capture`.
+- **Probes.** The origin root and each catalog `probe_paths` entry are matched without scope (SQ-V3).
+- **Overlap.** With the origin's existing adapters, then with the earlier-ranked drafted adapters, so the higher-ranked rule wins.
+- **Validity.** A rule that cannot be validated as a one-rule adapter, or conflicts with an earlier survivor, is dropped as `draft_invalid_rule` whoever wrote it, because it could never be saved.
+- **Notion consequence (`brwr-gf1`).** On `www.notion.so` the first segment is the `workspace` tenant capture, a `name`, so workspace pages have no literal before their `hex(32)@tail` ID and are refused as `draft_no_leading_literal`. Behind a route word on a non-shared origin, title-prefixed and bare 32-hex pages share one `hex(32)@tail` ID. The Notion starter (§11) is hand-written and unaffected.
 
 ## 11. Starter adapters
 
