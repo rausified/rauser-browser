@@ -1452,11 +1452,22 @@ test("TaskDetail shows Running with live output open, then Done with the report 
   const note = byClass(stopped.detail.element, "task-detail-note");
   assert.equal(note.hidden, false);
   assert.equal(note.textContent, "Changes the agent already made stay; check before running it again.");
-  assert.deepEqual(buttonTexts(stopped.detail.element), ["Copy", "Reuse", "Open page", "Dismiss"]);
-  button(stopped.detail.element, "Copy").click();
-  await settle();
-  assert.deepEqual(stopped.copied, ["Canceled."]);
+  // Copy is for failed tasks only (DESIGN.md §5.7), even with an error and a stream.
+  assert.deepEqual(buttonTexts(stopped.detail.element), ["Reuse", "Open page", "Dismiss"]);
   stopped.detail.dispose();
+
+  // A failed task copies its error, else its stream.
+  const failed = taskView({ state: "failed", finished_at: "2026-10-27T16:00:10Z", error: "Timed out.", error_kind: "timed_out" });
+  const broke = detailSetup(failed, {
+    reply: () => ({ type: "run_fetched", run: failed, stream_text: "partial", next_offset: 7, more: false }),
+  });
+  broke.detail.start();
+  await settle();
+  assert.deepEqual(buttonTexts(broke.detail.element), ["Copy", "Reuse", "Open page", "Dismiss"]);
+  button(broke.detail.element, "Copy").click();
+  await settle();
+  assert.deepEqual(broke.copied, ["Timed out."]);
+  broke.detail.dispose();
 });
 
 test("TaskDetail renders the instruction, title, report and stream as text only", async () => {

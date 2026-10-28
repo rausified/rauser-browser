@@ -569,6 +569,12 @@ abstract class TaskWatcher extends RunWatcher {
     return report === null ? [] : [actionButton("Copy report", () => this.copy(report))];
   }
 
+  /** Copy, on a failed task: its error, or else its stream. */
+  protected copyFailureButtons(): HTMLButtonElement[] {
+    if (this.view.state !== "failed") return [];
+    return [actionButton("Copy", () => this.copy(this.view.error || this.stream))];
+  }
+
   /** Reuse, on a finished task once a get_run gave its full instruction. */
   protected reuseButtons(reuse: ((instruction: string) => void) | undefined): HTMLButtonElement[] {
     const instruction = this.fullInstruction;
@@ -658,11 +664,8 @@ class TaskCard extends TaskWatcher implements Card {
 
     const buttons: HTMLButtonElement[] = [
       ...this.cancelButtons(), ...this.copyReportButtons(), ...this.reuseButtons(this.deps.reuse),
-      ...this.resumeButtons(),
+      ...this.resumeButtons(), ...this.copyFailureButtons(),
     ];
-    if (run.state === "failed") {
-      buttons.push(actionButton("Copy", () => this.copy(this.view.error || this.stream)));
-    }
     if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.onDismiss(this)));
     for (const button of buttons) button.disabled = this.acting;
     this.actions.replaceChildren(...buttons);
@@ -775,13 +778,11 @@ export class TaskDetail extends TaskWatcher {
       this.output.open = false;
     }
 
-    const buttons: HTMLButtonElement[] = [...this.cancelButtons(), ...this.copyReportButtons()];
-    const failure = run.state === "failed" || run.state === "canceled" ? run.error || this.stream : "";
-    if (failure !== "") buttons.push(actionButton("Copy", () => this.copy(failure)));
-    buttons.push(
+    const buttons: HTMLButtonElement[] = [
+      ...this.cancelButtons(), ...this.copyReportButtons(), ...this.copyFailureButtons(),
       ...this.reuseButtons((instruction) => this.deps.reuse(instruction)), ...this.resumeButtons(),
       actionButton("Open page", () => this.deps.openPage(this.view.url)),
-    );
+    ];
     if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.dismiss()));
     for (const button of buttons) button.disabled = this.acting;
     this.actions.replaceChildren(...buttons);
