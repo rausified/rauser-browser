@@ -263,6 +263,12 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 ### Focused quality follow-up
 
+- [ ] `brwr-mdn` **Pin the clock in capture tests that cross a calendar-day boundary (P2).**
+  Two `capture.rs` tests failed on Windows CI at exactly 00:00 UTC (#126, `f586628`)
+  because they build timestamps from the current clock.
+- [ ] `brwr-sti` **Use the item page's title in summaries after in-app navigation (P2).**
+  The first real summary of a GitHub PR took the PR list page's title; the URL and
+  artifact ID were right. Likely a stale `document.title` after client-side navigation.
 - [ ] `brwr-u8r` **Replay existing v1 capture intents before the normalized-URL
   bound rejects their event (P2).** From #139's review: a partial v1 intent left
   by an older host for an event whose normalized URL exceeds 8192 bytes is now
