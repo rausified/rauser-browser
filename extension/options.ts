@@ -40,9 +40,14 @@ import {
   type AdapterObject,
 } from "./adapter-review.js";
 import {
+  configuredGitHubOrganizations,
+  containerLinks,
   hasAdapter,
+  linkedToPresentContainers,
+  orderContainedFirst,
   parseGitHubOrganizations,
   starterOffers,
+  withContainerLinks,
   type StarterOffer,
 } from "./starter-adapters.js";
 
@@ -104,11 +109,19 @@ let vocabularyEdited = false;
 // Setup instructions while the last service request found no service.
 let serviceProblem: string | null = null;
 type AdapterEdit =
-  | { kind: "new" }
+  // linkContainers: the GitHub repositories starter, whose save also links
+  // existing pull request and issue rules to it (`withContainerLinks`).
+  | { kind: "new"; linkContainers?: boolean }
   | { kind: "existing"; identity: string; snapshot: string };
 
 let adapterEdit: AdapterEdit | null = null;
 let githubScopeText = "";
+// Until the user types in the organization field, it follows the
+// organizations the configured GitHub rules already name.
+let githubScopeEdited = false;
+
+const LINKS_EXISTING_RULES = "Also links your existing pull request and issue rules to their repositories.";
+const SKIPS_UNLINKABLE_RULES = "Some existing pull request or issue rules can't be linked to repositories because they don't capture owner and repo; they stay as they are.";
 
 // The host binds a folder selection to the revision it was made at, so any
 // save, from this page or another, makes it unusable.
@@ -400,6 +413,9 @@ function setStarterButtonState(button: HTMLButtonElement, origin: string, key: s
 
 function renderStarterGallery(): void {
   starterGallery.replaceChildren();
+  if (!githubScopeEdited) {
+    githubScopeText = configuredGitHubOrganizations(session.config?.adapters.artifacts ?? []).join(", ");
+  }
   // The typed site address first, then the sites that already have adapters.
   const typed = typedOrigin();
   const origins = [...new Set([
@@ -435,6 +451,7 @@ function renderStarterGallery(): void {
       guidance.className = parseGitHubOrganizations(githubScopeText) ? "" : "warning";
       input.addEventListener("input", () => {
         githubScopeText = input.value;
+        githubScopeEdited = true;
         const valid = parseGitHubOrganizations(githubScopeText) !== null;
         guidance.className = valid ? "" : "warning";
         for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
@@ -452,7 +469,8 @@ function renderStarterGallery(): void {
     review.addEventListener("click", () => {
       const selected = currentStarterOffer(origin, offer.key);
       if (!selected?.adapter || offerConfigured(selected)) return;
-      beginAdapterDraft(selected.adapter, selected.label);
+      const [draft] = linkedToPresentContainers([selected.adapter], session.config?.adapters.artifacts ?? []);
+      beginAdapterDraft(draft!, selected.label, selected.artifact_type === "github.repo");
     });
     card.append(review);
     starterGallery.append(card);
@@ -516,7 +534,9 @@ function renderAdapters(): void {
       move.type = "button";
       move.className = "secondary";
       move.textContent = label;
-      move.dataset.boundary = String(index + offset < 0 || index + offset >= adapters.length);
+      const held = moveHeldByContainer(adapters, index, index + offset);
+      move.dataset.boundary = String(index + offset < 0 || index + offset >= adapters.length || held);
+      if (held) move.title = CONTAINED_MOVE_HELD;
       move.addEventListener("click", () => void moveAdapter(index, offset));
       actions.append(move);
     }
@@ -562,9 +582,12 @@ function readAdapterCandidate(): CandidateResult {
   }
   const parsed = parseAdapterJson(adapterJson.value);
   if (!parsed.ok) return parsed;
-  const artifacts = [...session.config.adapters.artifacts];
-  if (adapterEdit.kind === "new") artifacts.push(parsed.adapter);
-  else {
+  let artifacts = [...session.config.adapters.artifacts];
+  if (adapterEdit.kind === "new") {
+    // Linking adds `within` and leaves every other field, scope included, as it is.
+    if (adapterEdit.linkContainers) artifacts = withContainerLinks(artifacts, parsed.adapter);
+    artifacts.push(parsed.adapter);
+  } else {
     const target = adapterEdit;
     const matches = artifacts
       .map((adapter, index) => adapterIdentity(adapter) === target.identity ? index : -1)
@@ -574,7 +597,8 @@ function readAdapterCandidate(): CandidateResult {
     }
     artifacts[matches[0]!] = parsed.adapter;
   }
-  const document = { format: 1, artifacts };
+  // Preview and save in the order the host will evaluate (contained first).
+  const document = { format: 1, artifacts: orderContainedFirst(artifacts) };
   const problem = validateAdapterDocument(document);
   return problem ? { ok: false, message: problem } : { ok: true, adapter: parsed.adapter, document };
 }
@@ -598,8 +622,15 @@ function refreshAdapterEditor(): void {
   if (adapterEdit === null) return;
   const candidate = readAdapterCandidate();
   adapterValidation.classList.toggle("warning", !candidate.ok);
+  const links = candidate.ok && adapterEdit.kind === "new" && adapterEdit.linkContainers === true
+    ? containerLinks(session.config?.adapters.artifacts ?? [], candidate.adapter)
+    : { linked: 0, skipped: 0 };
   adapterValidation.textContent = candidate.ok
-    ? "Valid here. The native host will validate the complete configuration again before saving."
+    ? [
+      "Valid here. The native host will validate the complete configuration again before saving.",
+      ...(links.linked ? [LINKS_EXISTING_RULES] : []),
+      ...(links.skipped ? [SKIPS_UNLINKABLE_RULES] : []),
+    ].join(" ")
     : candidate.message;
   adapterPreview.replaceChildren();
   if (!candidate.ok) {
@@ -641,9 +672,9 @@ function openAdapterEditor(edit: AdapterEdit, adapter: AdapterObject, heading: s
   refreshAdapterEditor();
 }
 
-function beginAdapterDraft(adapter: AdapterObject, label: string): void {
+function beginAdapterDraft(adapter: AdapterObject, label: string, linkContainers = false): void {
   if (!session.config || busy) return;
-  openAdapterEditor({ kind: "new" }, adapter, `Review ${label} starter`);
+  openAdapterEditor({ kind: "new", linkContainers }, adapter, `Review ${label} starter`);
 }
 
 function beginAdapterEdit(index: number | "new"): void {
@@ -675,8 +706,11 @@ function closeAdapterEditor(): void {
  * turns capture on unless a pause is still pending. A folder selection the
  * host has not saved yet is saved with it.
  */
-async function saveAdapterDocument(document: AdapterDocument, success: string): Promise<void> {
+async function saveAdapterDocument(proposed: AdapterDocument, success: string): Promise<void> {
   if (!session.config || busy) return;
+  // Every settings save keeps contained adapters ahead of their container's
+  // catch-all, whichever path built the document.
+  const document: AdapterDocument = { ...proposed, artifacts: orderContainedFirst(proposed.artifacts) };
   busy = true;
   updateControls();
   const selection = picker;
@@ -760,6 +794,23 @@ async function removeAdapter(index: number): Promise<void> {
   await saveAdapterDocument({ format: 1, artifacts }, `${label} adapter removed; its pages are no longer captured.`);
 }
 
+const CONTAINED_MOVE_HELD = "A pull request or issue rule must stay ahead of its repository rule.";
+
+/** Whether swapping `index` and `target` would put a contained adapter after
+ * its container, which every save would undo (`orderContainedFirst`). */
+function moveHeldByContainer(adapters: AdapterDocument["artifacts"], index: number, target: number): boolean {
+  if (target < 0 || target >= adapters.length) return false;
+  const swapped = [...adapters];
+  [swapped[index], swapped[target]] = [swapped[target]!, swapped[index]!];
+  // A document that is already out of order is reordered by any save, so
+  // only a move that newly breaks the order is held.
+  return misordered(swapped) && !misordered(adapters);
+}
+
+function misordered(adapters: AdapterDocument["artifacts"]): boolean {
+  return orderContainedFirst(adapters).some((adapter, at) => adapter !== adapters[at]);
+}
+
 /** Remove one strip_params entry an adapter reads, leaving everything else
  * as the host last returned it, in one revision-checked save. */
 async function stopStripping(entry: string): Promise<void> {
@@ -785,6 +836,10 @@ async function moveAdapter(index: number, offset: -1 | 1): Promise<void> {
   const config = session.config;
   const target = index + offset;
   if (!config || busy || target < 0 || target >= config.adapters.artifacts.length) return;
+  if (moveHeldByContainer(config.adapters.artifacts, index, target)) {
+    show(CONTAINED_MOVE_HELD, true);
+    return;
+  }
   const artifacts = [...config.adapters.artifacts];
   const current = artifacts[index]!;
   artifacts[index] = artifacts[target]!;

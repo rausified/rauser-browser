@@ -31,8 +31,9 @@ pub fn serve(config: ConfigStore) -> Result<()> {
     serve_with_io(input.lock(), output.lock(), config)
 }
 
-/// What the run proxy may use from the host process. Built once per
-/// connection; tests build it by hand with a fake service.
+/// What the run proxy and `open_summary` may use from the host process.
+/// Built once per connection; tests build it by hand with a fake service or
+/// a recording opener.
 pub struct SetupContext<'a> {
     /// Where run and harness setup messages go. `None` answers them
     /// `service_unavailable`.
@@ -40,6 +41,10 @@ pub struct SetupContext<'a> {
     pub service: Option<&'a ServiceLink>,
     #[cfg(not(unix))]
     pub service: std::marker::PhantomData<&'a ()>,
+    /// How `open_summary` opens a file: `/usr/bin/open` in a macOS release
+    /// build, the `OPEN_LOG_ENV` recorder in test builds, and `Unsupported`
+    /// elsewhere.
+    pub open: crate::open::Opener,
 }
 
 impl SetupContext<'_> {
@@ -50,6 +55,7 @@ impl SetupContext<'_> {
             service: None,
             #[cfg(not(unix))]
             service: std::marker::PhantomData,
+            open: crate::open::default_opener(),
         }
     }
 }
@@ -72,6 +78,7 @@ pub fn serve_with_io<R: Read, W: Write>(input: R, output: W, config: ConfigStore
     #[cfg(unix)]
     let context = SetupContext {
         service: link.as_ref(),
+        ..SetupContext::new()
     };
     #[cfg(not(unix))]
     let context = SetupContext::new();
@@ -263,9 +270,6 @@ fn dispatch(
     consent: &mut ConsentAuthority,
     context: &SetupContext<'_>,
 ) -> Response {
-    // Off Unix there is no service, so nothing is forwarded.
-    #[cfg(not(unix))]
-    let _ = context;
     let id = request.request_id();
     if !valid_request_id(id) {
         return error(
@@ -466,6 +470,7 @@ fn dispatch(
         Request::ListArtifacts(value) => list_artifacts(value, config),
         Request::Worklog(value) => worklog(value, config),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
+        Request::OpenSummary(value) => open_summary(value, config, context.open),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup
@@ -1206,7 +1211,7 @@ fn capture_outcome_is_duplicate(outcome: &CaptureOutcome) -> bool {
 
 /// Open the artifact index with the confirmed adapter document, which
 /// resolves title refs into mentions edges (adapter-templates.md §10.1).
-fn open_index(
+pub(crate) fn open_index(
     config: &ConfigStore,
     storage: &brauser_protocol::StorageConfig,
     cache_dir: &std::path::Path,
@@ -1304,6 +1309,29 @@ struct KeyParts {
     key: RecordKey,
 }
 
+/// `resolve_record_key`'s reason when the home folder is missing or was
+/// replaced; callers that map it to their own message match on this.
+pub(crate) const HOME_UNAVAILABLE: &str = "home folder is unavailable";
+
+/// The configured home folder's vault, refused as `resolve_key_parts`
+/// refuses: a config needing repair, no home folder, or one replaced.
+fn open_vault(config: &mut ConfigStore) -> Result<Vault, Refusal> {
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return Err((
+            ErrorCode::InvalidConfig,
+            "configuration is unavailable or needs repair".into(),
+        ));
+    }
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return Err((
+            ErrorCode::NotConfigured,
+            "choose a home folder first".into(),
+        ));
+    };
+    Vault::open_checked(storage, config.root_identity())
+        .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE.into()))
+}
+
 fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Refusal> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
@@ -1320,7 +1348,7 @@ fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Re
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
     let vault = Vault::open_checked(storage, config.root_identity())
-        .map_err(|_| (ErrorCode::Internal, "home folder is unavailable".into()))?;
+        .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE.into()))?;
     // Match on the original URL, not the stripped canonical form: capture
     // (record_activity, record_why) evaluates adapter identity before any
     // strip-parameter normalization, so a parameter an adapter's match rule
@@ -1739,20 +1767,36 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
     let matched = config
         .adapter_match(&value.url, value.title.as_deref())
         .ok();
-    let Some(matched) = matched else {
-        return Response::ArtifactResult(ArtifactResult {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: value.request_id,
-            recognized: false,
-            artifact: None,
-        });
-    };
     let Some(storage) = config.snapshot().storage.as_ref() else {
+        if matched.is_none() {
+            // Without a home folder there is no summary to report.
+            return Response::ArtifactResult(ArtifactResult {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                recognized: false,
+                artifact: None,
+                summary: None,
+            });
+        }
         return error(
             &value.request_id,
             ErrorCode::NotConfigured,
             "choose a home folder first",
         );
+    };
+    let Some(matched) = matched else {
+        // An unrecognized page is not an artifact, but a summary may still
+        // describe it (spec §7.2). Looking one up is best-effort: when the
+        // index or log catch-up fails the page is simply unrecognized, as
+        // it was before summaries, rather than an error on every tab.
+        let summary = unrecognized_page_summary(config, storage, &value.url, &canonical);
+        return Response::ArtifactResult(ArtifactResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            recognized: false,
+            artifact: None,
+            summary,
+        });
     };
     let cache_dir = match config.cache_dir() {
         Ok(path) => path,
@@ -1774,45 +1818,258 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             );
         }
     };
-    let artifact = match index.artifact(&matched.artifact_id) {
-        Ok(Some(artifact)) => artifact,
-        Ok(None) => ArtifactView {
-            // Context can be saved before the artifact's first activity is
-            // delivered, since activity derives rows but context does not
-            // wait on it; look it up directly instead of hardcoding `None`
-            // and blanking context the user just saved.
-            why: index.latest_why(&matched.artifact_id).ok().flatten(),
-            artifact_id: matched.artifact_id,
-            artifact_type: matched.artifact_type,
-            title: matched
-                .title
-                .map(|title| title.title)
-                .or(value.title)
-                .unwrap_or_else(|| "Untitled".into()),
-            url: canonical,
-            first_seen: String::new(),
-            last_seen: String::new(),
-            focused_seconds: 0,
-            background_seconds: 0,
-            opens: 0,
-            days_opened: 0,
-            last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
-            linked_count: 0,
-        },
-        Err(_) => {
-            return error(
-                &value.request_id,
-                ErrorCode::Internal,
-                "artifact history is unavailable; log catch-up could not complete",
-            );
+    let history_unavailable = |request_id: &str| {
+        error(
+            request_id,
+            ErrorCode::Internal,
+            "artifact history is unavailable; log catch-up could not complete",
+        )
+    };
+    let (artifact, summary) = match index.artifact_with_summary(&matched.artifact_id) {
+        Ok((Some(mut artifact), summary)) => {
+            // The index draws `within` from rolled-up visits, so a contained
+            // artifact recorded only by its summary names its container the
+            // way an unvisited one does.
+            if artifact.within.is_none() {
+                artifact.within = config
+                    .adapter_document()
+                    .ok()
+                    .and_then(|document| crate::index::unvisited_within(document, &matched));
+            }
+            (artifact, summary)
         }
+        Ok((None, _)) => {
+            let document = config.adapter_document().ok();
+            let container =
+                document.and_then(|document| crate::index::unvisited_container(document, &matched));
+            let within =
+                document.and_then(|document| crate::index::unvisited_within(document, &matched));
+            let (title, url) = container.unwrap_or_else(|| {
+                let title = matched
+                    .title
+                    .map(|title| title.title)
+                    .or(value.title)
+                    .unwrap_or_else(|| "Untitled".into());
+                (title, canonical)
+            });
+            (
+                ArtifactView {
+                    // Context can be saved before the artifact's first activity is
+                    // delivered, since activity derives rows but context does not
+                    // wait on it; look it up directly instead of hardcoding `None`
+                    // and blanking context the user just saved.
+                    why: index.latest_why(&matched.artifact_id).ok().flatten(),
+                    artifact_id: matched.artifact_id,
+                    artifact_type: matched.artifact_type,
+                    title,
+                    url,
+                    first_seen: String::new(),
+                    last_seen: String::new(),
+                    focused_seconds: 0,
+                    background_seconds: 0,
+                    opens: 0,
+                    days_opened: 0,
+                    last_mode: matched.mode.map(|mode| mode.as_str().to_owned()),
+                    linked_count: 0,
+                    within,
+                    contained: Vec::new(),
+                },
+                None,
+            )
+        }
+        Err(_) => return history_unavailable(&value.request_id),
     };
     Response::ArtifactResult(ArtifactResult {
         protocol_version: PROTOCOL_VERSION,
         request_id: value.request_id,
         recognized: true,
         artifact: Some(artifact),
+        summary,
     })
+}
+
+/// Open the summary file of the record the page's note uses (§7.2). The key
+/// is resolved, the file's ownership read, and the opener run, all under
+/// `lock_current`, so a config update cannot change the record in between.
+/// Only a file `summary::owned_summary` accepts for that key is opened,
+/// never another file at the generated name: just before the opener runs,
+/// the ambient path must still name the very inode whose bytes were checked
+/// (`vault::same_file`), not a symlink, so a leaf or folder swapped since
+/// is refused.
+///
+/// Accepted window: `/usr/bin/open` takes a pathname, not a handle, so a
+/// local writer that swaps the name between that last check and open's own
+/// lookup (microseconds) can still redirect it, as `replace_owned_file`'s
+/// replace window is accepted. Closing it would need opening by handle,
+/// which LaunchServices does not offer.
+fn open_summary(
+    value: brauser_protocol::OpenSummaryRequest,
+    config: &mut ConfigStore,
+    open: crate::open::Opener,
+) -> Response {
+    let Ok(_config_lock) = config.lock_current() else {
+        return error(
+            &value.request_id,
+            ErrorCode::Internal,
+            "configuration is unavailable",
+        );
+    };
+    // A named path is the summary a row or run shows, opened whatever
+    // record the URL resolves to now; the page's own otherwise.
+    if let Some(path) = &value.summary_path
+        && crate::summary::check_summary_path(path).is_err()
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "summary_path is not a summary path",
+        );
+    }
+    let found = match &value.summary_path {
+        Some(path) => open_vault(config).and_then(|vault| {
+            vault
+                .find_summary_at(path)
+                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
+        }),
+        None => resolve_key_parts(config, &value.url).and_then(|parts| {
+            parts
+                .vault
+                .find_summary(&parts.key, &parts.canonical)
+                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
+        }),
+    };
+    let (relative, linked, file_id) = match found {
+        Ok(crate::vault::FoundSummary::Owned {
+            relative,
+            linked,
+            file_id,
+            ..
+        }) => (relative, linked, file_id),
+        Ok(crate::vault::FoundSummary::Absent) => {
+            let message = if value.summary_path.is_some() {
+                "This summary file no longer exists."
+            } else {
+                "This page has no summary yet."
+            };
+            return error(&value.request_id, ErrorCode::InvalidRequest, message);
+        }
+        Ok(crate::vault::FoundSummary::Unowned) => return not_a_summary(&value.request_id),
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    // resolve_key_parts only succeeds with a home folder configured.
+    let Some(storage) = config.snapshot().storage.as_ref() else {
+        return error(
+            &value.request_id,
+            ErrorCode::NotConfigured,
+            "choose a home folder first",
+        );
+    };
+    let path = std::path::Path::new(&storage.root).join(relative);
+    if !crate::vault::same_file(&path, file_id) {
+        return not_a_summary(&value.request_id);
+    }
+    // `--` ends open's options, so no path can be read as one.
+    match open(&["--".into(), path.into_os_string()]) {
+        Ok(()) => Response::SummaryOpened(brauser_protocol::SummaryOpened {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            relative_path: linked,
+        }),
+        Err(open_error) if open_error.kind() == io::ErrorKind::Unsupported => error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            crate::open::UNSUPPORTED_MESSAGE,
+        ),
+        Err(open_error) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            &format!("Could not open the summary: {open_error}"),
+        ),
+    }
+}
+
+fn not_a_summary(request_id: &str) -> Response {
+    error(
+        request_id,
+        ErrorCode::Conflict,
+        "The file at the summary path is not a Brauser summary.",
+    )
+}
+
+/// The record key and artifact type the summary's log event uses:
+/// - a `Url` key is its own `web.page`;
+/// - an `Artifact` key takes the type of the adapter that matches `url` to
+///   it, or, for a key recovered from an older contract, of its indexed row;
+/// - an artifact whose type neither knows falls back to the URL's own key
+///   and `web.page`. The summary file keeps the resolved key.
+///
+/// `None` when the answer needs the index and it cannot give one (it is
+/// `None`, or its catch-up failed): that is not an answer of "no row", and
+/// falling back then would log the summary under an identity the page no
+/// longer looks under once the index recovers.
+pub(crate) fn summary_artifact(
+    config: &ConfigStore,
+    url: &str,
+    key: &RecordKey,
+    index: Option<&ArtifactIndex>,
+) -> Option<(RecordKey, String)> {
+    if key.kind == RecordKeyKind::Url {
+        return Some((key.clone(), crate::summary::WEB_PAGE_TYPE.into()));
+    }
+    let matched = config
+        .adapter_match(url, None)
+        .ok()
+        .filter(|found| found.artifact_id == key.value)
+        .map(|found| found.artifact_type);
+    let known = match matched {
+        Some(artifact_type) => Some(artifact_type),
+        None => index?
+            .artifact(&key.value)
+            .ok()?
+            .map(|artifact| artifact.artifact_type)
+            .filter(|artifact_type| artifact_type != crate::summary::WEB_PAGE_TYPE),
+    };
+    if let Some(artifact_type) = known {
+        return Some((key.clone(), artifact_type));
+    }
+    let url_key = crate::capture::canonical_url(url, &config.snapshot().strip_params)
+        .ok()
+        .and_then(|canonical| crate::vault::url_record_key(&canonical).ok())
+        .unwrap_or_else(|| key.clone());
+    Some((url_key, crate::summary::WEB_PAGE_TYPE.into()))
+}
+
+/// The latest summary of a page no live adapter recognizes, under the
+/// artifact the finisher logs it to: a recorded contract's artifact (a
+/// removed adapter's page) when its type is known, else the page's
+/// `web.page` identity ([`summary_artifact`] decides both). Any
+/// failure, including a contract this host cannot read, means no summary.
+fn unrecognized_page_summary(
+    config: &ConfigStore,
+    storage: &brauser_protocol::StorageConfig,
+    url: &str,
+    canonical: &str,
+) -> Option<brauser_protocol::SummaryView> {
+    let cache_dir = config.cache_dir().ok()?;
+    let index = open_index(config, storage, &cache_dir).ok()?;
+    let artifact_id = match config.note_key_rule(url) {
+        NoteKeyRule::Artifact(artifact_id) => {
+            let key = RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: artifact_id,
+            };
+            let (event_key, _) = summary_artifact(config, url, &key, Some(&index))?;
+            match event_key.kind {
+                RecordKeyKind::Artifact => event_key.value,
+                RecordKeyKind::Url => crate::summary::web_page_artifact_id(canonical).ok()?,
+            }
+        }
+        NoteKeyRule::Unavailable | NoteKeyRule::StateUnavailable => return None,
+        NoteKeyRule::Ambiguous | NoteKeyRule::Unrecognized | NoteKeyRule::Uncovered => {
+            crate::summary::web_page_artifact_id(canonical).ok()?
+        }
+    };
+    index.summary_for(&artifact_id).ok().flatten()
 }
 
 fn list_artifacts(
@@ -4587,6 +4844,629 @@ id = "work:{host}/{id}"
         }
     }
 
+    /// Log and index a summary the way the service's finisher does: the
+    /// daily-log event first, then the index row from the event it wrote.
+    fn record_page_summary(
+        config: &ConfigStore,
+        url: &str,
+        record_key: RecordKey,
+        artifact_type: &str,
+    ) -> crate::summary::SummaryEvent {
+        let storage = config.snapshot().storage.as_ref().unwrap();
+        let capture =
+            CaptureStore::open_in(storage, config.root_identity(), config.dir().unwrap()).unwrap();
+        let policy = CapturePolicy {
+            enabled: config.snapshot().capture_enabled,
+            origins: &[],
+            strip_params: &config.snapshot().strip_params,
+        };
+        let summary = crate::summary::PageSummary {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            url: url.into(),
+            title: "A summarized page".into(),
+            occurred_at: time::OffsetDateTime::now_utc()
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
+            document_type: "specification".into(),
+            category: "technical specification".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
+            summary_path: "summaries/a.summary.md".into(),
+            record_key,
+            artifact_type: artifact_type.into(),
+            harness: brauser_protocol::HarnessId::Claude,
+        };
+        let (CaptureOutcome::Persisted { .. }, Some(event)) =
+            capture.record_summary(policy, &summary)
+        else {
+            panic!("expected a persisted summary");
+        };
+        open_index(config, storage, &config.cache_dir().unwrap())
+            .unwrap()
+            .record_summary(&event)
+            .unwrap();
+        event
+    }
+
+    fn expected_summary(event: &crate::summary::SummaryEvent) -> brauser_protocol::SummaryView {
+        brauser_protocol::SummaryView {
+            summarized_at: event.occurred_at.clone(),
+            document_type: "specification".into(),
+            category: "technical specification".into(),
+            importance: brauser_protocol::ImportanceLevel::High,
+            summary_path: "summaries/a.summary.md".into(),
+            harness: brauser_protocol::HarnessId::Claude,
+        }
+    }
+
+    fn artifact_result(config: &mut ConfigStore, url: &str) -> ArtifactResult {
+        match get_artifact(
+            brauser_protocol::GetArtifactRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "artifact".into(),
+                url: url.into(),
+                title: None,
+            },
+            config,
+        ) {
+            Response::ArtifactResult(result) => result,
+            other => panic!("expected artifact_result, got {other:?}"),
+        }
+    }
+
+    fn recent_items(config: &mut ConfigStore) -> Vec<brauser_protocol::ArtifactListItem> {
+        match list_artifacts(
+            brauser_protocol::ListArtifactsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "recent".into(),
+                artifact_type: None,
+                title_query: None,
+                limit: 32,
+            },
+            config,
+        ) {
+            Response::ArtifactListResult(result) => result.items,
+            other => panic!("expected artifact_list_result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_artifact_reports_the_summary_of_an_unrecognized_page() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let none = artifact_result(&mut config, url);
+        assert!(!none.recognized);
+        assert_eq!((none.artifact, none.summary), (None, None));
+
+        let event = record_page_summary(
+            &config,
+            url,
+            crate::vault::url_record_key(url).unwrap(),
+            crate::summary::WEB_PAGE_TYPE,
+        );
+        let result = artifact_result(&mut config, url);
+        assert!(!result.recognized);
+        assert_eq!(result.artifact, None);
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+        // Another page has no summary of its own.
+        assert_eq!(
+            artifact_result(&mut config, "https://example.com/other").summary,
+            None
+        );
+
+        let items = recent_items(&mut config);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].artifact_type, "web.page");
+        assert_eq!(items[0].summary, Some(expected_summary(&event)));
+    }
+
+    #[test]
+    fn get_artifact_on_an_unrecognized_page_without_a_home_has_no_summary() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = ConfigStore::for_test(folder.path().join("config.toml"));
+        let result = artifact_result(&mut config, "https://example.com/spec");
+        assert!(!result.recognized);
+        assert_eq!((result.artifact, result.summary), (None, None));
+    }
+
+    /// A summary is extra information on an unrecognized page: when the
+    /// artifact history cannot be read, the page is still plainly
+    /// unrecognized rather than an error on every ordinary tab.
+    #[test]
+    fn get_artifact_on_an_unrecognized_page_stays_quiet_when_history_is_unavailable() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        // A file where the log folder belongs: catch-up cannot complete.
+        std::fs::write(notes.join("logs"), b"not a folder").unwrap();
+        let storage = config.snapshot().storage.clone().unwrap();
+        let index = open_index(&config, &storage, &config.cache_dir().unwrap()).unwrap();
+        assert!(index.summary_for("web:https://example.com/spec").is_err());
+        let result = artifact_result(&mut config, "https://example.com/spec");
+        assert!(!result.recognized);
+        assert_eq!((result.artifact, result.summary), (None, None));
+    }
+
+    /// A page whose adapter was removed keeps the summary logged under its
+    /// recorded artifact key, the key open_summary and Recent use too.
+    #[test]
+    fn get_artifact_reports_a_removed_adapters_summary_under_its_artifact_key() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        let event = record_page_summary(
+            &config,
+            url,
+            RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "work:work.example/7".into(),
+            },
+            "work.item",
+        );
+        let mut next = config.snapshot().clone();
+        next.adapters.artifacts.clear();
+        let revision = config.revision().to_owned();
+        config.update(next, &revision).unwrap().unwrap();
+        assert!(matches!(
+            config.note_key_rule(url),
+            crate::config::NoteKeyRule::Artifact(_)
+        ));
+
+        let result = artifact_result(&mut config, url);
+        assert!(!result.recognized);
+        assert_eq!(result.artifact, None);
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+    }
+
+    /// A removed adapter's page whose artifact type nothing records: the
+    /// finisher logs its summary under the URL's `web.page` key
+    /// (`summary_artifact`), and get_artifact looks under that same key.
+    #[test]
+    fn get_artifact_finds_a_summary_logged_under_the_web_page_of_an_untyped_artifact() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let mut next = config.snapshot().clone();
+        next.adapters.artifacts.clear();
+        let revision = config.revision().to_owned();
+        config.update(next, &revision).unwrap().unwrap();
+        let url = "https://work.example/items/7";
+        let artifact_key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:work.example/7".into(),
+        };
+        assert!(matches!(
+            config.note_key_rule(url),
+            crate::config::NoteKeyRule::Artifact(ref id) if *id == artifact_key.value
+        ));
+        let storage = config.snapshot().storage.clone().unwrap();
+        let index = open_index(&config, &storage, &config.cache_dir().unwrap()).unwrap();
+        let (event_key, artifact_type) =
+            summary_artifact(&config, url, &artifact_key, Some(&index)).unwrap();
+        assert_eq!(event_key, crate::vault::url_record_key(url).unwrap());
+        assert_eq!(artifact_type, crate::summary::WEB_PAGE_TYPE);
+        let event = record_page_summary(&config, url, event_key, &artifact_type);
+
+        let result = artifact_result(&mut config, url);
+        assert!(!result.recognized);
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+        // Recent lists the same summary.
+        let items = recent_items(&mut config);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].summary, Some(expected_summary(&event)));
+    }
+
+    #[test]
+    fn get_artifact_reports_an_adapter_artifacts_summary() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        assert_eq!(artifact_result(&mut config, url).summary, None);
+        let event = record_page_summary(
+            &config,
+            url,
+            RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "work:work.example/7".into(),
+            },
+            "work.item",
+        );
+
+        let result = artifact_result(&mut config, url);
+        assert!(result.recognized);
+        let artifact = result.artifact.expect("the summary created the row");
+        assert_eq!(artifact.artifact_id, "work:work.example/7");
+        assert_eq!((artifact.opens, artifact.days_opened), (0, 0));
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+        let items = recent_items(&mut config);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].artifact_id, "work:work.example/7");
+        assert_eq!(items[0].summary, Some(expected_summary(&event)));
+    }
+
+    std::thread_local! {
+        /// What the recording opener was asked to open on this test's thread.
+        static OPENED: std::cell::RefCell<Vec<Vec<String>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn recording_opener(args: &[std::ffi::OsString]) -> io::Result<()> {
+        OPENED.with(|opened| {
+            opened.borrow_mut().push(
+                args.iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect(),
+            );
+        });
+        Ok(())
+    }
+
+    fn take_opened() -> Vec<Vec<String>> {
+        OPENED.with(|opened| std::mem::take(&mut *opened.borrow_mut()))
+    }
+
+    /// The absolute path the host opens for a `/`-separated wire path, built
+    /// one segment at a time so Windows gets its own separators.
+    fn opened_path(root: &std::path::Path, relative: &str) -> String {
+        relative
+            .split('/')
+            .fold(root.to_path_buf(), |path, segment| path.join(segment))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn open_summary_with(
+        config: &mut ConfigStore,
+        url: &str,
+        open: crate::open::Opener,
+    ) -> Response {
+        open_summary_at(config, url, None, open)
+    }
+
+    fn open_summary_at(
+        config: &mut ConfigStore,
+        url: &str,
+        summary_path: Option<&str>,
+        open: crate::open::Opener,
+    ) -> Response {
+        dispatch(
+            Request::OpenSummary(brauser_protocol::OpenSummaryRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "open-summary".into(),
+                url: url.into(),
+                summary_path: summary_path.map(Into::into),
+            }),
+            config,
+            &mut ConsentAuthority::new(),
+            &SetupContext {
+                open,
+                ..SetupContext::new()
+            },
+        )
+    }
+
+    /// A minimal file `summary::owned_summary` accepts for `key`.
+    fn owned_summary_text(key: &RecordKey, canonical_url: &str) -> String {
+        let id = match key.kind {
+            RecordKeyKind::Url => "url_id",
+            RecordKeyKind::Artifact => "artifact_id",
+        };
+        format!(
+            "---\ntitle: \"T\"\nbrauser:\n  kind: summary\n  canonical_url: {}\n  {id}: {}\n---\n\nAgent text.\n",
+            serde_json::to_string(canonical_url).unwrap(),
+            serde_json::to_string(&key.value).unwrap(),
+        )
+    }
+
+    /// Write `contents` at the record's summary path; returns that path,
+    /// home-folder relative with `/` separators.
+    fn place_summary(
+        config: &ConfigStore,
+        key: &RecordKey,
+        canonical_url: &str,
+        contents: &str,
+    ) -> String {
+        let storage = config.snapshot().storage.as_ref().unwrap();
+        let vault = Vault::open_checked(storage, config.root_identity()).unwrap();
+        let relative = vault.summary_relative_path(key, canonical_url).unwrap();
+        let path = std::path::Path::new(&storage.root).join(&relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, contents).unwrap();
+        relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    fn error_of(response: Response) -> (ErrorCode, String) {
+        match response {
+            Response::Error(ErrorResponse { code, message, .. }) => (code, message),
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_summary_opens_only_an_owned_summary() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        take_opened();
+
+        // A file at the summary path that is not this record's summary is
+        // never opened: a plain note, then another record's summary.
+        let relative = place_summary(&config, &key, url, "# My own notes\n");
+        let (code, message) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert_eq!(
+            message,
+            "The file at the summary path is not a Brauser summary."
+        );
+        let other = crate::vault::url_record_key("https://example.com/other").unwrap();
+        place_summary(
+            &config,
+            &key,
+            url,
+            &owned_summary_text(&other, "https://example.com/other"),
+        );
+        let (code, _) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(take_opened().is_empty());
+
+        place_summary(&config, &key, url, &owned_summary_text(&key, url));
+        match open_summary_with(&mut config, url, recording_opener) {
+            Response::SummaryOpened(opened) => {
+                assert_eq!(opened.request_id, "open-summary");
+                assert_eq!(opened.relative_path, relative);
+            }
+            other => panic!("expected summary_opened, got {other:?}"),
+        }
+        let absolute = opened_path(&notes, &relative);
+        assert_eq!(take_opened(), vec![vec!["--".to_owned(), absolute]]);
+    }
+
+    #[test]
+    fn open_summary_uses_the_key_the_pages_note_uses() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/7";
+        let artifact = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:work.example/7".into(),
+        };
+        take_opened();
+        // A summary under the page's URL key is not the adapter artifact's.
+        let url_key = crate::vault::url_record_key(url).unwrap();
+        place_summary(&config, &url_key, url, &owned_summary_text(&url_key, url));
+        let (code, _) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+
+        let relative = place_summary(&config, &artifact, url, &owned_summary_text(&artifact, url));
+        assert!(matches!(
+            open_summary_with(&mut config, url, recording_opener),
+            Response::SummaryOpened(ref opened) if opened.relative_path == relative
+        ));
+        assert_eq!(
+            take_opened(),
+            vec![vec!["--".to_owned(), opened_path(&root, &relative)]]
+        );
+    }
+
+    /// Review finding: a Recent row or run card opens the summary it shows,
+    /// by that summary's own path, even when the page's URL now resolves to
+    /// another record (an adapter removed, or `strip_params` changed).
+    #[test]
+    fn open_summary_by_path_opens_the_summary_the_row_shows() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://work.example/items/7";
+        let artifact = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: "work:work.example/7".into(),
+        };
+        take_opened();
+        // Saved under an adapter's artifact that no longer matches the URL.
+        let relative = place_summary(&config, &artifact, url, &owned_summary_text(&artifact, url));
+        let (code, _) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert!(take_opened().is_empty());
+
+        match open_summary_at(&mut config, url, Some(&relative), recording_opener) {
+            Response::SummaryOpened(opened) => assert_eq!(opened.relative_path, relative),
+            other => panic!("expected summary_opened, got {other:?}"),
+        }
+        assert_eq!(
+            take_opened(),
+            vec![vec!["--".to_owned(), opened_path(&notes, &relative)]]
+        );
+    }
+
+    /// A path opens only a summary at the very name its own record's
+    /// summary has, so a request cannot point the opener anywhere else.
+    #[test]
+    fn open_summary_by_path_refuses_any_other_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        let other_url = "https://example.com/other";
+        let other = crate::vault::url_record_key(other_url).unwrap();
+        take_opened();
+
+        // Another record's summary copied to this record's name.
+        let relative = place_summary(&config, &key, url, &owned_summary_text(&other, other_url));
+        let (code, _) = error_of(open_summary_at(
+            &mut config,
+            url,
+            Some(&relative),
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::Conflict);
+        // A plain file at a summary name.
+        place_summary(&config, &key, url, "# Mine\n");
+        let (code, _) = error_of(open_summary_at(
+            &mut config,
+            url,
+            Some(&relative),
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::Conflict);
+        // An owned summary outside the summaries folder.
+        let elsewhere = notes.join("notes/x.summary.md");
+        std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+        std::fs::write(&elsewhere, owned_summary_text(&key, url)).unwrap();
+        let (code, _) = error_of(open_summary_at(
+            &mut config,
+            url,
+            Some("notes/x.summary.md"),
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::Conflict);
+        // Not a summary path at all.
+        for bad in ["../x.summary.md", "summaries/a.md", "/etc/x.summary.md"] {
+            let (code, _) = error_of(open_summary_at(
+                &mut config,
+                url,
+                Some(bad),
+                recording_opener,
+            ));
+            assert_eq!(code, ErrorCode::InvalidRequest, "{bad}");
+        }
+        // Gone since the row was drawn.
+        std::fs::remove_file(notes.join(&relative)).unwrap();
+        let (code, message) = error_of(open_summary_at(
+            &mut config,
+            url,
+            Some(&relative),
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert_eq!(message, "This summary file no longer exists.");
+        assert!(take_opened().is_empty());
+    }
+
+    #[test]
+    fn open_summary_without_a_summary_is_invalid_request() {
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        take_opened();
+        let (code, message) = error_of(open_summary_with(
+            &mut config,
+            "https://example.com/spec",
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert_eq!(message, "This page has no summary yet.");
+        // A name the host cannot read as a file is not a summary either.
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        let relative = place_summary(&config, &key, url, "");
+        let path = notes.join(&relative);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let (code, _) = error_of(open_summary_with(&mut config, url, recording_opener));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(take_opened().is_empty());
+
+        // Without a home folder there is nothing to open.
+        let mut unconfigured = ConfigStore::for_test(folder.path().join("none.toml"));
+        let (code, _) = error_of(open_summary_with(
+            &mut unconfigured,
+            "https://example.com/spec",
+            recording_opener,
+        ));
+        assert_eq!(code, ErrorCode::NotConfigured);
+        assert!(take_opened().is_empty());
+    }
+
+    #[test]
+    fn open_summary_reports_an_opener_that_cannot_open() {
+        fn unsupported(_: &[std::ffi::OsString]) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported"))
+        }
+        fn failing(_: &[std::ffi::OsString]) -> io::Result<()> {
+            Err(io::Error::other("no opener"))
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        place_summary(&config, &key, url, &owned_summary_text(&key, url));
+        let (code, message) = error_of(open_summary_with(&mut config, url, unsupported));
+        assert_eq!(code, ErrorCode::InvalidRequest);
+        assert_eq!(message, "Opening is only supported on macOS.");
+        let (code, message) = error_of(open_summary_with(&mut config, url, failing));
+        assert_eq!(code, ErrorCode::Internal);
+        assert!(message.contains("no opener"), "{message}");
+    }
+
     #[test]
     fn loading_a_note_works_on_any_http_page_without_site_authorization() {
         let folder = tempfile::tempdir().unwrap();
@@ -5840,6 +6720,150 @@ id = "work:{host}/{id}"
     }
 
     #[test]
+    fn an_unvisited_container_is_titled_from_its_id() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://github.com\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "github.pr"
+origin = "https://github.com"
+match = [{ path = "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }]
+scope = { owner = ["acme-corp"] }
+id = "github.pr:{host}/{owner}/{repo}/{number}"
+within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
+
+[[artifacts]]
+type = "github.repo"
+origin = "https://github.com"
+match = [{ path = "/{owner:name|lower}/{repo:name|lower}/{*}" }]
+scope = { owner = ["acme-corp"] }
+id = "github.repo:{host}/{owner}/{repo}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let get = |config: &mut ConfigStore, url: &str| {
+            let Response::ArtifactResult(reply) = get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "artifact".into(),
+                    url: url.into(),
+                    title: Some("widgets/README.md at main · acme-corp/widgets".into()),
+                },
+                config,
+            ) else {
+                panic!("expected artifact result")
+            };
+            reply.artifact.unwrap()
+        };
+        let repo = get(
+            &mut config,
+            "https://github.com/acme-corp/widgets/blob/main/README.md",
+        );
+        assert_eq!(repo.artifact_id, "github.repo:github.com/acme-corp/widgets");
+        assert_eq!(repo.title, "acme-corp/widgets");
+        assert_eq!(repo.url, "https://github.com/acme-corp/widgets");
+        assert_eq!((repo.within, repo.contained), (None, vec![]));
+        // A contained artifact keeps its page title.
+        let pull = get(&mut config, "https://github.com/acme-corp/widgets/pull/7");
+        assert_eq!(pull.title, "widgets/README.md at main · acme-corp/widgets");
+        assert_eq!(pull.url, "https://github.com/acme-corp/widgets/pull/7");
+        // Unvisited, it still names the repository it sits within.
+        assert_eq!(
+            pull.within,
+            Some(brauser_protocol::ArtifactRefView {
+                artifact_id: "github.repo:github.com/acme-corp/widgets".into(),
+                artifact_type: "github.repo".into(),
+                title: "acme-corp/widgets".into(),
+                url: "https://github.com/acme-corp/widgets".into(),
+            })
+        );
+        assert!(pull.contained.is_empty());
+    }
+
+    /// A contained artifact recorded only by its summary still names the
+    /// container it sits within, and the summary stays with it: the
+    /// repository's own page shows none (DESIGN.md §6.2, spec §7.2).
+    #[test]
+    fn a_summary_only_pull_request_names_its_repository() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://github.com\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "github.pr"
+origin = "https://github.com"
+match = [{ path = "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }]
+scope = { owner = ["acme-corp"] }
+id = "github.pr:{host}/{owner}/{repo}/{number}"
+within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
+
+[[artifacts]]
+type = "github.repo"
+origin = "https://github.com"
+match = [{ path = "/{owner:name|lower}/{repo:name|lower}/{*}" }]
+scope = { owner = ["acme-corp"] }
+id = "github.repo:{host}/{owner}/{repo}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let pr_url = "https://github.com/acme-corp/widgets/pull/7";
+        let pr_id = "github.pr:github.com/acme-corp/widgets/7";
+        let event = record_page_summary(
+            &config,
+            pr_url,
+            RecordKey {
+                kind: brauser_protocol::RecordKeyKind::Artifact,
+                value: pr_id.into(),
+            },
+            "github.pr",
+        );
+        let result = artifact_result(&mut config, pr_url);
+        assert!(result.recognized);
+        assert_eq!(result.summary, Some(expected_summary(&event)));
+        let pull = result.artifact.unwrap();
+        assert_eq!(pull.artifact_id, pr_id);
+        assert_eq!(
+            (pull.opens, pull.days_opened, pull.focused_seconds),
+            (0, 0, 0)
+        );
+        assert_eq!(
+            pull.within,
+            Some(brauser_protocol::ArtifactRefView {
+                artifact_id: "github.repo:github.com/acme-corp/widgets".into(),
+                artifact_type: "github.repo".into(),
+                title: "acme-corp/widgets".into(),
+                url: "https://github.com/acme-corp/widgets".into(),
+            })
+        );
+        let repo = artifact_result(
+            &mut config,
+            "https://github.com/acme-corp/widgets/blob/main/README.md",
+        );
+        assert_eq!(repo.summary, None);
+        let repo = repo.artifact.unwrap();
+        assert_eq!(repo.artifact_id, "github.repo:github.com/acme-corp/widgets");
+        assert_eq!((repo.opens, repo.focused_seconds), (0, 0));
+        assert!(repo.contained.is_empty());
+    }
+
+    #[test]
     fn title_refs_resolve_through_the_confirmed_adapters_into_links() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
@@ -6497,6 +7521,7 @@ id = "work:{host}/{id}"
         fn call(config: &mut ConfigStore, link: &ServiceLink, request: Request) -> Response {
             let context = SetupContext {
                 service: Some(link),
+                ..SetupContext::new()
             };
             dispatch(request, config, &mut ConsentAuthority::new(), &context)
         }

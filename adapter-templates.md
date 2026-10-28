@@ -1,6 +1,6 @@
 # Adapter Templates — Specification
 
-> Status: Accepted (2026-09-28) · Replaced the regular-expression patterns in DESIGN.md §7.2 (DESIGN.md updated 2026-09-28; §14 below is applied) · Amended 2026-09-28: fixed-shape captures anchor a template (§4.1), and drafts come from the Create adapter flow as well as the agent (§10.4) · Target: M1.5a, built in DESIGN.md §12.2 step 6.2 · Format version 1
+> Status: Accepted (2026-09-28) · Replaced the regular-expression patterns in DESIGN.md §7.2 (DESIGN.md updated 2026-09-28; §14 below is applied) · Amended 2026-09-28: fixed-shape captures anchor a template (§4.1), and drafts come from the Create adapter flow as well as the agent (§10.4) · Amended 2026-10-27: a required path capture named by a `scope` key anchors a template (§4.1, §6), and an adapter may declare a container with `within` (§3, §8.3) · Target: M1.5a, built in DESIGN.md §12.2 step 6.2 · Format version 1
 
 ## 1. Purpose
 
@@ -58,7 +58,10 @@ modes    = { }                 # optional (§5.4)
 scope    = { }                 # required on shared origins (§6)
 path_case = "sensitive"        # or "insensitive" (§5.1)
 fields   = { status = "<selector>" }               # Tier 1, unchanged
+# within = { type = "<container type>", id = "<container ID template>" } # optional (§8.3)
 ```
+
+`within` is optional. When present it is a table with exactly the string keys `type` and `id`: the type of the container artifact the adapter's artifacts sit within, and an ID template for it (§8.3). The Jira adapter above declares none.
 
 Each rule is a table with:
 
@@ -102,7 +105,7 @@ Structural rules, checked when config loads:
 
 - `{*}` may appear only as the last segment.
 - Optional segments may appear only after every required segment, and only before `{*}` if one is present.
-- A template must contain at least one required **anchor** segment. An anchor is a literal segment, an alternation segment (captured or not), or a fixed-shape capture. A fixed-shape capture is a `uuid` capture or a `hex` capture whose bounds fix its length at exactly 32 or more, such as `hex(32)` or `hex(40)`, with or without `@tail`. An optional segment never counts as the anchor, because the template also matches without it. `/` alone, `/{*}`, `/{a:name}/{b:token}`, `/{h:hex(16)}`, `/{h:hex(32,40)}`, and `/{a:name}/{t?:(tasks)}` are invalid. A fixed-shape value is as distinctive as a route word, so it anchors a tool whose URLs have no fixed words, such as Notion's `/<workspace>/<Title>-<32 hex>` (§11). An `int`, `token`, `name`, or `jira_key` capture is never an anchor, because ordinary pages have segments of those shapes too.
+- A template must contain at least one required **anchor** segment. An anchor is a literal segment, an alternation segment (captured or not), or a fixed-shape capture. A fixed-shape capture is a `uuid` capture or a `hex` capture whose bounds fix its length at exactly 32 or more, such as `hex(32)` or `hex(40)`, with or without `@tail`. An optional segment never counts as the anchor, because the template also matches without it. `/` alone, `/{*}`, `/{a:name}/{b:token}`, `/{h:hex(16)}`, `/{h:hex(32,40)}`, and `/{a:name}/{t?:(tasks)}` are invalid. A fixed-shape value is as distinctive as a route word, so it anchors a tool whose URLs have no fixed words, such as Notion's `/<workspace>/<Title>-<32 hex>` (§11). An `int`, `token`, `name`, or `jira_key` capture is never an anchor, because ordinary pages have segments of those shapes too. One exception: a required path capture whose name is a `scope` key (§6) is an anchor, because the scope list pins it to values the user chose, so it is effectively a literal. On GitHub, `/{owner:name|lower}/{repo:name|lower}/{*}` has no fixed word, but with `scope = { owner = ["acme-corp"] }` it validates and matches only that organization's repositories. The same rule applies on any shared origin with a tenant capture, such as a Notion or Linear workspace. An `unscoped = "acknowledged"` adapter gets no scope anchor, a scoped capture bound from a query value is not a path anchor, and an optional scoped capture fails scope (§6) before the anchor is checked. Validation checks the anchor after scope, so it can see the scope keys.
 - Capture names are unique within a rule.
 - At most 32 segments, 16 alternatives per alternation, 64 characters per literal, and 512 characters per template.
 - `bounds` may only narrow a type's default length range (§7). `hex(32)` means exactly 32; `token(20,64)` means 20 to 64.
@@ -196,6 +199,8 @@ An adapter on a shared origin must have one of:
 
 - **`unscoped = "acknowledged"`**, for origins where the URL cannot tell tenants apart. The native confirmation says so in plain words, for example: "This records every Google Doc you open in this Chrome profile, from every Google account signed in to it." It recommends a separate Chrome profile for work. Google's `/u/<n>/` account index is not accepted as a scope, because the index depends on sign-in order.
 
+A scoped tenant capture also anchors the adapter's templates (§4.1). On GitHub, the repository rule `/{owner:name|lower}/{repo:name|lower}/{*}` has no fixed word, and `scope = { owner = ["acme-corp"] }` is what makes it valid: the listed organization stands in for the literal. This holds for any shared origin whose URLs name the tenant, such as Notion and Linear workspaces. It needs a real scope list. An `unscoped` adapter, or a capture the scope does not restrict, gets no such anchor.
+
 Widening a scope (adding a value, or switching to `unscoped`) widens capture and needs the native confirmation. Narrowing takes effect immediately.
 
 ## 7. Capture types
@@ -247,6 +252,24 @@ Because no capture type admits `/` or `:`, an `artifact_id` splits back into its
 - The `format` number versions this language. A future format may add types or segment kinds, but it never changes how an existing template in an older format builds an ID.
 - Changing the `id` template of an adapter that has recorded activity is a **migration**, not an edit. The host shows how many artifacts are affected, and on confirmation writes one `alias` event from each old ID to its new one (DESIGN.md §5.1), so no history, note, or summary is orphaned.
 - A starter adapter's ID template is frozen once it ships. Starter adapters use Brauser's own ID scheme, not another tool's (DESIGN.md §14).
+
+### 8.3 Container IDs
+
+An adapter may declare that each artifact it recognizes sits **within** a container artifact, such as a pull request within its repository:
+
+```toml
+within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
+```
+
+- `within.type` follows the adapter-type grammar (§3). It may not be `web.page`, and it may not equal the adapter's own `type`.
+- `within.id` follows the §8.1 grammar, and the scheme `web` is reserved here too. It may not be the adapter's own `id` template (the same scheme and parts), which would give an artifact and its container one record key (`within_self`). Each `{name}` must be a capture the adapter's own `id` uses or a key of its `scope`, so every rule binds it, it is never optional, and it is never `mode`. A capture that only the container ID uses is still an extra capture (§8.1).
+- `{host}` is the adapter's own host, and parts take the same canonical values as the adapter's ID.
+- A match carries the container's type and built ID alongside its own. If the container ID would exceed 512 bytes, the match still stands but names no container.
+- Container IDs are as durable as artifact IDs (§8.2). The container's own adapter, if any, must build the same ID for the container's pages, and adding, changing, or removing `within` on an adapter with recorded activity is a contract change, confirmed like any other. Until migrations exist the host allows only the first addition: once an adapter declares `within`, changing or removing it is refused like an ID edit (DESIGN.md §6.2). A shipped starter's container ID is frozen with its own ID.
+
+Roll-up: a visit recognized as artifact A within container C counts once toward A and once toward C, never twice toward C. A visit is recognized by exactly one adapter (first match wins, §3), so C's totals are its own pages plus everything within it, each second counted once, and C's days opened are the union of its own days and its contents' days. The host derives containers and keeps these totals in its index (DESIGN.md §5).
+
+Title and URL: the host names a container row from its ID, not from the page last seen inside it, but only when some adapter in the document declares `within` that container's type. It assumes the container ID's native part (after `<scheme>:`) is `{host}/<path segments>`: the title is everything after the first `/` (for GitHub, `owner/repo`), and the URL is the adapter's origin followed by `/` and that title. A container ID template shaped differently, such as one that leads with a capture other than `{host}` or whose segments do not form the container's own path, gets a wrong title and a broken link; such templates are not supported yet.
 
 ## 9. Title templates
 
@@ -316,7 +339,7 @@ When config loads, the host checks every rule in §4.1, §5, §6, §7, §8, and 
 
 Because the language has no free-form patterns, the host can decide whether two rules could match the same URL. It compares them segment by segment: literals against literals, literals against type membership, types against types by alphabet and length range, with optional segments and rests expressed as length ranges. The comparison is conservative: it treats `@tail`, `jira_key`'s structure, and query conditions by their alphabets and length ranges, so it can report an overlap that no URL actually produces, but it never misses one. A fixed-shape `@tail` capture anchors a template (§4.1), but overlap still compares its whole segment as a range: any segment long enough to end in the capture. Messages therefore say "may overlap". The host uses this to:
 
-- warn when two user-written adapters on one origin overlap, naming the rule that would win;
+- warn when two user-written adapters on one origin overlap, naming the rule that would win. An adapter that declares `within` a type, placed before an adapter of that type on its origin whose ID template is the same as the `within` ID (same scheme and parts), is not warned about: the container is the intended fall-through for its other pages (§8.3). If the two ID templates differ, the pages would split between two containers, so the overlap is reported. The reverse order is still reported, because the container would claim the contained pages;
 - drop each Tier 2 draft rule that overlaps an existing adapter on its origin;
 - list, in the match preview, which already-recognized artifacts a change would re-map.
 
@@ -377,6 +400,9 @@ id       = "gdoc:{host}/{id}"
 title    = "{title} - Google Docs"
 
 # GitHub pull requests: scoped to an org; case-folded names; review tab.
+# `within` rolls each visit up into the repository too (§8.3); it must be
+# tried before the repository catch-all below, so adapters on this origin
+# keep pull requests and issues ordered ahead of it (DESIGN.md §5.1).
 [[artifacts]]
 type   = "github.pr"
 origin = "https://github.com"
@@ -388,6 +414,18 @@ modes  = { files = "review", commits = "view", checks = "view" }
 id     = "github.pr:{host}/{owner}/{repo}/{number}"
 title  = "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub"
 refs   = [{ type = "jira.issue", find = "jira_key" }]
+within = { type = "github.repo", id = "github.repo:{host}/{owner}/{repo}" }
+
+# GitHub repositories: a container (§8.3). The catch-all rule has no literal
+# route word; it is valid because the scoped {owner} capture is an anchor
+# (§4.1, §6). No title template: the host derives a container's title and
+# URL from its ID (`owner/repo`), never from a sub-page's title.
+[[artifacts]]
+type   = "github.repo"
+origin = "https://github.com"
+match  = [{ path = "/{owner:name|lower}/{repo:name|lower}/{*}" }]
+scope  = { owner = ["acme-corp"] }
+id     = "github.repo:{host}/{owner}/{repo}"
 
 # Notion: ID at the end of a slugged segment; scoped to a workspace. No literal segment:
 # the fixed-shape hex(32) capture is the anchor (§4.1).
@@ -411,7 +449,7 @@ match     = [
 id        = "sharepoint:{host}/{doc}"
 ```
 
-Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; and Google Docs cannot be scoped by URL.
+Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; Google Docs cannot be scoped by URL; and a scope miss is terminal rather than falling through to a container, so a pull request outside `github.pr`'s scope but inside `github.repo`'s is dropped, not recorded as a repository visit.
 
 ### 11.1 Adapter documentation
 
@@ -435,7 +473,7 @@ Every sample on the page is also a shared test vector (§12). CI fails when a st
 - **Bounds tests.** Inputs at every cap (2048-character URL, 64 segments, 512-character title, longest type values) complete within a fixed time budget in both engines.
 - **Title lists.** The first matching entry wins, a list of more than 4 is a validation error, an invalid entry fails validation even when an earlier entry is valid, and a prefixed and an unprefixed title of one artifact give the same title.
 - **Adapter documentation.** Each starter adapter has its page, and every sample on it is a vector (§11.1).
-- **Anchors.** The §11 Notion adapter validates; `/{a:name}/{b:token}`, `/{n:int}`, `/{k:jira_key}`, and `/{h:hex(8,40)}` fail with no anchor; `/{h:hex(16)}`, `/{h:hex(32,40)}`, and `/{a:name}/{t?:(tasks)}` fail because the only candidate anchor is too short, variable, or optional; `/{u:uuid}`, `/{h:hex(32)}`, `/{h:hex(32)@tail}`, and `/{m:(edit|view)}/{n:int}` validate; a draft rule whose only anchor is a fixed-shape capture is dropped while the draft's other rules survive (§10.4); and a draft on a shared origin with pending scope cannot be enabled, but choosing scope leaves it a draft.
+- **Anchors.** The §11 Notion adapter validates; `/{a:name}/{b:token}`, `/{n:int}`, `/{k:jira_key}`, and `/{h:hex(8,40)}` fail with no anchor; `/{h:hex(16)}`, `/{h:hex(32,40)}`, and `/{a:name}/{t?:(tasks)}` fail because the only candidate anchor is too short, variable, or optional; `/{u:uuid}`, `/{h:hex(32)}`, `/{h:hex(32)@tail}`, and `/{m:(edit|view)}/{n:int}` validate; `/{owner:name|lower}/{repo:name|lower}/{*}` on GitHub validates when `owner` is scoped and fails with no anchor when the adapter is `unscoped` or `owner` is bound only from the query; a draft rule whose only anchor is a fixed-shape capture is dropped while the draft's other rules survive (§10.4); and a draft on a shared origin with pending scope cannot be enabled, but choosing scope leaves it a draft.
 - **Drafts.** `/{owner:name|lower}/{repo:name}/pull/{n:int}` passes the draft rules on `github.com`, because `name` captures are not identifiers and `pull` comes before `{n}`. `/(issues|pulls)/{n:int}` and `/{d:token}/{n:int}` are dropped, with no literal before the first identifier. A rule whose ID uses only `name` captures is dropped. A draft that copies an existing scope keys it by the shared-origin list's capture name, and a pending scope blocks enabling without making the rule user-written.
 - **Scope tests.** For each shared origin: a URL outside the scope, a case variant of a scoped value, and a scoped capture missing from one rule (a validation error).
 

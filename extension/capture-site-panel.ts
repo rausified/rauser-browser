@@ -1,7 +1,7 @@
 import type { WorkerStatus } from "./model.js";
 import { ConfigSession, describe, element, withConfigMutationLock, worker } from "./settings.js";
 import { captureOrigin, planCaptureSite, siteConfigured, type CapturePlan } from "./capture-site.js";
-import { starterKind } from "./starter-adapters.js";
+import { githubOwnerFromUrl, starterKind } from "./starter-adapters.js";
 import { SitePatternPanel } from "./site-pattern-panel.js";
 
 export interface CapturePage {
@@ -17,6 +17,22 @@ interface CaptureActions {
   afterSave(): Promise<void>;
 }
 
+// The confirmation line names only what is actually checked, in this fixed
+// order, so the privacy-boundary scope line is never wider than the save.
+const GITHUB_RECORD_LABELS: Record<string, string> = {
+  "github.repo": "repositories",
+  "github.pr": "pull requests",
+  "github.issue": "issues",
+};
+const GITHUB_RECORD_ORDER = ["github.repo", "github.pr", "github.issue"];
+
+/** "A", "A and B", or "A, B and C" — no Oxford comma, matching this panel's
+ * existing list copy (e.g. the "Remember: X and Y" summary line). */
+function joinRecordedTypes(labels: string[]): string {
+  if (labels.length < 2) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
 /** An in-panel, revision-bound review. All transient page URLs and scopes
  * remain in this panel; only the reviewed config goes to the native host. */
 export class CaptureSitePanel {
@@ -27,10 +43,10 @@ export class CaptureSitePanel {
   private readonly review = element<HTMLElement>("capture-site-review");
   private readonly heading = element<HTMLElement>("capture-site-heading");
   private readonly github = element<HTMLElement>("capture-site-github");
+  private readonly repos = element<HTMLInputElement>("capture-site-repos");
   private readonly prs = element<HTMLInputElement>("capture-site-prs");
-  private readonly prOrgs = element<HTMLInputElement>("capture-site-pr-orgs");
   private readonly issues = element<HTMLInputElement>("capture-site-issues");
-  private readonly issueOrgs = element<HTMLInputElement>("capture-site-issue-orgs");
+  private readonly orgs = element<HTMLInputElement>("capture-site-orgs");
   private readonly preview = element<HTMLElement>("capture-site-preview");
   private readonly message = element<HTMLElement>("capture-site-message");
   private readonly save = element<HTMLButtonElement>("capture-site-save");
@@ -49,7 +65,7 @@ export class CaptureSitePanel {
       this.start.focus();
     });
     this.save.addEventListener("click", () => void this.commit());
-    for (const input of [this.prs, this.prOrgs, this.issues, this.issueOrgs]) {
+    for (const input of [this.repos, this.prs, this.issues, this.orgs]) {
       input.addEventListener("input", () => this.updatePreview());
     }
   }
@@ -85,10 +101,11 @@ export class CaptureSitePanel {
     const origin = captureOrigin(this.page.url)!;
     this.heading.textContent = `Capture work on ${new URL(origin).host}`;
     this.github.hidden = starterKind(origin) !== "github";
+    this.repos.checked = true;
     this.prs.checked = true;
     this.issues.checked = true;
-    this.prOrgs.value = "";
-    this.issueOrgs.value = "";
+    // Shown and confirmed, never applied unseen: the user still has to save.
+    this.orgs.value = githubOwnerFromUrl(this.page.url) ?? "";
     this.updatePreview();
     this.heading.focus();
   }
@@ -97,8 +114,7 @@ export class CaptureSitePanel {
     this.target = null;
     this.plan = null;
     this.review.hidden = true;
-    this.prOrgs.value = "";
-    this.issueOrgs.value = "";
+    this.orgs.value = "";
     this.preview.replaceChildren();
     this.start.hidden = false;
   }
@@ -116,9 +132,8 @@ export class CaptureSitePanel {
     this.message.textContent = problem ?? this.previewMessage;
     this.save.disabled = busy || !this.plan || !!problem || !this.session.connected;
     this.cancel.disabled = this.saving;
-    for (const input of [this.prs, this.prOrgs, this.issues, this.issueOrgs]) input.disabled = this.saving || stale;
-    this.prOrgs.disabled ||= !this.prs.checked;
-    this.issueOrgs.disabled ||= !this.issues.checked;
+    for (const input of [this.repos, this.prs, this.issues, this.orgs]) input.disabled = this.saving || stale;
+    this.orgs.disabled ||= !this.repos.checked && !this.prs.checked && !this.issues.checked;
     this.save.textContent = this.saving ? "Saving…" : this.plan?.startsCapture ? "Start capturing this site" : "Save site · keep capture paused";
   }
 
@@ -126,8 +141,10 @@ export class CaptureSitePanel {
     if (!this.target || !this.session.config || this.saving) return;
     this.preview.replaceChildren();
     const result = planCaptureSite(this.session.config, this.target.url, {
-      pullRequests: this.prs.checked ? this.prOrgs.value : null,
-      issues: this.issues.checked ? this.issueOrgs.value : null,
+      organizations: this.orgs.value,
+      repositories: this.repos.checked,
+      pullRequests: this.prs.checked,
+      issues: this.issues.checked,
     });
     this.plan = result.ok ? result.plan : null;
     this.previewMessage = result.ok
@@ -142,11 +159,16 @@ export class CaptureSitePanel {
       for (const offer of plan.offers) {
         const line = document.createElement("p");
         line.textContent = offer.description;
-        if (offer.kind === "github") {
-          const scope = offer.adapter!.scope as { owner: string[] };
-          line.textContent += ` Organizations for ${offer.label}: ${scope.owner.join(", ")}.`;
-        }
         this.preview.append(line);
+      }
+      const githubOffer = plan.offers.find((offer) => offer.kind === "github");
+      if (githubOffer) {
+        const scope = githubOffer.adapter!.scope as { owner: string[] };
+        const checkedTypes = new Set(plan.offers.map((offer) => offer.artifact_type));
+        const labels = GITHUB_RECORD_ORDER.filter((type) => checkedTypes.has(type)).map((type) => GITHUB_RECORD_LABELS[type]!);
+        const orgs = document.createElement("p");
+        orgs.textContent = `Records ${joinRecordedTypes(labels)} owned by: ${scope.owner.join(", ")}.`;
+        this.preview.append(orgs);
       }
       const current = document.createElement("p");
       current.textContent = `This page: ${plan.current.result.match ? "will be captured" : "will not be captured"} — ${plan.current.url}`;

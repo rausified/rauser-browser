@@ -15,6 +15,14 @@ it could not save. The capture housekeeping controls from M1 collapsed into a
 one-line, expandable capture strip. The answer card, Summary section, and full
 omnibar are not built (M2/M3).
 
+Unacknowledged note edits now have synchronous browser-local recovery
+(`extension/note-recovery.ts`, `brwr-3nq`). Every snapshot has an immutable
+key, and native acknowledgements/discards only remove the exact snapshot
+they saw. Reopening shows recovered copies beside the current host note with
+Copy/Discard; they never enter the editor or autosave automatically. Storage
+failures warn without preventing host saves. Preserve that boundary when
+changing note identity, save sequencing or panel teardown.
+
 Open access (protocol version 6, PR 1 of
 `docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md`)
 removed the per-site grant wall. The manifest requests `http://*/*` and
@@ -78,7 +86,7 @@ an optional `agent.env` on each run's environment. The panel polls
 LaunchAgent; `--no-service` skips it and `--unregister-service` removes it.
 
 Summarize & log (PR 3 of the open-access spec, DESIGN.md §12.2 step 10.3)
-is built on `feat/agent-runners-pr3`. Harness setup runs in the service:
+is merged (#98). Harness setup runs in the service:
 `discover_harnesses` and `set_up_harness` are forwarded to it, it detects
 `codex` and `claude` on its own `PATH` plus `$HOME/.local/bin` (an owned,
 non-writable install and a parseable `--version`, with no version refused),
@@ -110,9 +118,38 @@ frame, caps the text in encoded bytes, and sends `start_run`. A polling run
 card shows state, elapsed time, the streamed text as text only, Cancel,
 Retry save, Copy, Open in Codex or Copy resume command, and the
 type/category/importance line, and cards return from `list_runs` when the
-panel reopens. Nothing is saved yet: `summary_path` is always null, and the
-summary file and summary log event are PR 4. The headless smoke run covers
-setup and runs against fake `codex` and `claude` scripts.
+panel reopens. The headless smoke run covers setup and runs against fake
+`codex` and `claude` scripts.
+
+Summary outputs (PR 4, DESIGN.md §12.2 step 10.4) are built on
+`feat/summary-outputs-pr4`. The service's `SummaryFinisher`
+(`host/src/service/finisher.rs`) saves a validated answer under the
+configuration current at finish, holding the config lock: it rechecks the
+home folder and layout, re-derives the record key and follows a changed one
+(`written_record_key`), writes `summaries/<note stem>.summary.md`
+(`host/src/summary.rs` `render_summary`, `Vault::write_summary`), then appends
+a `summary` daily-log event whose marker carries `record_key`,
+`artifact_type`, and `harness` and attaches to the adapter's artifact on a
+recognized page or a `web.page` artifact otherwise. The event time is the
+run's `answered_at` stamp in the offset of the click's `requested_at`, so a
+Retry save rebuilds the same file and log line; the supervisor re-stamps an
+answer the daily log's window no longer accepts, and failures are plain
+reasons that say what to do. Summaries log while capture is paused. Agent
+body text goes through `markdown::neutralize_remote`, a context-free escape
+(`<` as `&lt;`, `\!` before `[`, and backticks, `$`, tabs, `~` runs of three
+or more and code-length space runs as numeric entities), single-line fields
+through `markdown::inline` or wikilinks, and front matter through
+`markdown::yaml_string` with no entities; `npm run test:markdown-neutralizer`
+renders the shared corpus with markdown-it, micromark and marked, in CI too.
+The index cache is format 6 (`STATE_VERSION`; a format-5 cache migrates in
+place); summaries never count as opens or opened days, artifact files gain a
+Summary line and date-ordered Timeline summary lines, and Recent rows,
+`get_artifact` (an unrecognized page included, quietly null on a failed
+lookup), and the worklog carry them. `open_summary` opens only the record's
+owned summary file through the native host's `SetupContext.open` (PR 3's
+opener). The panel shows the page's saved summary, summarized Recent rows,
+and the run card's saved-summary line (one retried lookup), each with **Open
+summary** through `ConfigSession.openSummary` or the card's host call.
 
 M1.5a is built on top of that. The adapter-template language
 (`adapter-templates.md`) is built as a Rust crate (`adapter-templates/`) and a
@@ -188,13 +225,52 @@ the snapshot and offers **Stop stripping**.
 The panel's Capture Site flow now sets up previously unconfigured Jira Cloud,
 SharePoint/OneDrive, and GitHub origins using the existing development starter
 catalog. It reviews the current page, illustrative examples and fixed safety
-probes inline, with separate GitHub pull-request and issue organization lists,
+probes inline. GitHub now offers repositories alongside pull requests and
+issues, all three checked by default and sharing one organization field
+(2026-10-27) instead of separate PR and issue lists; the field is pre-filled
+from the current URL's owner segment (also `/orgs/<org>/…`), lowercased and
+shown for the user to confirm or edit rather than applied unseen, and a page
+with no usable owner (the GitHub root, a reserved top-level route, `/orgs`
+with no org) gets no pre-fill and asks instead. The confirmation line names
+only the types actually checked, so it is never wider than what is saved. It
 then saves once through revisioned `update_config`. It preserves configured
 sites and global pauses, refuses pending local pauses/removals and stale
 reviews, and saves old note edits before reloading their host-derived identity.
 Installing policy from a page seeds already-open recognized tabs for attention
 measurement without inventing cold opens; background renewals retain their
 normal navigation accounting.
+
+GitHub repositories as container artifacts (2026-10-27): the adapter-template
+language gained a general mechanism for an adapter to declare
+`within = { type, id }`, naming a container artifact its own matches sit
+inside (adapter-templates.md §3, §8.3), and a required path capture a `scope`
+key restricts to a literal list now counts as an anchor segment too (§4.1,
+§6), not only a literal or a fixed-shape capture. `github.repo` is the first
+adapter to use either: a new starter, a catch-all over everything inside a
+GitHub repository that no PR or issue adapter claims, scoped to the owner
+like the other two, with `github.pr` and `github.issue` now declaring
+`within` it. `orderContainedFirst` (`extension/starter-adapters.ts`) keeps PR
+and issue adapters ahead of the repo catch-all on every save path (the panel,
+settings, and the JSON editor), because adapters on one origin are tried in
+config order and a PR or issue visit already rolls up into its repository.
+The host's index (`host/src/index.rs`) derives each contained visit's
+container by re-evaluating the logged URL, not by recording it at log time,
+so existing PR and issue history rolls up into repositories retroactively; a
+`within` edge records the relationship, worklog and day totals count a
+rolled-up visit once, and a container whose own page has never been opened
+directly still gets a title and URL derived from its ID instead of a stale or
+missing one. The route-history guard in `host/src/config.rs` is amended so a
+declared container may overlap the routes of a retired or removed contract it
+is exactly the container of, which is what lets settings add `github.repo` on
+top of already-configured PR/issue adapters (adding `within` to them in the
+same save) without tripping the existing-history freeze. Protocol version 7
+exposes the relationship to the panel: `ArtifactView.within` and `.contained`
+on `get_artifact`/`list_artifacts`, with the card showing "In <repo>" on a
+contained artifact's own card and "Worked on inside" with its rolled-up
+contents on a container's card. Downgrading after adding repositories is
+unsupported: older hosts reject `within` in the adapter config and in adapter
+history.
+
 The separate **Page patterns** panel review now inspects a URL and up to 500
 same-page anchors on an explicit click, in the top frame's isolated world.
 Its self-contained shaper (`extension/site-patterns.ts`) replaces identifier
@@ -235,8 +311,8 @@ changes a contract.
 - `protocol/strip-params/vectors.json` pins the `strip_params` matching rule shared by `matches_param` (host/src/capture.rs) and `stripsParam` (extension/adapter-review.ts); both test suites read it.
 - `host/` contains the native host. Keep host policy checks on the privileged side of the messaging boundary. `host/src/consent.rs` holds the purpose-bound folder-picker grants and the `update_config` field checks; `host/src/dialog.rs` runs the native folder picker, the only native dialog. There is no `privacy.rs`, `extension/grants.ts`, or `macos-alert/` crate any more (removed with protocol v6).
 - Every first-party crate is `#![forbid(unsafe_code)]`.
-- `host/src/answer.rs` validates the structured summary answer; `host/src/open.rs` is the platform opener (`/usr/bin/open` on macOS, a log file in test builds). `host/src/service/` holds the service: `child.rs` (line-streaming child processes), `codex.rs` and `claude.rs` (the runners), `prompt.rs` (the §6.4 prompt), `setup.rs` (detect and probe), and `open.rs` (`open_path`, `get_agent_env`), beside PR 2's server, supervisor, queue, records, and client. There is no `harness_setup.rs` any more.
-- `extension/` contains the MV3 Chrome development build. `npm run build:extension` emits `extension/dist/` for unpacked loading, including the pinned `vendor/readability.js` it copies from `node_modules` after checking its hash. `extension/extract.ts` is the self-contained page extractor, `extension/summarize.ts` starts a run from a tab, and `extension/run-card.ts` is the panel's polling run card.
+- `host/src/answer.rs` validates the structured summary answer; `host/src/open.rs` is the platform opener (`/usr/bin/open` on macOS, a log file in test builds). `host/src/service/` holds the service: `child.rs` (line-streaming child processes), `codex.rs` and `claude.rs` (the runners), `prompt.rs` (the §6.4 prompt), `setup.rs` (detect and probe), `open.rs` (`open_path`, `get_agent_env`), and `finisher.rs` (PR 4's `SummaryFinisher`), beside PR 2's server, supervisor, queue, records, and client. There is no `harness_setup.rs` any more. `host/src/markdown.rs` holds the shared Markdown safety helpers (`yaml_string`, `inline`, `wikilink`, `neutralize_remote`, `relative_link`) and `host/src/markdown_corpus.rs` checks them against the shared corpus; `host/src/summary.rs` names, renders, and recognizes summary files and validates summary events.
+- `extension/` contains the MV3 Chrome development build. `npm run build:extension` emits `extension/dist/` for unpacked loading, including the pinned `vendor/readability.js` it copies from `node_modules` after checking its hash. `extension/extract.ts` is the self-contained page extractor, `extension/summarize.ts` starts a run from a tab, and `extension/run-card.ts` is the panel's polling run card; `extension/summary-text.ts` words a saved summary for the panel, Recent, and the run card.
 - Product naming (app name, native host ID, storage key, marker, and temp-file prefixes) lives in `extension/brand.ts` (also used by the build and dev scripts) and `host/src/brand.rs`. Page and manifest text use `{{APP_NAME}}`/`{{FULL_NAME}}`, filled in by `extension/build.mjs`. Crate, package, and binary names in `Cargo.toml` and `package.json` still change separately.
 - `scripts/register-dev-host.mjs` registers a per-user development native host for one unpacked extension ID; installers own release registration.
 - `.github/workflows/ci.yml` runs the build and quality checks from the reusable `.github/workflows/build-os.yml` on `macos-15` and `windows-latest`, with the headless smoke run (`npm run smoke:macos:headless`) and fuzz-target compile check on macOS only, and `BRAUSER_REQUIRE_IPC_TESTS=1` so socket tests never skip. When GitHub cancels a starved `macos-15` job (cancelled with zero steps run, checked through the Actions API), the same steps rerun on `macos-15-intel` (x64; a separate runner pool from the arm64 images); a real failure, timeout or interruption of `macos-15` does not fall back. The `Build and check` gate job, the check branch protection requires, passes only when Windows passes and macOS passes on `macos-15` or, after that cancellation, on the `macos-15-intel` fallback.
@@ -248,11 +324,21 @@ Run the commands in [README.md](README.md#development) before proposing a code c
 
 For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a window or takes focus. Only when the user asks for it, run `npm run smoke:macos -- --auto` instead (real dialogs, UI scripting; warn them before it takes focus) — `--auto` and `--headless` are mutually exclusive flags of the same script, not combinable. See [TESTING.md](TESTING.md) for what each check (`smoke:macos:headless`, `probe:m15a`) actually does, how to run the real-dialog variants, and what headless cannot prove — it is the single, self-contained source for testing guidance; update it with anything you learn here.
 
+## Review and merge cadence
+
+These rules exist because repeated review passes, main moving under open PRs, and strictly serial review chains cost more time than building (2026-10-27).
+
+- **One Codex pass.** Run `codex exec review --base origin/main` once, after the full gate. Fix every P1 test-first. File each P2 and P3 as a bead (with the finding text and file) instead of fixing it in the PR, unless the fix is a few lines and needs no new test seam. Run a second pass only when the P1 fixes changed behaviour substantially; never a third.
+- **Run the Codex review alongside CI**, not after it. Both start on the same pushed head.
+- **Announce the final stretch of a big PR.** Before merging main into a PR that touches more than about ten files or a shared seam (protocol schema, `adapter-templates`, `service/`, `config.rs`), tell the other active sessions so they hold merges that touch the same files until it lands. Whoever merges second resolves the conflicts.
+- **Overlap per-task review with the next task** in multi-task plans: review task N while task N+1 is being built, unless N+1 depends on code the review may change. Batch small, low-risk tasks (docs, wiring) into one review.
+- **Check scope before a large build.** For a plan of more than about five tasks, list the user-facing decisions it assumes and confirm any that are open before building.
+
 ## Security rules
 
 - Treat all extension messages and page-derived content as untrusted.
 - Keep vault paths rooted in a user-selected directory; never accept a raw file path from a page or extension request.
-- Preserve existing user files. Page notes and generated artifact files are the two implemented file kinds the host replaces whole. A page note is replaced only after checking the caller's version and the file's recorded canonical URL and Brauser ownership (`host/src/note.rs`); an artifact is replaced only after finding exactly one matching `brauser.kind: artifact` and `artifact_id` in its frontmatter (`host/src/index.rs`). An unrelated or unowned file at either path is a conflict, never adopted or overwritten. Every other content location (log, later) stays create-only.
+- Preserve existing user files. Page notes, generated artifact files, and summary files are the three implemented file kinds Brauser replaces whole. A page note is replaced only after checking the caller's version and the file's recorded canonical URL and Brauser ownership (`host/src/note.rs`); an artifact is replaced only after finding exactly one matching `brauser.kind: artifact` and `artifact_id` in its frontmatter (`host/src/index.rs`); a summary is replaced only when the `brauser:` block in its leading frontmatter is `kind: summary` with this record's `url_id` or `artifact_id` and not the other key (`summary::owned_summary`, through the shared `replace_owned_file` in host/src/vault.rs). An unrelated or unowned file at any of these paths is a conflict, never adopted or overwritten; summary files are never adopted. Every other content location (log, later) stays create-only.
 - Keep capture off until a home folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs). Any stored config whose home folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path). The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs). Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings. The service re-checks that identity before every run and refuses a missing or replaced knowledge base folder (`not_configured`, host/src/service/server.rs), and checks it again under the config lock when a queued or resumed run leaves the queue, failing that run before its harness starts (`cwd_check`, `ServiceOptions::run_cwd`).
 - The host re-checks every delivered event against its own adapters with the Rust engine before any vault I/O; a worker can only narrow what is recorded, never widen it. Never let a Chrome permission, a worker claim, or extension state substitute for that check. That includes every activity trail source: the host rejects the event rather than drop a trail, so the worker strips trails whose source left the lease before dispatch (`trailsUnder` in extension/worker.ts) and never edits a dispatched event.
 - Carry pending site removals across upgrades. Origins an earlier build removed or saw revoked are migrated into the worker's one pending-removal list (`migratePendingRemovals` in extension/worker.ts), their adapters stay out of every capture lease, and the list clears only when a lease the host actually sent holds no adapter on those origins. An unreadable list pauses capture (fail closed).
@@ -260,7 +346,10 @@ For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a wind
 - Before offering a harness, detection verifies the resolved binary and its parent directory are owned by the current user or root and are not group/world-writable, and refuses it otherwise (host/src/harness.rs `detect`, `check_install`).
 - Summary runs have full access by design (Codex `danger-full-access` with `approvalPolicy: "never"`, Claude Code `--dangerously-skip-permissions`), run in the knowledge base folder with the service's environment plus `agent.env`, and are bounded by the per-run timeout and a process-group kill on cancel or timeout. Never put page text, or anything derived from the page, on a command line: the prompt names `page.md` by path, and Claude Code gets the prompt on stdin (host/src/service/prompt.rs, host/src/service/claude.rs).
 - The prompt must mark the page content as untrusted data that may carry instructions aimed at the agent, and tell the agent to ignore them (host/src/service/prompt.rs `summary_prompt`). The agent's answer is untrusted too: the service validates it (host/src/answer.rs `parse_answer`) and drops any `related_notes` entry outside the knowledge base.
-- Render streamed agent text and answers as text only (`textContent`), never as HTML or Markdown, and never navigate from them (extension/run-card.ts).
+- Render streamed agent text and answers as text only (`textContent`), never as HTML or Markdown, and never navigate from them (extension/run-card.ts). The saved-summary lines in the panel and the run card follow the same rule (extension/summary-text.ts).
+- Only the service writes summary files and `summary` log events, and only from a run it finished itself, with the answer it validated (`SummaryFinisher` in host/src/service/finisher.rs); no message lets the extension supply summary text, a summary path, or a record key for one.
+- Agent text in a summary file is never written raw: front matter values go through `summary.rs` `yaml_text` (`presentation::plain_line`, which turns control and invisible format characters into spaces, then `markdown::yaml_string`'s JSON quoting; no Markdown entities), identity values (the `brauser:` block's canonical URL and record key) go through `yaml_string` unchanged so the ownership check reads them back exactly, single-line fields are escaped with `markdown::inline` or written as wikilinks only when the wikilink carries the name unchanged, and the description and assessment go through `markdown::neutralize_remote`, each starting a line after a host newline (host/src/summary.rs `render_summary`, DESIGN.md §5.2 step 6). Change the neutralizer only with its corpus (`host/tests/fixtures/markdown-neutralize-corpus.json`) and `npm run test:markdown-neutralizer` green.
+- `open_summary` opens only the summary file the record's own key names and only when `summary::owned_summary` accepts it; it never opens a path the extension supplies or any other file at that name, and it re-checks, under the config lock and just before the opener runs, that the path still names the checked inode and no symlink (`vault::same_file`) (host/src/native.rs `open_summary`).
 - Tests never run a real harness, `/usr/bin/open`, or `launchctl`: runners are tested with fake `codex`/`claude` scripts on an injected search path, the opener in test and `scripted-dialogs` builds only appends to the file `BRAUSER_OPEN_LOG` names (host/src/open.rs), and the smoke run's fakes sit on a pinned `PATH`.
 - The Brauser service (`host/src/service/`) runs as the user, never root, as a per-user LaunchAgent started on demand. Its support directory must be a real directory owned by the user with mode 0700 (refuse a symlink or another owner, `ServicePaths::ensure_private`), its socket is mode 0600, and the service refuses a support path too long for a Unix socket rather than moving the socket elsewhere. Only the native host talks to it; the host accepts no `service_hello` from the extension and always chooses the run's record key itself.
 - `agent.env` is read at the start of every run and must be a regular, non-symlink file of mode 0600, or the run fails before it starts (host/src/service/agent_env.rs). Never put a value from it in an error, log line, protocol message, or settings view; settings may show its names only.

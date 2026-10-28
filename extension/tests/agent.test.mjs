@@ -7,7 +7,7 @@ const {
   SERVICE_SETUP_INSTRUCTIONS, SETUP_WARNING, agentEnvText, agentStateText, harnessFoundText,
   serviceSetupText, vocabularyFromText,
 } = agent;
-const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
+const { isConfig, isResponseShape, isSummaryView } = await import("../dist/protocol-shape.js");
 
 const config = {
   storage: {
@@ -152,6 +152,46 @@ test("artifact list responses enforce the protocol type bound", () => {
   }), false);
 });
 
+const SUMMARY_VIEW = {
+  summarized_at: "2026-10-26T14:05:00-07:00", document_type: "specification",
+  category: "technical specification", importance: "high",
+  summary_path: "summaries/a.summary.md", harness: "codex",
+};
+
+test("artifact_result requires summary", () => {
+  const result = { type: "artifact_result", recognized: false, artifact: null, summary: SUMMARY_VIEW };
+  assert.equal(isResponseShape(result), true);
+  assert.equal(isResponseShape({ ...result, summary: null }), true);
+  const { summary: _omitted, ...missing } = result;
+  assert.equal(isResponseShape(missing), false);
+  assert.equal(isSummaryView(SUMMARY_VIEW), true);
+  for (const bad of [
+    { ...SUMMARY_VIEW, importance: "critical" },
+    { ...SUMMARY_VIEW, harness: "claude_code" },
+    { ...SUMMARY_VIEW, summary_path: 7 },
+    { ...SUMMARY_VIEW, extra: 1 },
+    (({ harness: _harness, ...rest }) => rest)(SUMMARY_VIEW),
+    "high",
+  ]) {
+    assert.equal(isSummaryView(bad), false, JSON.stringify(bad));
+    assert.equal(isResponseShape({ ...result, summary: bad }), false, JSON.stringify(bad));
+  }
+});
+
+test("artifact list items require a nullable summary", () => {
+  const item = {
+    local_date: "2026-10-26", artifact_id: "web:a.example/x", artifact_type: "web.page", title: "T",
+    url: "https://a.example/x", focused_seconds: 0, background_seconds: 0, opens: 0, why: null,
+    summary: SUMMARY_VIEW,
+  };
+  const list = (items) => isResponseShape({ type: "artifact_list_result", items, artifact_types: [], truncated: false });
+  assert.equal(list([item]), true);
+  assert.equal(list([{ ...item, summary: null }]), true);
+  const { summary: _omitted, ...missing } = item;
+  assert.equal(list([missing]), false);
+  assert.equal(list([{ ...item, summary: { ...SUMMARY_VIEW, importance: "High" } }]), false);
+});
+
 test("run responses are checked against the RunView shape", () => {
   const view = {
     run_id: "00000000-0000-4000-8000-000000000001", state: "running", harness: "codex",
@@ -214,4 +254,10 @@ test("path_opened and agent_env_listed responses are checked", () => {
   assert.equal(isResponseShape({
     type: "agent_env_listed", names: Array.from({ length: 65 }, (_, n) => `K${n}`), problem: null,
   }), false);
+});
+
+test("summary_opened responses carry the opened path", () => {
+  assert.equal(isResponseShape({ type: "summary_opened", relative_path: "summaries/a.summary.md" }), true);
+  assert.equal(isResponseShape({ type: "summary_opened" }), false);
+  assert.equal(isResponseShape({ type: "summary_opened", relative_path: 7 }), false);
 });

@@ -10,6 +10,10 @@ use std::io;
 /// reveal a file in Finder. A plain function so a test can pass a recorder.
 pub type Opener = fn(args: &[OsString]) -> io::Result<()>;
 
+/// The one message for an opener that returns `io::ErrorKind::Unsupported`,
+/// whichever request asked to open something.
+pub(crate) const UNSUPPORTED_MESSAGE: &str = "Opening is only supported on macOS.";
+
 /// The opener this build uses.
 pub fn default_opener() -> Opener {
     #[cfg(any(test, feature = "scripted-dialogs"))]

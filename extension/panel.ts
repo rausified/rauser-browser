@@ -16,14 +16,19 @@ import { hostBuildText } from "./build-info.js";
 import { SETUP_WARNING } from "./agent.js";
 import { summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards, runsMayExist } from "./run-card.js";
+import { recentSummaryText, summaryLine } from "./summary-text.js";
 import { NoteEditor, type UnsavedText } from "./note-editor.js";
+import { NoteRecovery } from "./note-recovery.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
 } from "./artifact-refresh.js";
 import type {
   ArtifactListItem,
+  ArtifactRefView,
   ArtifactView,
+  ContainedArtifactView,
   OlderNote,
+  SummaryView,
   WorklogResult,
 } from "../protocol/ts/generated.js";
 
@@ -58,6 +63,8 @@ const noteBody = element<HTMLTextAreaElement>("note-body");
 const noteConflict = element<HTMLDivElement>("note-conflict");
 const noteConflictMessage = noteConflict.querySelector("p")!;
 const noteUnsaved = element<HTMLTextAreaElement>("note-unsaved");
+const discardUnsavedButton = element<HTMLButtonElement>("discard-unsaved");
+const noteRecoveryWarning = element<HTMLParagraphElement>("note-recovery-warning");
 const copyUnsavedButton = element<HTMLButtonElement>("copy-unsaved");
 const artifactStatus = element<HTMLParagraphElement>("artifact-status");
 const artifactCard = element<HTMLElement>("artifact-card");
@@ -65,6 +72,9 @@ const artifactHeading = element<HTMLHeadingElement>("artifact-heading");
 const artifactIdentity = element<HTMLParagraphElement>("artifact-identity");
 const artifactMeasures = element<HTMLParagraphElement>("artifact-measures");
 const artifactLinks = element<HTMLParagraphElement>("artifact-links");
+const artifactWithin = element<HTMLParagraphElement>("artifact-within");
+const artifactContained = element<HTMLDivElement>("artifact-contained");
+const artifactContainedList = element<HTMLUListElement>("artifact-contained-list");
 const artifactMode = element<HTMLSpanElement>("artifact-mode");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
@@ -89,6 +99,9 @@ const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
 const summarizeButton = element<HTMLButtonElement>("summarize");
 const runArea = element<HTMLDivElement>("run-area");
+const pageSummary = element<HTMLDivElement>("page-summary");
+const pageSummaryText = element<HTMLParagraphElement>("page-summary-text");
+const pageSummaryOpen = element<HTMLButtonElement>("page-summary-open");
 
 const session = new ConfigSession(render);
 const runCards = new RunCards(runArea, {
@@ -98,6 +111,7 @@ const runCards = new RunCards(runArea, {
   visible: () => document.visibilityState !== "hidden",
   storage: chrome.storage.local,
   openSettings,
+  summarySaved: () => void refreshArtifact(true),
 });
 let captureSite: CaptureSitePanel | null = null;
 // Suppress note loads only while capture policy can change their identity.
@@ -143,6 +157,11 @@ let whyEdited = false;
 // another page must not leave this card, and its artifact_id, in place.
 let artifactPageUrl: string | null = null;
 let savingWhy = false;
+// The page whose saved summary the summary line shows, or null when hidden.
+// Like the artifact card, a line for another page never stays in place.
+let summaryPageUrl: string | null = null;
+/** That summary's own file, which Open summary names. */
+let summaryPagePath: string | null = null;
 let summarizing = false;
 // The run area's latest line and the tab it is about; another tab's line goes
 // when the panel follows a different tab.
@@ -150,7 +169,11 @@ let runLine: { tabId: number; element: HTMLElement } | null = null;
 // The last worker notice shown, since one can arrive both live and stored.
 let shownNotice: string | null = null;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
+// The shown Recent rows' Open summary buttons, disabled with the host.
+let recentOpenButtons: HTMLButtonElement[] = [];
 let recentLoadSeq = 0;
+let recentWaitingForHost = false;
+let worklogWaitingForHost = false;
 let worklogLoadSeq = 0;
 
 function show(message: string, warning = false): void {
@@ -172,6 +195,76 @@ function duration(seconds: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
+/** Shows `summary`, the page's saved summary, whether or not an adapter
+ * recognizes the page; null hides the line. Agent text goes through
+ * textContent only. */
+function renderPageSummary(summary: SummaryView | null, pageUrl: string | null): void {
+  summaryPageUrl = summary === null ? null : pageUrl;
+  summaryPagePath = summary?.summary_path ?? null;
+  pageSummary.hidden = summaryPageUrl === null;
+  pageSummaryText.textContent = summary !== null && summaryPageUrl !== null ? summaryLine(summary) : "";
+}
+
+async function openPageSummary(): Promise<void> {
+  const url = summaryPageUrl;
+  if (url === null || currentPage?.url !== url) return;
+  try {
+    await session.openSummary(url, summaryPagePath);
+  } catch (error) {
+    show(`Could not open the summary: ${describe(error)}`, true);
+  }
+}
+
+async function openRecentSummary(url: string, summaryPath: string): Promise<void> {
+  try {
+    await session.openSummary(url, summaryPath);
+  } catch (error) {
+    recentStatus.textContent = `Could not open the summary: ${describe(error)}`;
+  }
+}
+
+/** Whether an artifact's history holds no measured activity: a summary
+ * moves first and last seen but adds no time, opens, or days. */
+function noActivityMeasured(artifact: ArtifactView): boolean {
+  return artifact.focused_seconds === 0 && artifact.background_seconds === 0 &&
+    artifact.opens === 0 && artifact.days_opened === 0;
+}
+
+// A null/empty container field hides its element along with its contents, so
+// a later artifact that lacks one never shows a stale card from the artifact
+// before it.
+function renderWithin(within: ArtifactRefView | null): void {
+  artifactWithin.replaceChildren();
+  artifactWithin.hidden = within === null;
+  if (!within) return;
+  const label = document.createElement("span");
+  label.textContent = "In ";
+  const link = document.createElement("a");
+  link.href = within.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = within.title;
+  artifactWithin.append(label, link);
+}
+
+function containedRow(item: ContainedArtifactView): HTMLLIElement {
+  const row = document.createElement("li");
+  const link = document.createElement("a");
+  link.href = item.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = `${item.title} · ${duration(item.focused_seconds)}`;
+  row.append(link);
+  return row;
+}
+
+function renderContained(contained: readonly ContainedArtifactView[]): void {
+  artifactContainedList.replaceChildren();
+  artifactContained.hidden = contained.length === 0;
+  if (!contained.length) return;
+  artifactContainedList.append(...contained.map(containedRow));
+}
+
 function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null = null): void {
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
@@ -180,6 +273,8 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   if (!artifact) {
     whyArtifactId = null;
     whyEdited = false;
+    renderWithin(null);
+    renderContained([]);
     updateControls();
     return;
   }
@@ -191,12 +286,16 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   // so days_opened alone cannot distinguish real delivered activity from
   // the no-record-yet placeholder; first_seen is empty only for that
   // placeholder (native.rs's get_artifact fallback).
-  artifactMeasures.textContent = artifact.first_seen
-    ? `Focused ${duration(artifact.focused_seconds)} over ${artifact.days_opened} day${artifact.days_opened === 1 ? "" : "s"} · ${duration(artifact.background_seconds)} background · last ${artifact.last_seen}`
-    : "Recognized; no delivered activity yet.";
+  artifactMeasures.textContent = !artifact.first_seen
+    ? "Recognized; no delivered activity yet."
+    : noActivityMeasured(artifact)
+    ? "No activity measured yet"
+    : `Focused ${duration(artifact.focused_seconds)} over ${artifact.days_opened} day${artifact.days_opened === 1 ? "" : "s"} · ${duration(artifact.background_seconds)} background · last ${artifact.last_seen}`;
   artifactLinks.textContent = artifact.linked_count
     ? `${artifact.linked_count} linked artifact${artifact.linked_count === 1 ? "" : "s"}`
     : "No linked artifacts yet.";
+  renderWithin(artifact.within);
+  renderContained(artifact.contained);
   if (artifact.artifact_id !== whyArtifactId) {
     whyArtifactId = artifact.artifact_id;
     whyEdited = false;
@@ -220,6 +319,7 @@ function showArtifactUnavailable(page: { url: string }, reason: string): void {
     artifactPageUrl = null;
     artifactCard.hidden = true;
   }
+  if (summaryPageUrl !== page.url) renderPageSummary(null, null);
   artifactStatus.textContent = `Artifact status unavailable: ${reason}`;
   updateControls();
 }
@@ -233,7 +333,10 @@ const artifactRefresher = new ArtifactRefresher(
     title: page.title,
   }, "artifact_result"),
   () => currentPage,
-  (page, response) => renderArtifact(response.artifact, response.recognized, page.url),
+  (page, response) => {
+    renderPageSummary(response.summary, page.url);
+    renderArtifact(response.artifact, response.recognized, page.url);
+  },
   (page, error) => showArtifactUnavailable(page, describe(error)),
 );
 
@@ -250,6 +353,7 @@ function refreshArtifact(force = false): Promise<void> {
   }
   if (!page || !session.config?.storage) {
     artifactRefresher.clear();
+    renderPageSummary(null, null);
     renderArtifact(null, false);
     return Promise.resolve();
   }
@@ -438,6 +542,8 @@ function updateControls(): void {
   summarizeButton.hidden = currentPage === null;
   summarizeButton.disabled = !harnessReady || summarizing || currentPage?.tabId === undefined;
   summarizeButton.title = harnessReady ? "" : SUMMARIZE_NEEDS_HARNESS;
+  pageSummaryOpen.disabled = !connected;
+  for (const open of recentOpenButtons) open.disabled = !connected;
   const paused = whyPausedReason();
   whyPausedHint.hidden = paused === null;
   if (paused !== null) whyPausedHint.textContent = paused;
@@ -485,6 +591,16 @@ function render(): void {
   renderSetupWarning();
   if (session.status) renderQueue(session.status);
   updateControls();
+  retryWaitingHistory();
+}
+
+// History needs only the host configuration, not the worker policy, so
+// Recent opened before the host answered loads as soon as the session
+// connects, even while policy installation is still pending or later fails.
+function retryWaitingHistory(): void {
+  if (!session.connected || recentView.hidden) return;
+  if (recentWaitingForHost) void loadRecent();
+  if (worklogWaitingForHost) void loadWorklog();
 }
 
 function openSettings(): void {
@@ -768,6 +884,10 @@ const notes = new NoteEditor({
   setEditable: (editable) => { noteBody.disabled = !editable; },
   setStatus: showNoteStatus,
   showUnsaved: showUnsavedText,
+  setRecoveryWarning: (message) => {
+    noteRecoveryWarning.textContent = message;
+    noteRecoveryWarning.hidden = !message;
+  },
   showOlderNotes: renderOlderNotes,
 }, {
   load: (url) => session.host.call({
@@ -782,7 +902,7 @@ const notes = new NoteEditor({
     request_id: newRequestId(),
     ...request,
   }, ["note_saved", "note_conflict"]),
-}, describe, NOTE_SAVE_DEBOUNCE_MS);
+}, describe, NOTE_SAVE_DEBOUNCE_MS, new NoteRecovery(() => window.localStorage));
 
 captureSite = new CaptureSitePanel(session, {
   isBusy: changing,
@@ -831,27 +951,52 @@ function worklogRange(): { start: string; end: string } {
   return { start: day, end: day };
 }
 
+/** A Recent row: a link to the page and, for a page summarized that day,
+ * the summary line and Open summary. The button sits beside the link, not
+ * inside it, since a link may not hold a button. */
 function recentRow(item: ArtifactListItem): HTMLElement {
-  const row = document.createElement("a");
+  const row = document.createElement("div");
   row.className = "recent-row";
-  row.href = item.url;
-  row.target = "_blank";
-  row.rel = "noopener noreferrer";
+  const link = document.createElement("a");
+  link.className = "recent-link";
+  link.href = item.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
   const title = document.createElement("strong");
   title.textContent = item.title;
   const details = document.createElement("span");
   details.textContent = `${item.artifact_type} · focused ${duration(item.focused_seconds)} · background ${duration(item.background_seconds)}${item.opens ? ` · opened ${item.opens}×` : ""}`;
-  row.append(title, details);
+  link.append(title, details);
   if (item.why) {
     const why = document.createElement("span");
     why.textContent = `Why: ${item.why}`;
-    row.append(why);
+    link.append(why);
+  }
+  row.append(link);
+  if (item.summary) {
+    const summarized = document.createElement("span");
+    summarized.textContent = recentSummaryText(item.summary);
+    link.append(summarized);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "secondary compact";
+    open.textContent = "Open summary";
+    open.setAttribute("aria-label", `Open summary: ${item.title}`);
+    open.disabled = !session.connected;
+    recentOpenButtons.push(open);
+    // The row's own summary, by its path: the URL alone may now resolve
+    // to another record (strip_params, or an adapter added or removed).
+    const url = item.url;
+    const path = item.summary.summary_path;
+    open.addEventListener("click", () => void openRecentSummary(url, path));
+    row.append(open);
   }
   return row;
 }
 
 function renderRecent(items: readonly ArtifactListItem[]): void {
   recentList.replaceChildren();
+  recentOpenButtons = [];
   let day = "";
   for (const item of items) {
     if (item.local_date !== day) {
@@ -870,8 +1015,18 @@ function renderRecent(items: readonly ArtifactListItem[]): void {
 }
 
 async function loadRecent(): Promise<void> {
-  if (!session.connected || !session.config?.storage) return;
   const seq = ++recentLoadSeq;
+  if (!session.connected) {
+    recentWaitingForHost = true;
+    recentStatus.textContent = "Waiting for the host…";
+    return;
+  }
+  recentWaitingForHost = false;
+  if (!session.config?.storage) {
+    recentStatus.textContent = "Choose a home folder in settings to view Recent.";
+    recentList.replaceChildren();
+    return;
+  }
   recentStatus.textContent = "Loading…";
   try {
     const response = await session.host.call({
@@ -897,8 +1052,19 @@ async function loadRecent(): Promise<void> {
 }
 
 async function loadWorklog(): Promise<void> {
-  if (!session.connected || !session.config?.storage) return;
   const seq = ++worklogLoadSeq;
+  if (!session.connected) {
+    worklogWaitingForHost = true;
+    worklogText.textContent = "Waiting for the host…";
+    copyWorklogButton.disabled = true;
+    return;
+  }
+  worklogWaitingForHost = false;
+  if (!session.config?.storage) {
+    worklogText.textContent = "Choose a home folder in settings to generate a worklog.";
+    copyWorklogButton.disabled = true;
+    return;
+  }
   const range = worklogRange();
   worklogText.textContent = "Generating…";
   copyWorklogButton.disabled = true;
@@ -1022,6 +1188,9 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   pageUrl.textContent = tab.url;
   showPageArea("note");
   currentPage = { url: tab.url, title, tabId: tab.id };
+  // Another page's summary line, and its Open summary, go now rather than
+  // when this page's lookup returns.
+  if (summaryPageUrl !== tab.url) renderPageSummary(null, null);
   updateControls();
   if (!changingNoteIdentity) await notes.showPage({ url: tab.url, title });
   void refreshArtifact();
@@ -1041,6 +1210,7 @@ dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
 copyUnsavedButton.addEventListener("click", copyUnsavedText);
+discardUnsavedButton.addEventListener("click", () => notes.discardUnsaved());
 saveWhyButton.addEventListener("click", () => void saveWhy());
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
@@ -1065,6 +1235,7 @@ recentTitle.addEventListener("input", scheduleRecent);
 worklogPeriod.addEventListener("change", () => void loadWorklog());
 copyWorklogButton.addEventListener("click", copyWorklog);
 summarizeButton.addEventListener("click", () => void summarize());
+pageSummaryOpen.addEventListener("click", () => void openPageSummary());
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (sender.id === chrome.runtime.id && isPanelNotice(message) && showNotice(message)) {
     void clearStoredNotice();
@@ -1116,6 +1287,9 @@ void (async () => {
     busy = false;
     await session.refreshStatus().catch(() => undefined);
     updateControls();
+    // A worker-policy failure can follow a successful host config read.
+    // History can still load once connected, even if capture setup failed.
+    retryWaitingHistory();
   }
   await refreshActiveTab();
   // list_runs makes the host start the registered service, which runs on

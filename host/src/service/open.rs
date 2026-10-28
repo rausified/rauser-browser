@@ -73,7 +73,7 @@ pub fn open_target(
         }
     };
     opener(&args).map_err(|error| match error.kind() {
-        ErrorKind::Unsupported => invalid("Opening is only supported on macOS."),
+        ErrorKind::Unsupported => invalid(crate::open::UNSUPPORTED_MESSAGE),
         _ => (
             ErrorCode::Internal,
             format!("Could not open {what}: {error}"),
@@ -221,6 +221,9 @@ mod tests {
                 stream_truncated: false,
                 run_timeout_secs: None,
                 vocabulary: None,
+                answered_at: None,
+                first_answered_at: None,
+                save_final: false,
             };
             self.store.create(&status, "page").unwrap();
             id

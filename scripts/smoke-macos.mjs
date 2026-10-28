@@ -42,7 +42,7 @@ const OPEN_LOG_ENV = `${BINARY_NAME.toUpperCase()}_OPEN_LOG`;
 const DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const DEV_DESCRIPTION = `${APP_NAME} development native host`;
 // Keep in step with PROTOCOL_VERSION in protocol/schema.json.
-const PROTOCOL_VERSION = 6;
+const PROTOCOL_VERSION = 7;
 // Keep in step with ACTIVITY_TOTALS_KEY in extension/worker.ts.
 const ACTIVITY_TOTALS_KEY = storageKey("activity_totals_v1");
 // Keep in step with POLICY_STORAGE_KEY in extension/model.ts.
@@ -235,7 +235,10 @@ async function choosePickerFolder(folder) {
 // - slow: no answer, until killed;
 // - fail: "fake failure" on stderr, and a failed turn;
 // - badjson-once: text that is not JSON, then a valid answer to the repair turn;
-// - badjson: text that is not JSON, every time.
+// - badjson: text that is not JSON, every time;
+// - summary: a valid §6.4 answer (FIXTURE_SUMMARY_ANSWER) whose agent text
+//   carries remote images, a Mermaid fence and a Dataview inline query, for
+//   the summary-file steps.
 // The setup probe is answered "OK" in every mode except fail.
 const FAKE_SESSION = "fake-session-1";
 const FAKE_THREAD = "fake-thread-1";
@@ -245,6 +248,27 @@ const FAKE_ANSWER = {
   description: "A smoke article the fake agent read.",
   importance: { level: "high", reason: "The smoke run needs it." },
   assessment: "Nothing new beyond the smoke run.",
+  related_notes: [],
+};
+
+// Hostile agent text: each of these must reach the summary file inert
+// (DESIGN.md §5.2 step 6).
+const FIXTURE_ENTITY = "<img src=https://evil.example/x.png>";
+const FIXTURE_SUMMARY_ANSWER = {
+  document_type: "specification", category: "technical specification",
+  entities: { technologies: [FIXTURE_ENTITY], products: [], people: [], companies: [] },
+  description: [
+    "The fixture page specifies ![t](https://evil.example/t.png) and <img src=https://evil.example/d.png> inline.",
+    "",
+    "```mermaid",
+    "flowchart TD",
+    '  A@{ img: "https://evil.example/m.png" }',
+    "```",
+    "",
+    'A query: `$= dv.el("img", "", {attr: {src: "https://evil.example/q.png"}})`',
+  ].join("\n"),
+  importance: { level: "high", reason: "Fixture reason" },
+  assessment: "The fixture adds nothing new to the knowledge base.",
   related_notes: [],
 };
 
@@ -266,7 +290,9 @@ function reply(prompt) {
   if (prompt.trim() === ${JSON.stringify(PROBE_PROMPT)}) return { text: "OK" };
   if (current === "slow") return { slow: true };
   const bad = current === "badjson" || (current === "badjson-once" && !prompt.startsWith(${JSON.stringify(REPAIR_PREFIX)}));
-  return { text: bad ? "Here is my summary, not as JSON." : ${JSON.stringify(JSON.stringify(FAKE_ANSWER))} };
+  if (bad) return { text: "Here is my summary, not as JSON." };
+  return { text: current === "summary" ? ${JSON.stringify(JSON.stringify(FIXTURE_SUMMARY_ANSWER))}
+    : ${JSON.stringify(JSON.stringify(FAKE_ANSWER))} };
 }
 const halves = (text) => [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))];
 const args = process.argv.slice(2);
@@ -660,7 +686,7 @@ function fixtureServer(caseId) {
   const server = createServer((request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
     const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/while-paused", "/allowed/after-resume",
-      "/allowed/after-removal", "/fresh/page", "/article"]);
+      "/allowed/after-removal", "/fresh/page", "/article", "/summary/page"]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (!known.has(pathname)) {
@@ -669,7 +695,7 @@ function fixtureServer(caseId) {
       return;
     }
     const title = pathname === "/" ? `${APP_NAME} smoke fixture` : `${APP_NAME} smoke ${pathname}`;
-    if (pathname === "/article") {
+    if (pathname === "/article" || pathname === "/summary/page") {
       response.end(articlePage(title, caseId));
       return;
     }
@@ -2097,6 +2123,250 @@ async function run() {
           requireCondition(!(await page.evaluate("document.documentElement.outerHTML")).includes(value),
             "The settings page shows an agent.env value");
         }), { timeout: 20_000 });
+      });
+
+      // Summary outputs (DESIGN.md §5.2 steps 6-7, §6.6): the file, its log
+      // event, the index, the worklog, artifact files, Retry save, reindex,
+      // and the panel. Codex again, so the event names the codex harness.
+      const summaryPage = `${origin}/summary/page?case=${caseId}`;
+      const summaryTitle = `${APP_NAME} smoke /summary/page`;
+      const summaryRuns = {};
+      // Every summary event in the daily logs, decoded, with the log it is in.
+      const summaryEvents = async () => (await markdownFiles(path.join(notesRoot, "logs"))).flatMap((file) =>
+        file.text.split("\n")
+          .filter((line) => line.startsWith("<!-- brauser:visit ") && line.includes(" kind=summary "))
+          .map((line) => ({
+            log: file.path,
+            payload: JSON.parse(Buffer.from(line.split(" data=")[1].replace(/ -->$/, ""), "hex").toString("utf8")),
+          })));
+      const summaryEventsFor = async (url) => (await summaryEvents()).filter((event) => event.payload.url === url);
+      const listArtifacts = async (artifactType) => {
+        const reply = await agentRequest({ type: "list_artifacts", artifact_type: artifactType, title_query: null, limit: 50 });
+        requireCondition(reply.type === "artifact_list_result", `list_artifacts answered ${JSON.stringify(reply)}`);
+        return reply.items;
+      };
+      // Follow the fixture tab in a freshly opened panel.
+      async function panelOnPage(url) {
+        await closePanel();
+        await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
+        await openPanel();
+        await waitUntil(`the panel to show ${url} with Summarize & log enabled`, () => onPanel(async (page) => ({
+          url: await page.text("#page-url"), summarize: await page.enabled("#summarize"),
+        })), (state) => state.url === url && state.summarize, { timeout: 20_000, signal: abort.signal });
+      }
+      // Summarize the panel's page with Codex; resolves with the finished run.
+      async function summarizeWithCodex() {
+        const runId = await summarizeFromPanel("codex");
+        await cardIn(runId, finished);
+        const { run } = await waitUntil(`run ${runId} to finish`, () => getRun(runId),
+          (reply) => reply.type === "run_fetched" && ["succeeded", "failed", "canceled"].includes(reply.run.state),
+          { timeout: 30_000, signal: abort.signal });
+        return run;
+      }
+      const summaryFile = (run) => path.join(notesRoot, ...run.summary_path.split("/"));
+      const frontmatterOf = (text) => text.slice(4, text.indexOf("\n---\n", 4) + 1);
+      // The artifact file whose front matter names `url`, after a refresh.
+      async function artifactFileFor(url) {
+        const reply = await agentRequest({ type: "refresh_artifacts" });
+        requireCondition(reply.type === "artifacts_refreshed" && reply.conflicts === 0,
+          `refresh_artifacts answered ${JSON.stringify(reply)}`);
+        const files = (await markdownFiles(path.join(notesRoot, "artifacts")))
+          .filter((file) => file.text.includes(`\nurl: ${JSON.stringify(url)}\n`));
+        requireCondition(files.length === 1, `Expected one artifact file for ${url}; found ${files.map((file) => file.path)}`);
+        return files[0];
+      }
+      // The Timeline's summary line for `title`, and that no rollup line
+      // dated on or before the summary's day comes before it.
+      function timelineSummaryLine(file, title) {
+        const timeline = file.text.slice(file.text.indexOf("## Timeline\n\n")).split("\n").filter((line) => line.startsWith("- "));
+        const wanted = ` · Summarized: ${title} — specification, high importance`;
+        const at = timeline.findIndex((line) => line.endsWith(wanted));
+        requireCondition(at >= 0, `The Timeline of ${file.path} lacks ${wanted}: ${JSON.stringify(timeline)}`);
+        const day = timeline[at].slice(2, 12);
+        const rollups = timeline.map((line, index) => ({ line, index }))
+          .filter(({ line }) => !line.includes(" · Summarized: ") && /^- \d{4}-\d{2}-\d{2}/.test(line));
+        const early = rollups.find(({ line, index }) => index < at && line.slice(2, 12) <= day);
+        requireCondition(!early, `A rollup sorts above its day's summary in ${file.path}: ${JSON.stringify(timeline)}`);
+        return { timeline, rollups: rollups.filter(({ line }) => line.slice(2, 12) <= day) };
+      }
+
+      await step("Codex again for the summary outputs", async () => {
+        await openSettingsTab();
+        await settingsConnected();
+        await detect();
+        const dialogsBefore = (await dialogLogLines()).length;
+        await setAgentMode("ok");
+        await testAndUse("codex", "Codex is set up.");
+        await noNewDialog(dialogsBefore);
+        const agent = (await hostConfig(wrapper)).config.agent;
+        requireCondition(agent?.harness === "codex" && await isFakeBinary(agent.binary, "codex"),
+          `The host config after Codex setup: ${JSON.stringify(agent)}`);
+      });
+
+      let noteBytes;
+      await step("Summarizing a page with a note writes the summary and leaves the note alone", async () => {
+        await setAgentMode("summary");
+        await workerHoldsHostPolicy();
+        await navigate(origin, summaryPage);
+        await panelOnPage(summaryPage);
+        await typeNote(`Summary page note ${caseId}`);
+        await waitForNoteStatus("Saved");
+        const notesFor = async () => (await markdownFiles(path.join(notesRoot, "notes")))
+          .filter((file) => file.text.includes(summaryPage));
+        const [note] = await waitUntil("one page note for the summary page", notesFor, (found) => found.length === 1,
+          { timeout: 20_000, signal: abort.signal });
+        noteBytes = { path: note.path, bytes: await readFile(note.path) };
+        const run = await summarizeWithCodex();
+        requireCondition(run.state === "succeeded" && run.summary_path, `The summary run ended ${JSON.stringify(run)}`);
+        summaryRuns.page = run;
+        requireCondition((await readFile(noteBytes.path)).equals(noteBytes.bytes), "Summarizing changed the page note");
+      });
+
+      await step("The summary file is owned, its front matter plain YAML, and its agent text inert", async () => {
+        const text = await readFile(summaryFile(summaryRuns.page), "utf8");
+        requireCondition(text.startsWith("---\nbrauser:\n  kind: summary\n"), `The summary file starts: ${text.slice(0, 80)}`);
+        const front = frontmatterOf(text);
+        const body = text.slice(front.length + 8);
+        const value = (key) => {
+          const line = front.split("\n").find((candidate) => candidate.startsWith(`${key}: `));
+          requireCondition(line, `The front matter has no ${key}: ${front}`);
+          return JSON.parse(line.slice(key.length + 2));
+        };
+        requireCondition(value("title") === summaryTitle && value("document_type") === "specification" &&
+          value("category") === "technical specification", `The front matter: ${front}`);
+        const technologies = front.split("\n").find((line) => line.startsWith("  technologies: "));
+        requireCondition(JSON.stringify(JSON.parse(technologies.slice("  technologies: ".length))) ===
+          JSON.stringify([FIXTURE_ENTITY]), `The front matter's technologies: ${technologies}`);
+        requireCondition(!/&lt;|&#|<|!\[/.test(front), `The front matter holds an entity or raw markup: ${front}`);
+        for (const expected of [
+          "\\![t](https://evil.example/t.png)", "&lt;img src=https://evil.example/d.png>",
+          "\\<img src\\=https://evil.example/x.png\\>", "&#96;&#96;&#96;mermaid", "&#96;&#36;= dv.el(",
+        ]) {
+          requireCondition(body.includes(expected), `The summary body lacks ${expected}:\n${body}`);
+        }
+        requireCondition(!body.split("\n").some((line) => line.trimStart().startsWith("```")),
+          `The summary body holds a raw backtick fence:\n${body}`);
+        requireCondition(!body.includes("`$="), `The summary body holds a raw Dataview query:\n${body}`);
+        const raw = [...text.matchAll(/<img/g)].filter((match) => text[match.index - 1] !== "\\");
+        requireCondition(raw.length === 0, `The summary file holds a raw <img:\n${text}`);
+      });
+
+      await step("The daily log has one summary event for the page", async () => {
+        const events = await summaryEventsFor(summaryPage);
+        requireCondition(events.length === 1, `Expected one summary event for the page; found ${JSON.stringify(events)}`);
+        const [{ log, payload }] = events;
+        requireCondition(payload.harness === "codex" && payload.record_key?.kind === "url" &&
+          payload.artifact_type === "web.page" && payload.summary_path === summaryRuns.page.summary_path,
+        `The summary event: ${JSON.stringify(payload)}`);
+        requireCondition(path.basename(log) === `${payload.occurred_at.slice(0, 10)}.md`,
+          `The summary event dated ${payload.occurred_at} is in ${log}`);
+      });
+
+      await step("list_artifacts shows the summarized page", async () => {
+        const items = await waitUntil("a web.page artifact with the page's summary", () => listArtifacts("web.page"),
+          (found) => found.some((item) => item.url === summaryPage && item.summary?.importance === "high"),
+          { timeout: 15_000, signal: abort.signal });
+        const item = items.find((candidate) => candidate.url === summaryPage);
+        requireCondition(item.summary.document_type === "specification" &&
+          item.summary.summary_path === summaryRuns.page.summary_path && item.opens === 0,
+        `The summarized page's artifact: ${JSON.stringify(item)}`);
+      });
+
+      await step("The worklog names the summary", async () => {
+        const [{ payload }] = await summaryEventsFor(summaryPage);
+        const day = payload.occurred_at.slice(0, 10);
+        const reply = await agentRequest({ type: "worklog", start_date: day, end_date: day });
+        requireCondition(reply.type === "worklog_result", `worklog answered ${JSON.stringify(reply)}`);
+        const wanted = `Summarized: ${summaryTitle} — specification, high importance`;
+        requireCondition(reply.text.includes(wanted), `The worklog lacks ${wanted}:\n${reply.text}`);
+      });
+
+      await step("The artifact file links to the summary and dates it in the Timeline", async () => {
+        const file = await artifactFileFor(summaryPage);
+        const link = file.text.match(/^Summary: \[specification, high importance\]\(<([^>]+)>\)$/m)?.[1];
+        requireCondition(link, `The artifact file has no Summary line:\n${file.text}`);
+        requireCondition(path.resolve(path.dirname(file.path), decodeURIComponent(link)) === summaryFile(summaryRuns.page),
+          `The artifact file's Summary links to ${link}`);
+        timelineSummaryLine(file, summaryTitle);
+      });
+
+      await step("A summary on a recognized page attaches to the adapter's artifact", async () => {
+        await workerHoldsHostPolicy();
+        await navigate(origin, allowed);
+        await panelOnPage(allowed);
+        const run = await summarizeWithCodex();
+        requireCondition(run.state === "succeeded", `The recognized page's run ended ${JSON.stringify(run)}`);
+        summaryRuns.allowed = run;
+        const items = await waitUntil("the smoke.page artifact with its summary", () => listArtifacts("smoke.page"),
+          (found) => found.some((item) => item.url === allowed && item.summary?.summary_path === run.summary_path),
+          { timeout: 15_000, signal: abort.signal });
+        requireCondition(items.find((item) => item.url === allowed).opens > 0,
+          `The recognized page's artifact lost its activity: ${JSON.stringify(items)}`);
+        const pages = await listArtifacts("web.page");
+        requireCondition(!pages.some((item) => item.url === allowed), `A web.page item exists for ${allowed}`);
+        const [event, ...more] = await summaryEventsFor(allowed);
+        requireCondition(event && more.length === 0 && event.payload.artifact_type === "smoke.page",
+          `The recognized page's summary events: ${JSON.stringify([event, ...more])}`);
+        // This artifact has measured activity, so its Timeline has the day's
+        // rollup, below the summary.
+        const { rollups } = timelineSummaryLine(await artifactFileFor(allowed), title);
+        requireCondition(rollups.length > 0, "The recognized page's Timeline has no rollup to order against");
+      });
+
+      await step("An unowned summary file fails the save; Retry save writes it once", async () => {
+        const target = summaryFile(summaryRuns.page);
+        const unowned = `Not ${APP_NAME}'s file ${caseId}\n`;
+        await writeFile(target, unowned);
+        const before = (await summaryEventsFor(summaryPage)).length;
+        await workerHoldsHostPolicy();
+        await navigate(origin, summaryPage);
+        await panelOnPage(summaryPage);
+        const run = await summarizeWithCodex();
+        requireCondition(run.state === "failed" && run.error_kind === "save_failed" && run.can_retry_save,
+          `The run over an unowned file ended ${JSON.stringify(run)}`);
+        summaryRuns.retried = run;
+        requireCondition(await readFile(target, "utf8") === unowned, "The failed save changed the unowned file");
+        requireCondition((await summaryEventsFor(summaryPage)).length === before, "A failed save logged a summary");
+        await unlink(target);
+        const retried = await agentRequest({ type: "retry_save", run_id: run.run_id });
+        requireCondition(retried.type === "run_updated" && retried.run.state === "succeeded" && !retried.run.can_retry_save,
+          `retry_save answered ${JSON.stringify(retried)}`);
+        requireCondition((await readFile(target, "utf8")).startsWith("---\nbrauser:\n  kind: summary\n"),
+          "Retry save did not write the summary file");
+        requireCondition((await summaryEventsFor(summaryPage)).length === before + 1,
+          "Retry save did not log exactly one more summary");
+        const again = await agentRequest({ type: "retry_save", run_id: run.run_id });
+        requireCondition(again.type === "error" || (again.type === "run_updated" && again.run.state === "succeeded"),
+          `A second retry_save answered ${JSON.stringify(again)}`);
+        requireCondition((await summaryEventsFor(summaryPage)).length === before + 1, "A second retry_save logged again");
+      });
+
+      await step("reindex keeps both summaries", async () => {
+        const report = await commandOutput(wrapper, ["reindex"]);
+        requireCondition(report.startsWith("Rebuilt index.db;"), `reindex said: ${report}`);
+        const pages = await listArtifacts("web.page");
+        requireCondition(pages.some((item) => item.url === summaryPage &&
+          item.summary?.summary_path === summaryRuns.page.summary_path), `web.page items after reindex: ${JSON.stringify(pages)}`);
+        const artifacts = await listArtifacts("smoke.page");
+        requireCondition(artifacts.some((item) => item.url === allowed &&
+          item.summary?.summary_path === summaryRuns.allowed.summary_path), `smoke.page items after reindex: ${JSON.stringify(artifacts)}`);
+      });
+
+      await step("The panel shows the page's summary and Open summary opens the file", async () => {
+        await panelOnPage(summaryPage);
+        const shown = await waitUntil("the panel's summary line", () => onPanel(async (page) => ({
+          hidden: await page.hidden("#page-summary"), text: await page.text("#page-summary-text"),
+          open: await page.enabled("#page-summary-open"),
+        })), (state) => state.hidden === false && state.open, { timeout: 20_000, signal: abort.signal });
+        requireCondition(shown.text === "specification · technical specification · high importance",
+          `The panel's summary line: ${JSON.stringify(shown)}`);
+        const openedLines = async () => (await readFile(openLog, "utf8").catch(() => "")).split("\n").filter(Boolean);
+        const before = (await openedLines()).length;
+        await onPanel((page) => page.click("#page-summary-open"));
+        const root = (await hostConfig(wrapper)).config.storage.root;
+        const expected = `-- ${path.join(root, ...summaryRuns.page.summary_path.split("/"))}`;
+        await waitUntil(`open.log to name ${expected}`, async () => (await openedLines()).slice(before),
+          (lines) => lines.includes(expected), { timeout: 15_000, signal: abort.signal });
       });
     }
 

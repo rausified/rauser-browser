@@ -50,9 +50,8 @@ use super::record::{
     page_markdown,
 };
 use crate::answer::parse_answer;
-use crate::config::{ConfigStore, default_summary_vocabulary, valid_summary_vocabulary};
+use crate::config::{default_summary_vocabulary, valid_summary_vocabulary};
 use crate::open::Opener;
-use crate::vault::Vault;
 
 /// How long a run may take before its process group is killed.
 pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -75,15 +74,70 @@ pub struct SavedRun {
     pub summary_path: Option<String>,
 }
 
+/// Why a save failed: a user-facing reason for the run's `error`, whether
+/// Retry save can work, and anything the save had written before it failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveFailure {
+    pub reason: String,
+    /// False when a retry builds the same refused output again (the day's
+    /// daily log is full, the run's details are invalid for it, ...): the
+    /// run then offers no Retry save.
+    pub retryable: bool,
+    /// What was written before the failure (the summary file, when the
+    /// daily log then refused its event), so the run card can still open it.
+    pub written: Option<SavedRun>,
+}
+
+impl SaveFailure {
+    /// A failure no retry can fix.
+    pub fn final_reason(reason: impl Into<String>, written: Option<SavedRun>) -> Self {
+        Self {
+            reason: reason.into(),
+            retryable: false,
+            written,
+        }
+    }
+
+    /// A failure Retry save can fix, after `written` was already written.
+    pub fn retry_after_write(reason: impl Into<String>, written: &SavedRun) -> Self {
+        Self {
+            reason: reason.into(),
+            retryable: true,
+            written: Some(written.clone()),
+        }
+    }
+}
+
+/// A plain reason is one Retry save can fix.
+impl From<String> for SaveFailure {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            retryable: true,
+            written: None,
+        }
+    }
+}
+
+impl From<&str> for SaveFailure {
+    fn from(reason: &str) -> Self {
+        reason.to_owned().into()
+    }
+}
+
 /// Validates a harness's final answer and saves it. Errors are user-facing
 /// reasons stored in the run's `error`.
 pub trait RunFinisher: Send + Sync {
     /// The normalized answer to keep in `result.json`, or what is wrong with
     /// `final_text`; the error goes back to the agent in the repair turn.
     fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String>;
-    /// PR 2: re-reads config under `lock_current` + `refresh` and requires a
-    /// configured, openable vault. PR 4 writes the summary here.
-    fn save(&self, run: &RunStatusFile, result: &serde_json::Value) -> Result<SavedRun, String>;
+    /// Writes the run's outputs from its kept answer; `retry_save` calls it
+    /// again after a failure (`super::finisher::SummaryFinisher`).
+    fn save(
+        &self,
+        run: &RunStatusFile,
+        result: &serde_json::Value,
+    ) -> Result<SavedRun, SaveFailure>;
 }
 
 /// Validate `final_text` as a §6.4 answer against the run's knowledge base
@@ -97,49 +151,6 @@ pub fn accept_summary_answer(
     };
     let answer = parse_answer(final_text, Path::new(cwd))?;
     serde_json::to_value(answer).map_err(|_| "the answer could not be encoded".to_string())
-}
-
-/// The service's finisher: accepts a §6.4 answer and checks, under the
-/// config lock, that a configured notes folder can still be opened. It
-/// writes nothing; PR 4 adds the summary file and log event.
-pub struct VaultCheckFinisher {
-    config: Mutex<ConfigStore>,
-}
-
-impl VaultCheckFinisher {
-    pub fn new(config: ConfigStore) -> Self {
-        Self {
-            config: Mutex::new(config),
-        }
-    }
-}
-
-impl RunFinisher for VaultCheckFinisher {
-    fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String> {
-        accept_summary_answer(run, final_text)
-    }
-
-    fn save(&self, run: &RunStatusFile, _result: &serde_json::Value) -> Result<SavedRun, String> {
-        let mut config = lock(&self.config);
-        let _config_lock = config
-            .lock_current()
-            .map_err(|_| "The configuration could not be locked.".to_string())?;
-        if config.refresh().is_err() || config.config_issue().is_some() {
-            return Err("The configuration is unavailable or needs repair.".to_string());
-        }
-        if !config.configured() {
-            return Err("Choose and confirm a notes folder first.".to_string());
-        }
-        let Some(storage) = config.snapshot().storage.as_ref() else {
-            return Err("Choose and confirm a notes folder first.".to_string());
-        };
-        Vault::open_checked(storage, config.root_identity())
-            .map_err(|_| "The notes folder is unavailable.".to_string())?;
-        Ok(SavedRun {
-            written_key: run.start_key.clone(),
-            summary_path: None,
-        })
-    }
 }
 
 /// Builds a run's child environment (the service environment overlaid with
@@ -551,6 +562,9 @@ impl Supervisor {
                 stream_truncated: false,
                 run_timeout_secs: req.timeout.map(|timeout| timeout.as_secs()),
                 vocabulary: Some(req.vocabulary.clone()),
+                answered_at: None,
+                first_answered_at: None,
+                save_final: false,
             };
             let page = page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref());
             if let Err(error) = inner.store.create(&status, &page) {
@@ -711,16 +725,29 @@ impl Supervisor {
                 "This run has no failed save to retry.".to_string(),
             ));
         };
-        match inner.finisher.save(&status, &result) {
-            Ok(saved) => {
-                status.state = RunState::Succeeded;
-                status.error = None;
-                status.error_kind = None;
-                status.written_key = Some(saved.written_key);
-                status.summary_path = saved.summary_path;
+        // A record kept before answers were stamped gets its stamp now,
+        // before the save, so later retries reuse it; so does one whose
+        // stamp the daily log's window no longer accepts.
+        // The first stamp is kept to order the save (see the finisher).
+        if !loggable_stamp(status.answered_at.as_deref(), OffsetDateTime::now_utc()) {
+            let previous = status.answered_at.replace(now_timestamp());
+            if status.first_answered_at.is_none() {
+                status.first_answered_at =
+                    previous.filter(|at| OffsetDateTime::parse(at, &Rfc3339).is_ok());
             }
-            Err(reason) => status.error = Some(reason),
+            inner.store.write_status(&status).map_err(|error| {
+                eprintln!("brauser service: stamping run {id} answer: {error:#}");
+                (
+                    ErrorCode::Internal,
+                    "The run could not be updated.".to_string(),
+                )
+            })?;
         }
+        match inner.finisher.save(&status, &result) {
+            Ok(saved) => Finish::Succeeded(saved),
+            Err(failure) => Finish::SaveFailed(failure),
+        }
+        .apply(&mut status);
         status.finished_at = Some(now_timestamp());
         inner.write_status(&status).map_err(|error| {
             eprintln!("brauser service: recording retry save of run {id}: {error:#}");
@@ -973,7 +1000,7 @@ impl Inner {
             (None, Driven::Invalid(reason)) => {
                 Finish::fail(RunErrorKind::InvalidOutput, Some(reason))
             }
-            (None, Driven::Accepted(result)) => this.conclude(id, &status, &result),
+            (None, Driven::Accepted(result)) => this.conclude(id, &result),
         };
         this.finish_with(&control, id, |status| finished.apply(status));
         let _ = watchdog.join();
@@ -1084,18 +1111,29 @@ impl Inner {
         driven
     }
 
-    /// Keep and save a validated answer.
-    fn conclude(&self, id: Uuid, status: &RunStatusFile, result: &serde_json::Value) -> Finish {
+    /// Keep and save a validated answer. The record is stamped with the
+    /// answer's time before the save, and the save gets the record as it
+    /// is now (with the session the harness reported), so a retry writes
+    /// the same event as this save would have.
+    fn conclude(&self, id: Uuid, result: &serde_json::Value) -> Finish {
+        const NOT_KEPT: &str = "The answer could not be kept for saving.";
         if let Err(error) = self.store.write_result(id, result) {
             eprintln!("brauser service: keeping run {id} result: {error:#}");
-            return Finish::fail(
-                RunErrorKind::SaveFailed,
-                Some("The answer could not be kept for saving.".to_string()),
-            );
+            return Finish::fail(RunErrorKind::SaveFailed, Some(NOT_KEPT.to_string()));
         }
-        match self.finisher.save(status, result) {
+        let answered = now_timestamp();
+        let status = match self.update(id, |status| {
+            status.answered_at.get_or_insert(answered);
+        }) {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("brauser service: stamping run {id} answer: {error:#}");
+                return Finish::fail(RunErrorKind::SaveFailed, Some(NOT_KEPT.to_string()));
+            }
+        };
+        match self.finisher.save(&status, result) {
             Ok(saved) => Finish::Succeeded(saved),
-            Err(reason) => Finish::fail(RunErrorKind::SaveFailed, Some(reason)),
+            Err(failure) => Finish::SaveFailed(failure),
         }
     }
 
@@ -1312,6 +1350,8 @@ enum Driven {
 /// A run's end state.
 enum Finish {
     Succeeded(SavedRun),
+    /// The finisher could not save the kept answer.
+    SaveFailed(SaveFailure),
     Failed {
         kind: RunErrorKind,
         error: Option<String>,
@@ -1329,8 +1369,19 @@ impl Finish {
                 status.state = RunState::Succeeded;
                 status.error = None;
                 status.error_kind = None;
+                status.save_final = false;
                 status.written_key = Some(saved.written_key);
                 status.summary_path = saved.summary_path;
+            }
+            Self::SaveFailed(failure) => {
+                status.state = RunState::Failed;
+                status.error_kind = Some(RunErrorKind::SaveFailed);
+                status.error = Some(failure.reason);
+                status.save_final = !failure.retryable;
+                if let Some(written) = failure.written {
+                    status.written_key = Some(written.written_key);
+                    status.summary_path = written.summary_path;
+                }
             }
             Self::Failed { kind, error } => {
                 status.state = if kind == RunErrorKind::Canceled {
@@ -1356,6 +1407,23 @@ pub fn timeout_message(timeout: Duration) -> String {
     };
     let plural = if count == 1 { "" } else { "s" };
     format!("Timed out after {count} {unit}{plural}")
+}
+
+/// Whether a retry may reuse the answer stamp `answered_at`: it parses and
+/// the daily log still accepts it at `now` (`capture::check_event_window`),
+/// with a day's margin for the save itself. The log checks that window
+/// before its duplicate and intent checks, so an event stamped outside it
+/// was never logged, and a new stamp loses no deduplication (unless its
+/// first append was interrupted after its intent was journaled, which no
+/// stamp can complete now; see the finisher's module doc).
+fn loggable_stamp(answered_at: Option<&str>, now: OffsetDateTime) -> bool {
+    const MARGIN_SECS: i64 = 24 * 60 * 60;
+    let Some(at) = answered_at.and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok()) else {
+        return false;
+    };
+    let (at, now) = (at.unix_timestamp(), now.unix_timestamp());
+    at >= now - (crate::capture::MAX_PAST_SECS - MARGIN_SECS)
+        && at <= now + crate::capture::MAX_FUTURE_SECS
 }
 
 /// RFC 3339 UTC with exactly nine fraction digits, so timestamps sort as
@@ -1402,13 +1470,20 @@ mod tests {
 
     use crate::answer::TEST_ANSWER;
     use crate::brand::FAKE_HARNESS_ENV;
+    use crate::service::finisher::SummaryFinisher;
     use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
     use crate::service::record::{RunStatusFile, RunStore};
 
+    /// Accepts a §6.4 answer and saves nothing, counting its saves and
+    /// keeping the record the last one was given.
     struct TestFinisher {
+        /// How many of the next saves fail.
         fail_saves: Arc<AtomicUsize>,
         saves: Arc<AtomicUsize>,
+        seen: SeenRun,
     }
+
+    type SeenRun = Arc<Mutex<Option<RunStatusFile>>>;
 
     impl RunFinisher for TestFinisher {
         fn accept(
@@ -1423,8 +1498,9 @@ mod tests {
             &self,
             run: &RunStatusFile,
             _result: &serde_json::Value,
-        ) -> Result<SavedRun, String> {
+        ) -> Result<SavedRun, SaveFailure> {
             self.saves.fetch_add(1, Ordering::SeqCst);
+            *self.seen.lock().unwrap() = Some(run.clone());
             let failing = self
                 .fail_saves
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
@@ -1432,7 +1508,7 @@ mod tests {
                 })
                 .is_ok();
             if failing {
-                return Err("The notes folder is unavailable.".to_string());
+                return Err("The notes folder is unavailable.".into());
             }
             Ok(SavedRun {
                 written_key: run.start_key.clone(),
@@ -1442,6 +1518,9 @@ mod tests {
     }
 
     type SharedEnv = Arc<Mutex<Result<Vec<(OsString, OsString)>, String>>>;
+    /// Builds a fixture's finisher from its temp directory, in place of the
+    /// default [`TestFinisher`].
+    type FinisherFactory = Box<dyn FnOnce(&Path) -> Box<dyn RunFinisher>>;
 
     /// A file in a fixture run's folder that makes the fixture's folder
     /// check fail, as if the knowledge base folder had been replaced.
@@ -1451,8 +1530,11 @@ mod tests {
     struct Fixture {
         dir: tempfile::TempDir,
         supervisor: Supervisor,
+        /// How many of the default [`TestFinisher`]'s next saves fail.
         fail_saves: Arc<AtomicUsize>,
         saves: Arc<AtomicUsize>,
+        /// The record the [`TestFinisher`]'s last save was given.
+        seen: SeenRun,
         /// What the run environment source returns when a run starts.
         env: SharedEnv,
     }
@@ -1490,7 +1572,7 @@ mod tests {
             env_error: Option<&str>,
             seed: impl FnOnce(&RunStore, &Path),
         ) -> Self {
-            Self::seeded_with_fault(body, run_timeout, env_error, None, seed)
+            Self::seeded_with_fault(body, run_timeout, env_error, None, None, seed)
         }
 
         /// As [`Fixture::seeded`], with every thread whose name `fault`
@@ -1500,7 +1582,29 @@ mod tests {
             fault: impl Fn(&str) -> bool + Send + Sync + 'static,
             seed: impl FnOnce(&RunStore, &Path),
         ) -> Self {
-            Self::seeded_with_fault(body, DEFAULT_RUN_TIMEOUT, None, Some(Arc::new(fault)), seed)
+            Self::seeded_with_fault(
+                body,
+                DEFAULT_RUN_TIMEOUT,
+                None,
+                Some(Arc::new(fault)),
+                None,
+                seed,
+            )
+        }
+
+        /// As [`Fixture::new`], saving through `finisher` instead.
+        fn with_finisher(
+            body: &str,
+            finisher: impl FnOnce(&Path) -> Box<dyn RunFinisher> + 'static,
+        ) -> Self {
+            Self::seeded_with_fault(
+                body,
+                DEFAULT_RUN_TIMEOUT,
+                None,
+                None,
+                Some(Box::new(finisher)),
+                |_, _| {},
+            )
         }
 
         fn seeded_with_fault(
@@ -1508,6 +1612,7 @@ mod tests {
             run_timeout: Duration,
             env_error: Option<&str>,
             spawn_fault: Option<SpawnFault>,
+            finisher: Option<FinisherFactory>,
             seed: impl FnOnce(&RunStore, &Path),
         ) -> Self {
             let dir = tempfile::tempdir().unwrap();
@@ -1521,7 +1626,7 @@ mod tests {
             let registry = HarnessRegistry::from_lookup(|name| {
                 (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
             });
-            Self::build(dir, registry, run_timeout, env_error, spawn_fault)
+            Self::build(dir, registry, run_timeout, env_error, spawn_fault, finisher)
         }
 
         fn without_runner() -> Self {
@@ -1529,6 +1634,7 @@ mod tests {
                 tempfile::tempdir().unwrap(),
                 HarnessRegistry::default(),
                 DEFAULT_RUN_TIMEOUT,
+                None,
                 None,
                 None,
             )
@@ -1540,13 +1646,19 @@ mod tests {
             run_timeout: Duration,
             env_error: Option<&str>,
             spawn_fault: Option<SpawnFault>,
+            finisher: Option<FinisherFactory>,
         ) -> Self {
             let store = RunStore::open(dir.path().join("runs")).unwrap();
             let fail_saves = Arc::new(AtomicUsize::new(0));
             let saves = Arc::new(AtomicUsize::new(0));
-            let finisher = TestFinisher {
-                fail_saves: fail_saves.clone(),
-                saves: saves.clone(),
+            let seen = SeenRun::default();
+            let finisher: Box<dyn RunFinisher> = match finisher {
+                Some(build) => build(dir.path()),
+                None => Box::new(TestFinisher {
+                    fail_saves: fail_saves.clone(),
+                    saves: saves.clone(),
+                    seen: seen.clone(),
+                }),
             };
             let env: SharedEnv = Arc::new(Mutex::new(match env_error {
                 Some(error) => Err(error.to_string()),
@@ -1568,7 +1680,6 @@ mod tests {
                 }),
                 opener: crate::open::default_opener(),
             };
-            let finisher = Box::new(finisher);
             let supervisor = match spawn_fault {
                 Some(fault) => {
                     Supervisor::with_spawn_fault(store, registry, finisher, options, fault)
@@ -1580,6 +1691,7 @@ mod tests {
                 supervisor,
                 fail_saves,
                 saves,
+                seen,
                 env,
             }
         }
@@ -1738,6 +1850,7 @@ mod tests {
             tempfile::tempdir().unwrap(),
             HarnessRegistry::of(vec![Box::new(runner)]),
             DEFAULT_RUN_TIMEOUT,
+            None,
             None,
             None,
         );
@@ -2184,8 +2297,7 @@ mod tests {
     #[test]
     fn accept_without_cwd_fails_invalid_output() {
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
-        let finisher = VaultCheckFinisher::new(config);
+        let finisher = SummaryFinisher::new(dir.path().join("config.toml"));
         let mut run = sample_status(Uuid::new_v4());
         assert_eq!(
             finisher.accept(&run, TEST_ANSWER).unwrap_err(),
@@ -2212,33 +2324,284 @@ mod tests {
 
     #[test]
     fn save_failure_offers_retry_save_and_retry_succeeds() {
-        let fixture = Fixture::new("echo ran >> \"$COUNT\"\necho \"$VALID_ANSWER\"\n");
-        fixture.fail_saves.store(1, Ordering::SeqCst);
+        // The service's own finisher, on a home folder in the fixture's
+        // directory, with an unowned file where the summary goes.
+        let fixture = Fixture::with_finisher(
+            "echo ran >> \"$COUNT\"\necho \"$VALID_ANSWER\"\n",
+            |dir: &Path| {
+                let root = dir.join("home");
+                std::fs::create_dir(&root).unwrap();
+                let config = dir.join("config.toml");
+                crate::config::fixtures::write(&config, &root, "", "", "");
+                Box::new(SummaryFinisher::new(config))
+            },
+        );
+        let page = fixture.request("a").url;
+        let key = crate::vault::url_record_key(&page).unwrap();
+        let config = crate::config::ConfigStore::load_from(fixture.path("config.toml"));
+        let relative = crate::vault::Vault::open(config.snapshot().storage.as_ref().unwrap())
+            .unwrap()
+            .summary_relative_path(&key, &page)
+            .unwrap();
+        let summary = fixture.path("home").join(&relative);
+        std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+        std::fs::write(&summary, "my own file\n").unwrap();
+        let shown = relative.to_string_lossy().replace('\\', "/");
+
         let id = fixture.start("a");
         let view = fixture.wait_finished(id);
         assert_eq!(view.state, RunState::Failed);
         assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed));
         assert_eq!(
-            view.error.as_deref(),
-            Some("The notes folder is unavailable.")
+            view.error,
+            Some(format!(
+                "A file Brauser does not own is at {shown}. Move it, then Retry save."
+            ))
         );
         assert!(view.can_retry_save);
+        assert_eq!(read(&summary), "my own file\n");
+        let failed = fixture.supervisor.store().status(id).unwrap();
+        let answered_at = failed.answered_at.clone().expect("stamped before the save");
 
+        std::fs::remove_file(&summary).unwrap();
         let retried = fixture.supervisor.retry_save(id).unwrap();
         assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
         assert_eq!(retried.error, None);
         assert_eq!(retried.error_kind, None);
-        assert_eq!(
-            retried.summary_path.as_deref(),
-            Some("summaries/a.summary.md")
-        );
+        assert_eq!(retried.summary_path.as_deref(), Some(shown.as_str()));
         assert!(!retried.can_retry_save);
+        let written = read(&summary);
+        assert!(written.starts_with("---\nbrauser:\n  kind: summary\n"));
+        // The retry writes the answer's time, not its own.
+        let stamped = crate::service::finisher::summarized_at(
+            OffsetDateTime::parse(&answered_at, &Rfc3339).unwrap(),
+            &failed.requested_at,
+        );
+        assert!(
+            written.contains(&format!("summarized_at: \"{stamped}\"")),
+            "{written}"
+        );
+        let stored = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(stored.answered_at.as_deref(), Some(answered_at.as_str()));
         assert_eq!(
             read(&fixture.path("count")),
             "ran\n",
             "the harness ran once"
         );
-        assert_eq!(fixture.saves.load(Ordering::SeqCst), 2);
+        // The failed first save logged nothing; the retry logged once.
+        assert_eq!(summary_lines(&fixture.path("home").join("logs")), 1);
+    }
+
+    /// A finisher whose saves write the summary file, then fail in a way no
+    /// retry can fix (as a full daily log does).
+    struct FinalFailureFinisher;
+
+    impl RunFinisher for FinalFailureFinisher {
+        fn accept(
+            &self,
+            run: &RunStatusFile,
+            final_text: &str,
+        ) -> Result<serde_json::Value, String> {
+            accept_summary_answer(run, final_text)
+        }
+
+        fn save(
+            &self,
+            run: &RunStatusFile,
+            _result: &serde_json::Value,
+        ) -> Result<SavedRun, SaveFailure> {
+            Err(SaveFailure::final_reason(
+                "The day's daily log is full. The summary file was saved.",
+                Some(SavedRun {
+                    written_key: run.start_key.clone(),
+                    summary_path: Some("summaries/a.summary.md".into()),
+                }),
+            ))
+        }
+    }
+
+    #[test]
+    fn a_save_failure_no_retry_can_fix_offers_no_retry_but_opens_the_file() {
+        let fixture = Fixture::with_finisher("echo \"$VALID_ANSWER\"\n", |_: &Path| {
+            Box::new(FinalFailureFinisher)
+        });
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed);
+        assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed));
+        assert!(!view.can_retry_save, "{view:?}");
+        assert_eq!(view.summary_path.as_deref(), Some("summaries/a.summary.md"));
+        assert!(view.written_record_key.is_some());
+        assert!(matches!(
+            fixture.supervisor.retry_save(id),
+            Err((ErrorCode::Conflict, _))
+        ));
+    }
+
+    /// The `kind=summary` lines in every daily log under `dir`.
+    fn summary_lines(dir: &Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .map(|entry| entry.unwrap().path())
+            .map(|path| {
+                if path.is_dir() {
+                    summary_lines(&path)
+                } else {
+                    read(&path).matches(" kind=summary data=").count()
+                }
+            })
+            .sum()
+    }
+
+    #[test]
+    fn the_first_save_gets_the_record_stamped_with_its_answer_time() {
+        let fixture = Fixture::new(ANSWER);
+        let id = fixture.start("a");
+        assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        let seen = fixture.seen.lock().unwrap().clone().unwrap();
+        let stored = fixture.supervisor.store().status(id).unwrap();
+        assert!(seen.answered_at.is_some(), "{seen:?}");
+        assert_eq!(seen.answered_at, stored.answered_at);
+        // The record as it is now, with the session the harness reported.
+        assert_eq!(seen.session_id.as_deref(), Some("sess-1"));
+    }
+
+    #[test]
+    fn a_retry_of_an_unstamped_record_stamps_it_before_saving() {
+        let mut seeded = None;
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            let id = seed_record(
+                store,
+                cwd,
+                RunState::Failed,
+                "2026-10-26T09:00:01.000000000Z",
+            );
+            let mut status = store.status(id).unwrap();
+            status.error_kind = Some(RunErrorKind::SaveFailed);
+            status.error = Some("The summary file could not be written. Retry save.".into());
+            store.write_status(&status).unwrap();
+            store
+                .write_result(id, &serde_json::from_str(TEST_ANSWER).unwrap())
+                .unwrap();
+            seeded = Some(id);
+        });
+        let id = seeded.unwrap();
+        assert_eq!(
+            fixture.supervisor.store().status(id).unwrap().answered_at,
+            None
+        );
+
+        let retried = fixture.supervisor.retry_save(id).unwrap();
+
+        assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
+        let seen = fixture.seen.lock().unwrap().clone().unwrap();
+        assert!(seen.answered_at.is_some());
+        let stored = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(stored.answered_at, seen.answered_at);
+    }
+
+    /// Seed a save-failed record with a kept answer stamped `answered_at`.
+    fn seed_save_failed(store: &RunStore, cwd: &Path, answered_at: &str) -> Uuid {
+        let id = seed_record(store, cwd, RunState::Failed, answered_at);
+        let mut status = store.status(id).unwrap();
+        status.error_kind = Some(RunErrorKind::SaveFailed);
+        status.error = Some("The summary file could not be written. Retry save.".into());
+        status.answered_at = Some(answered_at.into());
+        store.write_status(&status).unwrap();
+        store
+            .write_result(id, &serde_json::from_str(TEST_ANSWER).unwrap())
+            .unwrap();
+        id
+    }
+
+    fn days_ago(days: i64) -> String {
+        timestamp(OffsetDateTime::now_utc() - time::Duration::days(days))
+    }
+
+    #[test]
+    fn a_retry_re_stamps_an_answer_the_daily_log_window_no_longer_accepts() {
+        let stale = days_ago(31);
+        let mut seeded = None;
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            seeded = Some(seed_save_failed(store, cwd, &stale));
+        });
+        let id = seeded.unwrap();
+        let before = OffsetDateTime::now_utc();
+
+        fixture.supervisor.retry_save(id).unwrap();
+
+        let seen = fixture.seen.lock().unwrap().clone().unwrap();
+        let fresh = OffsetDateTime::parse(seen.answered_at.as_deref().unwrap(), &Rfc3339).unwrap();
+        assert!(fresh >= before.replace_nanosecond(0).unwrap(), "{fresh}");
+        let stored = fixture.supervisor.store().status(id).unwrap();
+        assert_eq!(stored.answered_at, seen.answered_at);
+        // The first stamp is kept to order the save, and survives later
+        // re-stamps.
+        assert_eq!(seen.first_answered_at.as_deref(), Some(stale.as_str()));
+        assert_eq!(stored.first_answered_at, seen.first_answered_at);
+    }
+
+    #[test]
+    fn a_retry_keeps_an_answer_stamp_inside_the_window() {
+        let kept = days_ago(28);
+        let mut seeded = None;
+        let fixture = Fixture::seeded(ANSWER, DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            seeded = Some(seed_save_failed(store, cwd, &kept));
+        });
+        let id = seeded.unwrap();
+
+        fixture.supervisor.retry_save(id).unwrap();
+
+        let seen = fixture.seen.lock().unwrap().clone().unwrap();
+        assert_eq!(seen.answered_at.as_deref(), Some(kept.as_str()));
+    }
+
+    #[test]
+    fn loggable_stamp_is_the_daily_log_window_less_a_day() {
+        let now = OffsetDateTime::parse("2026-10-27T12:00:00Z", &Rfc3339).unwrap();
+        let at = |offset: time::Duration| timestamp(now + offset);
+        assert!(loggable_stamp(Some(&at(time::Duration::ZERO)), now));
+        assert!(loggable_stamp(Some(&at(-time::Duration::days(29))), now));
+        assert!(!loggable_stamp(
+            Some(&at(-time::Duration::days(29) - time::Duration::seconds(1))),
+            now
+        ));
+        assert!(loggable_stamp(Some(&at(time::Duration::minutes(5))), now));
+        assert!(!loggable_stamp(Some(&at(time::Duration::minutes(6))), now));
+        assert!(!loggable_stamp(Some("yesterday"), now));
+        assert!(!loggable_stamp(None, now));
+    }
+
+    /// End to end: a run whose save failed (say, the notes drive was
+    /// unmounted) and that is retried more than 30 days later is logged.
+    #[test]
+    fn a_save_retried_after_the_daily_log_window_succeeds() {
+        let stale = days_ago(31);
+        let mut seeded = None;
+        let fixture = Fixture::seeded_with_fault(
+            ANSWER,
+            DEFAULT_RUN_TIMEOUT,
+            None,
+            None,
+            Some(Box::new(|dir: &Path| {
+                let root = dir.join("home");
+                std::fs::create_dir(&root).unwrap();
+                let config = dir.join("config.toml");
+                crate::config::fixtures::write(&config, &root, "", "", "");
+                Box::new(SummaryFinisher::new(config)) as Box<dyn RunFinisher>
+            })),
+            |store, cwd| {
+                seeded = Some(seed_save_failed(store, cwd, &stale));
+            },
+        );
+        let id = seeded.unwrap();
+
+        let retried = fixture.supervisor.retry_save(id).unwrap();
+
+        assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
+        assert_eq!(summary_lines(&fixture.path("home").join("logs")), 1);
     }
 
     #[test]
@@ -2460,17 +2823,24 @@ mod tests {
             stream_truncated: false,
             run_timeout_secs: None,
             vocabulary: None,
+            answered_at: None,
+            first_answered_at: None,
+            save_final: false,
         }
     }
 
     #[test]
-    fn vault_check_finisher_refuses_without_a_configured_vault() {
+    fn summary_finisher_refuses_without_a_configured_vault() {
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::ConfigStore::for_test(dir.path().join("config.toml"));
-        let finisher = VaultCheckFinisher::new(config);
+        let finisher = SummaryFinisher::new(dir.path().join("config.toml"));
         let run = sample_status(Uuid::new_v4());
-        let error = finisher.save(&run, &serde_json::json!({})).unwrap_err();
-        assert!(error.contains("notes folder"), "{error}");
+        let answer: serde_json::Value = serde_json::from_str(TEST_ANSWER).unwrap();
+        let error = finisher.save(&run, &answer).unwrap_err();
+        assert_eq!(
+            error.reason,
+            "Choose a notes folder in settings, then Retry save."
+        );
+        assert!(!dir.path().join("summaries").exists());
     }
 
     #[test]
@@ -2528,6 +2898,9 @@ mod tests {
             stream_truncated: false,
             run_timeout_secs: None,
             vocabulary: None,
+            answered_at: None,
+            first_answered_at: None,
+            save_final: false,
         };
         store.create(&status, "# Seeded\n").unwrap();
         id
@@ -2937,10 +3310,20 @@ mod tests {
         ));
         assert_eq!(disk.writes.load(Ordering::SeqCst), 0);
 
+        // The answer could not be stamped on the unreadable record, so the
+        // end state is a save failure that offers Retry save, and nothing
+        // was saved.
         *disk.unreadable.lock().unwrap() = None;
-        assert_eq!(fixture.view(id).state, RunState::Succeeded);
-        assert_eq!(fixture.on_disk(id), RunState::Succeeded);
+        let view = fixture.view(id);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.error_kind, Some(RunErrorKind::SaveFailed));
+        assert!(view.can_retry_save, "{view:?}");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.on_disk(id), RunState::Failed);
         fixture.wait_unsettled(0);
+        let retried = fixture.supervisor.retry_save(id).unwrap();
+        assert_eq!(retried.state, RunState::Succeeded, "{retried:?}");
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 1);
         assert_ne!(fixture.start("stuck"), id);
     }
 
@@ -2990,6 +3373,7 @@ mod tests {
         let finisher = TestFinisher {
             fail_saves: Arc::new(AtomicUsize::new(0)),
             saves: Arc::new(AtomicUsize::new(0)),
+            seen: SeenRun::default(),
         };
         let restarted = Supervisor::new(
             RunStore::open(fixture.path("runs")).unwrap(),
@@ -3045,6 +3429,7 @@ mod tests {
         let finisher = TestFinisher {
             fail_saves: Arc::new(AtomicUsize::new(0)),
             saves: Arc::new(AtomicUsize::new(0)),
+            seen: SeenRun::default(),
         };
         // Every end-state write of a recovery-only run fails.
         let fault: StatusFault = Arc::new(move |io: StatusIo<'_>| match io {

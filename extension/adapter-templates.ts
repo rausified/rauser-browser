@@ -22,8 +22,11 @@ export type EvaluateResult =
   | { match: false; reason: NoMatchReason }
   | ({
     match: true; adapter: number; rule: number; type: string; captures: Record<string, string>;
-    artifact_id: string; mode: Mode | null;
+    artifact_id: string; mode: Mode | null; within?: ContainerMatch;
   } & Partial<TitleResult>);
+
+/** The container a match sits within (§8.3). */
+export type ContainerMatch = { type: string; artifact_id: string };
 
 export type NoMatchReason =
   | "url_too_long" | "url_invalid" | "no_adapter" | "path_rejected" | "no_rule" | "out_of_scope" | "id_too_long";
@@ -73,6 +76,7 @@ const MODES: readonly Mode[] = ["view", "edit", "review"];
 const DOC_KEYS: ReadonlySet<string> = new Set(["format", "artifacts"]);
 const ADAPTER_KEYS: ReadonlySet<string> = new Set([
   "type", "origin", "match", "id", "title", "alias", "refs", "modes", "scope", "unscoped", "path_case", "fields",
+  "within",
 ]);
 const REQUIRED_ADAPTER_KEYS = ["type", "origin", "match", "id"] as const;
 const RULE_KEYS: ReadonlySet<string> = new Set(["path", "query", "absent", "mode"]);
@@ -98,6 +102,15 @@ type CompiledRule = {
 
 type IdPart = { kind: "lit"; text: string } | { kind: "cap"; name: string };
 
+function sameIdParts(a: readonly IdPart[], b: readonly IdPart[]): boolean {
+  return a.length === b.length && a.every((part, at) => {
+    const other = b[at]!;
+    return part.kind === "lit"
+      ? other.kind === "lit" && other.text === part.text
+      : other.kind === "cap" && other.name === part.name;
+  });
+}
+
 /** `fail` is the literal's KMP failure table, built when a skip searches for
  * it: over the literal in the prefix, over the reversed literal in the suffix. */
 type TitleToken =
@@ -113,6 +126,7 @@ type CompiledAdapter = {
   scheme: string; idParts: readonly IdPart[]; modes: ReadonlyMap<string, Mode>;
   scope: ReadonlyMap<string, readonly string[]>; captureTypes: ReadonlyMap<string, CType>;
   titles: readonly TitleEntry[] | null; aliasCapture: string | null; refs: readonly { type: string; find: RefFind }[];
+  within?: { type: string; scheme: string; idParts: readonly IdPart[] };
 };
 
 /** Validates an adapter document (§10.3). */
@@ -173,13 +187,21 @@ export function evaluate(doc: CompiledDocument, url: string, title?: string): Ev
         const value = captures.get(name);
         if (value === undefined || !values.includes(value)) return { match: false, reason: "out_of_scope" };
       }
-      const artifactId = buildId(adapter, captures);
+      const artifactId = buildId(adapter.scheme, adapter.host, adapter.idParts, captures);
       if (artifactId === null) return { match: false, reason: "id_too_long" };
+      // A container ID past 512 bytes drops only the container (§8.3).
+      const containerId = adapter.within
+        ? buildId(adapter.within.scheme, adapter.host, adapter.within.idParts, captures)
+        : null;
       const modeValue = captures.get("mode");
       const mode = modeValue !== undefined ? adapter.modes.get(modeValue) ?? null : rule.mode;
+      // `within` is absent, not null, when the adapter declares none.
       const result: EvaluateResult = {
         match: true, adapter: adapterIndex, rule: ruleIndex, type: adapter.type,
         captures: Object.fromEntries(captures), artifact_id: artifactId, mode,
+        ...(adapter.within && containerId !== null
+          ? { within: { type: adapter.within.type, artifact_id: containerId } }
+          : {}),
       };
       if (title === undefined) return result;
       return { ...result, ...matchTitle(adapter, captures, artifactId, prepareTitle(title)) };
@@ -321,6 +343,8 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
     ["path_case", (v) => typeof v === "string"], ["unscoped", (v) => typeof v === "string"],
     ["modes", (v) => isTable(v) && Object.values(v).every((m) => typeof m === "string")],
     ["scope", (v) => isTable(v) && Object.values(v).every(isStringList)],
+    ["within", (v) => isTable(v) && Object.keys(v).sort().join(",") === "id,type"
+      && typeof v.id === "string" && typeof v.type === "string"],
   ];
   for (const [key, check] of optionalTypes) if (key in raw && !check(raw[key])) fail("wrong_type");
 
@@ -451,6 +475,14 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
     }
   }
   if (shared && scopeTable === null && !("unscoped" in raw)) fail("shared_origin_unscoped");
+  // 4.7.9: each rule needs an anchor among its required path segments. A
+  // required path capture named by a scope key anchors too: the scope list
+  // pins it the way a literal would. A query binding never anchors.
+  rules.forEach((rule, r) => {
+    const anchored = rule.required.some((segment) =>
+      isAnchorSegment(segment) || (segment.kind === "cap" && !segment.optional && scope.has(segment.name)));
+    if (!anchored) fail("no_literal_segment", r);
+  });
 
   // 8. title.
   let titles: TitleEntry[] | null = null;
@@ -522,9 +554,32 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
     }
   }
 
+  // 12. within (§8.3). Typed in step 1. Its captures are the adapter ID's
+  // and scope's, so step 6's extra_capture is unchanged.
+  let within: CompiledAdapter["within"];
+  if (isTable(raw.within)) {
+    const { type: containerType, id: containerId } = raw.within as { type: string; id: string };
+    if (!isGrammarName(containerType, "._") || containerType === "web.page") fail("within_bad_type");
+    if (containerType === type) fail("within_self");
+    const parsedContainer = parseIdTemplate(containerId);
+    if (parsedContainer === null) return fail("within_id_syntax");
+    if (parsedContainer.scheme === "web") fail("within_id_reserved_scheme");
+    // Its own ID would give the artifact and its container one record key.
+    if (parsedContainer.scheme === parsedId.scheme && sameIdParts(parsedContainer.parts, parsedId.parts)) fail("within_self");
+    const containerNames = parsedContainer.parts.flatMap((part) => (part.kind === "cap" ? [part.name] : []));
+    ruleCaptures.forEach((captures, r) => {
+      for (const name of containerNames) {
+        const known = name !== "mode" && captures.has(name) && (idNames.includes(name) || scopeNames.has(name));
+        if (!known) fail("within_unknown_capture", r);
+      }
+    });
+    within = { type: containerType, scheme: parsedContainer.scheme, idParts: parsedContainer.parts };
+  }
+
   return {
     type, origin, host, insensitive: pathCase === "insensitive", rules, scheme: parsedId.scheme,
     idParts: parsedId.parts, modes, scope, captureTypes, titles, aliasCapture, refs,
+    ...(within ? { within } : {}),
   };
 }
 
@@ -546,7 +601,8 @@ function compareCodePoints(a: string, b: string): number {
 /** §4.1: a required literal, a required alternation (captured or not), or a
  * required fixed-shape capture (`uuid`, or `hex` with bounds that fix its
  * length at exactly 32 or more) anchors a template. An optional segment, and
- * any other capture type, never does. */
+ * any other capture type, never does. A required path capture named by a
+ * scope key also anchors; compileAdapter checks that after scope (4.7.9). */
 function isAnchorSegment(segment: Segment): boolean {
   if (segment.kind === "lit" || segment.kind === "alt") return true;
   if (segment.kind !== "cap" || segment.optional) return false;
@@ -587,7 +643,6 @@ function compileRule(
     if (sawOptional && !optional && segment.kind !== "rest") fail("optional_misplaced");
     if (optional) sawOptional = true;
   }
-  if (!segments.some(isAnchorSegment)) fail("no_literal_segment");
 
   // 4. query.
   // Conditions are checked in ascending key order by code point (SQ-V21):
@@ -1041,10 +1096,12 @@ function defaultCType(type: TypeName): CType {
 /** The artifact ID, or null once it passes 512 bytes (§8.1). The template has
  * no length cap, so stopping there keeps the work per visit bounded by the ID
  * limit rather than by the config (§10.2). */
-function buildId(adapter: CompiledAdapter, captures: ReadonlyMap<string, string>): string | null {
-  let id = `${adapter.scheme}:${adapter.host}`;
+function buildId(
+  scheme: string, host: string, idParts: readonly IdPart[], captures: ReadonlyMap<string, string>,
+): string | null {
+  let id = `${scheme}:${host}`;
   let bytes = utf8Length(id);
-  for (const part of adapter.idParts) {
+  for (const part of idParts) {
     if (bytes > MAX_ID_BYTES) return null;
     const text = part.kind === "lit" ? part.text : captures.get(part.name) ?? "";
     id += `/${text}`;
@@ -1072,7 +1129,7 @@ function matchTitle(
     if (found.alias !== null && adapter.aliasCapture !== null && (scoped === undefined || scoped.includes(found.alias))) {
       const aliased = new Map(captures);
       aliased.set(adapter.aliasCapture, found.alias);
-      const candidate = buildId(adapter, aliased);
+      const candidate = buildId(adapter.scheme, adapter.host, adapter.idParts, aliased);
       if (candidate !== null && candidate !== artifactId) aliasId = candidate;
     }
     return { title: found.title, title_entry: e, alias_id: aliasId, refs: findRefs(adapter, found.title) };
