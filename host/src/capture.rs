@@ -2427,7 +2427,9 @@ fn legacy_entries(entry: &str, event: &VisitEvent, why: bool) -> Vec<String> {
         safe_markdown_line(event.title.as_deref(), limit)
     );
     let Some(suffix) = entry.strip_prefix(&current) else {
-        return Vec::new();
+        // Summary and overflow prose has no visit-title prefix, but its
+        // pre-provenance bytes still form a valid v1 recovery candidate.
+        return vec![entry.to_owned()];
     };
     let mut candidates = legacy::lines(event.title.as_deref().unwrap_or("Untitled"), limit)
         .into_iter()
@@ -3268,6 +3270,89 @@ mod tests {
                 assert!(matches!(deliver(true), CaptureOutcome::Retryable { .. }));
             }
             assert_eq!(fs::read_to_string(&log).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn pre_provenance_v1_summary_and_overflow_intents_resume_exact_bytes() {
+        for summary in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let storage = storage(root.path(), "log");
+            let store = CaptureStore::open_at(&storage, None, state.path()).unwrap();
+            let page = page_summary("https://example.com/article");
+            let overflow = OverflowMarker {
+                count: 3,
+                first_occurred_at: page.occurred_at.clone(),
+                last_occurred_at: page.occurred_at.clone(),
+            };
+            let origins = ["https://example.com".into()];
+            let policy = CapturePolicy {
+                enabled: true,
+                origins: &origins,
+                strip_params: &[],
+            };
+            let deliver = |store: &CaptureStore| {
+                if summary {
+                    store.record_summary(policy, &page).0
+                } else {
+                    store.record_overflow(policy, &page.event_id, &page.url, &overflow)
+                }
+            };
+            let CaptureOutcome::Persisted { relative_path } = deliver(&store) else {
+                panic!("fixture")
+            };
+            let log = root.path().join(relative_path);
+            let journal = store.journal_path(&sha256_hex(page.event_id.as_bytes()));
+            let mut intent = read_intent(&journal).unwrap().unwrap();
+            let old = format!(
+                "{} -->\n",
+                intent
+                    .entry
+                    .as_ref()
+                    .unwrap()
+                    .rsplit_once(" stripped=")
+                    .unwrap()
+                    .0
+            );
+            intent.version = 1;
+            intent.entry_hash = sha256_hex(old.as_bytes());
+            intent.entry = None;
+            intent.payload_hash = None;
+            fs::write(&journal, serde_json::to_vec(&intent).unwrap()).unwrap();
+            let original = fs::read(&log).unwrap();
+            let prefix = &original[..intent.offset as usize];
+            let mut torn = prefix.to_vec();
+            torn.extend_from_slice(&old.as_bytes()[..old.len() / 2]);
+            fs::write(&log, &torn).unwrap();
+            drop(store);
+            let store = CaptureStore::open_at(&storage, None, state.path()).unwrap();
+            let changed = if summary {
+                let mut changed = page.clone();
+                changed.summary_path = "summaries/changed.summary.md".into();
+                store.record_summary(policy, &changed).0
+            } else {
+                let mut changed = overflow.clone();
+                changed.count += 1;
+                store.record_overflow(policy, &page.event_id, &page.url, &changed)
+            };
+            assert!(matches!(changed, CaptureOutcome::Retryable { .. }));
+            assert_eq!(fs::read(&log).unwrap(), torn);
+            let mut edited = torn.clone();
+            *edited.last_mut().unwrap() = b'X';
+            fs::write(&log, &edited).unwrap();
+            assert!(matches!(deliver(&store), CaptureOutcome::Retryable { .. }));
+            assert_eq!(fs::read(&log).unwrap(), edited);
+            fs::write(&log, &torn).unwrap();
+            let outcome = deliver(&store);
+            assert!(
+                matches!(outcome, CaptureOutcome::Persisted { .. }),
+                "{outcome:?}"
+            );
+            let expected = [prefix, old.as_bytes()].concat();
+            assert_eq!(fs::read(&log).unwrap(), expected);
+            assert!(matches!(deliver(&store), CaptureOutcome::Suppressed { .. }));
+            assert_eq!(fs::read(&log).unwrap(), expected);
         }
     }
 

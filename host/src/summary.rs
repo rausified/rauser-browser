@@ -457,7 +457,7 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
     if let Some(names) = doc.stripped_params {
         out.push_str(&format!(
             "  stripped_params: {}\n",
-            serde_json::to_string(names).expect("query names")
+            crate::markdown::yaml_strings(names)
         ));
     }
     out.push_str(&format!(

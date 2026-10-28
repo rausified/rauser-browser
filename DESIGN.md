@@ -1085,9 +1085,12 @@ misaligned evidence is skipped rather than guessed, and an unusable cache
 is rebuilt. The existing cache read and publication bounds remain in force.
 
 New page notes and saved summaries write `brauser.stripped_params` beside
-their canonical URL. A page note's creation URL and its evidence survive
-later saves from alternate routes and explicit re-keying; a legacy note
-keeps its missing field instead of acquiring today's evidence. Older-note
+their canonical URL. These exact decoded names use the shared YAML string
+escaping, so a page-controlled name cannot expose HTML or image syntax in a
+Markdown viewer that renders front matter as text. A page note's creation URL
+and its evidence survive later saves from alternate routes and explicit
+re-keying; a legacy note keeps its missing field instead of acquiring today's
+evidence. Older-note
 discovery, View and Use as artifact note refuse a candidate whose recorded
 removed names intersect query or absent keys read by a current, retired or
 adopted contract on that origin. Unrelated tracking names still allow

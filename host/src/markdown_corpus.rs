@@ -209,7 +209,7 @@ fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
         &SummaryDocument {
             key: &key,
             canonical_url: url,
-            stripped_params: None,
+            stripped_params: Some(&[format!("utm_{input}")]),
             title: input,
             summarized_at: "2026-10-26T14:05:00-07:00",
             harness: HarnessId::Codex,
@@ -337,6 +337,14 @@ fn the_corpus_comes_out_inert() {
                 );
             }
             assert!(!front.contains('<') && !front.contains("!["), "{front:?}");
+            let names = front
+                .lines()
+                .find_map(|line| line.strip_prefix("  stripped_params: "))
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Vec<String>>(names).unwrap(),
+                [format!("utm_{input}")]
+            );
             let title = front
                 .lines()
                 .find_map(|line| line.strip_prefix("title: "))

@@ -218,6 +218,14 @@ finisher test checks names-only evidence in the file, daily log and index.
 failed first during review and protects the existing terminal-rejection
 semantics for malformed main, mode and trail URLs.
 
+Independent review added failing-first coverage for page-controlled HTML and
+image syntax in stripped names: note creation round-trips the exact names
+through escaped front matter, and every summary corpus case now also supplies
+a stripped name. The shared renderer check exercises those summary fields.
+`pre_provenance_v1_summary_and_overflow_intents_resume_exact_bytes` covers
+interrupted v1 events without visit-title prose, preserving exact old bytes,
+refusing changed payloads and edited tails, and deduplicating after recovery.
+
 ## Page-note recovery coverage
 
 `extension/tests/note-editor.test.mjs` drives the real recovery store with

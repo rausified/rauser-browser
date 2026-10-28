@@ -386,7 +386,7 @@ fn render_note(
         .map(|names| {
             format!(
                 "  stripped_params: {}\n",
-                serde_json::to_string(names).expect("query names")
+                crate::markdown::yaml_strings(names)
             )
         })
         .unwrap_or_default();
@@ -802,6 +802,25 @@ mod tests {
         };
         let vault = Vault::open(&storage).unwrap();
         (root, vault)
+    }
+
+    #[test]
+    fn stripped_names_are_inert_in_note_frontmatter_and_round_trip() {
+        let (_root, vault) = vault();
+        let mut raw = url::Url::parse("https://example.com/a").unwrap();
+        let name = "utm_<img src=https://evil.example/pixel>![x](https://evil.example/image)";
+        raw.query_pairs_mut().append_pair(name, "private-value");
+        let stored =
+            crate::capture::canonical_url_with_provenance(raw.as_str(), &["utm_*".into()]).unwrap();
+        let key = crate::vault::url_record_key(&stored.url).unwrap();
+        save_keyed_note_with_provenance(&vault, &stored, &key, "Title", "body", "missing").unwrap();
+        let contents = vault.read_note(&key, &stored.url).unwrap().unwrap();
+        assert!(
+            !contents.contains('<') && !contents.contains("!["),
+            "{contents}"
+        );
+        assert!(!contents.contains("private-value"));
+        assert_eq!(url_keyed_note_evidence(&contents), Some(stored));
     }
 
     #[test]
