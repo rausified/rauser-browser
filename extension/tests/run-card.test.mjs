@@ -10,6 +10,7 @@ const {
 const { HostError } = await import("../dist/native.js");
 const { SERVICE_SETUP_INSTRUCTIONS } = await import("../dist/agent.js");
 const { storageKey } = await import("../dist/brand.js");
+const { RunProgress } = await import("../dist/run-card.js");
 
 const DISMISSED_KEY = storageKey("dismissed_runs_v1");
 
@@ -737,14 +738,44 @@ test("a run recorded while list_runs is in flight is not cleared", async () => {
   page.runCards.dispose();
 });
 
-// --- Site-draft runs (Capture Site: Improve with AI) ------------------------
+test("cards show only for the followed page", async () => {
+  const other = view({
+    run_id: "00000000-0000-4000-8000-000000000041", url: "https://read.example/b", title: "Another page",
+  });
+  const page = setup({
+    reply: (request) => request.type === "get_run"
+      ? { type: "run_fetched", run: request.run_id === other.run_id ? other : view(), stream_text: "", next_offset: 0, more: false }
+      : null,
+  });
+  page.runCards.follow("https://read.example/a#section");
+  page.runCards.show(view());
+  page.runCards.show(other);
+  await settle();
+  const shown = () => cards(page.container).filter((card) => !card.hidden).map((card) => card.dataset.runId);
+  // A card for another page is kept, hidden, so it is back when its page is.
+  assert.equal(cards(page.container).length, 2);
+  assert.deepEqual(shown(), [view().run_id]);
+  page.runCards.follow("https://read.example/b");
+  assert.deepEqual(shown(), [other.run_id]);
+  // A page that is not a web page shows no card.
+  page.runCards.follow(null);
+  assert.deepEqual(shown(), []);
+  page.runCards.dispose();
+});
 
-const { RunProgress } = await import("../dist/run-card.js");
+test("panel.css hides a hidden run card despite its display rule", async () => {
+  // `.run-card { display: grid }` outranks Chrome's [hidden] style, so the
+  // card itself needs its own rule or follow() hides nothing on screen.
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("../panel.css", import.meta.url), "utf8");
+  assert.match(css, /\.run-card\[hidden\][^{]*\{\s*display:\s*none;/);
+});
 
 const SITE_DRAFT = {
   kind: "site_draft", url: "https://wiki.example.com", title: "Capture Site: wiki.example.com",
   record_key: { kind: "url", value: "https://wiki.example.com" }, cwd: "/Users/me/Library/Application Support/Brauser/runs/x",
 };
+
 const ANSWER_DRAFT = { adapters: [{ type: "wiki.pages", origin: "https://wiki.example.com", match: [{ path: "/pages/{n:int}" }], id: "wiki.pages:{host}/{n}" }] };
 
 test("restored summary cards skip site-draft runs", async () => {

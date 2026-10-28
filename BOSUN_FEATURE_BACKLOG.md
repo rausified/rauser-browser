@@ -285,10 +285,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   lock, refresh, policy, and store setup, and `capture.rs` has twin
   mode/trail authorization loops. Extract the shared steps and set a removal
   release for the legacy paths.
-- [ ] `brwr-m68` **Split DESIGN.md into a spec and an as-built history.** Move
-  dated as-built and probe records to `docs/history.md`, and make AGENTS.md
-  "Current state" a short table.
-
 - [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
   and preview the exact text to share without altering measured activity;
   preserve selections across refreshes. This remains behind the ordered plan.
@@ -332,6 +328,11 @@ strip_params note-identity follow-up has shipped (see Shipped).
   asking an older build to interpret or migrate an unsupported future format.
 
 ## In Progress / This Iteration
+
+- In progress in the Columbus session (John's request, 2026-10-28), not Cookie. Cookie must not claim these:
+- [ ] `brwr-m68` **Split DESIGN.md into a spec and an as-built history.** Move
+  dated as-built and probe records to `docs/history.md`, and make AGENTS.md
+  "Current state" a short table.
 
 - [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.**
   Cookie claimed the highest-priority ready item after the coordinator cleared
