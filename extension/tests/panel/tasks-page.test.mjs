@@ -501,7 +501,7 @@ test("search and status filter narrow the list; Running includes queued", async 
 test("the page stops polling while hidden and refreshes on show", async () => {
   const page = await openTasks({ runs: [task(1, { state: "running" }), task(2)] });
   await listed(page);
-  await until(() => page.sent("list_runs").length >= 2, "a list refresh while a task runs");
+  await afterPoll(() => page.sent("list_runs").length >= 2, "a list refresh while a task runs");
   page.setHidden(true);
   await settle(20);
   const before = page.sent("list_runs").length;
@@ -660,7 +660,7 @@ test("the list keeps keyboard focus across a refresh", async () => {
   assert.equal(focused.dataset.runId, runId(2));
   // A refresh that changes no row updates the rows in place.
   const lists = page.sent("list_runs").length;
-  await until(() => page.sent("list_runs").length > lists, "a list refresh");
+  await afterPoll(() => page.sent("list_runs").length > lists, "a list refresh");
   await settle(20);
   assert.equal(document.activeElement, focused);
   assert.ok(page.rows().includes(focused), "the focused row is still in the list");
