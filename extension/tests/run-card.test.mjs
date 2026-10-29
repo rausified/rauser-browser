@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test, { mock } from "node:test";
 
 // Run after build:extension. The run card gets a fake DOM, a scripted host,
 // and mocked timers, so each poll happens when a test ticks the clock.
 const {
-  MAX_RESTORED_FINISHED, POLL_MS, RESTORE_FINISHED_WITHIN_MS, RunCards, answerLine, elapsedText,
-  markRunsMayExist, restorable, restoreRunCards, resumeCommand, runsMayExist, stateText,
+  MAX_RESTORED_FINISHED, POLL_MS, RESTORE_FINISHED_WITHIN_MS, RunCards, answerLine, dismissedIds, elapsedText,
+  markRunsMayExist, rememberDismissed, restorable, restoreRunCards, resumeCommand, runsMayExist, stateText,
 } = await import("../dist/run-card.js");
 const { HostError } = await import("../dist/native.js");
 const { SERVICE_SETUP_INSTRUCTIONS } = await import("../dist/agent.js");
@@ -407,18 +408,29 @@ test("restore shows in-flight runs and at most 5 recent finished, skipping dismi
   await settle();
   assert.equal(cards(page.container).length, 7);
 
-  // Dismiss removes a finished card and remembers it, keeping the newest 200.
-  storage.entries.set(DISMISSED_KEY, Array.from({ length: 200 }, (_, n) => id(1000 + n)));
+  // Dismiss removes a finished card and remembers it, keeping the newest 1000.
+  storage.entries.set(DISMISSED_KEY, Array.from({ length: 1000 }, (_, n) => id(1000 + n)));
   const card = cards(page.container).find((candidate) => candidate.textContent.includes("Summarized"));
   assert.ok(!buttonTexts(cards(page.container)[0]).includes("Dismiss"), "an in-flight card has no Dismiss");
   button(card, "Dismiss").click();
   await settle();
   assert.equal(cards(page.container).length, 6);
   const stored = storage.entries.get(DISMISSED_KEY);
-  assert.equal(stored.length, 200);
+  assert.equal(stored.length, 1000);
   assert.equal(stored.at(-1), id(3));
   assert.ok(!stored.includes(id(1000)));
   page.runCards.dispose();
+});
+
+test("rememberDismissed keeps the newest 1000", async () => {
+  const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const storage = storageArea(new Map([[DISMISSED_KEY, Array.from({ length: 1000 }, (_, n) => id(n))]]));
+  await rememberDismissed(storage, id(1000));
+  const stored = storage.entries.get(DISMISSED_KEY);
+  assert.equal(stored.length, 1000);
+  assert.equal(stored.at(-1), id(1000));
+  assert.ok(!stored.includes(id(0)));
+  assert.deepEqual(await dismissedIds(storage), stored);
 });
 
 test("dismissing two cards at once remembers both", async () => {
@@ -939,28 +951,13 @@ function taskView(overrides = {}) {
   return view({ ...TASK, ...overrides });
 }
 
-function taskSetup(options = {}) {
-  const terminal = [];
-  const reused = [];
-  const page = setup({
-    ...options,
-    extra: {
-      kind: "task",
-      onTerminal: (run) => terminal.push(structuredClone(run)),
-      reuse: (instruction) => reused.push(instruction),
-      ...(options.extra ?? {}),
-    },
-  });
-  return { ...page, terminal, reused };
-}
-
 function byClass(root, name) {
   let found = null;
   walk(root, (child) => { if (!found && child.className.split(" ").includes(name)) found = child; });
   return found;
 }
 
-test("restorable filters by kind and keeps site drafts out of both", () => {
+test("restorable keeps summary runs only, never tasks or site drafts", () => {
   const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
   const runs = [
     view({ run_id: id(1), state: "running" }),
@@ -973,217 +970,12 @@ test("restorable filters by kind and keeps site drafts out of both", () => {
     taskView({ run_id: id(8), state: "failed", error: "x", finished_at: "2026-10-27T15:59:30Z" }),
   ];
   assert.deepEqual(restorable(runs, NOW, new Set()).map((run) => run.run_id), [id(1), id(2), id(7)]);
-  assert.deepEqual(restorable(runs, NOW, new Set(), "summary").map((run) => run.run_id), [id(1), id(2), id(7)]);
-  assert.deepEqual(restorable(runs, NOW, new Set([id(5)]), "task").map((run) => run.run_id), [id(3), id(8)]);
-  // A kind the panel does not know is in neither.
+  // A kind the panel does not know is not a summary.
   const unknown = [view({ run_id: id(9), state: "running", kind: "other" })];
   assert.deepEqual(restorable(unknown, NOW, new Set()), []);
-  assert.deepEqual(restorable(unknown, NOW, new Set(), "task"), []);
 });
 
-test("TaskCard renders the instruction, stream and report as text", async () => {
-  const instruction = "<b>Find</b> the\ndeadlines";
-  const report = "<script>alert(1)</script>\nAll done.";
-  const pages = [
-    { run: taskView({ instruction, thread_id: "thread-1" }), stream_text: "<i>working", next_offset: 10, more: false },
-    {
-      run: taskView({ instruction, thread_id: "thread-1", state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: report }),
-      stream_text: " done", next_offset: 15, more: false,
-    },
-  ];
-  const page = taskSetup({
-    reply: (request) => request.type === "get_run" ? { type: "run_fetched", ...pages.shift() } : null,
-  });
-  page.runCards.show(taskView({ instruction }));
-  await settle();
-  const [card] = cards(page.container);
-  const headline = byClass(card, "run-card-instruction");
-  assert.equal(headline.textContent, instruction);
-  assert.deepEqual(headline.children, []);
-  assert.match(card.textContent, /on A readable article · Codex/);
-  assert.match(card.textContent, /Running · 30s/);
-  assert.equal(byClass(card, "run-card-report").hidden, true);
-  await tick();
-  assert.match(card.textContent, /Done · 40s/);
-  assert.doesNotMatch(card.textContent, /Summarized|Type:/);
-  const stream = byClass(card, "run-card-stream");
-  assert.equal(stream.textContent, "<i>working done");
-  assert.deepEqual(stream.children, []);
-  const shown = byClass(card, "run-card-report");
-  assert.equal(shown.hidden, false);
-  assert.equal(shown.textContent, report);
-  assert.deepEqual(shown.children, []);
-  // The run was seen finishing, so the panel hears of it once.
-  assert.deepEqual(page.terminal.map((run) => run.state), ["succeeded"]);
-  await tick(POLL_MS * 3);
-  assert.equal(page.terminal.length, 1);
-  page.runCards.dispose();
-
-  // A Claude Code task names its harness; an untitled page names its url.
-  const claude = taskSetup({
-    reply: (request) => request.type === "get_run"
-      ? { type: "run_fetched", run: taskView({ harness: "claude", title: "" }), stream_text: "", next_offset: 0, more: false }
-      : null,
-  });
-  claude.runCards.show(taskView({ harness: "claude", title: "" }));
-  await settle();
-  assert.match(cards(claude.container)[0].textContent, /on https:\/\/read\.example\/a · Claude Code/);
-  claude.runCards.dispose();
-});
-
-test("TaskCard offers Copy report, Reuse, resume and Dismiss when done, and Cancel while running", async () => {
-  let current = taskView({ thread_id: "thread-1" });
-  const page = taskSetup({
-    reply: (request) => {
-      if (request.type === "get_run") return { type: "run_fetched", run: current, stream_text: "", next_offset: 0, more: false };
-      if (request.type === "open_path") return { type: "path_opened" };
-      return null;
-    },
-  });
-  page.runCards.show(current);
-  await settle();
-  const [card] = cards(page.container);
-  assert.deepEqual(buttonTexts(card), ["Cancel", "Open in Codex"]);
-  current = taskView({ thread_id: "thread-1", state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "Three links." });
-  await tick();
-  assert.deepEqual(buttonTexts(card), ["Copy report", "Reuse", "Open in Codex", "Dismiss"]);
-  button(card, "Copy report").click();
-  await settle();
-  assert.deepEqual(page.copied, ["Three links."]);
-  button(card, "Reuse").click();
-  assert.deepEqual(page.reused, [TASK.instruction]);
-  button(card, "Open in Codex").click();
-  await settle();
-  assert.deepEqual(page.sent("open_path").map((r) => [r.target, r.run_id]), [["codex_thread", current.run_id]]);
-  button(card, "Dismiss").click();
-  await settle();
-  assert.equal(cards(page.container).length, 0);
-  page.runCards.dispose();
-
-  // A failed Claude Code task offers its resume command and Copy (the error), never Copy report.
-  const failed = taskView({
-    harness: "claude", session_id: "s-1", state: "failed", finished_at: "2026-10-27T16:00:10Z",
-    error: "The harness exited.", error_kind: "harness_failed",
-  });
-  const other = taskSetup({
-    reply: (request) => request.type === "get_run"
-      ? { type: "run_fetched", run: failed, stream_text: "lots of output", next_offset: 14, more: false }
-      : null,
-  });
-  other.runCards.show(failed);
-  await settle();
-  const [failedCard] = cards(other.container);
-  assert.deepEqual(buttonTexts(failedCard), ["Reuse", "Copy resume command", "Copy", "Dismiss"]);
-  button(failedCard, "Copy").click();
-  await settle();
-  assert.deepEqual(other.copied, ["The harness exited."]);
-  // It was never seen unfinished, so nothing is announced.
-  assert.deepEqual(other.terminal, []);
-  other.runCards.dispose();
-});
-
-test("TaskCard warns that changes stay after a failure or cancel", async () => {
-  const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-  const runs = [
-    taskView({ run_id: id(1), state: "failed", finished_at: "2026-10-27T16:00:10Z", error: "Timed out.", error_kind: "timed_out" }),
-    taskView({ run_id: id(2), state: "canceled", finished_at: "2026-10-27T16:00:10Z", error: "Canceled.", error_kind: "canceled" }),
-    // Canceled while queued: the agent never ran, so nothing changed.
-    taskView({ run_id: id(3), state: "canceled", started_at: null, finished_at: "2026-10-27T16:00:10Z", error: "Canceled.", error_kind: "canceled" }),
-    taskView({ run_id: id(4), state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "ok" }),
-    taskView({ run_id: id(5), state: "running" }),
-  ];
-  const page = taskSetup({
-    reply: (request) => request.type === "get_run"
-      ? { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id), stream_text: "", next_offset: 0, more: false }
-      : null,
-  });
-  for (const run of runs) page.runCards.show(run);
-  await settle();
-  const warned = (n) => {
-    const card = cards(page.container).find((candidate) => candidate.dataset.runId === id(n));
-    return card.textContent.includes("Changes the agent already made stay; check before running it again.");
-  };
-  assert.deepEqual([1, 2, 3, 4, 5].map(warned), [true, true, false, false, false]);
-  page.runCards.dispose();
-});
-
-test("TaskCard never shows Retry save, even when can_retry_save is true", async () => {
-  const failed = taskView({
-    state: "failed", finished_at: "2026-10-27T16:00:10Z", error: "The agent finished, but its report could not be kept.",
-    error_kind: "save_failed", can_retry_save: true, summary_path: "summaries/x.summary.md",
-  });
-  const page = taskSetup({
-    reply: (request) => request.type === "get_run"
-      ? { type: "run_fetched", run: failed, stream_text: "", next_offset: 0, more: false }
-      : null,
-  });
-  page.runCards.show(failed);
-  await settle();
-  const [card] = cards(page.container);
-  assert.ok(!buttonTexts(card).includes("Retry save"));
-  assert.ok(!buttonTexts(card).includes("Open summary"));
-  assert.deepEqual(page.sent("get_artifact"), []);
-  page.runCards.dispose();
-});
-
-test("Reuse uses the full instruction from get_run, not the list_runs cut", async () => {
-  const full = `${"a".repeat(300)} and then the end`;
-  const cut = `${"a".repeat(280)}…`;
-  const finished = taskView({ instruction: full, state: "succeeded", finished_at: "2026-10-27T15:59:50Z", task_report: "Report." });
-  const listed = { ...finished, instruction: cut, task_report: null };
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const page = taskSetup({
-    reply: async (request) => {
-      if (request.type === "list_runs") return { type: "runs_listed", runs: [listed] };
-      if (request.type === "get_run") {
-        await gate;
-        return { type: "run_fetched", run: finished, stream_text: "", next_offset: 0, more: false };
-      }
-      return null;
-    },
-  });
-  await page.runCards.restore();
-  await settle();
-  const [card] = cards(page.container);
-  // A restored finished card asks get_run at once; until it answers, there is no Reuse.
-  assert.equal(page.sent("get_run").length, 1);
-  assert.ok(!buttonTexts(card).includes("Reuse"));
-  release();
-  await settle();
-  assert.equal(byClass(card, "run-card-instruction").textContent, full);
-  assert.equal(byClass(card, "run-card-report").textContent, "Report.");
-  // A later list_runs view (cut, no report) does not undo the full one.
-  await page.runCards.restore();
-  await settle();
-  assert.equal(byClass(card, "run-card-instruction").textContent, full);
-  assert.equal(byClass(card, "run-card-report").textContent, "Report.");
-  button(card, "Reuse").click();
-  assert.deepEqual(page.reused, [full]);
-  page.runCards.dispose();
-});
-
-test("task RunCards ignore follow", async () => {
-  const other = taskView({ run_id: "00000000-0000-4000-8000-000000000041", url: "https://read.example/b" });
-  const page = taskSetup({
-    reply: (request) => request.type === "get_run"
-      ? { type: "run_fetched", run: request.run_id === other.run_id ? other : taskView(), stream_text: "", next_offset: 0, more: false }
-      : null,
-  });
-  page.runCards.follow("https://read.example/a");
-  page.runCards.show(taskView());
-  page.runCards.show(other);
-  await settle();
-  const shown = () => cards(page.container).filter((card) => !card.hidden).length;
-  assert.equal(shown(), 2);
-  page.runCards.follow("https://read.example/c");
-  assert.equal(shown(), 2);
-  page.runCards.follow(null);
-  assert.equal(shown(), 2);
-  page.runCards.dispose();
-});
-
-function pairSetup({ reply, storage = storageArea() }) {
+function restoreSetup({ reply, storage = storageArea() }) {
   globalThis.document = { createElement: (tag) => new FakeElement(tag) };
   const requests = [];
   const state = { settingsOpened: 0 };
@@ -1202,43 +994,40 @@ function pairSetup({ reply, storage = storageArea() }) {
     openSettings: () => { state.settingsOpened += 1; },
   };
   const summaryArea = new FakeElement("div");
-  const taskArea = new FakeElement("div");
+  const noticeArea = new FakeElement("div");
   const summaries = new RunCards(summaryArea, deps);
-  const tasks = new RunCards(taskArea, { ...deps, kind: "task" });
   return {
-    summaryArea, taskArea, summaries, tasks, storage, state, deps,
+    summaryArea, noticeArea, summaries, storage, state, deps,
     sent: (type) => requests.filter((r) => r.type === type),
-    restore: () => restoreRunCards([summaries, tasks], taskArea, deps),
-    dispose: () => { summaries.dispose(); tasks.dispose(); },
+    restore: (options) => restoreRunCards([summaries], noticeArea, deps, options),
+    dispose: () => summaries.dispose(),
   };
 }
 
-test("restoreRunCards lists once and clears runsMayExist only when nothing shows", async () => {
-  let runs = [taskView({ state: "running" })];
-  const page = pairSetup({
-    reply: (request) => {
-      if (request.type === "list_runs") return { type: "runs_listed", runs };
-      if (request.type === "get_run") {
-        return { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id) ?? taskView(), stream_text: "", next_offset: 0, more: false };
-      }
-      return null;
-    },
-  });
+test("summary restore asks list_runs for kind summary, and clears runsMayExist only when nothing shows", async () => {
+  let runs = [view({ state: "running" })];
+  const reply = (request) => {
+    if (request.type === "list_runs") return { type: "runs_listed", runs, more: false };
+    if (request.type === "get_run") {
+      return { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id) ?? view(), stream_text: "", next_offset: 0, more: false };
+    }
+    return null;
+  };
+  const page = restoreSetup({ reply });
   await markRunsMayExist(page.storage, NOW - 1);
-  // Only a task: the summary area is empty, but the record stays.
   await page.restore();
   await settle();
+  const [listed] = page.sent("list_runs");
   assert.equal(page.sent("list_runs").length, 1);
-  assert.equal(cards(page.summaryArea).length, 0);
-  assert.equal(cards(page.taskArea).length, 1);
+  assert.equal(listed.kind, "summary");
+  assert.equal("before" in listed, false);
+  assert.equal(cards(page.summaryArea).length, 1);
   assert.equal(await runsMayExist(page.storage), true);
   page.dispose();
 
-  // Nothing to show in either: the record goes, after one list_runs.
+  // Nothing to show: the record goes, after one list_runs.
   runs = [];
-  const empty = pairSetup({
-    reply: (request) => request.type === "list_runs" ? { type: "runs_listed", runs } : null,
-  });
+  const empty = restoreSetup({ reply });
   await markRunsMayExist(empty.storage, NOW - 1);
   await empty.restore();
   await settle();
@@ -1246,28 +1035,19 @@ test("restoreRunCards lists once and clears runsMayExist only when nothing shows
   assert.equal(await runsMayExist(empty.storage), false);
   empty.dispose();
 
-  // Each kind goes to its own area.
-  runs = [view({ state: "running" }), taskView({ run_id: "00000000-0000-4000-8000-000000000041", state: "queued", started_at: null })];
-  const both = pairSetup({
-    reply: (request) => {
-      if (request.type === "list_runs") return { type: "runs_listed", runs };
-      if (request.type === "get_run") {
-        return { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id), stream_text: "", next_offset: 0, more: false };
-      }
-      return null;
-    },
-  });
-  await both.restore();
+  // Nothing to show, but the caller knows of an active task: the record stays.
+  const kept = restoreSetup({ reply });
+  await markRunsMayExist(kept.storage, NOW - 1);
+  await kept.restore({ keepRecord: true });
   await settle();
-  assert.deepEqual(cards(both.summaryArea).map((card) => card.dataset.runId), [runs[0].run_id]);
-  assert.deepEqual(cards(both.taskArea).map((card) => card.dataset.runId), [runs[1].run_id]);
-  both.dispose();
+  assert.equal(await runsMayExist(kept.storage), true);
+  kept.dispose();
 });
 
 test("restoreRunCards shows one neutral notice in the named area when listing fails", async () => {
   const message = "The Brauser service did not answer.";
   let failure = new HostError("service_unavailable", message);
-  const page = pairSetup({
+  const page = restoreSetup({
     reply: (request) => {
       if (request.type === "list_runs") return failure ?? { type: "runs_listed", runs: [] };
       return null;
@@ -1276,24 +1056,31 @@ test("restoreRunCards shows one neutral notice in the named area when listing fa
   await page.restore();
   const notices = (area) => area.children.filter((child) => child.className.split(" ").includes("run-notice"));
   assert.equal(notices(page.summaryArea).length, 0);
-  assert.equal(notices(page.taskArea).length, 1);
-  assert.ok(page.taskArea.textContent.includes(SERVICE_SETUP_INSTRUCTIONS));
-  assert.ok(page.taskArea.textContent.includes(message));
-  button(page.taskArea, "Open settings").click();
+  assert.equal(notices(page.noticeArea).length, 1);
+  assert.ok(page.noticeArea.textContent.includes(SERVICE_SETUP_INSTRUCTIONS));
+  assert.ok(page.noticeArea.textContent.includes(message));
+  button(page.noticeArea, "Open settings").click();
   assert.equal(page.state.settingsOpened, 1);
 
   // Another failure replaces it, neutrally worded, with no settings button.
   failure = new HostError("internal", "disk full");
   await page.restore();
-  assert.equal(notices(page.taskArea).length, 1);
-  assert.equal(page.taskArea.textContent, "Could not list agent runs: disk full");
+  assert.equal(notices(page.noticeArea).length, 1);
+  assert.equal(page.noticeArea.textContent, "Could not list agent runs: disk full");
   assert.equal(page.summaryArea.textContent, "");
-  assert.ok(!buttonTexts(page.taskArea).includes("Open settings"));
+  assert.ok(!buttonTexts(page.noticeArea).includes("Open settings"));
+
+  // An older host refuses the kind field: it needs rebuilding.
+  failure = new HostError("invalid_request", "invalid or unsupported request JSON");
+  await page.restore();
+  assert.equal(notices(page.noticeArea).length, 1);
+  // The summary restore's own words: it restores agent runs, not task history.
+  assert.equal(page.noticeArea.textContent, "Rebuild the Brauser host to restore agent runs.");
 
   // A list that works clears it.
   failure = null;
   await page.restore();
-  assert.equal(notices(page.taskArea).length, 0);
+  assert.equal(notices(page.noticeArea).length, 0);
   page.dispose();
 
   // The single-area restore uses the same neutral words.
@@ -1305,14 +1092,14 @@ test("restoreRunCards shows one neutral notice in the named area when listing fa
   single.runCards.dispose();
 });
 
-test("dismissing a summary and a task together keeps both ids", async () => {
+test("dismissing two summaries together keeps both ids", async () => {
   const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
   const runs = [
     view({ run_id: id(1), state: "succeeded", answer: ANSWER, finished_at: "2026-10-27T15:59:00Z" }),
-    taskView({ run_id: id(2), state: "succeeded", task_report: "ok", finished_at: "2026-10-27T15:59:10Z" }),
+    view({ run_id: id(2), state: "failed", error: "x", finished_at: "2026-10-27T15:59:10Z" }),
   ];
   const storage = storageArea(new Map([[DISMISSED_KEY, [id(9)]]]));
-  const page = pairSetup({
+  const page = restoreSetup({
     storage,
     reply: (request) => {
       if (request.type === "list_runs") return { type: "runs_listed", runs };
@@ -1324,17 +1111,302 @@ test("dismissing a summary and a task together keeps both ids", async () => {
   });
   await page.restore();
   await settle();
-  const [summary] = cards(page.summaryArea);
-  const [task] = cards(page.taskArea);
+  const [first, second] = cards(page.summaryArea);
   // Both clicks land before either storage read completes.
-  button(summary, "Dismiss").click();
-  button(task, "Dismiss").click();
+  button(first, "Dismiss").click();
+  button(second, "Dismiss").click();
   await settle();
-  assert.equal(cards(page.summaryArea).length + cards(page.taskArea).length, 0);
+  assert.equal(cards(page.summaryArea).length, 0);
   assert.deepEqual([...storage.entries.get(DISMISSED_KEY)].sort(), [id(1), id(2), id(9)]);
   // A later restore keeps both out.
   await page.restore();
   await settle();
-  assert.equal(cards(page.summaryArea).length + cards(page.taskArea).length, 0);
+  assert.equal(cards(page.summaryArea).length, 0);
   page.dispose();
+});
+
+const { TaskDetail } = await import("../dist/run-card.js");
+
+// A TaskDetail with a scripted host; `reply` answers get_run.
+function detailSetup(initial, { reply = () => null, storage = storageArea() } = {}) {
+  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  const requests = [];
+  const copied = [];
+  const reused = [];
+  const opened = [];
+  const dismissed = [];
+  const changed = [];
+  const host = {
+    async call(request, expected) {
+      requests.push(structuredClone(request));
+      const answer = await reply(request);
+      if (answer instanceof Error) throw answer;
+      if (!answer) throw new HostError("internal", `unexpected ${request.type}`);
+      assert.equal(answer.type, expected);
+      return answer;
+    },
+  };
+  const detail = new TaskDetail(initial, {
+    host,
+    now: () => NOW,
+    copy: async (text) => { copied.push(text); },
+    visible: () => true,
+    storage,
+    reuse: (instruction) => reused.push(instruction),
+    openPage: (url) => opened.push(url),
+    dismissed: (runId) => dismissed.push(runId),
+    changed: (run) => changed.push(structuredClone(run)),
+  });
+  return { detail, requests, copied, reused, opened, dismissed, changed, storage };
+}
+
+function output(detail) {
+  return byClass(detail.element, "task-detail-output");
+}
+
+test("TaskDetail shows Running with live output open, then Done with the report and output closed", async () => {
+  const pages = [
+    { run: taskView({ thread_id: "thread-1" }), stream_text: "working", next_offset: 7, more: false },
+    {
+      run: taskView({ thread_id: "thread-1", state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "Three links." }),
+      stream_text: " done", next_offset: 12, more: false,
+    },
+  ];
+  const page = detailSetup(taskView(), { reply: (request) => request.type === "get_run" ? { type: "run_fetched", ...pages.shift() } : null });
+  const { detail } = page;
+  const started = new Date("2026-10-27T15:59:30.000000000Z").toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  assert.equal(output(detail).tagName, "DETAILS");
+  assert.equal(output(detail).open, true);
+  detail.start();
+  await settle();
+  const classes = detail.element.children.map((child) => child.className.split(" ")[0]);
+  assert.deepEqual(classes, [
+    "task-detail-instruction", "task-detail-meta", "run-card-actions", "run-card-problem", "task-detail-note",
+    "task-detail-report-label", "task-detail-report", "task-detail-output",
+  ]);
+  assert.equal(byClass(detail.element, "task-detail-instruction").tagName, "H2");
+  assert.equal(byClass(detail.element, "task-detail-meta").textContent,
+    `on A readable article · Codex · started ${started} · Running · 30s`);
+  assert.equal(byClass(detail.element, "task-detail-report").hidden, true);
+  assert.equal(byClass(detail.element, "task-detail-report-label").hidden, true);
+  assert.equal(output(detail).open, true);
+  assert.equal(output(detail).children[0].tagName, "SUMMARY");
+  assert.equal(output(detail).children[0].textContent, "Agent output");
+  assert.equal(byClass(detail.element, "run-card-stream").textContent, "working");
+  assert.deepEqual(buttonTexts(detail.element), ["Cancel", "Open in Codex", "Open page"]);
+  await tick();
+  assert.equal(byClass(detail.element, "task-detail-meta").textContent,
+    `on A readable article · Codex · started ${started} · Done · 40s`);
+  const report = byClass(detail.element, "task-detail-report");
+  assert.equal(report.hidden, false);
+  assert.equal(report.textContent, "Three links.");
+  assert.equal(byClass(detail.element, "task-detail-report-label").textContent, "Report");
+  assert.equal(output(detail).open, false);
+  assert.equal(byClass(detail.element, "run-card-stream").textContent, "working done");
+  assert.equal(byClass(detail.element, "task-detail-note").hidden, true);
+  assert.deepEqual(buttonTexts(detail.element), ["Copy report", "Reuse", "Open in Codex", "Open page", "Dismiss"]);
+  button(detail.element, "Copy report").click();
+  await settle();
+  assert.deepEqual(page.copied, ["Three links."]);
+  assert.equal(detail.run.state, "succeeded");
+  assert.deepEqual(page.changed.map((run) => run.state), ["running", "succeeded"]);
+  detail.dispose();
+
+  // A queued task has no start time yet; a canceled one after it started notes that changes stay.
+  const queued = detailSetup(taskView({ state: "queued", started_at: null, harness: "claude", title: "" }));
+  assert.equal(byClass(queued.detail.element, "task-detail-meta").textContent,
+    "on https://read.example/a · Claude Code · Queued");
+  queued.detail.dispose();
+  const canceled = taskView({ state: "canceled", finished_at: "2026-10-27T16:00:10Z", error: "Canceled.", error_kind: "canceled" });
+  const stopped = detailSetup(canceled, {
+    reply: () => ({ type: "run_fetched", run: canceled, stream_text: "partial", next_offset: 7, more: false }),
+  });
+  assert.equal(output(stopped.detail).open, false);
+  stopped.detail.start();
+  await settle();
+  const note = byClass(stopped.detail.element, "task-detail-note");
+  assert.equal(note.hidden, false);
+  assert.equal(note.textContent, "Changes the agent already made stay; check before running it again.");
+  // Copy is for failed tasks only (DESIGN.md §5.7), even with an error and a stream.
+  assert.deepEqual(buttonTexts(stopped.detail.element), ["Reuse", "Open page", "Dismiss"]);
+  stopped.detail.dispose();
+
+  // A failed task copies its error, else its stream.
+  const failed = taskView({ state: "failed", finished_at: "2026-10-27T16:00:10Z", error: "Timed out.", error_kind: "timed_out" });
+  const broke = detailSetup(failed, {
+    reply: () => ({ type: "run_fetched", run: failed, stream_text: "partial", next_offset: 7, more: false }),
+  });
+  broke.detail.start();
+  await settle();
+  assert.deepEqual(buttonTexts(broke.detail.element), ["Copy", "Reuse", "Open page", "Dismiss"]);
+  button(broke.detail.element, "Copy").click();
+  await settle();
+  assert.deepEqual(broke.copied, ["Timed out."]);
+  broke.detail.dispose();
+});
+
+// Ported from main's task-card tests (decision 43) onto the Tasks page detail.
+test("TaskDetail hides Agent output until there is a stream, and keeps the user's expansion after the finish", async () => {
+  const done = taskView({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "The report." });
+  const pages = [
+    { run: taskView(), stream_text: "", next_offset: 0, more: false },
+    { run: taskView(), stream_text: "Reading the page", next_offset: 16, more: false },
+    { run: done, stream_text: " and done", next_offset: 25, more: false },
+  ];
+  const page = detailSetup(taskView(), { reply: (request) => request.type === "get_run" ? { type: "run_fetched", ...pages.shift() } : null });
+  const { detail } = page;
+  detail.start();
+  await settle();
+  assert.equal(output(detail).hidden, true, "no disclosure before the agent streams anything");
+  await tick();
+  assert.equal(output(detail).hidden, false);
+  assert.equal(output(detail).open, true, "open while running");
+  await tick();
+  assert.equal(byClass(detail.element, "task-detail-report").textContent, "The report.");
+  assert.equal(output(detail).open, false, "closed once for the finish");
+  // The user expands it; a later re-render (Copy report) leaves it open.
+  output(detail).open = true;
+  button(detail.element, "Copy report").click();
+  await settle();
+  assert.deepEqual(page.copied, ["The report."]);
+  assert.equal(output(detail).open, true, "the expansion survives re-renders");
+  assert.equal(byClass(detail.element, "run-card-stream").textContent, "Reading the page and done");
+  detail.dispose();
+
+  // A run restored finished starts closed, and stays hidden with no stream.
+  const restored = detailSetup(done, {
+    reply: () => ({ type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false }),
+  });
+  assert.equal(output(restored.detail).open, false);
+  restored.detail.start();
+  await settle();
+  assert.equal(output(restored.detail).hidden, true);
+  restored.detail.dispose();
+});
+
+test("the Tasks page's task stream uses body type, not monospace", () => {
+  const css = readFileSync(new URL("../dist/panel.css", import.meta.url), "utf8");
+  const rule = css.match(/\.tasks-detail \.run-card-stream\s*\{([^}]*)\}/);
+  assert.ok(rule, "a Tasks page stream rule");
+  assert.doesNotMatch(rule[1], /monospace/);
+  assert.match(rule[1], /font-family:\s*inherit/);
+  assert.match(rule[1], /max-height/);
+});
+
+test("TaskDetail renders the instruction, title, report and stream as text only", async () => {
+  const hostile = "<img src=x onerror=alert(1)> [x](javascript:alert(1))";
+  const done = taskView({
+    instruction: hostile, title: hostile, state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: hostile,
+  });
+  const page = detailSetup(done, {
+    reply: () => ({ type: "run_fetched", run: done, stream_text: hostile, next_offset: hostile.length, more: false }),
+  });
+  page.detail.start();
+  await settle();
+  for (const name of ["task-detail-instruction", "task-detail-report", "run-card-stream"]) {
+    const element = byClass(page.detail.element, name);
+    assert.equal(element.textContent, hostile, name);
+    assert.deepEqual(element.children, [], name);
+  }
+  const meta = byClass(page.detail.element, "task-detail-meta");
+  assert.ok(meta.textContent.startsWith(`on ${hostile} · Codex`));
+  assert.deepEqual(meta.children, []);
+  button(page.detail.element, "Open page").click();
+  assert.deepEqual(page.opened, ["https://read.example/a"]);
+  page.detail.dispose();
+});
+
+test("TaskDetail Reuse passes the full get_run instruction, not the list cut", async () => {
+  const full = `${"a".repeat(300)} and then the end`;
+  const cut = `${"a".repeat(280)}…`;
+  const finished = taskView({ instruction: full, state: "succeeded", finished_at: "2026-10-27T15:59:50Z", task_report: "Report." });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const page = detailSetup({ ...finished, instruction: cut, task_report: null }, {
+    reply: async () => {
+      await gate;
+      return { type: "run_fetched", run: finished, stream_text: "", next_offset: 0, more: false };
+    },
+  });
+  page.detail.start();
+  await settle();
+  // Until get_run answers there is no full instruction, so no Reuse.
+  assert.ok(!buttonTexts(page.detail.element).includes("Reuse"));
+  assert.equal(byClass(page.detail.element, "task-detail-instruction").textContent, cut);
+  release();
+  await settle();
+  assert.equal(byClass(page.detail.element, "task-detail-instruction").textContent, full);
+  button(page.detail.element, "Reuse").click();
+  assert.deepEqual(page.reused, [full]);
+  page.detail.dispose();
+});
+
+test("TaskDetail Open page opens the run url", async () => {
+  const running = taskView({ url: "https://read.example/b#section" });
+  const page = detailSetup(running, {
+    reply: () => ({ type: "run_fetched", run: running, stream_text: "see https://evil.example", next_offset: 24, more: false }),
+  });
+  page.detail.start();
+  await settle();
+  button(page.detail.element, "Open page").click();
+  assert.deepEqual(page.opened, ["https://read.example/b#section"]);
+  page.detail.dispose();
+});
+
+test("TaskDetail Dismiss remembers the run and reports it", async () => {
+  const done = taskView({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "ok" });
+  const storage = storageArea(new Map([[DISMISSED_KEY, ["00000000-0000-4000-8000-000000000009"]]]));
+  const page = detailSetup(done, {
+    storage, reply: () => ({ type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false }),
+  });
+  page.detail.start();
+  await settle();
+  button(page.detail.element, "Dismiss").click();
+  await settle();
+  assert.deepEqual(storage.entries.get(DISMISSED_KEY), ["00000000-0000-4000-8000-000000000009", done.run_id]);
+  assert.deepEqual(page.dismissed, [done.run_id]);
+  page.detail.dispose();
+});
+
+test("TaskDetail keeps the output toggle the user chose after finishing", async () => {
+  let current = taskView();
+  const page = detailSetup(current, {
+    reply: () => ({ type: "run_fetched", run: current, stream_text: "", next_offset: 0, more: false }),
+  });
+  page.detail.start();
+  await settle();
+  // The user closes it while it runs; it stays closed.
+  output(page.detail).open = false;
+  await tick();
+  assert.equal(output(page.detail).open, false);
+  // The user opens it again; the finish closes it once.
+  output(page.detail).open = true;
+  current = taskView({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "ok" });
+  await tick();
+  assert.equal(output(page.detail).open, false);
+  // The user opens it after the finish; later renders keep it open.
+  output(page.detail).open = true;
+  await tick(POLL_MS * 3);
+  button(page.detail.element, "Copy report").click();
+  await settle();
+  assert.equal(output(page.detail).open, true);
+  page.detail.dispose();
+});
+
+test("TaskDetail never shows Retry save or Open summary, even when can_retry_save is true", async () => {
+  const failed = taskView({
+    state: "failed", finished_at: "2026-10-27T16:00:10Z", error: "The agent finished, but its report could not be kept.",
+    error_kind: "save_failed", can_retry_save: true, summary_path: "summaries/x.summary.md",
+  });
+  const page = detailSetup(failed, {
+    reply: (request) => request.type === "get_run"
+      ? { type: "run_fetched", run: failed, stream_text: "", next_offset: 0, more: false }
+      : null,
+  });
+  page.detail.start();
+  await settle();
+  assert.ok(!buttonTexts(page.detail.element).includes("Retry save"));
+  assert.ok(!buttonTexts(page.detail.element).includes("Open summary"));
+  assert.deepEqual(page.requests.filter((request) => request.type === "get_artifact"), []);
+  page.detail.dispose();
 });

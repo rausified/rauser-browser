@@ -73,6 +73,14 @@ interface ChromeInjectionResult<T> {
   result?: T;
 }
 
+/** One open extension page or frame, as `runtime.getContexts` reports it.
+ * Only the fields the Tasks hand-off reads (task-handoff.ts). */
+interface ChromeExtensionContext {
+  documentUrl?: string;
+  tabId: number;
+  windowId: number;
+}
+
 interface ChromeApi {
   runtime: {
     id: string;
@@ -82,6 +90,7 @@ interface ChromeApi {
     getManifest(): { version: string; options_ui?: { page: string } };
     connectNative(name: string): ChromePort;
     sendMessage<T = unknown>(message: unknown): Promise<T>;
+    getContexts(filter: { contextTypes: string[] }): Promise<ChromeExtensionContext[]>;
     lastError?: { message: string };
     onMessage: {
       addListener(
@@ -159,6 +168,7 @@ interface ChromeApi {
     get(tabId: number): Promise<ChromeTab>;
     query(queryInfo: { active?: boolean; currentWindow?: boolean }): Promise<ChromeTab[]>;
     create(properties: { url: string }): Promise<ChromeTab>;
+    update(tabId: number, updateProperties: { active?: boolean; url?: string }): Promise<ChromeTab>;
     onUpdated: {
       addListener(
         listener: (tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => void,
@@ -181,9 +191,11 @@ interface ChromeApi {
     };
     getFrame?(details: { tabId: number; frameId: number }): Promise<{ url?: string } | null>;
   };
-  windows?: {
+  windows: {
     WINDOW_ID_NONE: number;
     getLastFocused(): Promise<{ id?: number; focused: boolean }>;
+    getCurrent(): Promise<{ id?: number }>;
+    update(windowId: number, updateInfo: { focused?: boolean }): Promise<void>;
     onFocusChanged: { addListener(listener: (windowId: number) => void): void };
   };
   idle?: {
