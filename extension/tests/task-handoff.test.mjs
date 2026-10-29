@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 // Run after build:extension.
-const { REUSE_KEY, openTasksPage, sendReuse, takeReuse } = await import("../dist/task-handoff.js");
+const { REUSE_KEY, SELECT_KEY, openTasksPage, sendReuse, takeReuse } = await import("../dist/task-handoff.js");
 
 function storageArea(entries = new Map()) {
   return {
@@ -23,14 +23,16 @@ function storageArea(entries = new Map()) {
   };
 }
 
-// A fake Chrome with only runtime, tabs and windows, which is all
-// openTasksPage uses. `contexts` answers runtime.getContexts.
+// A fake Chrome with only runtime, tabs, windows and storage.session, which
+// is all openTasksPage uses. `contexts` answers runtime.getContexts.
 function fakeChrome(contexts = []) {
   const updatedTabs = [];
   const updatedWindows = [];
   const created = [];
+  const session = storageArea();
   return {
     calls: { updatedTabs, updatedWindows, created },
+    session,
     runtime: {
       getURL: (path) => `chrome-extension://test-id/${path}`,
       getContexts: async () => contexts,
@@ -50,6 +52,7 @@ function fakeChrome(contexts = []) {
         updatedWindows.push({ windowId, ...updateInfo });
       },
     },
+    storage: { session },
   };
 }
 
@@ -112,9 +115,30 @@ test("openTasksPage opens a new tab when none is open", async () => {
   assert.deepEqual(noTabs.calls.created, [{ url: "chrome-extension://test-id/tasks.html" }]);
   assert.deepEqual(noTabs.calls.updatedTabs, []);
   assert.deepEqual(noTabs.calls.updatedWindows, []);
+  assert.equal(noTabs.session.entries.has(SELECT_KEY), false);
 
   // A context for another extension page does not count as a Tasks tab.
   const otherPage = fakeChrome([{ documentUrl: "chrome-extension://test-id/panel.html", tabId: 1, windowId: 1 }]);
   await openTasksPage(otherPage, RUN_ID);
   assert.deepEqual(otherPage.calls.created, [{ url: `chrome-extension://test-id/tasks.html#run=${RUN_ID}` }]);
+  assert.equal(otherPage.session.entries.has(SELECT_KEY), false);
+});
+
+test("openTasksPage signals the open Tasks tab to select the run", async () => {
+  const chromeApi = fakeChrome([
+    { documentUrl: "chrome-extension://test-id/tasks.html#run=00000000-0000-4000-8000-000000000001", tabId: 3, windowId: 7 },
+  ]);
+  const before = Date.now();
+  await openTasksPage(chromeApi, RUN_ID);
+  const signal = chromeApi.session.entries.get(SELECT_KEY);
+  assert.equal(signal.run_id, RUN_ID);
+  assert.ok(signal.at >= before);
+
+  // The newest-task case (null) does not need a signal: the tab's own
+  // hash already names no run, same as a freshly opened one.
+  const again = fakeChrome([
+    { documentUrl: "chrome-extension://test-id/tasks.html#run=00000000-0000-4000-8000-000000000001", tabId: 3, windowId: 7 },
+  ]);
+  await openTasksPage(again, null);
+  assert.equal(again.session.entries.has(SELECT_KEY), false);
 });

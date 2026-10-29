@@ -15,7 +15,7 @@ import {
 } from "./run-card.js";
 import { ConfigSession, describe, element } from "./settings.js";
 import { harnessReady } from "./summarize.js";
-import { sendReuse } from "./task-handoff.js";
+import { SELECT_KEY, parseSelectSignal, sendReuse } from "./task-handoff.js";
 import { TASK_NEEDS_HARNESS_MESSAGE, UNSUPPORTED_REQUEST_TEXT } from "./task.js";
 import {
   filterTasks, groupTasks, listAllTasks, listTaskPage, mergeRuns, parseRunHash, type StatusFilter,
@@ -341,6 +341,34 @@ function syncSelectionToHash(): void {
   if (wanted !== null && wanted !== selectedId && runs.some((run) => run.run_id === wanted)) select(wanted);
 }
 
+/** A select signal from `openTasksPage` (task-handoff.ts): another Tasks
+ * tab reused by Tasks ↗ named a run for this page to show. Selects it
+ * directly when it is already known; otherwise this page may simply not
+ * have it yet (started after this page's last list, while no task was
+ * active to keep it polling) — one `list_runs` refresh is tried first, then
+ * the run is selected if it showed up, falling back to the newest, the way
+ * an unknown `#run=` hash does. A read failure is not surfaced here; the
+ * signal just falls back to whatever the page already knows. */
+async function selectFromSignal(runId: string): Promise<void> {
+  if (closed || !listed) return;
+  if (runs.some((run) => run.run_id === runId)) {
+    select(runId);
+    return;
+  }
+  try {
+    const page = await listTaskPage(session.host, null);
+    if (closed) return;
+    runs = mergeRuns(runs, tasksOnly(page.runs));
+    renderList();
+  } catch {
+    // Select from whatever is already known instead.
+  }
+  if (closed) return;
+  const shown = shownRuns();
+  const target = shown.find((run) => run.run_id === runId) ?? shown[0];
+  if (target) select(target.run_id);
+}
+
 function taskChanged(run: RunView): void {
   runs = mergeRuns(runs, [run]);
   // Finishing moves a row out of Running (and maybe out of the filter);
@@ -468,6 +496,20 @@ window.addEventListener("hashchange", () => {
   void refresh().then(() => {
     if (runs.some((run) => run.run_id === wanted)) select(wanted);
   });
+});
+
+// `openTasksPage` (task-handoff.ts) signals an already-open Tasks tab this
+// way rather than relying only on the hash: a `chrome.tabs.update` that
+// changes only the fragment does not reliably fire `hashchange` here, so
+// without this, `syncSelectionToHash` (reached only from a `refresh`) is
+// this page's only other way to notice — fine once a poll is already
+// running, not fine when nothing is active to trigger one.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "session") return;
+  const change = changes[SELECT_KEY];
+  if (!change) return;
+  const runId = parseSelectSignal(change.newValue);
+  if (runId !== null) void selectFromSignal(runId);
 });
 
 window.addEventListener("pagehide", () => {

@@ -13,6 +13,7 @@ const { TASK_NEEDS_HARNESS_MESSAGE } = await import("../../dist/task.js");
 
 const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
 const DISMISSED_KEY = storageKey("dismissed_runs_v1");
+const SELECT_KEY = storageKey("tasks_select_v1");
 const MINUTE = 60_000;
 const BASE = Date.now();
 
@@ -60,6 +61,7 @@ async function openTasks({
   const docListeners = new Map();
   const windowListeners = new Map();
   const on = (map) => (type, listener) => map.set(type, [...(map.get(type) ?? []), listener]);
+  const storageListeners = [];
 
   globalThis.document = {
     getElementById: (id) => elements.get(id) ?? null,
@@ -142,7 +144,7 @@ async function openTasks({
     storage: {
       local: localGet ? { ...storageArea(local), get: localGet } : storageArea(local),
       session: storageArea(state.session),
-      onChanged: { addListener() {} },
+      onChanged: { addListener(listener) { storageListeners.push(listener); } },
     },
     tabs: {
       async create(properties) {
@@ -188,6 +190,13 @@ async function openTasks({
       location.hash = next;
       for (const listener of windowListeners.get("hashchange") ?? []) listener({ type: "hashchange" });
     },
+    // A select signal (task-handoff.ts) another Tasks tab wrote for this
+    // one, the way `openTasksPage` sends Tasks ↗ to an already-open tab.
+    selectSignal(runId) {
+      const value = { run_id: runId, at: Date.now() };
+      state.session.set(SELECT_KEY, value);
+      for (const listener of storageListeners) listener({ [SELECT_KEY]: { newValue: value } }, "session");
+    },
   };
   // A loaded page keeps polling; hiding it at the end of each test stops it.
   teardown.push(() => {
@@ -230,6 +239,34 @@ test("#run=<id> selects that task", async () => {
   page.hashChanged(`#run=${runId(2)}`);
   await until(() => page.detailId() === runId(2), "task 2's detail after the hash changes");
   assert.deepEqual(page.selected(), [runId(2)]);
+});
+
+test("a select signal moves the selection with no task active and no hashchange", async () => {
+  const page = await openTasks();
+  await listed(page);
+  assert.deepEqual(page.selected(), [runId(1)]);
+  // Every task is terminal (nothing polling); the hash changes the way
+  // `tabs.update`'s own hash-only navigation does here, with no
+  // `hashchange` event, so only the storage signal moves the selection.
+  page.location.hash = `#run=${runId(2)}`;
+  page.selectSignal(runId(2));
+  await until(() => page.detailId() === runId(2), "task 2's detail after the select signal");
+  assert.deepEqual(page.selected(), [runId(2)]);
+});
+
+test("a select signal for a run not yet listed refreshes, then selects it", async () => {
+  const page = await openTasks({ runs: [task(1), task(2)] });
+  await listed(page);
+  assert.deepEqual(page.selected(), [runId(1)]);
+  assert.equal(page.sent("list_runs").length, 1);
+  // A run started after this page's list, which it does not know about yet.
+  page.state.runs.push(task(0));
+  page.selectSignal(runId(0));
+  await until(() => page.detailId() === runId(0), "the newly started task's detail");
+  assert.deepEqual(page.selected(), [runId(0)]);
+  assert.equal(page.location.hash, `#run=${runId(0)}`);
+  // One refresh found it; the signal does not poll repeatedly.
+  assert.equal(page.sent("list_runs").length, 2);
 });
 
 test("an unknown #run= selects the newest task", async () => {
