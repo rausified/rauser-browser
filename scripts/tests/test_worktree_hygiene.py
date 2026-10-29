@@ -68,6 +68,7 @@ def no_prs(_repo, _branch):
     return []
 
 
+@unittest.skipIf(sys.platform == "win32", "worktree-hygiene is a macOS/Linux dev tool: it relies on lsof, the Brauser LaunchAgent plist and the Chrome native-messaging manifest, none of which exist on Windows")
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="wt-hygiene-")).resolve()

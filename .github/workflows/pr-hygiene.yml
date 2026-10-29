@@ -6,12 +6,15 @@ name: PR hygiene
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
+  # The merge queue needs every required context reported on its merge_group
+  # SHA; ownership was already checked on the PR, so this passes there.
+  merge_group:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-hygiene-${{ github.event.pull_request.number }}
+  group: pr-hygiene-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -28,6 +31,7 @@ jobs:
         with:
           node-version: "24.14.0"
       - name: Check the PR body names its owner
+        if: github.event_name == 'pull_request'
         run: node scripts/pr-owner.mjs
 
   dev-tools:
