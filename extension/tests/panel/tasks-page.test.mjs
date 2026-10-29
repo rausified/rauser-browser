@@ -49,6 +49,8 @@ async function openTasks({
   // storage for Reuse (task-handoff.ts), and whether chrome.sidePanel.open
   // rejects (as it does with no window to open it in).
   windowId = 1, session = new Map(), sidePanelFails = false,
+  // Whether chrome.tabs.create rejects (Open page's error path).
+  createFails = false,
 } = {}) {
   const elements = pageElements(TASKS_HTML);
   // A select's value is its first option's until one is chosen.
@@ -56,6 +58,8 @@ async function openTasks({
   const state = {
     runs: structuredClone(runs), requests: [], created: [], counts: new Map(), local,
     session, hidden: false, sidePanelOpens: [],
+    // What get_config reports; a test may change it, as setting up a harness does.
+    agentStatus,
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
   const docListeners = new Map();
@@ -95,7 +99,7 @@ async function openTasks({
   } });
 
   function reply(request) {
-    if (request.type === "get_config") return { ...hostReply(request), agent_status: agentStatus };
+    if (request.type === "get_config") return { ...hostReply(request), agent_status: state.agentStatus };
     if (request.type === "list_runs") {
       const sorted = [...state.runs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
       const start = request.before
@@ -149,6 +153,7 @@ async function openTasks({
     tabs: {
       async create(properties) {
         state.created.push(properties);
+        if (createFails) throw new Error("Tabs cannot be edited right now.");
         return { id: 99, incognito: false, ...properties };
       },
     },
@@ -207,6 +212,15 @@ async function openTasks({
 }
 
 const listed = (page) => until(() => page.rows().length > 0, "the task list");
+
+// `until` gives up after 2 s, about one poll; this waits through the next.
+async function afterPoll(condition, what) {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+    await settle(5);
+  }
+}
 
 test("the page lists every page of tasks and selects the newest", async () => {
   const page = await openTasks({ runs: [task(1), task(2), task(3), task(4), task(5)], pageSize: 2 });
@@ -310,6 +324,83 @@ test("the page shows the service setup text with Open settings when the service 
   assert.equal(page.el("tasks-layout").hidden, true);
   page.el("tasks-status-settings").click();
   assert.equal(page.calls("openOptionsPage"), 1);
+});
+
+test("the page lists tasks once a harness is set up and the page is shown again", async () => {
+  const page = await openTasks({ agentStatus: NOT_SET_UP });
+  await until(() => page.el("tasks-status").textContent === TASK_NEEDS_HARNESS_MESSAGE, "the setup text");
+  await settle();
+  assert.equal(page.sent("list_runs").length, 0);
+  // The user sets up a harness in settings, then comes back to this tab.
+  page.state.agentStatus = READY;
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => page.rows().length === 3, "the task list after setup");
+  assert.equal(page.el("tasks-status-box").hidden, true);
+  assert.deepEqual(page.selected(), [runId(1)]);
+  // A second show while the list is up does not open the page again.
+  const configs = page.sent("get_config").length;
+  page.setHidden(true);
+  page.setHidden(false);
+  await settle(20);
+  assert.equal(page.sent("get_config").length, configs);
+});
+
+test("a first list that finds the service unavailable recovers when the page is shown again", async () => {
+  let failures = 1;
+  const page = await openTasks({
+    intercept: (request) => request.type === "list_runs" && failures-- > 0
+      ? { type: "error", code: "service_unavailable", message: "The service is not running." }
+      : null,
+  });
+  const text = serviceSetupText("The service is not running.");
+  await until(() => page.el("tasks-status").textContent === text, "the service setup text");
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => page.rows().length === 3, "the task list once the service answers");
+  assert.equal(page.el("tasks-status-box").hidden, true);
+  assert.equal(page.el("tasks-status-settings").hidden, true);
+  assert.equal(page.el("tasks-layout").hidden, false);
+});
+
+test("a select signal before the first list worked opens the page again on that run", async () => {
+  let failures = 1;
+  const page = await openTasks({
+    intercept: (request) => request.type === "list_runs" && failures-- > 0
+      ? { type: "error", code: "service_unavailable", message: "The service is not running." }
+      : null,
+  });
+  await until(() => page.el("tasks-status").textContent === serviceSetupText("The service is not running."), "the setup text");
+  page.location.hash = `#run=${runId(2)}`;
+  page.selectSignal(runId(2));
+  await until(() => page.detailId() === runId(2), "task 2's detail after the signal");
+  assert.deepEqual(page.selected(), [runId(2)]);
+});
+
+test("an active row missing from the first page is fetched once and shows its finish", async () => {
+  // Task 3 is still running but the first page (two runs) leaves it out.
+  const page = await openTasks({ runs: [task(1), task(2), task(3, { state: "running", stream_bytes: 17 })], pageSize: 2 });
+  await until(() => page.rows().length === 3, "all three tasks");
+  assert.match(page.pill(runId(3)).className, /\brunning\b/);
+  // It finishes before the next refresh.
+  page.state.runs[2] = task(3, { state: "succeeded", stream_bytes: 17 });
+  await afterPoll(() => /\bdone\b/.test(page.pill(runId(3)).className), "task 3's finish");
+  const fetches = page.sent("get_run").filter((request) => request.run_id === runId(3));
+  assert.equal(fetches.length, 1);
+  assert.equal(fetches[0].since_offset, 17);
+  // Nothing is active now, so the page stops polling.
+  const lists = page.sent("list_runs").length;
+  await settle(2_300);
+  assert.equal(page.sent("list_runs").length, lists, "no list refresh once nothing is active");
+});
+
+test("an active row the service no longer holds is dropped from the list", async () => {
+  const page = await openTasks({ runs: [task(1), task(2), task(3, { state: "running" })], pageSize: 2 });
+  await until(() => page.rows().length === 3, "all three tasks");
+  // Pruned before the next refresh: get_run answers invalid_request.
+  page.state.runs.splice(2, 1);
+  await afterPoll(() => page.rows().length === 2, "the pruned task to go");
+  assert.equal(page.sent("get_run").filter((request) => request.run_id === runId(3)).length, 1);
 });
 
 test("an older host gets the rebuild text", async () => {
@@ -471,6 +562,36 @@ test("Open page opens the task's own URL and Reuse opens the side panel and hand
   assert.equal(handed.instruction, "Task 1");
   assert.equal(handed.window_id, 9);
   assert.equal(typeof handed.at, "number");
+});
+
+test("an Open page error stays after a refresh", async () => {
+  const page = await openTasks({ runs: [task(1), task(2, { state: "running" })], createFails: true });
+  await listed(page);
+  await until(() => buttonIn(page.el("tasks-detail"), "Open page"), "the Open page button");
+  buttonIn(page.el("tasks-detail"), "Open page").click();
+  const text = "Could not open the page: Tabs cannot be edited right now.";
+  await until(() => page.el("tasks-status").textContent === text, "the Open page error");
+  // Task 2 keeps the page polling; a refresh that works leaves the line.
+  const lists = page.sent("list_runs").length;
+  await afterPoll(() => page.sent("list_runs").length > lists, "a list refresh");
+  await settle(20);
+  assert.equal(page.el("tasks-status").textContent, text);
+  assert.equal(page.el("tasks-status-box").hidden, false);
+});
+
+test("a list error clears once a refresh works", async () => {
+  let failures = 0;
+  const page = await openTasks({
+    runs: [task(1, { state: "running" }), task(2)],
+    intercept: (request) => request.type === "list_runs" && failures-- > 0
+      ? { type: "error", code: "internal", message: "disk full" }
+      : null,
+  });
+  await listed(page);
+  failures = 1;
+  await afterPoll(() => page.el("tasks-status").textContent === "Could not list tasks: disk full", "the list error");
+  // The next poll works and clears it.
+  await afterPoll(() => page.el("tasks-status-box").hidden, "the list error to clear");
 });
 
 test("Reuse still hands off the instruction, to any window, when opening the side panel fails", async () => {

@@ -1283,7 +1283,8 @@ async function refreshTasks(): Promise<void> {
  * newest one, focusing an already-open Tasks tab rather than opening a
  * second one. */
 function openTasks(): void {
-  void openTasksPage(chrome, lastStartedRunId ?? newestTaskId);
+  // Nothing to show for a failure here: the user can click again.
+  void openTasksPage(chrome, lastStartedRunId ?? newestTaskId).catch(() => undefined);
 }
 
 /** Takes any Reuse instruction left for this panel's window and fills the

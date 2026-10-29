@@ -25,7 +25,7 @@ function storageArea(entries = new Map()) {
 
 // A fake Chrome with only runtime, tabs, windows and storage.session, which
 // is all openTasksPage uses. `contexts` answers runtime.getContexts.
-function fakeChrome(contexts = []) {
+function fakeChrome(contexts = [], { closedTabs = [] } = {}) {
   const updatedTabs = [];
   const updatedWindows = [];
   const created = [];
@@ -39,6 +39,7 @@ function fakeChrome(contexts = []) {
     },
     tabs: {
       async update(tabId, updateProperties) {
+        if (closedTabs.includes(tabId)) throw new Error(`No tab with id: ${tabId}.`);
         updatedTabs.push({ tabId, ...updateProperties });
         return { id: tabId, incognito: false, ...updateProperties };
       },
@@ -141,4 +142,15 @@ test("openTasksPage signals the open Tasks tab to select the run", async () => {
   ]);
   await openTasksPage(again, null);
   assert.equal(again.session.entries.has(SELECT_KEY), false);
+});
+
+test("openTasksPage opens a new tab when the open Tasks tab has just closed", async () => {
+  // getContexts still listed the tab, but it closed before tabs.update.
+  const chromeApi = fakeChrome([
+    { documentUrl: "chrome-extension://test-id/tasks.html", tabId: 3, windowId: 7 },
+  ], { closedTabs: [3] });
+  await openTasksPage(chromeApi, RUN_ID);
+  assert.deepEqual(chromeApi.calls.created, [{ url: `chrome-extension://test-id/tasks.html#run=${RUN_ID}` }]);
+  assert.deepEqual(chromeApi.calls.updatedTabs, []);
+  assert.deepEqual(chromeApi.calls.updatedWindows, []);
 });

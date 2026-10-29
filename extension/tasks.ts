@@ -18,7 +18,7 @@ import { harnessReady } from "./summarize.js";
 import { SELECT_KEY, parseSelectSignal, sendReuse } from "./task-handoff.js";
 import { TASK_NEEDS_HARNESS_MESSAGE, UNSUPPORTED_REQUEST_TEXT } from "./task.js";
 import {
-  filterTasks, groupTasks, listAllTasks, listTaskPage, mergeRuns, parseRunHash, type StatusFilter,
+  fetchOffPageRun, filterTasks, groupTasks, listAllTasks, listTaskPage, mergeRuns, parseRunHash, type StatusFilter,
 } from "./task-history.js";
 
 initDiag("tasks");
@@ -64,7 +64,13 @@ let selectedId: string | null = null;
 let detail: TaskDetail | null = null;
 // Whether the first full listing has finished, so refreshes may run.
 let listed = false;
+// The open (first full listing) in flight, so a show or a select signal
+// that retries it after a failure or the setup text runs it only once.
+let opening: Promise<void> | null = null;
 let refreshing = false;
+// Whether the status line shows a list error, the only line a refresh that
+// works may clear (a Reuse or Open page line stays).
+let listErrorShown = false;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let closed = false;
 
@@ -81,6 +87,7 @@ function visible(): boolean {
 /** One line above the list: a problem (styled as a warning, optionally
  * with Open settings) or plain progress; null hides it. */
 function showStatus(text: string | null, options: { problem?: boolean; settings?: boolean } = {}): void {
+  listErrorShown = false;
   statusBox.hidden = text === null;
   statusBox.className = options.problem ? "setup-warning" : "status";
   statusLine.textContent = text ?? "";
@@ -101,6 +108,7 @@ function showListError(error: unknown): void {
   } else {
     showStatus(`Could not list tasks: ${describe(error)}`, { problem: true });
   }
+  listErrorShown = true;
 }
 
 /** An older service ignores `kind` and lists summaries too. */
@@ -350,7 +358,14 @@ function syncSelectionToHash(): void {
  * an unknown `#run=` hash does. A read failure is not surfaced here; the
  * signal just falls back to whatever the page already knows. */
 async function selectFromSignal(runId: string): Promise<void> {
-  if (closed || !listed) return;
+  if (closed) return;
+  if (!listed) {
+    // The first list failed or was never tried: open again, on this run
+    // when it is listed (the hash sent with the signal names it too).
+    await reopen();
+    if (!closed && listed && runs.some((run) => run.run_id === runId)) select(runId);
+    return;
+  }
   if (runs.some((run) => run.run_id === runId)) {
     select(runId);
     return;
@@ -401,15 +416,31 @@ function stopPolling(): void {
 }
 
 /** Re-reads the first page (active runs and the newest finished) and
- * merges it into the list. */
+ * merges it into the list. An unfinished run the list has that the page
+ * left out gets one get_run, as the panel's TaskTracker does, so it still
+ * shows its finish (and polling stops); one the service no longer holds
+ * leaves the list. */
 async function refresh(): Promise<void> {
   if (closed || !listed || refreshing) return;
   refreshing = true;
   try {
     const page = await listTaskPage(session.host, null);
     if (closed) return;
-    runs = mergeRuns(runs, tasksOnly(page.runs));
-    if (!statusBox.hidden && statusBox.className === "setup-warning") showStatus(null);
+    const fresh = tasksOnly(page.runs);
+    const onPage = new Set(fresh.map((run) => run.run_id));
+    const gone = new Set<string>();
+    for (const run of runs.filter((candidate) => !isTerminal(candidate) && !onPage.has(candidate.run_id))) {
+      try {
+        const fetched = await fetchOffPageRun(session.host, run);
+        if (fetched === null) gone.add(run.run_id);
+        else fresh.push(fetched);
+      } catch {
+        // Tried again on the next refresh.
+      }
+      if (closed) return;
+    }
+    runs = mergeRuns(runs.filter((run) => !gone.has(run.run_id)), fresh);
+    if (listErrorShown) showStatus(null);
     renderList();
     syncSelectionToHash();
   } catch (error) {
@@ -418,6 +449,17 @@ async function refresh(): Promise<void> {
     refreshing = false;
     schedulePoll();
   }
+}
+
+/** Runs `open` unless one is in flight (that one is returned) or the list
+ * is already up: the first open, and a retry once the setup text or a
+ * failed first list was shown. */
+function reopen(): Promise<void> {
+  if (closed || listed) return Promise.resolve();
+  opening ??= open().finally(() => {
+    opening = null;
+  });
+  return opening;
 }
 
 async function open(): Promise<void> {
@@ -482,12 +524,20 @@ document.addEventListener("visibilitychange", () => {
     return;
   }
   stopPolling();
-  void refresh();
+  // Shown again before a list ever worked (the setup text, or a failed
+  // first list): try opening again.
+  if (!listed) void reopen();
+  else void refresh();
 });
 
 window.addEventListener("hashchange", () => {
   const wanted = parseRunHash(location.hash);
-  if (wanted === null || wanted === selectedId || !listed) return;
+  if (wanted === null || wanted === selectedId) return;
+  // Not listed yet: opening again selects the hash's run.
+  if (!listed) {
+    void reopen();
+    return;
+  }
   if (runs.some((run) => run.run_id === wanted)) {
     select(wanted);
     return;
@@ -519,4 +569,4 @@ window.addEventListener("pagehide", () => {
   detail = null;
 });
 
-void open();
+void reopen();

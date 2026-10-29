@@ -77,7 +77,8 @@ export async function takeReuse(storage: ChromeStorageArea, windowId: number): P
  * starting hash; an already-open tab may not notice a hash-only navigation
  * (`tasks.ts`'s `hashchange` listener does not reliably fire for one here),
  * so it is also sent `SELECT_KEY` to select directly, when `runId` is
- * known. */
+ * known. A Tasks tab that closes between the lookup and the focus gets a
+ * new tab instead. */
 export async function openTasksPage(
   chromeApi: Pick<ChromeApi, "runtime" | "tabs" | "windows" | "storage">, runId: string | null,
 ): Promise<void> {
@@ -89,7 +90,13 @@ export async function openTasksPage(
     if (runId !== null) {
       await chromeApi.storage.session.set({ [SELECT_KEY]: { run_id: runId, at: Date.now() } satisfies SelectValue });
     }
-    await chromeApi.tabs.update(open.tabId, { active: true, url });
+    try {
+      await chromeApi.tabs.update(open.tabId, { active: true, url });
+    } catch {
+      // The tab closed after getContexts listed it: open a new one instead.
+      await chromeApi.tabs.create({ url });
+      return;
+    }
     await chromeApi.windows.update(open.windowId, { focused: true });
   } else {
     await chromeApi.tabs.create({ url });

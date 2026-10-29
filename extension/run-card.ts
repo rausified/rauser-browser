@@ -33,8 +33,11 @@ export interface RunProgressDeps {
   visible(): boolean;
 }
 
-/** What an older host, which does not know `list_runs`' `kind`, needs. */
+/** What an older host, which does not know `list_runs`' `kind`, needs: the
+ * task wording (the Tasks page and the task bar's tracker notice), and the
+ * summary restore's. */
 export const RUNS_REBUILD_HOST_MESSAGE = `Rebuild the ${APP_NAME} host to see task history.`;
+export const SUMMARY_REBUILD_HOST_MESSAGE = `Rebuild the ${APP_NAME} host to restore agent runs.`;
 
 export interface RunCardDeps extends RunProgressDeps {
   storage: ChromeStorageArea;
@@ -803,13 +806,15 @@ export function clearNotice(area: HTMLElement): void {
 }
 
 /** Shows the one notice in `area` for a failed `list_runs`, of either kind:
- * the service setup instructions with Open settings, the rebuild text for
- * an older host that refuses `kind`, or "Could not list agent runs: …". */
-export function showListFailure(area: HTMLElement, error: unknown, openSettings: () => void): void {
+ * the service setup instructions with Open settings, `rebuildText` for an
+ * older host that refuses `kind`, or "Could not list agent runs: …". */
+export function showListFailure(
+  area: HTMLElement, error: unknown, openSettings: () => void, rebuildText = RUNS_REBUILD_HOST_MESSAGE,
+): void {
   if (error instanceof HostError && error.code === "service_unavailable") {
     showNotice(area, serviceSetupText(error.message), openSettings);
   } else if (error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT) {
-    showNotice(area, RUNS_REBUILD_HOST_MESSAGE, null);
+    showNotice(area, rebuildText, null);
   } else {
     showNotice(area, `Could not list agent runs: ${errorText(error)}`, null);
   }
@@ -837,7 +842,7 @@ export async function restoreRunCards(
     }, "runs_listed")).runs;
   } catch (error) {
     if (containers.some((cards) => cards.isDisposed)) return;
-    showListFailure(noticeArea, error, () => deps.openSettings());
+    showListFailure(noticeArea, error, () => deps.openSettings(), SUMMARY_REBUILD_HOST_MESSAGE);
     return;
   }
   const dismissed = new Set(await dismissedIds(deps.storage));

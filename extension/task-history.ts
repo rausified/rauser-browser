@@ -6,7 +6,7 @@
 // is untrusted and only ever matched or shown as text, never rendered as
 // HTML or Markdown.
 import type { RunCursor, RunView } from "../protocol/ts/generated.js";
-import { PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
+import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
 import { isTerminal } from "./run-card.js";
 
 /** Which tasks a filter keeps. "running" covers both queued and running. */
@@ -30,6 +30,23 @@ export async function listTaskPage(
     ...(before === null ? {} : { before }),
   }, "runs_listed");
   return { runs: response.runs, more: response.more ?? false };
+}
+
+/** An unfinished run a list page left out, read with one get_run from the
+ * stream offset it had: its fresh view, or null when the service no longer
+ * holds it (`invalid_request`). Any other failure rejects, to be tried
+ * again on the next refresh. */
+export async function fetchOffPageRun(host: Pick<HostClient, "call">, run: RunView): Promise<RunView | null> {
+  try {
+    const fetched = await host.call({
+      type: "get_run", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      run_id: run.run_id, since_offset: run.stream_bytes,
+    }, "run_fetched");
+    return fetched.run;
+  } catch (error) {
+    if (error instanceof HostError && error.code === "invalid_request") return null;
+    throw error;
+  }
 }
 
 /** The last (oldest) terminal run in `runs`, or undefined when the page has

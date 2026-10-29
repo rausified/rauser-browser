@@ -4,9 +4,9 @@
 // unfinished has finished, so `#task-announce` can say so. It never draws
 // agent text, and nothing here reaches diag (DESIGN.md §15).
 import type { RunView } from "../protocol/ts/generated.js";
-import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
+import type { HostClient } from "./native.js";
 import { isTerminal } from "./run-card.js";
-import { listTaskPage, mergeRuns, runningCount } from "./task-history.js";
+import { fetchOffPageRun, listTaskPage, mergeRuns, runningCount } from "./task-history.js";
 
 /** How often the tracker re-reads the list while a task is active. */
 export const TRACK_MS = 2000;
@@ -109,13 +109,12 @@ export class TaskTracker {
    * dropped; any other failure is tried again on the next refresh. */
   private async fetchMissing(run: RunView): Promise<void> {
     try {
-      const fetched = await this.deps.host.call({
-        type: "get_run", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-        run_id: run.run_id, since_offset: run.stream_bytes,
-      }, "run_fetched");
-      if (!this.disposed) this.saw(fetched.run);
-    } catch (error) {
-      if (error instanceof HostError && error.code === "invalid_request") this.active.delete(run.run_id);
+      const fetched = await fetchOffPageRun(this.deps.host, run);
+      if (this.disposed) return;
+      if (fetched === null) this.active.delete(run.run_id);
+      else this.saw(fetched);
+    } catch {
+      // Tried again on the next refresh.
     }
   }
 

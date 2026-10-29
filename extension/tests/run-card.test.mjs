@@ -1074,7 +1074,8 @@ test("restoreRunCards shows one neutral notice in the named area when listing fa
   failure = new HostError("invalid_request", "invalid or unsupported request JSON");
   await page.restore();
   assert.equal(notices(page.noticeArea).length, 1);
-  assert.equal(page.noticeArea.textContent, "Rebuild the Brauser host to see task history.");
+  // The summary restore's own words: it restores agent runs, not task history.
+  assert.equal(page.noticeArea.textContent, "Rebuild the Brauser host to restore agent runs.");
 
   // A list that works clears it.
   failure = null;
