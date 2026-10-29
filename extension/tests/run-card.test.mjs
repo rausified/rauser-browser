@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test, { mock } from "node:test";
 
 // Run after build:extension. The run card gets a fake DOM, a scripted host,
@@ -1241,6 +1242,54 @@ test("TaskDetail shows Running with live output open, then Done with the report 
   await settle();
   assert.deepEqual(broke.copied, ["Timed out."]);
   broke.detail.dispose();
+});
+
+// Ported from main's task-card tests (decision 43) onto the Tasks page detail.
+test("TaskDetail hides Agent output until there is a stream, and keeps the user's expansion after the finish", async () => {
+  const done = taskView({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "The report." });
+  const pages = [
+    { run: taskView(), stream_text: "", next_offset: 0, more: false },
+    { run: taskView(), stream_text: "Reading the page", next_offset: 16, more: false },
+    { run: done, stream_text: " and done", next_offset: 25, more: false },
+  ];
+  const page = detailSetup(taskView(), { reply: (request) => request.type === "get_run" ? { type: "run_fetched", ...pages.shift() } : null });
+  const { detail } = page;
+  detail.start();
+  await settle();
+  assert.equal(output(detail).hidden, true, "no disclosure before the agent streams anything");
+  await tick();
+  assert.equal(output(detail).hidden, false);
+  assert.equal(output(detail).open, true, "open while running");
+  await tick();
+  assert.equal(byClass(detail.element, "task-detail-report").textContent, "The report.");
+  assert.equal(output(detail).open, false, "closed once for the finish");
+  // The user expands it; a later re-render (Copy report) leaves it open.
+  output(detail).open = true;
+  button(detail.element, "Copy report").click();
+  await settle();
+  assert.deepEqual(page.copied, ["The report."]);
+  assert.equal(output(detail).open, true, "the expansion survives re-renders");
+  assert.equal(byClass(detail.element, "run-card-stream").textContent, "Reading the page and done");
+  detail.dispose();
+
+  // A run restored finished starts closed, and stays hidden with no stream.
+  const restored = detailSetup(done, {
+    reply: () => ({ type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false }),
+  });
+  assert.equal(output(restored.detail).open, false);
+  restored.detail.start();
+  await settle();
+  assert.equal(output(restored.detail).hidden, true);
+  restored.detail.dispose();
+});
+
+test("the Tasks page's task stream uses body type, not monospace", () => {
+  const css = readFileSync(new URL("../dist/panel.css", import.meta.url), "utf8");
+  const rule = css.match(/\.tasks-detail \.run-card-stream\s*\{([^}]*)\}/);
+  assert.ok(rule, "a Tasks page stream rule");
+  assert.doesNotMatch(rule[1], /monospace/);
+  assert.match(rule[1], /font-family:\s*inherit/);
+  assert.match(rule[1], /max-height/);
 });
 
 test("TaskDetail renders the instruction, title, report and stream as text only", async () => {

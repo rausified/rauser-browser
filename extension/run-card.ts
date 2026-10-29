@@ -540,8 +540,10 @@ function startedText(run: RunView): string | null {
 /**
  * One task on the Tasks page (decision 20): the full instruction as the
  * headline, the meta line, the actions, then the report and a collapsible
- * Agent output. The output starts open while the run is unfinished and
- * closes once when it finishes; after that the user's toggle stays. It
+ * Agent output, hidden until the agent has streamed something. The output
+ * starts open while the run is unfinished and closes once when it finishes
+ * (or starts closed for a run already finished); after that the user's
+ * toggle stays across re-renders (decision 43). It
  * offers Cancel, Copy report, Copy (a failed task's error), Reuse, the
  * harness's resume, Open page and Dismiss, and never Open summary or Retry
  * save: a task writes nothing. The full instruction and the report come
@@ -664,6 +666,8 @@ export class TaskDetail extends RunWatcher {
     this.reportText.hidden = report === null;
     this.reportLabel.hidden = report === null;
     this.streamText.textContent = this.stream;
+    // No disclosure until the agent has streamed something (decision 43).
+    this.output.hidden = this.stream === "";
     if (!this.outputSettled && isTerminal(run)) {
       this.outputSettled = true;
       this.output.open = false;

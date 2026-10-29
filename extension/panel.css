@@ -179,7 +179,8 @@ body.tasks-page main { max-width: none; padding: 14px 18px; }
 .task-detail-report-label { margin: 8px 0 0; color: #767676; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .task-detail-report { border: 1px solid #8885; border-radius: 6px; padding: 10px; }
 .task-detail-output summary { cursor: pointer; color: #767676; font-size: .85rem; font-weight: 650; margin-top: 6px; }
-.tasks-detail .run-card-stream { max-height: 50vh; }
+/* The task's activity is body text, not a monospace block (decision 43). */
+.tasks-detail .run-card-stream { max-height: 50vh; font-family: inherit; }
 @media (max-width: 720px) {
   .tasks-layout { grid-template-columns: 1fr; }
   .tasks-list { max-height: 45vh; border-right: 0; border-bottom: 1px solid #8885; padding: 0 0 8px; }

@@ -30,7 +30,7 @@ use super::record::{TaskStatus, check_start_run, check_task_instruction};
 use super::setup;
 use super::supervisor::{CwdCheck, EnvSource, ListQuery, ServiceOptions, StartRun, Supervisor};
 use crate::capture_site::exact_origin;
-use crate::config::{ConfigLock, ConfigStore, default_summary_vocabulary};
+use crate::config::{ConfigLock, ConfigStore, SUMMARY_TIMEOUT_SECS, default_summary_vocabulary};
 use crate::diag;
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::harness::HarnessEnv;
@@ -45,6 +45,21 @@ const ACCEPT_POLL: Duration = Duration::from_millis(250);
 /// them.
 pub const TASK_FOLDERS_MISSING: &str =
     "Brauser's own folders could not be found, so the task was not started.";
+/// The shortest time limit a task runs with: a task works through the
+/// knowledge base and can take far longer than a summary, so it gets the
+/// larger of `[summarizer] timeout_secs` and this, never more than
+/// [`SUMMARY_TIMEOUT_SECS`]'s maximum. Summaries and site drafts keep the
+/// configured limit.
+pub const TASK_MIN_TIMEOUT_SECS: u64 = 1800;
+
+/// A task's time limit for a configured run limit of `configured`.
+fn task_timeout(configured: Duration) -> Duration {
+    let max = Duration::from_secs((*SUMMARY_TIMEOUT_SECS.end()).into());
+    configured
+        .max(Duration::from_secs(TASK_MIN_TIMEOUT_SECS))
+        .min(max)
+}
+
 pub const NOT_CONFIGURED: &str = "Choose a notes folder in Brauser settings first.";
 pub const SET_UP_HARNESS: &str = "Set up a summary harness in Brauser settings first.";
 pub const KNOWLEDGE_BASE_CHANGED: &str =
@@ -599,8 +614,9 @@ impl Server {
         })
     }
 
-    /// As [`Server::run_setup`], for a task: the same harness, time limit
-    /// and knowledge base, plus the folders its prompt names as Brauser's
+    /// As [`Server::run_setup`], for a task: the same harness and knowledge
+    /// base, a time limit of at least [`TASK_MIN_TIMEOUT_SECS`]
+    /// ([`task_timeout`]), plus the folders its prompt names as Brauser's
     /// own, all read under the same config lock. A configuration or cache
     /// folder that cannot be found refuses the task (fails closed).
     fn task_setup(
@@ -614,7 +630,7 @@ impl Server {
         Ok(RunSetup {
             harness,
             cwd: knowledge_base,
-            timeout,
+            timeout: timeout.map(task_timeout),
             vocabulary: config.snapshot().summary_vocabulary.clone(),
             protected,
         })
@@ -2276,6 +2292,50 @@ mod tests {
         let fetched = start_task_run(&world);
         assert_task_ran_in(&world, &fetched, &knowledge_base);
         assert_eq!(fetched.run.harness, HarnessId::Claude);
+    }
+
+    #[test]
+    fn a_task_gets_at_least_thirty_minutes() {
+        // The default 600 s summary limit is raised for a task; a longer
+        // configured limit is kept; nothing exceeds the configured maximum.
+        let secs = |configured: u64| task_timeout(Duration::from_secs(configured)).as_secs();
+        assert_eq!(TASK_MIN_TIMEOUT_SECS, 1800);
+        assert_eq!(secs(60), 1800);
+        assert_eq!(secs(600), 1800);
+        assert_eq!(secs(1800), 1800);
+        assert_eq!(secs(2400), 2400);
+        assert_eq!(secs(3600), 3600);
+        assert_eq!(secs(7200), 3600);
+    }
+
+    /// The limit a run recorded in its status file when it was queued.
+    fn recorded_timeout(world: &World, run_id: &str) -> serde_json::Value {
+        let status = world.paths.runs().join(run_id).join("status.json");
+        let status: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(status).unwrap()).unwrap();
+        status["run_timeout_secs"].clone()
+    }
+
+    #[test]
+    fn a_task_runs_with_the_task_limit_and_a_summary_with_the_configured_one() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        // The fixture's [summarizer] timeout_secs is the default 600.
+        let world = World::new(&task_reporter());
+        world.start(Duration::from_secs(600));
+        let task = start_task_run(&world);
+        assert_eq!(task.run.state, RunState::Succeeded, "{task:?}");
+        assert_eq!(
+            recorded_timeout(&world, &task.run.run_id),
+            serde_json::json!(TASK_MIN_TIMEOUT_SECS)
+        );
+
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        let run_id = world.started_run_id();
+        world.wait_finished(&run_id);
+        assert_eq!(recorded_timeout(&world, &run_id), serde_json::json!(600));
     }
 
     /// A queued task is checked, when it starts, against the folders its
