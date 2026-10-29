@@ -4,20 +4,118 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue builds each entry on a temporary merge_group commit; every
+  # required check must report there too (AGENTS.md "Review and merge cadence").
+  merge_group:
 
 permissions:
   contents: read
 
+# A new push to a PR cancels that PR's superseded run. Pushes to main and
+# merge_group runs each get their own group (the run id), so they are never
+# cancelled or replaced by a later run.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Docs-only changes (root Markdown, docs/**, .beads/**; scripts/ci-changes.mjs
+  # has the exact rule) skip the macOS and Windows builds and run the cheap
+  # docs-checks job instead. A PR compares its merge commit with that commit's
+  # base parent; a merge group compares its head with the queue's base commit.
+  # Pushes to main always build.
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      base: ${{ steps.base.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A PR checkout is its merge commit; depth 2 brings the base parent.
+          fetch-depth: 2
+      - name: Find the base commit to compare against
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          case "$EVENT" in
+            pull_request) base=$(git rev-parse HEAD^1) ;;
+            merge_group)
+              git fetch --no-tags --depth=1 origin "$QUEUE_BASE"
+              base=$QUEUE_BASE ;;
+            *) base= ;;
+          esac
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+      - name: Classify the changed paths
+        id: classify
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          if [ -z "$BASE" ]; then
+            echo "$GITHUB_EVENT_NAME: always build"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node scripts/ci-changes.mjs "$BASE" HEAD
+
+  docs-checks:
+    name: Docs and queue checks
+    needs: changes
+    if: needs.changes.outputs.docs_only == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Check contributor status documentation
+        run: python scripts/check_current_state.py
+      # Fails only on queue disagreements this change adds, so a disagreement
+      # already on the base does not block every unrelated docs change (it
+      # still shows as a warning); the PR that fixes it passes either way.
+      - name: Check the work queue's two views agree
+        env:
+          BASE: ${{ needs.changes.outputs.base }}
+        run: |
+          if python scripts/check_queue_consistency.py; then exit 0; fi
+          git cat-file -e "$BASE^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$BASE"
+          dir="$RUNNER_TEMP/queue-base"
+          mkdir -p "$dir"
+          git show "$BASE:.beads/issues.jsonl" > "$dir/issues.jsonl" || true
+          git show "$BASE:BOSUN_FEATURE_BACKLOG.md" > "$dir/backlog.md" || true
+          python scripts/check_queue_consistency.py --json > "$dir/head.json" || true
+          python scripts/check_queue_consistency.py --json --issues "$dir/issues.jsonl" --backlog "$dir/backlog.md" > "$dir/base.json" || true
+          if jq -e '.status == "error"' "$dir/head.json" > /dev/null; then exit 1; fi
+          # Counted per detail, so a second copy of a base disagreement is new.
+          added=$(jq -r --slurpfile base "$dir/base.json" '
+            (reduce ($base[0].violations[]?.detail) as $d ({}; .[$d] += 1)) as $b
+            | reduce (.violations[]?.detail) as $d ({}; .[$d] += 1)
+            | to_entries[] | select(.value > ($b[.key] // 0)) | .key' "$dir/head.json")
+          if [ -n "$added" ]; then
+            echo "::error::This change adds queue disagreements:"
+            echo "$added"
+            exit 1
+          fi
+          echo "::warning::The queue views already disagree on the base commit; this change adds no new disagreement."
+
   # Every platform runs the same steps from build-os.yml.
   build-macos:
     name: macOS
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: macos-15
 
   build-windows:
     name: Windows
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: windows-latest
@@ -40,6 +138,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
+      pull-requests: read
     outputs:
       starved: ${{ steps.check.outputs.starved }}
     steps:
@@ -50,7 +149,20 @@ jobs:
           JOBS_URL: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs
           # "<caller job name> / <reusable workflow job name>"
           JOB_NAME: macOS / Build and check (macos-15)
+          PULLS_URL: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}
+          RUN_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          # A newer push cancels this PR run, and a macOS job still waiting for
+          # a runner then also shows as cancelled with zero steps. That is not
+          # starvation: never start the fallback for a superseded head.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            head=$(gh api "$PULLS_URL" --jq .head.sha)
+            if [ "$head" != "$RUN_HEAD" ]; then
+              echo "superseded: PR head is now $head, this run built $RUN_HEAD"
+              echo "starved=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
           steps=$(gh api --paginate "$JOBS_URL" \
             --jq '.jobs[] | select(.name == env.JOB_NAME) | .steps | length')
           echo "$JOB_NAME steps run: ${steps:-not found}"
@@ -72,21 +184,31 @@ jobs:
   # per-OS jobs report under their own names, so this job stands for all of
   # them. Pass needs Windows plus macOS, where macOS is either the macos-15
   # build or, only when that job was starved of a runner, the macos-15-intel (x64)
-  # fallback.
+  # fallback. A docs-only change passes when the classifier ran, both builds
+  # were skipped as intended, and docs-checks passed.
   build-gate:
     name: Build and check
-    needs: [build-macos, build-windows, macos-starvation-check, build-macos-fallback]
+    needs: [changes, docs-checks, build-macos, build-windows, macos-starvation-check, build-macos-fallback]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Require every platform build to pass
         env:
+          CHANGES: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          DOCS: ${{ needs.docs-checks.result }}
           MACOS: ${{ needs.build-macos.result }}
           WINDOWS: ${{ needs.build-windows.result }}
           STARVED: ${{ needs.macos-starvation-check.outputs.starved }}
           FALLBACK: ${{ needs.build-macos-fallback.result }}
         run: |
+          echo "classify: $CHANGES (docs only: ${DOCS_ONLY:-n/a}); docs checks: $DOCS"
           echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-15-intel fallback: $FALLBACK"
+          test "$CHANGES" = success
+          if [ "$DOCS_ONLY" = true ]; then
+            test "$DOCS" = success && test "$MACOS" = skipped && test "$WINDOWS" = skipped
+            exit 0
+          fi
           test "$WINDOWS" = success
           if [ "$MACOS" = success ]; then exit 0; fi
           case "$MACOS" in cancelled|abandoned) ;; *) exit 1 ;; esac

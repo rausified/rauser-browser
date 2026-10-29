@@ -3,10 +3,13 @@ name: Merge hold
 # A PR labeled `final-stretch` holds every other open PR (pending
 # `merge-hold` status) until it merges or loses the label; see scripts/merge-hold.mjs and
 # AGENTS.md "Review and merge cadence". Every PR event that can change the
-# hold re-evaluates all open PRs.
+# hold re-evaluates all open PRs. In the merge queue, `merge-hold` (a required
+# check) must also report on the queue's merge_group commit: an entry already
+# passed the hold to be enqueued, so that run posts success on github.sha only.
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled, closed]
+  merge_group:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
@@ -15,8 +18,12 @@ permissions:
   pull-requests: read
   statuses: write
 
+# The open-PR sweep keeps its single `merge-hold` group, unchanged. A
+# merge_group run gets its own group per commit: a pending run in a shared
+# group is replaced by the next one, and a replaced merge_group run would leave
+# its queue entry waiting for a status that never comes.
 concurrency:
-  group: merge-hold
+  group: ${{ github.event_name == 'merge_group' && format('merge-hold-queue-{0}', github.sha) || 'merge-hold' }}
   cancel-in-progress: false
 
 jobs:
@@ -32,7 +39,14 @@ jobs:
         with:
           node-version: "24.14.0"
       - name: Set merge-hold on every open PR
+        if: github.event_name != 'merge_group'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: node scripts/merge-hold.mjs
+      - name: Pass merge-hold on the merge queue commit
+        if: github.event_name == 'merge_group'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/merge-hold.mjs --merge-group "$GITHUB_SHA"

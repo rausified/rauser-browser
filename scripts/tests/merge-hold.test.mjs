@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { STATUS_CONTEXT, decideStatuses } from "../merge-hold.mjs";
+import { STATUS_CONTEXT, decideStatuses, mergeGroupStatus, parseArgs } from "../merge-hold.mjs";
 
 function pr(number, head, labels = [], sha = `sha${number}`) {
   return { number, head: { ref: head, sha }, labels: labels.map((name) => ({ name })) };
@@ -39,4 +39,27 @@ test("several final-stretch PRs all pass, so two final stretches never hold each
   assert.match(held.description, /#5/);
   assert.match(held.description, /#9/);
   assert.ok(held.description.length <= 140, "GitHub caps status descriptions at 140 characters");
+});
+
+const QUEUE_SHA = "0123456789abcdef0123456789abcdef01234567";
+
+test("a merge queue entry passes merge-hold on its merge_group commit, since it passed the hold to be enqueued", () => {
+  const status = mergeGroupStatus(QUEUE_SHA);
+  assert.equal(status.sha, QUEUE_SHA);
+  assert.equal(status.state, "success");
+  assert.equal(status.context, STATUS_CONTEXT);
+  assert.ok(status.description.length > 0 && status.description.length <= 140);
+});
+
+test("the merge_group status refuses anything but a full commit SHA", () => {
+  for (const sha of ["", "abc123", "refs/heads/main", `${QUEUE_SHA}0`, QUEUE_SHA.toUpperCase().replace(/./, "g")]) {
+    assert.throws(() => mergeGroupStatus(sha), /full commit SHA/, JSON.stringify(sha));
+  }
+});
+
+test("--merge-group <sha> selects the merge_group path; no arguments keeps the open-PR sweep", () => {
+  assert.deepEqual(parseArgs(["--merge-group", QUEUE_SHA]), { mergeGroupSha: QUEUE_SHA });
+  assert.deepEqual(parseArgs([]), { mergeGroupSha: null });
+  assert.throws(() => parseArgs(["--merge-group"]), /--merge-group needs a commit SHA/);
+  assert.throws(() => parseArgs(["--sweep"]), /unknown argument/);
 });
