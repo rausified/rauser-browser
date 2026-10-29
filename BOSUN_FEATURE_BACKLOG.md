@@ -367,6 +367,8 @@ Live beads with no `backlog_section` (for example discovered work filed with
 queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
+- [ ] `brwr-h7p` **PR hygiene: body edits can cancel the Dev tools run.** Codex review P2 on PR #183 (.github/workflows/pr-hygiene.yml:15). The workflow's concurrency group cancels an in-progress opened/synchronize run when the PR body is edited, and the replacement 'edited' run skips the dev-tools job (if: github.event.action != 'edited'). A quick… _(P2; labels: codex-review, dev-tools)_
+- [ ] `brwr-h7q` **worktree-hygiene: keep a stable control worktree during removals.** Codex review P2 on PR #183 (scripts/dev/worktree-hygiene, main(): git(repo, 'worktree', 'remove', ...)). When --repo names a removable linked worktree and the tool runs from elsewhere, removing that worktree deletes the directory used for every later git -C call, so later… _(P2; labels: codex-review, dev-tools)_
 - [ ] `brwr-dc7` **Extractor: keep visibility filtering when body has no box (display: contents).** Codex review of PR #186 (P2). extension/extract.ts: when document.body has no client rect, the fallback walks a script-stripped clone instead of innerText. A page with body { display: contents } has no body rect but renders its children, so this path ignores display:none /… _(P2; labels: extraction, task-bar)_
 <!-- END GENERATED section=new -->
 
