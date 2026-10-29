@@ -1,8 +1,8 @@
-use brauser_protocol::{Request, Response, RunKind};
+use brauser_protocol::{Request, Response, RunCursor, RunKind};
 use serde_json::{Value, json};
 
 mod common;
-use common::{assert_response_round_trips, schema_subset};
+use common::{assert_request_round_trips, assert_response_round_trips, schema_subset};
 
 const RUN_VIEW: &str = r#"{"run_id":"00000000-0000-4000-8000-000000000001","state":"running","harness":"codex","record_key":{"kind":"url","value":"https://a.example/x"},"written_record_key":null,"url":"https://a.example/x","title":"T","cwd":null,"created_at":"2026-10-26T14:00:00-07:00","started_at":null,"finished_at":null,"error":null,"error_kind":null,"thread_id":null,"session_id":null,"summary_path":null,"stream_bytes":0,"can_retry_save":false,"answer":null}"#;
 
@@ -264,4 +264,97 @@ fn run_view_site_draft_rejects_more_than_8_adapters() {
     // service's validator and the host's check enforce it at runtime.
     view["site_draft"] = json!({ "adapters": ["/docs/{num:int}"] });
     assert!(!schema_subset::valid("RunView", &view));
+}
+
+#[test]
+fn list_runs_without_kind_round_trips_unchanged() {
+    // Today's list_runs shape: no kind, before or more key anywhere.
+    let request_value = json!({
+        "type": "list_runs", "protocol_version": 8, "request_id": "r",
+    });
+    let parsed = assert_request_round_trips("ListRunsRequest", &request_value);
+    let Request::ListRuns(request) = parsed else {
+        panic!("not list_runs");
+    };
+    assert_eq!(request.kind, None);
+    assert_eq!(request.before, None);
+    let encoded = serde_json::to_value(Request::ListRuns(request)).unwrap();
+    let object = encoded.as_object().unwrap();
+    for key in ["kind", "before"] {
+        assert!(!object.contains_key(key), "{key}");
+    }
+
+    let listed_value = json!({
+        "type": "runs_listed", "protocol_version": 8, "request_id": "r",
+        "runs": [run_view()],
+    });
+    let parsed = assert_response_round_trips("RunsListed", &listed_value);
+    let Response::RunsListed(listed) = parsed else {
+        panic!("not runs_listed");
+    };
+    assert_eq!(listed.more, None);
+    let encoded = serde_json::to_value(Response::RunsListed(listed)).unwrap();
+    assert!(!encoded.as_object().unwrap().contains_key("more"));
+}
+
+#[test]
+fn list_runs_with_kind_and_cursor_round_trips() {
+    let value = json!({
+        "type": "list_runs", "protocol_version": 8, "request_id": "r",
+        "kind": "task",
+        "before": {
+            "created_at": "2026-10-28T11:34:00-07:00",
+            "run_id": "00000000-0000-4000-8000-000000000001",
+        },
+    });
+    let parsed = assert_request_round_trips("ListRunsRequest", &value);
+    let Request::ListRuns(request) = parsed else {
+        panic!("not list_runs");
+    };
+    assert_eq!(request.kind, Some(RunKind::Task));
+    assert_eq!(
+        request.before,
+        Some(RunCursor {
+            created_at: "2026-10-28T11:34:00-07:00".to_string(),
+            run_id: "00000000-0000-4000-8000-000000000001".to_string(),
+        })
+    );
+
+    // kind alone (no before) also round-trips: the first page of a kind.
+    let mut kind_only = value.clone();
+    kind_only.as_object_mut().unwrap().remove("before");
+    let parsed = assert_request_round_trips("ListRunsRequest", &kind_only);
+    let Request::ListRuns(request) = parsed else {
+        panic!("not list_runs");
+    };
+    assert_eq!(request.kind, Some(RunKind::Task));
+    assert_eq!(request.before, None);
+
+    // An unknown kind is rejected at the schema layer, as RunKind elsewhere.
+    let mut unknown_kind = value.clone();
+    unknown_kind["kind"] = json!("chat");
+    assert!(serde_json::from_value::<Request>(unknown_kind).is_err());
+}
+
+#[test]
+fn runs_listed_more_is_optional() {
+    let base = json!({
+        "type": "runs_listed", "protocol_version": 8, "request_id": "r",
+        "runs": [],
+    });
+    let parsed = assert_response_round_trips("RunsListed", &base);
+    let Response::RunsListed(listed) = parsed else {
+        panic!("not runs_listed");
+    };
+    assert_eq!(listed.more, None);
+
+    for more in [true, false] {
+        let mut with_more = base.clone();
+        with_more["more"] = json!(more);
+        let parsed = assert_response_round_trips("RunsListed", &with_more);
+        let Response::RunsListed(listed) = parsed else {
+            panic!("not runs_listed");
+        };
+        assert_eq!(listed.more, Some(more));
+    }
 }

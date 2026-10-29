@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{APP_NAME}} · Tasks</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body class="tasks-page">
+    <main>
+      <header class="tasks-header">
+        <h1>{{APP_NAME}} · Tasks</h1>
+        <div class="tasks-controls">
+          <label for="tasks-search" class="visually-hidden">Search tasks</label>
+          <input id="tasks-search" type="search" placeholder="Search tasks…" autocomplete="off" />
+          <label for="tasks-filter" class="visually-hidden">Show tasks that are</label>
+          <select id="tasks-filter">
+            <option value="all">All</option>
+            <option value="running">Running</option>
+            <option value="done">Done</option>
+            <option value="failed">Failed</option>
+            <option value="canceled">Canceled</option>
+          </select>
+          <label class="check-label"><input id="tasks-show-dismissed" type="checkbox" /> Show dismissed</label>
+        </div>
+      </header>
+
+      <div id="tasks-status-box" class="status" hidden>
+        <p id="tasks-status" role="status" aria-live="polite"></p>
+        <button id="tasks-status-settings" type="button" class="compact" hidden>Open settings</button>
+      </div>
+
+      <p id="tasks-empty" class="tasks-empty" hidden>No tasks yet. Start one from the side panel.</p>
+
+      <div id="tasks-layout" class="tasks-layout" hidden>
+        <div id="tasks-list" class="tasks-list" role="listbox" aria-label="Tasks"></div>
+        <section id="tasks-detail" class="tasks-detail" aria-label="Selected task"></section>
+      </div>
+    </main>
+    <script type="module" src="tasks.js"></script>
+  </body>
+</html>

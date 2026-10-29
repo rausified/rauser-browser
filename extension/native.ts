@@ -9,6 +9,10 @@ import { isResponseShape } from "./protocol-shape.js";
 // this annotation fails typecheck whenever the generated version changes.
 export const PROTOCOL_VERSION: typeof GENERATED_PROTOCOL_VERSION = 8;
 
+/** What a host answers a request it cannot parse, such as one with a type
+ * or field an older host does not know (its parse_envelope). */
+export const UNSUPPORTED_REQUEST_TEXT = "invalid or unsupported request JSON";
+
 export function newRequestId(): string {
   return crypto.randomUUID();
 }

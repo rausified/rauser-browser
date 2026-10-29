@@ -925,9 +925,20 @@ pub struct RunFetched {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RunCursor {
+    pub created_at: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListRunsRequest {
     pub protocol_version: u32,
     pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<RunKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<RunCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -936,6 +947,8 @@ pub struct RunsListed {
     pub protocol_version: u32,
     pub request_id: String,
     pub runs: Vec<RunView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub more: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

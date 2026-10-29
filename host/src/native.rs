@@ -3008,6 +3008,8 @@ id = "work:{host}/{id}"
             let request = Request::ListRuns(brauser_protocol::ListRunsRequest {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "runs-diag".into(),
+                kind: None,
+                before: None,
             });
             #[cfg(not(unix))]
             let request = hello_request("runs-diag");
@@ -9121,8 +9123,8 @@ title = "{title} - Jira"
         use crate::service::client::fake::{self, FakeService};
         use crate::service::client::{Launch, NOT_INSTALLED, ServiceLink};
         use brauser_protocol::{
-            CancelRunRequest, GetRunRequest, LoadNoteRequest, RunStarted, ServiceHelloRequest,
-            StartRunRequest, StartTaskRequest,
+            CancelRunRequest, GetRunRequest, ListRunsRequest, LoadNoteRequest, RunCursor, RunKind,
+            RunStarted, ServiceHelloRequest, StartRunRequest, StartTaskRequest,
         };
         use std::sync::Arc;
         use std::time::Duration;
@@ -9385,6 +9387,41 @@ title = "{title} - Jira"
             let requests = service.requests();
             assert!(matches!(&requests[1], Request::OpenPath(value) if *value == open));
             assert!(matches!(&requests[3], Request::GetAgentEnv(_)));
+        }
+
+        /// `list_runs`'s `kind` and `before` are the service's to apply; the
+        /// host changes neither on the way through.
+        #[test]
+        fn list_runs_forwards_kind_and_before_unchanged() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let link = link(socket, never);
+            let before = RunCursor {
+                created_at: "2026-10-26T00:00:00.000000000Z".into(),
+                run_id: "00000000-0000-4000-8000-000000000001".into(),
+            };
+            let request = Request::ListRuns(ListRunsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "list-paged".into(),
+                kind: Some(RunKind::Task),
+                before: Some(before.clone()),
+            });
+            call(&mut config, &link, request);
+            let requests = service.requests();
+            assert!(matches!(requests[0], Request::ServiceHello(_)));
+            match &requests[1] {
+                Request::ListRuns(forwarded) => {
+                    assert_eq!(forwarded.kind, Some(RunKind::Task));
+                    assert_eq!(forwarded.before, Some(before));
+                }
+                other => panic!("expected list_runs, got {other:?}"),
+            }
         }
 
         #[test]
@@ -10206,6 +10243,68 @@ title = "{title} - Jira"
             }
             assert!(service.requests().is_empty());
         }
+    }
+
+    /// Twenty task views at the schema and host's longest fields (the
+    /// longest url and title the host accepts, and the 280-character cut
+    /// instruction of four-byte characters `list_runs` produces) still fit
+    /// one outbound frame.
+    #[test]
+    #[cfg(unix)]
+    fn twenty_task_list_views_with_longest_fields_fit_one_frame() {
+        use brauser_protocol::{
+            HarnessId, RecordKey, RecordKeyKind, RunErrorKind, RunState, RunsListed,
+        };
+
+        let instruction_source: String = "😀".repeat(400);
+        let instruction = crate::service::record::list_instruction(&instruction_source);
+        assert_eq!(
+            instruction.chars().count(),
+            crate::service::record::LIST_INSTRUCTION_CHARS + 1
+        );
+        let view = brauser_protocol::RunView {
+            run_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
+            state: RunState::Succeeded,
+            harness: HarnessId::Codex,
+            record_key: RecordKey {
+                kind: RecordKeyKind::Url,
+                value: "k".repeat(512),
+            },
+            written_record_key: Some(RecordKey {
+                kind: RecordKeyKind::Url,
+                value: "k".repeat(512),
+            }),
+            url: "a".repeat(8192),
+            title: "t".repeat(2048),
+            cwd: Some("c".repeat(4096)),
+            created_at: "2026-10-26T00:00:00.000000000Z".into(),
+            started_at: Some("2026-10-26T00:00:00.000000000Z".into()),
+            finished_at: Some("2026-10-26T00:00:00.000000000Z".into()),
+            error: Some("e".repeat(2048)),
+            error_kind: Some(RunErrorKind::HarnessFailed),
+            thread_id: Some("d".repeat(256)),
+            session_id: Some("s".repeat(256)),
+            summary_path: Some("p".repeat(4096)),
+            stream_bytes: u32::MAX,
+            can_retry_save: true,
+            answer: None,
+            kind: Some(brauser_protocol::RunKind::Task),
+            site_draft: None,
+            instruction: Some(instruction),
+            task_report: None,
+        };
+        let listed = RunsListed {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "r".repeat(128),
+            runs: std::iter::repeat_n(view, 20).collect(),
+            more: Some(true),
+        };
+        let wire = serde_json::to_vec(&listed).unwrap();
+        assert!(
+            wire.len() <= crate::frame::MAX_OUTBOUND_BYTES,
+            "{} bytes",
+            wire.len()
+        );
     }
 
     /// DESIGN.md §6.7: delivery marks artifacts dirty and does not touch their

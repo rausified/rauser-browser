@@ -8,7 +8,7 @@ import { serviceSetupText } from "./agent.js";
 import { APP_NAME } from "./brand.js";
 import { wellFormed } from "./extract.js";
 import { localTimestamp } from "./model.js";
-import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId } from "./native.js";
 import { markRunsMayExist } from "./run-card.js";
 import { readTab, type SummarizeDeps } from "./summarize.js";
 
@@ -27,11 +27,11 @@ export const TASK_FINISH_SETUP_MESSAGE =
 export const TASK_REPAIR_MESSAGE = `${APP_NAME}'s settings need repair before a task can run.`;
 export const TASK_REBUILD_HOST_MESSAGE = `Rebuild the ${APP_NAME} host to use the task bar.`;
 /** start_task's answer was lost after the request may have reached the
- * service, which may have queued it. */
-export const TASK_MAY_HAVE_STARTED_MESSAGE = "The task may have started — check below before running it again.";
-// What an older host's parse_envelope answers for a request type it does
-// not know, such as start_task.
-const UNSUPPORTED_REQUEST_TEXT = "invalid or unsupported request JSON";
+ * service, which may have queued it; the Tasks page shows whether it did. */
+export const TASK_MAY_HAVE_STARTED_MESSAGE = "The task may have started — check Tasks before running it again.";
+// What an older host answers for a request type it does not know, such as
+// start_task.
+export { UNSUPPORTED_REQUEST_TEXT };
 // The host's texts for a service whose answer it lost (its EXCHANGE_TIMEOUT
 // or a closed connection) and for a reply it could not use.
 const HOST_NO_ANSWER_TEXT = "The Brauser service stopped before answering. Try again in a moment.";
@@ -72,7 +72,7 @@ export interface TaskFailure {
   /** Settings is the fix, so the line offers Open settings. */
   openSettings: boolean;
   /** The answer was lost, so the task may have started: the panel lists
-   * the runs to show its card. */
+   * the tasks again to count it. */
   uncertain: boolean;
 }
 

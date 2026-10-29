@@ -641,6 +641,7 @@ pub(crate) mod fake {
             protocol_version: PROTOCOL_VERSION,
             request_id: request.request_id().to_owned(),
             runs: Vec::new(),
+            more: None,
         })
     }
 
@@ -696,6 +697,8 @@ mod tests {
         Request::ListRuns(ListRunsRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: "list-1".into(),
+            kind: None,
+            before: None,
         })
     }
 
@@ -1122,6 +1125,8 @@ mod tests {
                 _ => fake::runs_listed(&Request::ListRuns(ListRunsRequest {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "someone-else".into(),
+                    kind: None,
+                    before: None,
                 })),
             }),
         );

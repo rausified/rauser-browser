@@ -2087,14 +2087,27 @@
         "more": { "type": "boolean" }
       }
     },
+    "RunCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A page boundary for list_runs: the created_at and run_id of the oldest run already seen, since created_at alone does not order runs uniquely.",
+      "required": ["created_at", "run_id"],
+      "properties": {
+        "created_at": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "run_id": { "type": "string", "minLength": 36, "maxLength": 36 }
+      }
+    },
     "ListRunsRequest": {
       "type": "object",
       "additionalProperties": false,
+      "description": "kind absent lists in-flight and recent runs of every kind, unchanged from before version 8's task history. kind present restricts the list to that kind and allows paging with before; before without kind is invalid_request.",
       "required": ["type", "protocol_version", "request_id"],
       "properties": {
         "type": { "const": "list_runs" },
         "protocol_version": { "type": "integer", "const": 8 },
-        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "kind": { "description": "Optional; restricts the list to one run kind and enables before.", "$ref": "#/$defs/RunKind" },
+        "before": { "description": "Optional, only valid with kind; pages strictly before this cursor through finished runs of that kind.", "$ref": "#/$defs/RunCursor" }
       }
     },
     "RunsListed": {
@@ -2106,7 +2119,8 @@
         "type": { "const": "runs_listed" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "runs": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/RunView" } }
+        "runs": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/RunView" } },
+        "more": { "description": "Optional; present and true only when kind was given and finished runs remain past this page.", "type": "boolean" }
       }
     },
     "CancelRunRequest": {
