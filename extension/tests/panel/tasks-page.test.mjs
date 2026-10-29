@@ -243,6 +243,32 @@ test("the page lists every page of tasks and selects the newest", async () => {
   assert.match(page.pill(runId(1)).textContent, /^Done · 30s$/);
 });
 
+test("the page says when history is incomplete", async () => {
+  // A host that always answers more: true with a distinct, advancing
+  // cursor, so the walk never finds a last page and stops only at
+  // listAllTasks' page cap (100), leaving real history unread.
+  let served = 0;
+  const page = await openTasks({
+    intercept: (request) => {
+      if (request.type !== "list_runs") return null;
+      served += 1;
+      return { type: "runs_listed", runs: [task(served)], more: true };
+    },
+  });
+  await until(() => page.rows().length === 100, "every page up to the cap");
+  assert.equal(page.el("tasks-status").textContent, "Showing the newest 100 tasks. Older history could not be loaded.");
+  assert.equal(page.el("tasks-status-box").hidden, false);
+  assert.equal(page.el("tasks-status-settings").hidden, true);
+
+  // A later refresh (shown again after being hidden) must not clear the
+  // note: it is not a list error.
+  page.setHidden(true);
+  page.setHidden(false);
+  await settle(50);
+  assert.equal(page.el("tasks-status").textContent, "Showing the newest 100 tasks. Older history could not be loaded.");
+  assert.equal(page.el("tasks-status-box").hidden, false);
+});
+
 test("#run=<id> selects that task", async () => {
   const page = await openTasks({ hash: `#run=${runId(3)}` });
   await listed(page);

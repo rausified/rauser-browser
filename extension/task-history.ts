@@ -70,21 +70,29 @@ function lastFinishedRun(runs: readonly RunView[]): RunView | undefined {
  * asked for (a host stuck on the same page cannot be walked forever). The
  * result can repeat a run_id across pages (a run finishing mid-walk can
  * reappear, once active and once finished); callers merge with
- * {@link mergeRuns} rather than assuming each id appears once. */
-export async function listAllTasks(host: Pick<HostClient, "call">): Promise<RunView[]> {
+ * {@link mergeRuns} rather than assuming each id appears once.
+ *
+ * `complete` is false only when the walk stops because it reached the page
+ * cap while the last page answered `more: true` — the one stop that means
+ * real history was left unread. The stuck-cursor and no-finished-run stops
+ * are not reported as incomplete: a host behaving that way is not expected
+ * to have more that a bigger cap would actually reach. */
+export async function listAllTasks(host: Pick<HostClient, "call">): Promise<{ runs: RunView[]; complete: boolean }> {
   const all: RunView[] = [];
   let cursor: RunCursor | null = null;
   for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
     const { runs, more } = await listTaskPage(host, cursor);
     all.push(...runs);
-    if (!more) break;
+    if (!more) return { runs: all, complete: true };
     const last = lastFinishedRun(runs);
-    if (!last) break;
+    if (!last) return { runs: all, complete: true };
     const next: RunCursor = { created_at: last.created_at, run_id: last.run_id };
-    if (cursor !== null && next.created_at === cursor.created_at && next.run_id === cursor.run_id) break;
+    if (cursor !== null && next.created_at === cursor.created_at && next.run_id === cursor.run_id) {
+      return { runs: all, complete: true };
+    }
     cursor = next;
   }
-  return all;
+  return { runs: all, complete: false };
 }
 
 /** `known` and `fresh` merged into one view per `run_id`: a run that

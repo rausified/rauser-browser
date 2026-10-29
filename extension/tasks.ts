@@ -481,8 +481,11 @@ async function open(): Promise<void> {
     return;
   }
   showStatus("Loading tasks…");
+  let complete: boolean;
   try {
-    runs = mergeRuns([], tasksOnly(await listAllTasks(session.host)));
+    const all = await listAllTasks(session.host);
+    runs = mergeRuns([], tasksOnly(all.runs));
+    complete = all.complete;
   } catch (error) {
     showListError(error);
     return;
@@ -491,7 +494,10 @@ async function open(): Promise<void> {
   dismissed = new Set(await dismissedIds(storage).catch((): string[] => []));
   if (closed) return;
   listed = true;
-  showStatus(null);
+  // An incomplete walk (the page cap reached with more still true) shows a
+  // plain note, not an error: showStatus resets listErrorShown, so a later
+  // refresh's "clear only a list error" rule leaves this note alone.
+  showStatus(complete ? null : `Showing the newest ${runs.length} tasks. Older history could not be loaded.`);
   renderList();
   selectFromHash();
   schedulePoll();

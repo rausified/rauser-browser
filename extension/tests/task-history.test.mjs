@@ -49,9 +49,10 @@ test("listAllTasks walks pages with the last view as cursor", async () => {
     { runs: page2, hasMore: true, more: true },
     { runs: page3, hasMore: true, more: false },
   ]);
-  const all = await listAllTasks(host);
+  const { runs: all, complete } = await listAllTasks(host);
   assert.equal(all.length, 45);
   assert.deepEqual(all.map((run) => run.run_id), [...page1, ...page2, ...page3].map((run) => run.run_id));
+  assert.equal(complete, true);
 
   assert.equal(requests.length, 3);
   assert.equal(requests[0].kind, "task");
@@ -65,20 +66,35 @@ test("listAllTasks stops when the cursor does not advance", async () => {
   // and keeps claiming there is more.
   const stuck = [taskRun(1)];
   const { host, requests, callCount } = scriptedHost([{ runs: stuck, hasMore: true, more: true }]);
-  const all = await listAllTasks(host);
+  const { runs: all, complete } = await listAllTasks(host);
   // The first call (before: none) always advances past a null cursor; the
   // second call's cursor matches what it was asked for, so it stops there.
   assert.equal(callCount(), 2);
   assert.equal(requests.length, 2);
   assert.equal(all.length, 2);
+  assert.equal(complete, true);
 });
 
 test("listAllTasks treats a missing more as the last page", async () => {
   const runs = Array.from({ length: 5 }, (_, index) => taskRun(index + 1));
   const { host, requests } = scriptedHost([{ runs, hasMore: false }]);
-  const all = await listAllTasks(host);
+  const { runs: all, complete } = await listAllTasks(host);
   assert.equal(requests.length, 1);
   assert.equal(all.length, 5);
+  assert.equal(complete, true);
+});
+
+test("listAllTasks reports incomplete history at the page cap", async () => {
+  // A host that always says there is more, and always advances the cursor
+  // (a distinct finished run each page), so the walk only ever stops
+  // because it reached the page cap — the one stop that leaves real,
+  // unread history behind.
+  const replies = Array.from({ length: 101 }, (_, index) => ({ runs: [taskRun(index + 1)], hasMore: true, more: true }));
+  const { host, requests } = scriptedHost(replies);
+  const { runs: all, complete } = await listAllTasks(host);
+  assert.equal(requests.length, 100);
+  assert.equal(all.length, 100);
+  assert.equal(complete, false);
 });
 
 test("listAllTasks takes the cursor from the last finished view", async () => {
@@ -96,10 +112,11 @@ test("listAllTasks takes the cursor from the last finished view", async () => {
     { runs: page1, hasMore: true, more: true },
     { runs: page2, hasMore: true, more: false },
   ]);
-  const all = await listAllTasks(host);
+  const { runs: all, complete } = await listAllTasks(host);
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[1].before, { created_at: runB.created_at, run_id: runB.run_id });
   assert.equal(all.length, 4);
+  assert.equal(complete, true);
 });
 
 test("listAllTasks stops when a page has no finished view", async () => {
@@ -110,9 +127,10 @@ test("listAllTasks stops when a page has no finished view", async () => {
     taskRun(2, { state: "running" }),
   ];
   const { host, requests } = scriptedHost([{ runs: activeOnly, hasMore: true, more: true }]);
-  const all = await listAllTasks(host);
+  const { runs: all, complete } = await listAllTasks(host);
   assert.equal(requests.length, 1);
   assert.equal(all.length, 2);
+  assert.equal(complete, true);
 });
 
 test("mergeRuns keeps one view per run, the fresher state", () => {

@@ -1305,11 +1305,13 @@ async function checkReuse(): Promise<void> {
 }
 
 /** Restores the summary cards. The run record stays while a task is active,
- * or when the task list failed and nothing is known. */
+ * when the tracker's latest list found any task (even only finished ones,
+ * so an empty summary restore cannot clear history the Tasks page still
+ * has), or when the task list failed and nothing is known. */
 function restoreCards(): Promise<void> {
   return restoreRunCards([runCards], taskRunArea, {
     host: session.host, now: () => Date.now(), storage: chrome.storage.local, openSettings,
-  }, { keepRecord: tasksRunning > 0 || trackerError !== null });
+  }, { keepRecord: tasksRunning > 0 || newestTaskId !== null || trackerError !== null });
 }
 
 /** Shows a notice from the worker's shortcut or context-menu summary when it

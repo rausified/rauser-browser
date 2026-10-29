@@ -232,6 +232,24 @@ test("the panel does not list task runs without a harness or a run record", asyn
   assert.equal(summaryLists(recorded).length, 1);
 });
 
+test("finished task history keeps the run record after an empty summary restore", async () => {
+  // Only a finished task remains (running: 0, but the tracker's first page
+  // still has it). The summary restore finds no summary cards to show, which
+  // alone would clear the run record; it must not when task history exists.
+  const finished = { ...TASK_VIEW, state: "succeeded", finished_at: RECENT };
+  const local = new Map([[RUNS_MAY_EXIST_KEY, Date.now() - 60_000]]);
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "A" }, config: CONFIG, executeScript: pageReader(), local,
+    intercept: (request) => request.type === "list_runs"
+      ? { type: "runs_listed", runs: request.kind === "task" ? [finished] : [], more: false }
+      : null,
+  });
+  await until(() => taskLists(page).length === 1 && summaryLists(page).length === 1, "both lists");
+  await settle(20);
+  assert.equal(tasksButton(page), "Tasks ↗", "no task is running");
+  assert.ok(local.has(RUNS_MAY_EXIST_KEY), "the run record survives the empty summary restore");
+});
+
 test("Enter sends start_task, Shift+Enter does not, IME composition does not", async () => {
   const page = await taskPanel();
   type(page, "Find the owner\nof this page");
