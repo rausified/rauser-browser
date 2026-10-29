@@ -26,14 +26,21 @@ const el = (tag, ...children) => ({
 
 // A page whose Readability finds `article` (null: no article), with
 // `bodyText` as the body's innerText and `selection` as the user's selection.
+// `rendered` / `bodyRendered` false give the document element / body no
+// layout boxes (a display:none iframe; a display:none body), and `bodyNodes`
+// are the body's children. Without either option the fake has no
+// getClientRects, as in the older tests.
 function page({
   title = "Page title", article = null, articleTitle = "", bodyText = "", selection = "", href = PAGE_URL,
-  mainHeadings = [],
+  mainHeadings = [], rendered, bodyRendered = rendered, bodyNodes = [],
 } = {}) {
   const seen = { clonedDeep: null, options: null, parsed: 0 };
+  const rects = (shown) => (shown === undefined ? {} : { getClientRects: () => (shown ? [{ width: 1, height: 1 }] : []) });
+  const body = Object.assign(el("body", ...bodyNodes), { innerText: bodyText }, rects(bodyRendered));
   const document = {
     title,
-    body: { innerText: bodyText },
+    body,
+    documentElement: { ...rects(rendered) },
     querySelectorAll: () => mainHeadings,
     cloneNode(deep) {
       seen.clonedDeep = deep;
@@ -186,6 +193,53 @@ test("falls back to body text when Readability finds no article", () => {
   assert.deepEqual({ ...run(empty.scope) }, {
     title: "Doc title", content: "Body", selection: null, truncated: false, readable: false, href: PAGE_URL,
   });
+});
+
+// What John's first task run read from a SharePoint PowerPoint for the web
+// page (2026-10-28): a hidden Office token-factory iframe whose body holds
+// only an inline script. In a frame that is not rendered, innerText returns
+// textContent, script text included.
+const TOKEN_SCRIPT = 'var settings = {"requestExecutorSettings":{},"tokenFactorySettings":{"upn":"user@example.com"}};';
+const hiddenScriptFrame = (fields = {}) => page({
+  title: "", bodyText: TOKEN_SCRIPT, bodyNodes: [el("script", TOKEN_SCRIPT)], rendered: false, selection: "x", ...fields,
+});
+
+test("a frame that is not rendered contributes no content or selection", () => {
+  const { scope } = hiddenScriptFrame();
+  const result = run(scope);
+  assert.equal(result.content, "");
+  assert.equal(result.selection, null);
+  assert.equal(result.readable, false);
+  assert.doesNotMatch(JSON.stringify(result), /tokenFactorySettings|user@example\.com/);
+  // An article Readability finds in a hidden frame is not content either.
+  const article = page({ article: el("p", "Hidden article"), rendered: false });
+  assert.equal(run(article.scope).content, "");
+  assert.equal(run(article.scope).readable, false);
+});
+
+test("the body fallback never includes script, style, noscript or template text", () => {
+  // A rendered document whose body is not (display:none): innerText would
+  // return textContent, so the fallback walks the body without those.
+  const nodes = [
+    el("p", "Visible ", el("script", "var leak = 1;"), "slide text"),
+    el("style", ".leak { color: red }"),
+    el("noscript", "Enable JavaScript leak"),
+    el("template", el("p", "Template leak")),
+    el("div", "Second block"),
+  ];
+  const leaky = nodes.map((node) => node.textContent).join("");
+  const { scope } = page({ title: "Deck", bodyText: leaky, bodyNodes: nodes, rendered: true, bodyRendered: false });
+  const result = run(scope);
+  assert.equal(result.content, "Visible slide text\n\nSecond block");
+  assert.doesNotMatch(result.content, /leak/i);
+  assert.equal(result.readable, false);
+});
+
+test("a rendered page's body fallback is still its innerText", () => {
+  const { scope } = page({
+    title: "Doc", bodyText: "  Rendered text  ", bodyNodes: [el("script", "var leak = 1;")], rendered: true,
+  });
+  assert.equal(run(scope).content, "Rendered text");
 });
 
 test("maximal extraction stays under the host frame cap", () => {
@@ -485,6 +539,30 @@ test("only the top frame's address must still name the tab's page", async () => 
   await assert.rejects(summarizeTab(TAB, moved.deps),
     (error) => error.code === "page_changed" && error.message === PAGE_CHANGED_MESSAGE);
   assert.equal(moved.requests.length, 0);
+});
+
+test("a hidden script-only frame loses to a visible frame with short text", async () => {
+  // Every frame's result comes from the real extractor, as Chrome runs it.
+  const extracted = (scope, href) => {
+    scope.window.location.href = href;
+    return run(scope);
+  };
+  const top = page({ title: "Deck.pptx", bodyText: "", rendered: true, href: TAB.url }).scope;
+  const hidden = hiddenScriptFrame().scope;
+  const slide = page({ bodyText: "Slide 1: Plan", rendered: true }).scope;
+  const frames = [
+    { frameId: 0, result: extracted(top, TAB.url) },
+    { frameId: 2, result: extracted(hidden, "https://cisco-my.sharepoint.com/_layouts/15/tokenfactoryiframe") },
+    { frameId: 4, result: extracted(slide, "https://powerpoint.officeapps.live.com/p/PowerPointFrame.aspx") },
+  ];
+  const { deps, requests } = framesDeps(frames);
+  await summarizeTab(TAB, deps);
+  assert.equal(requests[0].content, "Slide 1: Plan");
+  assert.equal(requests[0].selection, null);
+  assert.doesNotMatch(JSON.stringify(requests[0]), /tokenFactorySettings|user@example\.com/);
+  // With no visible text anywhere, the hidden frame cannot make it readable.
+  const alone = framesDeps(frames.slice(0, 2));
+  await assert.rejects(readTab(TAB, alone.deps), (error) => error.code === "unreadable");
 });
 
 test("a selection borrowed from another frame never pushes start_run past the cap", async () => {

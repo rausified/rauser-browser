@@ -664,10 +664,17 @@ export interface RunFetched {
   more: boolean;
 }
 
+export interface RunCursor {
+  created_at: string;
+  run_id: string;
+}
+
 export interface ListRunsRequest {
   type: "list_runs";
   protocol_version: 8;
   request_id: string;
+  kind?: RunKind;
+  before?: RunCursor;
 }
 
 export interface RunsListed {
@@ -675,6 +682,7 @@ export interface RunsListed {
   protocol_version: 8;
   request_id: string;
   runs: RunView[];
+  more?: boolean;
 }
 
 export interface CancelRunRequest {

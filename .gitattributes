@@ -1,3 +1,9 @@
 # Test fixtures are byte-exact copies of files Brauser wrote; never convert
 # their line endings on checkout (Windows CI would otherwise see CRLF).
 host/tests/fixtures/** -text
+
+# The beads queue merges bead by bead (scripts/render_backlog.py
+# --install-merge-driver registers the driver; without it git does a normal
+# text merge). BOSUN_FEATURE_BACKLOG.md's generated blocks are re-rendered by
+# `python3 scripts/render_backlog.py --resolve` after a conflict.
+.beads/issues.jsonl merge=beads-jsonl

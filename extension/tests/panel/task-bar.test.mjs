@@ -3,11 +3,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ARTICLE_URL, CONFIG, PANEL_HTML, READY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
+  ARTICLE_URL, CONFIG, PANEL_HTML, READY, REUSE_KEY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
   buttonIn, descendants, install, readablePage, settle, startsRun, storageKey, teardown, until,
 } from "./harness.mjs";
 
-const DISMISSED_KEY = storageKey("dismissed_runs_v1");
+const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
 const OTHER_URL = "https://other.example/b";
 // Finished a minute ago, so a new panel restores it.
 const RECENT = new Date(Date.now() - 60_000).toISOString();
@@ -75,6 +75,11 @@ function enter(page, init = {}) {
 const runLines = (area) => area.children.filter((child) => child.className.split(" ").includes("run-line"));
 const cards = (area) => area.children.filter((child) => child.className.split(" ").includes("run-card"));
 const taskCards = (page) => cards(page.el("task-run-area"));
+// The panel's two lists: summaries restore their cards, tasks feed the tracker.
+const taskLists = (page) => page.sent("list_runs").filter((request) => request.kind === "task");
+const summaryLists = (page) => page.sent("list_runs").filter((request) => request.kind === "summary");
+const tasksButton = (page) => page.el("task-open").textContent;
+const runningButton = (n) => `Tasks · ${n} running ↗`;
 
 function held() {
   let release;
@@ -99,10 +104,11 @@ test("the task bar sits between the page area and the tabs", async () => {
   assert.ok(PANEL_HTML.indexOf("</section>", pageArea) < bar, "the bar follows the page area");
   assert.ok(bar < tabs, "the bar comes before the tabs");
   const section = PANEL_HTML.slice(bar, tabs);
-  for (const id of ["task-form", "task-input", "task-run", "task-context", "task-hint", "task-announce", "task-run-area"]) {
+  for (const id of ["task-form", "task-input", "task-run", "task-open", "task-context", "task-hint", "task-announce", "task-run-area"]) {
     assert.match(section, new RegExp(`id="${id}"`), id);
   }
   assert.match(section, /<textarea id="task-input"[^>]*maxlength="4000"/);
+  assert.match(section, /<button id="task-open" type="button" class="secondary compact">Tasks ↗<\/button>/);
   // Not inside the This page view, so it shows on Recent too.
   assert.ok(bar < PANEL_HTML.indexOf('<div id="page-view">'));
 
@@ -195,7 +201,7 @@ test("the hint explains each disabled state in order", async () => {
   assert.equal(page.el("task-run").textContent, "Run");
 });
 
-test("with no agent configured the panel never lists runs", async () => {
+test("the panel does not list task runs without a harness or a run record", async () => {
   const page = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, config: CONFIG, executeScript: pageReader() });
   await until(() => page.el("note-body").disabled === false, "the note to load");
   type(page, "Do something");
@@ -203,10 +209,45 @@ test("with no agent configured the panel never lists runs", async () => {
   await settle(20);
   assert.equal(page.sent("list_runs").length, 0);
   assert.equal(page.sent("start_task").length, 0);
-  // Nor does it read the page for the context line.
+  // Nor does it read the page for the context line, or refresh on show.
   page.el("task-input").dispatch("focus");
+  page.setHidden(true);
+  page.setHidden(false);
   await settle(20);
   assert.equal(page.state.selectionProbes.length, 0);
+  assert.equal(page.sent("list_runs").length, 0);
+  assert.equal(tasksButton(page), "Tasks ↗");
+  teardown.splice(0).forEach((listener) => listener());
+
+  // A run record (one started before the harness was removed) lists both kinds once.
+  const recorded = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "A" }, config: CONFIG, executeScript: pageReader(),
+    local: new Map([[RUNS_MAY_EXIST_KEY, Date.now()]]),
+    intercept: (request) => request.kind === "task"
+      ? { type: "runs_listed", runs: [{ ...TASK_VIEW, state: "running" }], more: false }
+      : null,
+  });
+  await until(() => tasksButton(recorded) === runningButton(1), "the running count");
+  assert.equal(taskLists(recorded).length, 1);
+  assert.equal(summaryLists(recorded).length, 1);
+});
+
+test("finished task history keeps the run record after an empty summary restore", async () => {
+  // Only a finished task remains (running: 0, but the tracker's first page
+  // still has it). The summary restore finds no summary cards to show, which
+  // alone would clear the run record; it must not when task history exists.
+  const finished = { ...TASK_VIEW, state: "succeeded", finished_at: RECENT };
+  const local = new Map([[RUNS_MAY_EXIST_KEY, Date.now() - 60_000]]);
+  const page = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "A" }, config: CONFIG, executeScript: pageReader(), local,
+    intercept: (request) => request.type === "list_runs"
+      ? { type: "runs_listed", runs: request.kind === "task" ? [finished] : [], more: false }
+      : null,
+  });
+  await until(() => taskLists(page).length === 1 && summaryLists(page).length === 1, "both lists");
+  await settle(20);
+  assert.equal(tasksButton(page), "Tasks ↗", "no task is running");
+  assert.ok(local.has(RUNS_MAY_EXIST_KEY), "the run record survives the empty summary restore");
 });
 
 test("Enter sends start_task, Shift+Enter does not, IME composition does not", async () => {
@@ -260,7 +301,8 @@ test("a double Enter sends one request", async () => {
   await settle(20);
   assert.equal(page.sent("start_task").length, 1);
   start.release({ type: "run_started", run: TASK_VIEW, existing: false });
-  await until(() => taskCards(page).length === 1, "the card");
+  await until(() => page.el("task-input").value === "", "the bar to clear");
+  await settle(20);
   assert.equal(page.sent("start_task").length, 1);
 });
 
@@ -269,10 +311,8 @@ test("the bar clears on success and keeps the text on failure", async () => {
   type(page, "List every link on this page");
   page.el("task-input").focused = false;
   enter(page);
-  await until(() => taskCards(page).length === 1, "the task card");
-  assert.equal(page.el("task-input").value, "");
+  await until(() => page.el("task-input").value === "", "the bar to clear");
   assert.equal(page.el("task-input").focused, true, "focus stays in the bar");
-  assert.match(taskCards(page)[0].textContent, /List every link on this page/);
   teardown.splice(0).forEach((listener) => listener());
 
   const conflict = "Four tasks are already waiting or running. Wait for one to finish.";
@@ -416,34 +456,63 @@ test("a list_runs failure shows one notice, in the task area", async () => {
   assert.ok(!unavailable.el("run-area").textContent.includes("not running"));
   buttonIn(unavailable.el("task-run-area"), "Open settings").click();
   assert.equal(unavailable.calls("openOptionsPage"), 1);
+  teardown.splice(0).forEach((listener) => listener());
+
+  // An older host refuses the list's kind field: one rebuild notice, and the
+  // button stays plain.
+  const older = await taskPanel({
+    intercept: (request) => request.type === "list_runs"
+      ? { type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" }
+      : startsTask()(request),
+  });
+  await until(() => older.el("task-run-area").textContent.includes("Rebuild the Brauser host to see task history."), "the rebuild notice");
+  await settle(20);
+  assert.equal(older.el("task-run-area").textContent, "Rebuild the Brauser host to see task history.");
+  assert.equal(tasksButton(older), "Tasks ↗");
 });
 
-test("restore puts task runs in the task area and never in summary cards", async () => {
+test("summary restore asks list_runs for kind summary", async () => {
   const summary = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000060", title: "Summary page", state: "running" };
   const task = { ...TASK_VIEW, state: "running", instruction: "Restored task instruction" };
   const views = new Map([[summary.run_id, summary], [task.run_id, task]]);
   const page = await taskPanel({
-    intercept: (request) => request.type === "list_runs" ? { type: "runs_listed", runs: [task, summary] } : startsTask(views)(request),
+    intercept: (request) => {
+      if (request.type === "list_runs") return { type: "runs_listed", runs: request.kind === "task" ? [task] : [summary], more: false };
+      return startsTask(views)(request);
+    },
   });
-  await until(() => taskCards(page).length === 1 && cards(page.el("run-area")).length === 1, "both cards");
-  assert.equal(page.sent("list_runs").length, 1, "the runs are listed once");
-  assert.match(taskCards(page)[0].textContent, /Restored task instruction/);
-  assert.doesNotMatch(page.el("task-run-area").textContent, /Summary page/);
+  await until(() => cards(page.el("run-area")).length === 1 && tasksButton(page) === runningButton(1), "the summary card and the count");
+  assert.equal(summaryLists(page).length, 1, "summaries are listed once");
+  assert.equal(taskLists(page).length, 1, "tasks are listed once");
+  assert.equal(page.sent("list_runs").length, 2);
   assert.match(cards(page.el("run-area"))[0].textContent, /Summary page/);
   assert.doesNotMatch(page.el("run-area").textContent, /Restored task instruction/);
+  assert.equal(taskCards(page).length, 0);
+  assert.doesNotMatch(page.el("task-run-area").textContent, /Restored task instruction/);
 });
 
-test("task cards stay visible after following another tab", async () => {
-  const page = await taskPanel();
-  type(page, "Keep me visible");
+test("the task bar shows only the field, Run and Tasks", async () => {
+  const running = { ...TASK_VIEW, state: "running", started_at: "2026-10-27T09:00:01-07:00" };
+  const views = new Map([[running.run_id, running]]);
+  let started = false;
+  const page = await taskPanel({
+    intercept: (request) => {
+      if (request.type === "start_task") started = true;
+      return request.type === "list_runs" && request.kind === "task"
+        ? { type: "runs_listed", runs: started ? [running] : [], more: false }
+        : startsTask(views)(request);
+    },
+  });
+  type(page, "List every link on this page");
   enter(page);
-  await until(() => taskCards(page).length === 1, "the task card");
-  page.navigate(OTHER_URL, 2);
-  await until(() => page.el("page-url").textContent === OTHER_URL, "tab 2 to show");
-  assert.equal(taskCards(page)[0].hidden, false);
-  page.navigate("chrome://extensions/", 3);
-  await until(() => page.el("page-url").textContent === "chrome://extensions/", "tab 3 to show");
-  assert.equal(taskCards(page)[0].hidden, false);
+  await until(() => tasksButton(page) === runningButton(1), "the running count");
+  await settle(20);
+  assert.equal(taskCards(page).length, 0);
+  assert.equal(descendants(page.el("task-run-area")).length, 0);
+  assert.doesNotMatch(page.el("task-bar").textContent, /List every link on this page/);
+  assert.equal(page.el("task-run").textContent, "Run");
+  assert.equal(page.el("task-open").textContent, runningButton(1));
+  assert.equal(page.el("task-open").hidden, false);
 });
 
 test("a draft survives a tab switch, the context line follows, and Enter sends the draft with the new page", async () => {
@@ -487,15 +556,17 @@ test("the bar is never pre-filled from the page, the selection or agent text", a
   const page = await taskPanel({
     selection: () => true,
     intercept: (request) => {
-      if (request.type === "list_runs") return { type: "runs_listed", runs: [{ ...finished, task_report: null }] };
+      if (request.type === "list_runs" && request.kind === "task") return { type: "runs_listed", runs: [{ ...finished, task_report: null }], more: false };
       if (request.type === "get_run" && request.run_id === finished.run_id) {
         return { type: "run_fetched", run: finished, stream_text: "Streamed agent text", next_offset: 19, more: false };
       }
       return startsTask(views)(request);
     },
   });
-  await until(() => page.el("task-run-area").textContent.includes("Report text from the agent"), "the restored report");
+  await until(() => taskLists(page).length === 1, "the task list");
+  await settle(20);
   assert.equal(page.el("task-input").value, "");
+  assert.doesNotMatch(page.el("task-run-area").textContent, /Report text from the agent/);
   page.navigate(OTHER_URL, 2);
   await until(() => page.el("page-url").textContent === OTHER_URL, "tab 2 to show");
   page.followLink(`${OTHER_URL}/next`, "Next page");
@@ -506,7 +577,7 @@ test("the bar is never pre-filled from the page, the selection or agent text", a
   assert.equal(page.el("task-input").value, "Typed by the user");
 });
 
-test("a finished task announces itself", async () => {
+test("a task finishing is announced in #task-announce", async () => {
   const instruction = "Summarize every comment in this thread and list who asked open questions";
   const done = {
     ...TASK_VIEW, state: "succeeded", started_at: "2026-10-27T09:00:01-07:00", finished_at: RECENT,
@@ -519,56 +590,13 @@ test("a finished task announces itself", async () => {
   enter(page);
   await until(() => page.el("task-announce").textContent !== "", "the announcement");
   assert.equal(page.el("task-announce").textContent, `Task done: ${instruction.slice(0, 60)}…`);
-  assert.match(page.el("task-run-area").textContent, /Three open questions\./);
-});
-
-test("Reuse puts the instruction back in the bar", async () => {
-  const full = `Check every claim on this page ${"and its sources ".repeat(30)}`.trim();
-  const finished = {
-    ...TASK_VIEW, state: "failed", error: "The agent stopped.", error_kind: "harness_failed",
-    started_at: "2026-10-27T09:00:01-07:00", finished_at: RECENT, instruction: full,
-  };
-  const page = await taskPanel({
-    intercept: (request) => {
-      if (request.type === "list_runs") return { type: "runs_listed", runs: [{ ...finished, instruction: `${full.slice(0, 280)}…` }] };
-      if (request.type === "get_run") return { type: "run_fetched", run: finished, stream_text: "", next_offset: 0, more: false };
-      return startsTask()(request);
-    },
-  });
-  await until(() => buttonIn(page.el("task-run-area"), "Reuse"), "Reuse");
-  page.el("task-input").focused = false;
-  buttonIn(page.el("task-run-area"), "Reuse").click();
-  assert.equal(page.el("task-input").value, full);
-  assert.equal(page.el("task-input").focused, true);
-});
-
-test("Dismiss is remembered", async () => {
-  const finished = {
-    ...TASK_VIEW, state: "canceled", started_at: null, finished_at: RECENT,
-  };
-  const intercept = (request) => {
-    if (request.type === "list_runs") return { type: "runs_listed", runs: [finished] };
-    if (request.type === "get_run") return { type: "run_fetched", run: finished, stream_text: "", next_offset: 0, more: false };
-    return startsTask()(request);
-  };
-  const local = new Map([[WARNING_SEEN_KEY, true]]);
-  const page = await taskPanel({ local, intercept });
-  await until(() => buttonIn(page.el("task-run-area"), "Dismiss"), "Dismiss");
-  buttonIn(page.el("task-run-area"), "Dismiss").click();
-  await until(() => (local.get(DISMISSED_KEY) ?? []).includes(finished.run_id), "the dismissal");
+  assert.doesNotMatch(page.el("task-run-area").textContent, /Three open questions\./);
   assert.equal(taskCards(page).length, 0);
-  teardown.splice(0).forEach((listener) => listener());
-
-  const again = await taskPanel({ local, intercept });
-  await until(() => again.sent("list_runs").length === 1, "list_runs");
-  await settle(20);
-  assert.equal(taskCards(again).length, 0);
-  assert.equal(descendants(again.el("task-run-area")).length, 0);
 });
 
-const MAY_HAVE_STARTED = "The task may have started — check below before running it again.";
+const MAY_HAVE_STARTED = "The task may have started — check Tasks before running it again.";
 
-test("a lost start_task answer says the task may have started and restores its card", async () => {
+test("a lost start answer says check Tasks and refreshes the tracker", async () => {
   const lost = [
     ["the host's lost answer", (respond) => respond({
       type: "error", code: "service_unavailable", message: "The Brauser service stopped before answering. Try again in a moment.",
@@ -587,11 +615,11 @@ test("a lost start_task answer says the task may have started and restores its c
           return start.promise;
         }
         // The service queued the task before its answer was lost.
-        if (request.type === "list_runs") return { type: "runs_listed", runs: started ? [queued] : [] };
+        if (request.type === "list_runs") return { type: "runs_listed", runs: started && request.kind === "task" ? [queued] : [], more: false };
         return startsTask(views)(request);
       },
     });
-    await until(() => page.sent("list_runs").length === 1, `${what}: the first list`);
+    await until(() => taskLists(page).length === 1, `${what}: the first list`);
     type(page, "Possibly started");
     enter(page);
     await until(() => page.sent("start_task").length === 1, `${what}: start_task`);
@@ -599,9 +627,10 @@ test("a lost start_task answer says the task may have started and restores its c
     await until(() => page.el("task-run-area").textContent.includes(MAY_HAVE_STARTED), `${what}: the softer line`);
     assert.doesNotMatch(page.el("task-run-area").textContent, /Could not start the task/, what);
     assert.equal(page.el("task-input").value, "Possibly started", what);
-    await until(() => taskCards(page).length === 1, `${what}: the restored card`);
-    assert.equal(page.sent("list_runs").length, 2, what);
-    assert.match(taskCards(page)[0].textContent, /Possibly started/, what);
+    await until(() => tasksButton(page) === runningButton(1), `${what}: the running count`);
+    assert.equal(taskLists(page).length, 2, what);
+    assert.equal(summaryLists(page).length, 1, what);
+    assert.equal(taskCards(page).length, 0, what);
     teardown.splice(0).forEach((listener) => listener());
   }
 
@@ -611,16 +640,16 @@ test("a lost start_task answer says the task may have started and restores its c
       ? { type: "error", code: "conflict", message: "Four tasks are already waiting or running." }
       : startsTask()(request),
   });
-  await until(() => refused.sent("list_runs").length === 1, "the first list");
+  await until(() => taskLists(refused).length === 1, "the first list");
   type(refused, "A fifth task");
   enter(refused);
   await until(() => refused.el("task-run-area").textContent.includes("Four tasks are already waiting or running."), "the refusal");
   await settle(20);
   assert.doesNotMatch(refused.el("task-run-area").textContent, /may have started/);
-  assert.equal(refused.sent("list_runs").length, 1);
+  assert.equal(taskLists(refused).length, 1);
 });
 
-test("a task view without an instruction (a corrupt record) still lists, without Reuse", async () => {
+test("a task view without an instruction (a corrupt record) still lists", async () => {
   const { instruction: _instruction, ...corrupt } = {
     ...TASK_VIEW, run_id: "00000000-0000-4000-8000-000000000051", state: "failed",
     error: "The task's request is missing.", error_kind: "harness_failed",
@@ -629,14 +658,11 @@ test("a task view without an instruction (a corrupt record) still lists, without
   const running = { ...TASK_VIEW, state: "running", instruction: "Still running" };
   const views = new Map([[corrupt.run_id, corrupt], [running.run_id, running]]);
   const page = await taskPanel({
-    intercept: (request) => request.type === "list_runs"
-      ? { type: "runs_listed", runs: [corrupt, running] }
+    intercept: (request) => request.type === "list_runs" && request.kind === "task"
+      ? { type: "runs_listed", runs: [corrupt, running], more: false }
       : startsTask(views)(request),
   });
-  await until(() => taskCards(page).length === 2, "both task cards");
-  const shown = taskCards(page).find((card) => card.textContent.includes("The task's request is missing."));
-  assert.ok(shown, "the corrupt record's card");
-  assert.equal(buttonIn(shown, "Reuse"), null);
+  await until(() => tasksButton(page) === runningButton(1), "the running count");
   assert.doesNotMatch(page.el("task-run-area").textContent, /Could not list agent runs/);
 });
 
@@ -651,7 +677,7 @@ test("a started task clears an earlier restore notice", async () => {
   listFails = false;
   type(page, "Start anyway");
   enter(page);
-  await until(() => taskCards(page).length === 1, "the task card");
+  await until(() => page.el("task-input").value === "", "the start");
   assert.doesNotMatch(page.el("task-run-area").textContent, /list broke/);
 });
 
@@ -717,4 +743,151 @@ test("a repeated identical announcement is announced again", async () => {
   }
   // Each announcement first empties the region, so the same text is new.
   assert.deepEqual(writes, ["", `Task done: ${instruction}`, "", `Task done: ${instruction}`]);
+});
+
+test('Tasks reads "Tasks · 1 running ↗" while a task runs and "Tasks ↗" after', async () => {
+  let current = null;
+  const page = await taskPanel({
+    intercept: (request) => {
+      if (request.type === "list_runs" && request.kind === "task") return { type: "runs_listed", runs: current ? [current] : [], more: false };
+      if (request.type === "start_task") {
+        current = { ...TASK_VIEW, state: "running", started_at: "2026-10-27T09:00:01-07:00", instruction: request.instruction };
+        return { type: "run_started", run: { ...current, state: "queued", started_at: null }, existing: false };
+      }
+      return startsTask()(request);
+    },
+  });
+  await until(() => taskLists(page).length === 1, "the first list");
+  assert.equal(tasksButton(page), "Tasks ↗");
+  type(page, "Watch me run");
+  enter(page);
+  await until(() => tasksButton(page) === runningButton(1), "the running count");
+  const listed = taskLists(page).length;
+  // The tracker polls every 2000 ms while a task is active.
+  current = { ...current, state: "succeeded", finished_at: new Date().toISOString(), task_report: "Done." };
+  await settle(2100);
+  await until(() => tasksButton(page) === "Tasks ↗", "the plain button");
+  assert.equal(taskLists(page).length, listed + 1);
+  await until(() => page.el("task-announce").textContent === "Task done: Watch me run", "the announcement");
+  // Nothing is active, so it stops polling.
+  await settle(2100);
+  assert.equal(taskLists(page).length, listed + 1);
+  assert.deepEqual(page.sent("get_run"), []);
+});
+
+test("a finished task missing from the list is fetched once with get_run", async () => {
+  const started = { ...TASK_VIEW, instruction: "Gone from the list", stream_bytes: 42 };
+  const done = {
+    ...started, state: "failed", started_at: "2026-10-27T09:00:01-07:00", finished_at: RECENT,
+    error: "The agent stopped.", error_kind: "harness_failed", stream_bytes: 99,
+  };
+  const page = await taskPanel({
+    intercept: (request) => {
+      if (request.type === "start_task") return { type: "run_started", run: started, existing: false };
+      // The list never has it (another kind crowded it out, say).
+      if (request.type === "list_runs") return { type: "runs_listed", runs: [], more: false };
+      if (request.type === "get_run") return { type: "run_fetched", run: done, stream_text: "", next_offset: 99, more: false };
+      return startsTask()(request);
+    },
+  });
+  type(page, "Gone from the list");
+  enter(page);
+  await until(() => page.el("task-announce").textContent === "Task failed: Gone from the list", "the announcement");
+  const fetched = page.sent("get_run");
+  assert.equal(fetched.length, 1);
+  assert.equal(fetched[0].run_id, started.run_id);
+  assert.equal(fetched[0].since_offset, 42);
+  // A later refresh does not fetch it again.
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => taskLists(page).length >= 3, "the refresh on show");
+  await settle(20);
+  assert.equal(page.sent("get_run").length, 1);
+});
+
+test("the tracker stops while the panel is hidden and refreshes on show", async () => {
+  let current = { ...TASK_VIEW, state: "running", started_at: "2026-10-27T09:00:01-07:00" };
+  const page = await taskPanel({
+    intercept: (request) => request.type === "list_runs" && request.kind === "task"
+      ? { type: "runs_listed", runs: [current], more: false }
+      : startsTask()(request),
+  });
+  await until(() => tasksButton(page) === runningButton(1), "the running count");
+  page.setHidden(true);
+  const listed = taskLists(page).length;
+  current = { ...current, state: "succeeded", finished_at: new Date().toISOString() };
+  await settle(2100);
+  assert.equal(taskLists(page).length, listed, "no list while hidden");
+  assert.equal(tasksButton(page), runningButton(1));
+  page.setHidden(false);
+  await until(() => tasksButton(page) === "Tasks ↗", "the refresh on show");
+  assert.equal(taskLists(page).length, listed + 1);
+});
+
+test("Tasks ↗ opens the Tasks page on the last started task, else the newest", async () => {
+  const newest = { ...TASK_VIEW, run_id: "00000000-0000-4000-8000-000000000081", state: "succeeded", finished_at: RECENT };
+  const older = { ...TASK_VIEW, run_id: "00000000-0000-4000-8000-000000000080", state: "succeeded", finished_at: RECENT };
+  let listed = [];
+  const page = await taskPanel({
+    intercept: (request) => request.type === "list_runs" && request.kind === "task"
+      ? { type: "runs_listed", runs: listed, more: false }
+      : startsTask()(request),
+  });
+  await until(() => taskLists(page).length === 1, "the first list");
+  page.el("task-open").click();
+  await until(() => page.created.length === 1, "a new tab");
+  assert.deepEqual(page.created.map((tab) => tab.url), ["chrome-extension://test-id/tasks.html"]);
+  teardown.splice(0).forEach((listener) => listener());
+
+  listed = [newest, older];
+  const listedPage = await taskPanel({
+    intercept: (request) => request.type === "list_runs" && request.kind === "task"
+      ? { type: "runs_listed", runs: listed, more: false }
+      : startsTask()(request),
+  });
+  await until(() => taskLists(listedPage).length === 1, "the first list");
+  await settle(20);
+  listedPage.el("task-open").click();
+  await until(() => listedPage.created.length === 1, "a new tab");
+  assert.equal(listedPage.created.at(-1).url, `chrome-extension://test-id/tasks.html#run=${newest.run_id}`);
+  type(listedPage, "My own task");
+  enter(listedPage);
+  await until(() => listedPage.el("task-input").value === "", "the start");
+  listedPage.el("task-open").click();
+  await until(() => listedPage.created.length === 2, "a second new tab");
+  assert.equal(listedPage.created.at(-1).url, `chrome-extension://test-id/tasks.html#run=${TASK_VIEW.run_id}`);
+});
+
+test("Tasks ↗ focuses an already-open Tasks tab instead of opening a second one", async () => {
+  const page = await taskPanel({ tasksContexts: [
+    { documentUrl: "chrome-extension://test-id/tasks.html#run=00000000-0000-4000-8000-000000000001", tabId: 7, windowId: 3 },
+  ] });
+  await until(() => taskLists(page).length === 1, "the first list");
+  page.el("task-open").click();
+  await until(() => page.state.tabUpdates.length === 1, "the open tab to be focused");
+  assert.deepEqual(page.created, []);
+  assert.deepEqual(page.state.tabUpdates, [
+    { tabId: 7, active: true, url: "chrome-extension://test-id/tasks.html" },
+  ]);
+  assert.deepEqual(page.state.windowUpdates, [{ windowId: 3, focused: true }]);
+});
+
+test("a reuse value that arrives during a start fills the bar once the start settles", async () => {
+  const start = held();
+  const page = await taskPanel({ intercept: (request) => request.type === "start_task" ? start.promise : startsTask()(request) });
+  type(page, "My own draft");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1, "start_task");
+  assert.equal(page.el("task-run").disabled, true, "a start is in flight");
+  // A Reuse value for this panel's window (and the harness's default
+  // windowId, 1) arrives while the start is in flight.
+  page.state.session.set(REUSE_KEY, { instruction: "Reused once settled", window_id: 1, at: Date.now() });
+  page.reuseChanged();
+  await settle(20);
+  // Left in storage, and the bar untouched, while the start is still going.
+  assert.equal(page.el("task-input").value, "My own draft", "the draft stays during the start");
+  assert.equal(page.state.session.has(REUSE_KEY), true, "the value is still in storage");
+  start.release({ type: "run_started", run: TASK_VIEW, existing: false });
+  await until(() => page.el("task-input").value === "Reused once settled", "the bar fills once the start settles");
+  assert.equal(page.state.session.has(REUSE_KEY), false);
 });

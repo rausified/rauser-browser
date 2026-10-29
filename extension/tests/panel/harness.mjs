@@ -14,12 +14,15 @@ export const { NoteRecovery } = await import("../../dist/note-recovery.js");
 export const { storageKey } = await import("../../dist/brand.js");
 export const { EXTRACT_LIMITS } = await import("../../dist/extract.js");
 export const { starterOffers: starterOffersFor } = await import("../../dist/starter-adapters.js");
+export const { REUSE_KEY } = await import("../../dist/task-handoff.js");
 
 // Run after build:extension. Each test loads a fresh copy of the side panel
 // against a fake DOM built from the shipped panel.html, a scripted native
 // host, a stub worker, and a fake Chrome whose site access can be withdrawn
 // and restored as the user would in chrome://extensions.
 export const PANEL_HTML = readFileSync(new URL("../../dist/panel.html", import.meta.url), "utf8");
+// The Tasks page, for tests that load tasks.js against its own markup.
+export const TASKS_HTML = readFileSync(new URL("../../dist/tasks.html", import.meta.url), "utf8");
 const SITE_ACCESS = ["http://*/*", "https://*/*"];
 
 export class FakeElement {
@@ -73,20 +76,21 @@ export class FakeElement {
   }
 }
 
-// Every element with an id in panel.html, with its initial `hidden` state and
-// static text, so the panel fails with "Missing page element" for markup that
-// is not there. The text is the markup up to the first matching end tag,
-// which is exact for elements that do not nest their own tag.
-function pageElements() {
+// Every element with an id in `html` (panel.html by default), with its
+// initial `hidden` state and static text, so the page fails with "Missing
+// page element" for markup that is not there. The text is the markup up to
+// the first matching end tag, which is exact for elements that do not nest
+// their own tag.
+export function pageElements(html = PANEL_HTML) {
   const elements = new Map();
-  for (const match of PANEL_HTML.matchAll(/<([a-z0-9]+)\b([^>]*?)\bid="([^"]+)"([^>]*)>/g)) {
+  for (const match of html.matchAll(/<([a-z0-9]+)\b([^>]*?)\bid="([^"]+)"([^>]*)>/g)) {
     const [, tag, before, id, after] = match;
     const element = new FakeElement(tag, /(^|\s)hidden(\s|\/|$)/.test(`${before} ${after}`));
     element.checked = /(^|\s)checked(\s|\/|$)/.test(`${before} ${after}`);
     const start = match.index + match[0].length;
-    const end = PANEL_HTML.indexOf(`</${tag}>`, start);
+    const end = html.indexOf(`</${tag}>`, start);
     if (end !== -1) {
-      element.ownText = PANEL_HTML.slice(start, end).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+      element.ownText = html.slice(start, end).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
     }
     elements.set(id, element);
   }
@@ -114,10 +118,10 @@ export const CONFIG = {
   adapters: { format: 1, artifacts: [] },
 };
 
-const NOT_SET_UP = { state: "not_set_up", harness_version: null, message: "Set up an AI harness." };
+export const NOT_SET_UP = { state: "not_set_up", harness_version: null, message: "Set up an AI harness." };
 export const READY = { state: "ready", harness_version: "1.0.0", message: null };
 
-function storageArea(entries) {
+export function storageArea(entries) {
   return {
     async get(keys) {
       const result = {};
@@ -205,6 +209,9 @@ export async function install({
   localStorage = memoryStorage(),
   script = async () => ({ current: "/items/{num}", links: [] }), patterns = [], patternsError = null,
   selection = () => false,
+  // The panel's own window (chrome.windows.getCurrent), and the Tasks tabs
+  // runtime.getContexts reports already open, for Tasks ↗ (task-handoff.ts).
+  windowId = 1, tasksContexts = [],
 }) {
   const elements = pageElements();
   const listeners = () => {
@@ -222,18 +229,29 @@ export async function install({
     removed: [],
     ports: [],
     hostDead: false,
+    hidden: false,
     agentStatus,
     injections: [],
     selectionProbes: [],
     local,
     session,
     runtimeMessages: listeners(),
+    windowId,
+    tasksContexts,
+    tabUpdates: [],
+    windowUpdates: [],
   };
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
 
+  const documentListeners = new Map();
   globalThis.document = {
     getElementById: (id) => elements.get(id) ?? null,
     createElement: (tag) => new FakeElement(tag),
+    get visibilityState() { return state.hidden ? "hidden" : "visible"; },
+    get hidden() { return state.hidden; },
+    addEventListener(type, listener) {
+      documentListeners.set(type, [...(documentListeners.get(type) ?? []), listener]);
+    },
   };
   globalThis.Option = class extends FakeElement {
     constructor(text = "", value = text) {
@@ -291,6 +309,11 @@ export async function install({
       getManifest: () => ({ options_ui: { page: "options.html" } }),
       getURL: (path) => `chrome-extension://test-id/${path}`,
       openOptionsPage: async () => { count("openOptionsPage"); },
+      // Tasks ↗ (task-handoff.ts openTasksPage) looks for an open Tasks
+      // tab this way rather than with the `tabs` permission.
+      async getContexts() {
+        return state.tasksContexts;
+      },
       connectNative() {
         const messageListeners = [];
         const disconnectListeners = [];
@@ -360,6 +383,10 @@ export async function install({
         state.created.push(properties);
         return { id: 99, incognito: false, ...properties };
       },
+      async update(tabId, updateProperties) {
+        state.tabUpdates.push({ tabId, ...updateProperties });
+        return { id: tabId, incognito: false, ...updateProperties };
+      },
       onActivated: tabActivated,
       onUpdated: tabUpdated,
     },
@@ -381,6 +408,14 @@ export async function install({
       onAdded: { addListener(listener) { state.added.push(listener); } },
       onRemoved: { addListener(listener) { state.removed.push(listener); } },
     },
+    windows: {
+      async getCurrent() {
+        return { id: state.windowId };
+      },
+      async update(windowId, updateInfo) {
+        state.windowUpdates.push({ windowId, ...updateInfo });
+      },
+    },
   };
 
   loads += 1;
@@ -401,6 +436,13 @@ export async function install({
         listener({ [POLICY_STORAGE_KEY]: { newValue: lease } }, "local");
       }
     },
+    // A Reuse value (task-handoff.ts) was written to session storage, by
+    // this panel's own write or another page's.
+    reuseChanged() {
+      for (const listener of chrome.storage.onChanged.registered) {
+        listener({ [REUSE_KEY]: { newValue: session.get(REUSE_KEY) } }, "session");
+      }
+    },
     el(id) {
       const found = elements.get(id);
       if (!found) throw new Error(`No element ${id} in panel.html`);
@@ -410,6 +452,12 @@ export async function install({
     // The panel's window gets an event, such as focus.
     windowEvent(type) {
       for (const listener of type === "pagehide" ? [] : windowListeners.get(type) ?? []) listener({ type });
+    },
+    // The panel is hidden (another side panel, a minimized window) or shown
+    // again; Chrome fires visibilitychange either way.
+    setHidden(hidden) {
+      state.hidden = hidden;
+      for (const listener of documentListeners.get("visibilitychange") ?? []) listener({ type: "visibilitychange" });
     },
     // The worker broadcasts a notice to open extension pages.
     notify(notice) {
