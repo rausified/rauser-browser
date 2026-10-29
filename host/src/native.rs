@@ -10250,6 +10250,7 @@ title = "{title} - Jira"
     /// instruction of four-byte characters `list_runs` produces) still fit
     /// one outbound frame.
     #[test]
+    #[cfg(unix)]
     fn twenty_task_list_views_with_longest_fields_fit_one_frame() {
         use brauser_protocol::{
             HarnessId, RecordKey, RecordKeyKind, RunErrorKind, RunState, RunsListed,
