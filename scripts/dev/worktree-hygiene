@@ -27,7 +27,8 @@ A candidate is kept, with the reason printed, when it
 If lsof cannot be run, every candidate is kept (fail closed).
 
 Nothing changes without --apply; removal is plain `git worktree remove`
-(never --force) and leaves the branch in place.
+(never --force) and leaves the branch in place. Control commands use the
+main worktree, so --repo may name a linked worktree that is removed.
 
 --clear-locks also looks at the repository's index.lock and each worktree's
 index.lock. A lock is removed (with --apply) only when it is older than
@@ -570,6 +571,11 @@ def main(argv: Optional[list[str]] = None, probe=None, pr_lookup: Optional[PrLoo
     if base_sha.returncode != 0:
         print(f"error: base {args.base} does not exist in {repo}", file=out)
         return 2
+
+    # The supplied linked worktree may be the first removal candidate. The
+    # main worktree (or bare repository) is never removed by this tool, so
+    # keep all control commands there, including the later lock checks.
+    repo = list_worktrees(repo)[0].path
 
     mode = "apply" if args.apply else "dry run (pass --apply to act)"
     print(f"worktree hygiene: {repo} against {args.base} {base_sha.stdout.strip()[:10]}, {mode}", file=out)

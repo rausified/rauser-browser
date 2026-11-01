@@ -36,7 +36,8 @@ jobs:
 
   dev-tools:
     name: Dev tools
-    if: github.event.action != 'edited'
+    # A body edit can cancel the previous run through workflow concurrency.
+    # Its replacement must run these tests too, even on the same head SHA.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
