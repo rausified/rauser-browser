@@ -2088,7 +2088,7 @@ mod tests {
         ) -> Self {
             let dir = tempfile::tempdir().unwrap();
             seed(
-                &RunStore::open(dir.path().join("runs")).unwrap(),
+                &RunStore::ephemeral(dir.path().join("runs")).unwrap(),
                 dir.path(),
             );
             let program = dir.path().join("fake-harness");
@@ -2119,7 +2119,7 @@ mod tests {
             spawn_fault: Option<SpawnFault>,
             finisher: Option<FinisherFactory>,
         ) -> Self {
-            let store = RunStore::open(dir.path().join("runs")).unwrap();
+            let store = RunStore::ephemeral(dir.path().join("runs")).unwrap();
             let fail_saves = Arc::new(AtomicUsize::new(0));
             let saves = Arc::new(AtomicUsize::new(0));
             let seen = SeenRun::default();
@@ -2696,7 +2696,7 @@ mod tests {
         assert_eq!(fixture.stream(id), "");
 
         // A new service process recovers the record this one left behind.
-        let restarted = RunStore::open(fixture.path("runs")).unwrap();
+        let restarted = RunStore::ephemeral(fixture.path("runs")).unwrap();
         maintenance::recover(
             &restarted,
             OffsetDateTime::now_utc(),
@@ -3740,30 +3740,70 @@ mod tests {
     }
 
     #[test]
-    fn a_resumed_queued_run_keeps_its_recorded_limit_and_vocabulary() {
+    fn a_resumed_queued_run_keeps_its_recorded_limit() {
         let mut queued = None;
-        let fixture = Fixture::seeded(
-            "/bin/cat > \"$COUNT.prompt\"\nexec /bin/sleep 30\n",
-            DEFAULT_RUN_TIMEOUT,
-            |store, cwd| {
-                let id = seed_record(
-                    store,
-                    cwd,
-                    RunState::Queued,
-                    "2026-10-26T09:00:01.000000000Z",
-                );
-                let mut status = store.status(id).unwrap();
-                status.run_timeout_secs = Some(1);
-                status.vocabulary = Some(custom_vocabulary());
-                store.write_status(&status).unwrap();
-                queued = Some(id);
-            },
-        );
+        let fixture = Fixture::seeded("exec /bin/sleep 30\n", DEFAULT_RUN_TIMEOUT, |store, cwd| {
+            let id = seed_record(
+                store,
+                cwd,
+                RunState::Queued,
+                "2026-10-26T09:00:01.000000000Z",
+            );
+            let mut status = store.status(id).unwrap();
+            status.run_timeout_secs = Some(1);
+            store.write_status(&status).unwrap();
+            queued = Some(id);
+        });
         let view = fixture.wait_finished(queued.unwrap());
         assert_eq!(view.error_kind, Some(RunErrorKind::TimedOut), "{view:?}");
         assert_eq!(view.error.as_deref(), Some("Timed out after 1 second"));
-        let prompt = read(&fixture.path("count.prompt"));
-        assert!(prompt.contains("legal review"), "{prompt}");
+    }
+
+    #[test]
+    fn a_resumed_queued_run_keeps_its_recorded_vocabulary() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::ephemeral(dir.path().join("runs")).unwrap();
+        let id = seed_record(
+            &store,
+            dir.path(),
+            RunState::Queued,
+            "2026-10-26T09:00:01.000000000Z",
+        );
+        let mut status = store.status(id).unwrap();
+        status.vocabulary = Some(custom_vocabulary());
+        store.write_status(&status).unwrap();
+        // Inspect the prompt through the existing in-process runner. A
+        // one-second timeout must not race a shell starting and copying stdin.
+        let seen = SharedSeen::default();
+        let runner = RecordingRunner {
+            answers: vec![TEST_ANSWER.to_string()],
+            seen: seen.clone(),
+        };
+        let fixture = Fixture::build(
+            dir,
+            HarnessRegistry::of(vec![Box::new(runner)]),
+            DEFAULT_RUN_TIMEOUT,
+            None,
+            None,
+            None,
+        );
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.prompts.len(), 1);
+        assert!(
+            seen.prompts[0].contains("legal review"),
+            "{:?}",
+            seen.prompts
+        );
+        assert_eq!(
+            seen.prompts,
+            [summary_prompt(
+                &store.page_path(id),
+                fixture.dir.path(),
+                &custom_vocabulary(),
+            )]
+        );
     }
 
     #[test]
@@ -4157,7 +4197,7 @@ mod tests {
             seen: SeenRun::default(),
         };
         let restarted = Supervisor::new(
-            RunStore::open(fixture.path("runs")).unwrap(),
+            RunStore::ephemeral(fixture.path("runs")).unwrap(),
             HarnessRegistry::default(),
             Box::new(finisher),
             options,
@@ -4226,7 +4266,7 @@ mod tests {
             (name == FAKE_HARNESS_ENV).then(|| program.clone().into_os_string())
         });
         let restarted = Supervisor::with_status_fault(
-            RunStore::open(fixture.path("runs")).unwrap(),
+            RunStore::ephemeral(fixture.path("runs")).unwrap(),
             registry,
             Box::new(finisher),
             options,

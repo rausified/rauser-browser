@@ -19,6 +19,30 @@ Put each check in the lowest layer that can prove it.
 3. **UI-free end-to-end run**, the default for routine checks and CI. A real browser runs headless in a temporary profile and is driven over the DevTools protocol. Native dialogs are replaced by test-only seams, and the extension holds the access it needs from install, so no browser permission prompt appears.
 4. **Real-UI acceptance**, used only occasionally. It runs the same flow against the real dialogs and prompts on a desktop, only when the user agrees. Run it before accepting changes to dialogs, permission prompts, or visual behavior.
 
+## Supervisor fixture durability
+
+Supervisor and retention unit tests use the explicit, unit-test-only
+`RunStore::ephemeral` constructor for disposable records. It keeps real
+file writes, private modes, atomic replacements and filesystem errors, but
+omits file and directory `fsync` calls. This keeps a ten-second supervisor
+state wait from becoming a test of the machine's disk flush latency; a local
+failure reproduced with a single file flush taking 5.6 seconds. Timeouts and
+state assertions are not relaxed.
+
+`RunStore::open` always syncs, including in unit-test builds. The record
+storage tests still use that constructor, and production and scripted-dialogs
+builds have no ephemeral constructor or durability switch. A separate
+ephemeral-store regression checks private file modes, successful status
+replacement, refused replacement of an existing result directory, temporary
+file cleanup and preservation of an existing page. Supervisor fault-injection
+tests continue to check actual write failures through the same writer.
+
+Resumed-run limit and vocabulary checks are separate: the limit case keeps
+its recorded one-second timeout, and the vocabulary case checks the full
+prompt through the existing in-process recording runner. Prompt delivery
+must not depend on a shell copying stdin before a one-second watchdog kills
+it on a loaded machine.
+
 ## Retired adapter history budget
 
 `cargo test --locked -p brauser adapter_history` exercises real config.toml
