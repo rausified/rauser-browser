@@ -250,3 +250,5 @@
 - **Brauser — Back off repeated task-tracking failures (2026-11-01):** Brauser backs off task tracking on consecutive list/off-page failures (2/4/8/16 seconds), pauses at five failures, and resumes on an explicit refresh or panel visibility refresh (`brwr-7u4`).
 - **Brauser — Preserve task-list failure notices (2026-11-01):** Brauser keeps task-list errors visible when live or stored worker summary notices restore cards (`brwr-4r1`).
 - **Brauser — Simplify tracker dependencies (2026-11-01):** Brauser removes TaskTracker's unused clock callback from its dependency contract (`brwr-ug2`).
+
+- **Brauser — Stabilize supervisor timing tests on slow disks (2026-11-01):** Explicit temporary unit-test stores omit crash-durability flush waits while preserving real private writes, atomic replacements and filesystem failures. Production, scripted-dialogs builds and the normal storage tests retain durable writes. Supervisor deadlines remain unchanged; resumed-run vocabulary delivery is checked independently from its one-second timeout, avoiding a shell startup race (`brwr-pnti`).
