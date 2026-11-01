@@ -243,3 +243,10 @@
 - **Brauser — Reserve tracked IDs before creating issues (2026-11-01):** Added `scripts/dev/create-bead` to validate and import committed issue history before creation, including closed IDs. Uses the existing timestamp guard, retains local-only work, preserves JSON output, and stops after invalid input or a failed import. Contributor guidance keeps linked worktrees on isolated scratch databases; nine regressions cover the workflow and duplicate-ID rejection.
 
 - **Brauser — Bound adapter comparisons in restricted sandboxes (2026-11-01):** The differential test command now probes child-pipe access before starting either engine and reports “no cases compared” on a permitted sandbox skip; required CI mode fails on denial. A three-second probe bound and 60-second engine-batch bound stop stalls with actionable diagnostics, and incomplete engine output fails. Fifteen new regression cases preserve comparison and generator checks; supplemental regular-file transport matched 5,000 real Rust/TypeScript cases.
+
+
+- **Brauser — Announce each watched task completion once (2026-11-01):** Brauser announces each watched task completion once per panel instance, even after stale running/start views (`brwr-jlz`).
+- **Brauser — Preserve queued task refreshes after failure (2026-11-01):** Brauser preserves refresh requests queued behind failed task-list reads; merged callers receive the final follow-up outcome (`brwr-2p0`).
+- **Brauser — Back off repeated task-tracking failures (2026-11-01):** Brauser backs off task tracking on consecutive list/off-page failures (2/4/8/16 seconds), pauses at five failures, and resumes on an explicit refresh or panel visibility refresh (`brwr-7u4`).
+- **Brauser — Preserve task-list failure notices (2026-11-01):** Brauser keeps task-list errors visible when live or stored worker summary notices restore cards (`brwr-4r1`).
+- **Brauser — Simplify tracker dependencies (2026-11-01):** Brauser removes TaskTracker's unused clock callback from its dependency contract (`brwr-ug2`).

@@ -793,3 +793,43 @@ IPC guards apply), all 38 extension test files, both Clippy configurations,
 85 Python tests, seven Node script files and 10,696 inert Markdown renderings.
 Logs are in `target/cookie-wg5-final/`; independent review and publication
 remain with the driver.
+
+
+### 2026-11-01 — Announce each watched task completion once (brwr-jlz)
+
+The panel remembers which task run IDs it has announced. A delayed start reply
+or stale running view can no longer make the same finished task announce again.
+Different tasks still receive separate announcements even when their instructions
+are identical; the memory lasts for the current panel instance.
+
+### 2026-11-01 — Preserve refreshes queued during a failed task list (brwr-2p0)
+
+A request to refresh while another list is pending now receives its promised
+follow-up even if the pending list fails. Overlapping requests still merge into
+one follow-up, and all callers receive the final attempt's outcome. Tests hold
+and reject host replies to verify both recovery and a second failure, plus
+disposal while a refresh is pending.
+
+### 2026-11-01 — Pause task tracking after repeated host failures (brwr-7u4)
+
+The panel keeps checking active tasks every two seconds while the host works.
+Consecutive failed passes now retry after two, four, eight and sixteen seconds
+and pause after the fifth failure, including failures fetching tasks absent
+from the first history page. Showing the panel again or explicitly refreshing
+restarts the budget, and a successful pass restores the normal interval.
+Mocked timers verify the delay boundaries, pause, and recovery without waiting
+for those delays in real time.
+
+### 2026-11-01 — Keep task-list failures visible across summary restores (brwr-4r1)
+
+A summary started through the shortcut or context menu can restore its card
+without making an outstanding task-list error disappear. Error restoration now
+lives in the shared summary-card restore function, so startup, live worker
+notifications and stored notifications use the same rule. Tests cover live
+delivery and a stored notice consumed when the panel follows its tab.
+
+### 2026-11-01 — Remove the tracker's unused clock dependency (brwr-ug2)
+
+TaskTracker no longer asks callers for a clock it never reads. Its only timing
+mechanism is the polling timer; the panel and direct tests now construct it
+without an unused timestamp callback. Type checking verifies the updated API.
