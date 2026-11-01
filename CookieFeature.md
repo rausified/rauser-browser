@@ -733,3 +733,33 @@ renderings. Nine extension cases were added overall. Queue and
 current-state checks pass. The full diff was reviewed locally; the driver
 owns independent review and publication. Logs: `target/cookie-health/`.
 No live API, deployed service or real harness was used.
+
+## 2026-11-01 — Reserve tracked issue IDs before creating beads
+
+Brauser now has a repository command, `scripts/dev/create-bead`, that loads
+the committed issue history into the local beads database before creating
+a new issue. This prevents a stale database from treating an already-shipped
+issue ID as available. The helper first validates the JSONL, then uses the
+existing importer's timestamp guard and proceeds only after import succeeds.
+It retains local-only work and newer local scalar fields rather than
+rebuilding the database; labels, comments and dependencies may still merge
+under the importer's rules.
+
+The helper forwards issue text as literal process arguments and sends import
+progress to stderr so `--json` creation output remains usable. It refuses
+linked worktrees, redirected databases and routing overrides; worktrees keep
+the documented scratch-database workflow and copy back only new rows. Eight
+mocked-command regressions cover ordering and refusal behavior, and a ninth
+regression proves the existing queue checker rejects a closed/open ID
+collision even when the backlog itself is current. Contributor instructions
+and the beads quick start now point to this workflow.
+
+The final review caught a missing `--repo` routing refusal. Both argument
+forms were reproduced in the regression before the fix; the helper now
+rejects them before hydration as well. Importer storage semantics remain
+covered by beads itself; this repository tests the command boundary.
+
+Validation after the review fix passed every required and README check:
+1,207 reported Rust passes, all 38 extension test files, 85 Python tests
+(+9), six Node script files, both Clippy configurations and 10,696 inert
+Markdown renderings. Logs are in `target/overnight-checks/review-fix-*.log`.
