@@ -781,6 +781,10 @@ function openAdapterEditor(
   adapterPreviewUrl.value = exampleUrl(review?.example ?? (Array.isArray(adapter) ? adapter[0]! : adapter));
   adapterPreviewTitle.value = "";
   refreshAdapterEditor();
+  // The editor sits below the gallery and the adapter list, so without this
+  // a click that opens it changes nothing the user can see.
+  adapterEditor.scrollIntoView({ block: "start", behavior: "smooth" });
+  adapterEditorHeading.focus({ preventScroll: true });
 }
 
 function beginAdapterDraft(adapter: AdapterObject, label: string, linkContainers = false): void {
