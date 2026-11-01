@@ -128,12 +128,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 ### Focused quality follow-up
 
 <!-- BEGIN GENERATED section=quality: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-rl2` **list_runs: site-draft runs can push summary runs out of
-  the restore window.** Filter by kind before LIST_LIMIT, or reserve summary
-  slots (Codex review of #170).
-- [ ] `brwr-sdc` **Capture Site: cancel a running AI draft when the review
-  goes stale.** A config change elsewhere leaves the run using a harness slot
-  for a result the revision check will refuse (Codex review of #170).
 <!-- END GENERATED section=quality -->
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
@@ -169,7 +163,6 @@ Follow-ups filed with the task bar (DESIGN.md §4.5, §5.6). They wait behind
 the plan work above.
 
 <!-- BEGIN GENERATED section=task-bar: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-67i` **list_runs: per-kind listing so one kind cannot crowd the other out of restore.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 32). host/src/service/supervisor.rs list_runs returns every active run, then fills the rest of LIST_LIMIT (20) with the newest finished runs of any kind. A burst of newer finished tasks (or… _(P2; labels: assigned, task-bar)_
 - [ ] `brwr-8qm` **Task completion notifications when the panel is closed.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decisions 21 and 26). Today a finished task announces itself only through #task-announce while the panel is open. Seam: the notifications permission in extension/manifest.json (a new permission, so it needs… _(P3; labels: task-bar)_
 - [ ] `brwr-cdq` **Omnibar: slash commands and custom [[commands]] config.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26; DESIGN.md §5.6). The task bar built the Omnibar's free-text row only. Slash commands (for example /summarize) and user-defined [[commands]] in config.toml are still not built. Seam: the… _(P3; labels: task-bar)_
 - [ ] `brwr-h1g` **Task history view.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). The panel restores only active tasks plus the 5 newest finished in 24 h (restorable in extension/run-card.ts); older tasks have no view. Seam: ListRunsRequest.kind (shared with the per-kind… _(P3; labels: task-bar)_
@@ -259,6 +252,12 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Cancel AI drafts when their review becomes stale (2026-11-01).** A settings change now detaches and cancels queued or running Capture Site AI drafts while retaining the stale message and disabled save. Late start answers, including rejoined runs for the still-open review, are canceled before mounting or judgment; repeated refresh and close do not cancel twice. **Metrics:** 20 Capture Site agent panel tests (+2); full gate green.
+
+- **Category:** Bug Fix. **Keep summary restoration compatible across run-list versions (2026-11-01).** Replaced the obsolete crowding test with per-kind regressions in both summary/task directions. Summary restoration retries once without kind only when an older host explicitly rejects the field; local filtering excludes tasks and site drafts. Older hosts retain their shared window until rebuilt. **Metrics:** 43 run-card unit tests, four-case Rust matrix, and 3 built-panel run-card tests; full gate green.
+
+- **Category:** Testing & Verification. **Verify summary restoration after AI-draft bursts (2026-11-01).** Confirmed the existing per-kind service listing and added a built-panel regression restoring a finished summary behind 21 newer site drafts. The host matrix also protects tasks from site-draft bursts. **Metrics:** Four-case Rust matrix and 3 panel run-card tests; full gate green.
+
 <!-- END GENERATED section=shipped -->
 
 - **Category:** Docs. **Split DESIGN.md into the current contract and an append-only history (2026-10-28).** Completed `brwr-m68` (Columbus session, John's request). Dated decision and as-built notes, probe results, review reproductions, superseded designs and the done-step build log moved verbatim to `docs/history.md`, grouped by DESIGN.md section, with pointers where a current rule depended on them; every section number, heading and §12.2 step number stays. AGENTS.md "Current state" is now a component table with invariants, and both files say new dated records go to `docs/history.md`. **Metrics:** DESIGN.md 341,373 → 275,922 bytes (1,831 → 1,604 lines); `docs/history.md` 111,854 bytes; AGENTS.md 48,143 → 22,567 bytes; 2,809 original sentences checked, none lost or duplicated beyond five glue edits. An independent review's findings are folded in: rules it found moved to history (credential refusal, the log marker format, the frozen-ID sibling rule, four headless limits now in TESTING.md) are restated, and stale §14 records are trimmed or moved.
@@ -1383,3 +1382,33 @@ Validation after the repair passed the complete required and README gates:
 renderings. Current-state and queue checks pass. Full diff reviewed locally;
 independent review and publication remain with the driver. Logs are in
 `target/overnight-health/2026-11-01-queue-repair/`.
+
+
+### Cycle observations (2026-11-01 — assigned run restoration and stale drafts)
+
+Completed `brwr-rl2`, `brwr-67i` and `brwr-sdc`. Task history had already
+supplied the per-kind service mechanism; this cycle replaced the obsolete
+known-crowding test, verified restoration from the built panel, and completed
+the older-host summary compatibility criterion. Legacy summary restoration
+can only use the old shared window; the Tasks page still requires filtered,
+paged listing. Capture Site now cancels attached stale drafts and cancels
+pending starts when their ids arrive, without mounting or judging them.
+
+The health check began green. The final required and README gates passed:
+1,207 reported Rust passes (92 return through the documented sandbox IPC
+guard), all 37 extension test files, both Clippy builds, 74 Python script
+tests, six Node script test files and 10,696 inert Markdown renderings.
+Focused files report 43 run-card unit tests, 3 built-panel run-card tests,
+and 20 Capture Site agent panel tests; five extension test cases were added.
+Logs are in `target/cookie-cycle-2/`. The full diff was reviewed locally;
+the driver owns independent review and publication.
+
+Twenty assigned items remain actionable. Continue from `bd ready --label
+assigned --exclude-label human,needs-macos,needs-windows`; next are the P2
+PR hygiene/worktree controls, extractor visibility, tracker tests, timing
+flake and queue hydration items. Keep the tracker implementation fixes and
+its tests together when their priority tier is reached. New product ideation
+is deferred while these assignments remain. A useful lesson for the next
+cycle is to audit older assigned acceptance against the current design:
+several follow-ups predate task history, and duplicating its mechanisms
+would add complexity without improving the user's experience.

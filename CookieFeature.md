@@ -665,3 +665,17 @@ Validation after the repair passed the complete required and README gates:
 renderings. Current-state and queue checks pass. Full diff reviewed locally;
 independent review and publication remain with the driver. Logs are in
 `target/overnight-health/2026-11-01-queue-repair/`.
+
+## 2026-11-01 — Verify summary restoration after AI-draft bursts
+
+The Capture Site restore follow-up is now covered across the service and the built panel. The existing per-kind list implementation filters before its 20-run limit; the new regression matrix verifies that more than a window of newer AI drafts cannot hide retained summaries or tasks. A built panel test also reopens with an older finished summary behind 21 newer site drafts and checks that the summary card actually returns. This closes a stale follow-up left after task history supplied the implementation, rather than adding a second listing mechanism.
+
+## 2026-11-01 — Keep summary restoration compatible across list versions
+
+Summary restoration continues to ask for its own run kind, keeping recent tasks from displacing summaries. The obsolete test that documented that displacement now checks both directions: an older task survives a summary burst, and an older summary survives a task burst. If an older host explicitly rejects the new filter field, the panel retries the original unfiltered request once and displays only summaries from that answer. That fallback retains the older host's shared window until it is rebuilt; the Tasks page still needs filtered, paged listing for complete history and retains its existing rebuild instruction. Other errors are reported directly rather than retried.
+
+## 2026-11-01 — Cancel AI drafts when their review becomes stale
+
+Changing settings elsewhere can make an open Capture Site review unusable. Brauser now removes and cancels its queued or running AI draft as soon as it observes that change, freeing the service slot instead of waiting for a result it cannot use. The review retains its settings-changed message and disabled save button. If the service has not yet answered the start request, the panel waits for its run identifier, then cancels without mounting progress, polling, or judging the result, including a rejoined run while that stale review remains open. Repeated updates and closing do not send duplicate cancels; a failed cancel keeps the existing service-timeout bound.
+
+Validation for this batch passed the required and README gates: 1,207 reported Rust passes (92 use the documented sandbox IPC guard), all 37 extension test files, both Clippy builds, 74 Python script tests, six Node script files, and 10,696 inert Markdown renderings. Five extension test cases were added. The full diff was reviewed locally; independent review and publication remain with the driver. No live API, service, or real harness was used.
