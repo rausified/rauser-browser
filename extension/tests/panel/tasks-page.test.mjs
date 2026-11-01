@@ -456,6 +456,13 @@ test("on Windows the page shows only the Windows text", async () => {
   assert.equal(page.state.requests.length, 0);
 });
 
+test("on Windows the page hides its search and filter controls", async () => {
+  const page = await openTasks({ platform: "Win32" });
+  await until(() => page.el("tasks-status").textContent !== "", "the status");
+  await settle();
+  assert.equal(page.el("tasks-controls").hidden, true);
+});
+
 test("the page says so when there are no tasks", async () => {
   const page = await openTasks({ runs: [] });
   await until(() => page.el("tasks-empty").hidden === false, "the empty text");

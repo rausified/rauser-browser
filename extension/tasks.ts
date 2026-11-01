@@ -39,6 +39,7 @@ void chrome.windows.getCurrent().then((current) => { pageWindowId = current.id ?
 const statusBox = element<HTMLDivElement>("tasks-status-box");
 const statusLine = element<HTMLParagraphElement>("tasks-status");
 const statusSettings = element<HTMLButtonElement>("tasks-status-settings");
+const controls = element<HTMLDivElement>("tasks-controls");
 const searchInput = element<HTMLInputElement>("tasks-search");
 const statusFilter = element<HTMLSelectElement>("tasks-filter");
 const showDismissed = element<HTMLInputElement>("tasks-show-dismissed");
@@ -465,6 +466,7 @@ function reopen(): Promise<void> {
 async function open(): Promise<void> {
   // The Brauser service runs on macOS (and Unix) only.
   if (/^win/i.test(navigator.platform ?? "")) {
+    controls.hidden = true;
     showStatus(WINDOWS_TEXT);
     return;
   }

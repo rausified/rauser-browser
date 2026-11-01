@@ -202,7 +202,6 @@ queue".
 - [ ] `brwr-4r1` **Panel: re-show trackerError after a worker-notice restore.** Panel: a worker-notice restore (showNotice -> restoreCards) can clear the tracker's failure notice; re-show trackerError after it. _(P3; labels: assigned, panel, tasks-page)_
 - [ ] `brwr-ug2` **TaskTracker: remove the unused now dependency.** TaskTracker: the `now` dependency is unused. _(P3; labels: assigned, task-tracker, tasks-page)_
 - [ ] `brwr-um4` **Tasks page: a hashchange during an in-flight refresh can miss a just-started run.** Tasks page: a hashchange during an in-flight refresh can miss a just-started run. The select signal mostly covers this. _(P3; labels: assigned, tasks-page)_
-- [ ] `brwr-64i` **Tasks page (Windows): hide .tasks-controls when search/filter/dismissed controls should be hidden.** Tasks page on Windows: the search, filter and Show dismissed controls are still visible; hide .tasks-controls. _(P3; labels: needs-windows, tasks-page, windows)_
 - [ ] `brwr-jzs` **tasks-page tests: avoid the 2.3s real-time wait and add an overlapping-refresh test.** tasks-page tests: the hidden-polling test waits 2.3 s of real time, and there is no overlapping-refresh test. _(P3; labels: assigned, tasks-page, tests)_
 - [ ] `brwr-90b` **Panel/page: dismissWrites queue can lose an id on simultaneous dismissals.** Panel/page: the dismissWrites queue covers one document only, so simultaneous dismissals from the panel and the Tasks page can lose one id. _(P3; labels: assigned, panel, tasks-page)_
 - [ ] `brwr-3wh` **Protocol test: use schema_subset::valid for the unknown_kind check.** Protocol test: the unknown_kind check uses serde instead of schema_subset::valid. _(P3; labels: assigned, protocol, tests)_
@@ -249,6 +248,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Hide Tasks page controls on Windows (2026-11-01).** The Tasks page's search box, status filter and Show dismissed toggle (`.tasks-controls`) now hide on Windows alongside the existing "Tasks are not supported on Windows yet." text, instead of staying visible and inert. DESIGN.md's Tasks page paragraph now notes the hidden state. **Metrics:** 1 new test (29 in tasks-page.test.mjs); 1930 extension tests; full required gate (typecheck, lint, build, tests) green.
+
 - **Category:** Testing & Verification. **Remove the Tasks focus test polling race (2026-11-01).** The focus regression now triggers the existing visibility refresh and waits for a rendered status change or added row before asserting retained-node and rebuilt-list focus. It no longer races the two-second poll or relies on a fixed settle delay. **Metrics:** 10/10 isolated local repeats; 38 extension test files; full required and README gates green.
 
 - **Category:** Testing & Verification. **Pin task tracker refresh and completion behavior (2026-11-01).** Seven direct tests use deferred replies and mocked timers to cover coalesced refreshes, one poll timer, one completion callback for tracked runs, off-page completion, visibility and disposal. The file is included in the normal extension suite. **Metrics:** 7 new tracker tests; 38 extension test files; full required and README gates green.
