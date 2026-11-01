@@ -801,3 +801,23 @@ against a shell copying the prompt. Separate tests retain the recorded
 one-second limit and check the full vocabulary prompt with the existing
 in-process recording runner, preserving both assertions without the shell
 startup dependency.
+
+### 2026-11-01 — Tasks-page review follow-ups
+
+Assigned PR #188 follow-ups now coalesce page refreshes through a shared
+promise and pending flag, including after a failed list (`brwr-um4`). Hash
+selection follows the latest location rather than an earlier handler's
+captured target. Off-page reads use `Promise.allSettled`, preserve failed
+rows for retry and ignore replies after pagehide (`brwr-sm8`).
+
+Dismissals keep their document queue and acquire one origin-wide Web Lock
+around the shared storage read/write (`brwr-90b`), with best-effort recovery
+after rejected lock or storage operations. Independent module instances
+exercise the cross-document race. The Tasks-page tests use mocked timers
+and held host replies (`brwr-jzs`); Reuse's failure case now asserts the
+source-window open attempt and consumption by another window (`brwr-3pv`).
+
+RunCursor.created_at now shares RunView's 20–64 character schema bounds
+(`brwr-0at`); this is length alignment, not syntax validation. The generator
+was run and both generated type files remain unchanged. The unknown-kind
+wire test checks schema rejection as well as serde rejection (`brwr-3wh`).

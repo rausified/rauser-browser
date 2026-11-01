@@ -856,3 +856,64 @@ are now independent: the recorded limit still has to time out after one
 second, while the existing in-process recording runner checks the complete
 prompt built from the recorded vocabulary. This preserves both expectations
 without making prompt verification depend on subprocess startup speed.
+
+### 2026-11-01 — Keep Tasks navigation current during refreshes
+
+A newly started task could be missed when its Tasks-page hash arrived while
+an older list was still loading. The page now remembers overlapping refresh
+requests and runs one follow-up after the current read, even if that read
+fails. Selection follows the latest URL hash, so a delayed callback cannot
+undo a newer navigation. Closing the tab stops queued work and ignores
+pending replies. Deferred-response tests cover success, failure, repeated
+refresh requests and tab closure (`brwr-um4`).
+
+### 2026-11-01 — Test Tasks polling without wall-clock waits
+
+The Tasks-page tests now advance a mocked polling clock and drain host
+replies separately. Hidden tabs and completed histories are checked across
+multiple polling intervals without sleeping for 2.3 seconds. New held-reply
+cases verify that overlapping requests produce one follow-up and keep the
+latest selection, making the actual race reproducible (`brwr-jzs`).
+
+### 2026-11-01 — Preserve dismissals from different Brauser views
+
+Dismissing a summary in the panel and a task in the Tasks tab at the same
+time now serializes the shared storage update with a Chrome Web Lock.
+Each document retains its own queue as a fallback, and a failed lock or
+write no longer prevents later attempts. The existing 1,000-item cap and
+deduplication stay in place. Tests load independent copies of the module
+against shared storage and locks to exercise the original lost-update race
+(`brwr-90b`).
+
+### 2026-11-01 — Check unknown run kinds against the schema
+
+The protocol regression for an unsupported list_runs kind now checks the
+JSON schema directly, alongside the existing Rust deserializer rejection.
+This ensures a future schema change cannot silently accept a kind that the
+wire contract excludes (`brwr-3wh`).
+
+### 2026-11-01 — Verify Reuse's fallback across windows
+
+The Reuse fallback test now begins in a known, nondefault Tasks window and
+asserts that Brauser attempts to open that window's panel. When that open
+fails, the saved instruction is untargeted and a panel in a different
+window actually consumes it and fills its task bar. This catches the older
+behavior that simply handed off without trying to open the panel (`brwr-3pv`).
+
+### 2026-11-01 — Refresh off-page task states concurrently
+
+A task that finishes outside the newest history page still needs get_run
+to update its row. Those lookups now start together, so one slow read does
+not prevent the others from starting. Results merge in candidate order;
+a failed read leaves its row for retry while a successful finish or prune
+still takes effect. Tests hold one reply, fail another, prune a third and
+verify both recovery and teardown (`brwr-sm8`).
+
+### 2026-11-01 — Align history cursor timestamp lengths
+
+History cursors now use the same 20–64 character timestamp bounds as run
+views, replacing the one-character minimum. Wire tests cover both ends of
+the range and assert that the two definitions stay aligned. Regenerating
+the protocol leaves its Rust and TypeScript types unchanged because this
+change affects schema validation rather than field types; length bounds
+alone do not validate RFC 3339 syntax (`brwr-0at`).
