@@ -36,6 +36,13 @@ pub struct Vault {
     summaries_dir: Option<PathBuf>,
 }
 
+/// Complete bounded Markdown snapshot for read-only migration review.
+pub(crate) struct ReviewFile {
+    pub relative: PathBuf,
+    pub summary: bool,
+    pub bytes: Vec<u8>,
+}
+
 /// A page that was published under its final name. Warnings describe work that
 /// failed after publication; callers must not retry the create as if it failed.
 #[derive(Debug)]
@@ -353,6 +360,55 @@ impl Vault {
             contents.push(text);
         }
         Ok(contents)
+    }
+
+    /// Unlike best-effort discovery, an impact plan must refuse an incomplete
+    /// inventory. Read regular Markdown only; no symlinks, skips or truncation.
+    pub(crate) fn relearn_files(&self) -> Result<Vec<ReviewFile>> {
+        let mut files = Vec::new();
+        let mut total = 0;
+        for (folder, summary) in std::iter::once((&self.pages_dir, false))
+            .chain(self.summaries_dir.iter().map(|dir| (dir, true)))
+        {
+            let metadata = match self.root.symlink_metadata(folder) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                bail!("re-learning review requires real notes and summaries directories");
+            }
+            let dir = self.root.open_dir(folder)?;
+            for entry in dir.entries()? {
+                let name = entry?.file_name();
+                if Path::new(&name).extension().is_none_or(|ext| ext != "md") {
+                    continue;
+                }
+                if files.len() >= MAX_NOTE_SCAN_FILES {
+                    bail!("re-learning review exceeds the file scan limit");
+                }
+                let metadata = dir.symlink_metadata(&name)?;
+                if !metadata.is_file()
+                    || metadata.file_type().is_symlink()
+                    || metadata.len() > MAX_OWNED_FILE_BYTES as u64
+                {
+                    bail!("re-learning review cannot inspect a Markdown file");
+                }
+                let bytes = read_inspected_occupant(&dir, &name, &metadata)?
+                    .context("a file changed during re-learning review")?;
+                total += bytes.len();
+                if total > MAX_NOTE_SCAN_BYTES {
+                    bail!("re-learning review exceeds the byte scan limit");
+                }
+                files.push(ReviewFile {
+                    relative: folder.join(name),
+                    summary,
+                    bytes,
+                });
+            }
+        }
+        files.sort_by(|a, b| a.relative.cmp(&b.relative));
+        Ok(files)
     }
 
     /// Publish a re-keyed note without replacing either side. The caller has

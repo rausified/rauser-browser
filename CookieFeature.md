@@ -646,7 +646,68 @@ one-case probe timed out, and Node child pipes are denied by this sandbox.
 The run was stopped and recorded as brwr-wg5. Both adapter engines are
 unchanged; their ordinary vector tests passed in the required gate.
 
-### 2026-11-01 — Repair the exported work queue before feature work
+## 2026-10-28 — Review the impact of re-learning capture rules
+
+Brauser can now show what a replacement capture policy would do to history
+that already exists. `brauser adapters relearn-plan` inspects the selected
+home folder's owned log markers, notes and summaries and returns a JSON
+review with unchanged and changed identities, splits, merges and unresolved
+cases. It also includes a repository whose history comes entirely from work
+inside it. This completes brwr-hq8, the second stage of capture re-learning;
+the panel action and actual migrations remain under the parent brwr-6x2.
+
+The report keeps existing notes and summaries on both sides visible without
+choosing one or overwriting either. It flags simultaneous swaps and reused
+keys that sequential aliases would incorrectly collapse, and refuses to
+infer identity when a query parameter may have been stripped. A URL note
+sharing an artifact's address remains a separate copy requiring an explicit
+choice. Config, recorded contracts, inspected evidence and proposal hashes
+bind the review so a later migration can reject stale decisions. The command
+writes only coordination locks; it leaves the cache, content and ID freeze
+unchanged. An optional absolute config path supports disposable fixtures.
+
+Twenty-one new tests cover this boundary, including actual capture markers,
+both-side files, provenance and the real CLI's rejection paths. A successful
+CLI fixture also preserved exact config/note bytes. The full required and
+README checks passed with 1,018 workspace Rust outcomes (43 explicit sandbox
+IPC skips), all 15 extension files, both Clippy builds, 880 scripted-dialog
+outcomes (53 IPC skips) and 10,696 inert Markdown renderings. Windows/macOS
+execution remains separate. The next concrete stage, brwr-wvi, records
+reviewed decisions in a durable journal with recovery before file/index or
+panel integration can enable migrations.
+
+## 2026-10-28 — Keep capture-correction reviews across interrupted writes
+
+Brauser can now keep a durable record of a reviewed capture correction before
+any migration is enabled. The developer command `adapters relearn-record`
+rebuilds the impact plan under the configuration and capture locks, checks that
+all reviewed inputs still match, and records an approval or rejection with its
+full proposal, mappings, file revisions and selected home-folder identity.
+`adapters relearn-journal` shows those records and completes interrupted
+appends. This finishes brwr-wvi, the journal prerequisite of capture re-learning.
+
+Each operation has a stable UUID. An exact retry returns the original receipt;
+a different proposal or decision cannot reuse that ID. The journal saves the
+exact bytes it intends to append before writing them, so recovery can finish a
+torn write without guessing or flattening a simultaneous mapping into alias
+links. Splits, merges and reused keys cannot be approved in this stage; a
+rejection preserves their full impact report. Reviews remain inspectable even
+if the former home folder is unavailable. All receipts say `applied: false`:
+notes, summaries, activity, config and index identities are still untouched,
+and ordinary settings saves still enforce the ID freeze.
+
+Eighteen new regressions cover crash checkpoints, a torn UTF-8 append,
+concurrent writers, exact retries, stale log/note/config/contract evidence,
+conflicting identities, damaged state and separate real CLI processes. The
+complete Linux gate passed with 1,037 workspace Rust outcomes (43 explicit
+sandbox IPC skips), 899 scripted-build outcomes (53 IPC skips), all 15 extension
+files, both Clippy builds, two script files and 10,696 inert Markdown renderings.
+Fresh diff review also fixed parent-directory syncing on retries. Windows
+power-loss durability and real browser acceptance still need platform evidence.
+Next, brwr-dbp integrates actual config/file/index migration and authoritative
+rebuild; panel Re-learn and parent brwr-6x2 acceptance follow that work.
+
+## 2026-11-01 — Repair the exported work queue before feature work
 
 This cycle repaired a failing queue check discovered during the opening
 health gate. The committed queue named two Re-learn prerequisites that were

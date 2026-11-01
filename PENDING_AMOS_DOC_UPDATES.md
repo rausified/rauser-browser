@@ -203,6 +203,17 @@
   gate green (997 Rust outcomes, all 15 extension files) and 859 scripted-build
   outcomes. Platform evidence for brwr-bzx/brwr-9xg remains blocked externally.
 
+- **Brauser — review capture re-learning impact:** The host's new
+  `adapters relearn-plan` CLI reviews real owned log/note/summary evidence,
+  including containers, before any rule correction can change identity.
+  It lists splits, merges, swaps, reused keys, insufficient provenance and
+  existing copies on both sides, bound to config/contract/evidence/proposal
+  revisions. No content is moved and URL notes never choose an autosave key.
+  Completes brwr-hq8 with 21 new tests and the full local gate green (1,018
+  workspace Rust outcomes, all 15 extension files, 880 scripted outcomes;
+  explicit IPC sandbox skips included). Durable journal/recovery brwr-wvi,
+  file/index integration and panel Re-learn remain before parent acceptance.
+
 - **Brauser — Task bar:** The side panel now has a free-text task bar under
   the page: the user types any instruction, presses Enter, and the configured
   full-access Codex or Claude Code carries it out through the Brauser service,
@@ -215,6 +226,17 @@
   diagnostics logs, and the change is additive within protocol v8 (host and
   extension deploy together). Real-harness and hostile-page canary checks
   remain [human] work; notifications and task history are follow-ups.
+
+- **Brauser — retain reviewed capture corrections across crashes:** The host's
+  `adapters relearn-record` command revalidates and durably records a complete
+  correction review; `adapters relearn-journal` inspects decisions and recovers
+  exact interrupted appends. Stable UUIDs make retries idempotent, while stale
+  reviews and conflicting payloads refuse. Rejected splits/merges/key reuse
+  retain their simultaneous mapping. Completes brwr-wvi with 18 regressions
+  and the full local gate green (1,037 workspace Rust outcomes, 899 scripted
+  outcomes, all 15 extension files; explicit IPC skips included). Decisions
+  always report `applied: false`; brwr-dbp still owns actual vault/index/config
+  migration, with panel Re-learn remaining under parent brwr-6x2.
 
 - **Brauser — Queue health repair (2026-11-01):** Reconciled stale local
   database-only Re-learn records and dangling exported dependency links,

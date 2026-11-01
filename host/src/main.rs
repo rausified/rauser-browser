@@ -80,8 +80,8 @@ fn run() -> Result<()> {
         // Chrome supplies its extension origin as a command-line argument to
         // native messaging hosts. The installed manifest, rather than argv,
         // authorizes the stable extension ID.
-        // Developer and test tooling: evaluates adapter templates without
-        // reading the config (adapter-templates.md §12).
+        // Developer tooling: template/alias rehearsal, impact review and a
+        // durable decision journal. These commands never apply identity changes.
         Some(adapters::COMMAND) => adapters::run(args),
         // The per-user service that owns agent runs: launchd starts it on
         // macOS; elsewhere on Unix it is started by hand or by a test seam.

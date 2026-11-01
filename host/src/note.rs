@@ -508,7 +508,7 @@ pub fn artifact_keyed_note_evidence(
 /// Identity for explicit read-only discovery, never for resolving a page's
 /// autosave key. Reject duplicate ownership fields before using the ordinary
 /// page-note ownership check.
-fn preserved_identity(contents: &str) -> Option<(RecordKey, String)> {
+pub(crate) fn preserved_identity(contents: &str) -> Option<(RecordKey, String)> {
     let (frontmatter, _) = contents.strip_prefix("---\n")?.split_once("\n---\n")?;
     if frontmatter
         .lines()
