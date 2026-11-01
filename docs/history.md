@@ -716,3 +716,17 @@ the whole agent draft before any preview, and every other rule passes
 setup hint; on Windows the run messages answer `service_unavailable`.
 
 The service worker delivers buffered events and renews its policy lease itself, from `alarms` and at browser startup, so capture does not depend on opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the worker to sync now. The rest of the agent integration, search index, signed installers, Chrome Web Store listing, and public release do not exist yet.
+
+
+## Development tooling — history
+
+2026-11-01 (`brwr-h7p`, `brwr-h7q`): PR hygiene runs Dev tools on edited
+PR bodies too. Workflow concurrency can cancel the earlier run, so its
+replacement must execute the Python checks as well as checking PR ownership.
+Worktree hygiene selects the main worktree (or bare repository) for control
+Git commands before acting: removing a linked worktree supplied as --repo
+no longer breaks later removals or --clear-locks. Existing candidate and
+safety checks are unchanged. A temporary-repository regression reproduces
+the old failure and verifies two removals, branch preservation and stale
+common-lock cleanup. Hosted workflow cancellation remains unexercised locally;
+no live API or deployed service was used.

@@ -189,8 +189,6 @@ queue".
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
-- [ ] `brwr-h7p` **PR hygiene: body edits can cancel the Dev tools run.** Codex review P2 on PR #183 (.github/workflows/pr-hygiene.yml:15). The workflow's concurrency group cancels an in-progress opened/synchronize run when the PR body is edited, and the replacement 'edited' run skips the dev-tools job (if: github.event.action != 'edited'). A quick… _(P2; labels: assigned, codex-review, dev-tools)_
-- [ ] `brwr-h7q` **worktree-hygiene: keep a stable control worktree during removals.** Codex review P2 on PR #183 (scripts/dev/worktree-hygiene, main(): git(repo, 'worktree', 'remove', ...)). When --repo names a removable linked worktree and the tool runs from elsewhere, removing that worktree deletes the directory used for every later git -C call, so later… _(P2; labels: assigned, codex-review, dev-tools)_
 - [ ] `brwr-dc7` **Extractor: keep visibility filtering when body has no box (display: contents).** Codex review of PR #186 (P2). extension/extract.ts: when document.body has no client rect, the fallback walks a script-stripped clone instead of innerText. A page with body { display: contents } has no body rect but renders its children, so this path ignores display:none /… _(P2; labels: assigned, extraction, task-bar)_
 - [ ] `brwr-z4j` **TaskTracker unit tests for refresh/track/finished behavior.** TaskTracker unit tests (extension/task-tracker.ts): two refresh() calls while one is in flight give two lists, not three; repeated refreshes leave one pending timer; track() + a terminal list give one finished(). (P2: the tracker is the panel's only source of finish… _(P2; labels: assigned, task-tracker, tasks-page)_
 - [ ] `brwr-b2p` **Flaky test: "the list keeps keyboard focus across a refresh" timed out on macos-15 CI.** Flaky test: tasks-page "the list keeps keyboard focus across a refresh" timed out (4044 ms) on macos-15 CI on PR #181 (step 'Run extension worker tests'); it passed on Windows, and #181 doesn't touch extension code. The test waits on the page's real 2000 ms poll through… _(P2; labels: assigned, flaky, tasks-page, tests)_
@@ -252,6 +250,10 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Complete cleanup after removing its starting worktree (2026-11-01).** Worktree hygiene selects the main worktree for control Git commands before removing candidates. Supplying a removable linked worktree no longer breaks subsequent removals or stale-lock checks; existing safety checks and branch preservation remain. **Metrics:** 75 Python dev-tool tests (+1 regression); full required and README gates green.
+
+- **Category:** Bug Fix. **Keep PR hygiene checks running after body edits (2026-11-01).** Dev tools now runs on edited events, so a handoff or owner edit that cancels an earlier hygiene workflow receives a tested replacement. PR owner still validates the updated body; existing workflow concurrency remains. **Metrics:** 75 Python dev-tool tests; full required and README gates green; hosted event behavior reviewed locally.
+
 - **Category:** Bug Fix. **Cancel AI drafts when their review becomes stale (2026-11-01).** A settings change now detaches and cancels queued or running Capture Site AI drafts while retaining the stale message and disabled save. Late start answers, including rejoined runs for the still-open review, are canceled before mounting or judgment; repeated refresh and close do not cancel twice. **Metrics:** 20 Capture Site agent panel tests (+2); full gate green.
 
 - **Category:** Bug Fix. **Keep summary restoration compatible across run-list versions (2026-11-01).** Replaced the obsolete crowding test with per-kind regressions in both summary/task directions. Summary restoration retries once without kind only when an older host explicitly rejects the field; local filtering excludes tasks and site drafts. Older hosts retain their shared window until rebuilt. **Metrics:** 43 run-card unit tests, four-case Rust matrix, and 3 built-panel run-card tests; full gate green.
@@ -374,6 +376,16 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-11-01 assigned dev-tool batch.** Completed the PR hygiene body-edit
+  and removable-control-worktree fixes together. The next ready P2 is
+  `brwr-dc7` (visible-only extraction when the body uses display: contents),
+  followed by TaskTracker coverage and the Tasks page timing regression.
+  Finish assigned work before proposing another surface. After that queue
+  clears, existing `brwr-ppn` (curating a copied worklog) and `brwr-ued`
+  (named cross-tool focus sessions) remain useful human-facing directions;
+  no duplicate proposal is needed. GitHub-hosted cancellation and real
+  macOS/Windows acceptance remain outside this offline Linux cycle.
 
 - **2026-10-28 assigned P2 follow-up.** `brwr-mdn` and `brwr-mdt` were
   duplicate reports of the same midnight failures and are now closed together.

@@ -227,3 +227,8 @@
 - **Brauser — Keep summary restoration compatible across list versions (2026-11-01):** Pinned summary/task restore isolation in both directions and added a single legacy summary-list retry when an older host explicitly rejects the filter field. Current hosts protect each kind before limiting; older hosts retain their shared-window limitation until rebuilt. Complete task history still requires the current listing protocol.
 
 - **Brauser — Cancel stale Capture Site AI drafts (2026-11-01):** A settings change that invalidates an open review now detaches and cancels its queued or running AI draft. Pending starts are canceled when their identifier arrives, before polling or judgment, and the review retains its stale message and disabled save.
+
+
+- **Brauser — Keep PR hygiene tests running after handoff edits (2026-11-01):** PR body edits now run Dev tools as well as PR owner validation, so canceling an earlier hygiene workflow cannot replace its Python test job with a skip. Uses the existing cancellation group; hosted event behavior was reviewed locally without a GitHub API call.
+
+- **Brauser — Complete cleanup from a removable linked worktree (2026-11-01):** Worktree hygiene now runs control commands from the main worktree, allowing --repo itself to be removed without breaking later removals or stale-lock checks. A failing-then-passing throwaway Git regression verifies both removals, preserved branches and common-lock cleanup; all 75 Python dev-tool tests pass.
