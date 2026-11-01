@@ -109,10 +109,10 @@ class Fixture(unittest.TestCase):
         run(self.repo, "fetch", "-q", "origin")
         return path
 
-    def hygiene(self, *argv, probe=None, prs=no_prs):
+    def hygiene(self, *argv, probe=None, prs=no_prs, repo=None):
         out = io.StringIO()
         code = wh.main(
-            ["--repo", str(self.repo), "--native-host-manifest", str(self.manifest),
+            ["--repo", str(repo or self.repo), "--native-host-manifest", str(self.manifest),
              "--launch-agent-plist", str(self.plist), *argv],
             probe=probe or FakeProbe(), pr_lookup=prs, out=out,
         )
@@ -143,12 +143,47 @@ class Candidates(Fixture):
         self.assertFalse(path.exists())
         self.assertIn("feat/merged", run(self.repo, "branch", "--list", "feat/merged"))
 
+    def test_removable_repo_does_not_break_later_removals_or_lock_checks(self):
+        first = self.merged_worktree("wt-a", "feat/a")
+        second = self.merged_worktree("wt-z", "feat/z")
+        lock = self.repo / ".git" / "index.lock"
+        lock.write_text("")
+        past = time.time() - 3600
+        os.utime(lock, (past, past))
+
+        # The caller is outside --repo, so no cwd probe protects it. Remove
+        # the supplied worktree first, then another, then check common locks.
+        code, out = self.hygiene("--apply", "--clear-locks", repo=first)
+
+        self.assertEqual(code, 0, out)
+        for path in (first, second):
+            self.assertEqual(self.line_for(out, path)[0], "removed", out)
+            self.assertFalse(path.exists())
+        self.assertFalse(lock.exists())
+        self.assertIn(f"cleared {lock}", out)
+        self.assertTrue(self.repo.exists())
+        self.assertIn("feat/a", run(self.repo, "branch", "--list", "feat/a"))
+        self.assertIn("feat/z", run(self.repo, "branch", "--list", "feat/z"))
+
     def test_fresh_branch_at_main_is_not_a_candidate(self):
         path = self.worktree("wt-fresh", "feat/fresh")
         _, out = self.hygiene()
         action, line = self.line_for(out, path)
         self.assertEqual(action, "skip")
         self.assertIn("no commits of its own", line)
+
+    def test_head_base_uses_the_supplied_worktree(self):
+        first = self.merged_worktree("wt-a", "feat/a")
+        second = self.merged_worktree("wt-z", "feat/z")
+
+        # Both branches are merged into the main worktree's HEAD, but neither
+        # is finished relative to the first linked worktree's HEAD.
+        code, out = self.hygiene("--apply", "--base", "HEAD", repo=first)
+
+        self.assertEqual(code, 0, out)
+        for path in (first, second):
+            self.assertEqual(self.line_for(out, path)[0], "skip", out)
+            self.assertTrue(path.exists())
 
     def test_detached_worktree_at_main_is_not_a_candidate(self):
         path = self.worktree("wt-detached")
