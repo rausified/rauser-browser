@@ -463,6 +463,15 @@ test("on Windows the page hides its search and filter controls", async () => {
   assert.equal(page.el("tasks-controls").hidden, true);
 });
 
+test("panel.css hides a hidden .tasks-controls despite its display rule", async () => {
+  // `.tasks-page .tasks-controls { display: flex }` outranks Chrome's
+  // [hidden] style, so the controls need their own rule or the Windows
+  // hide above hides nothing on screen.
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("../../panel.css", import.meta.url), "utf8");
+  assert.match(css, /\.tasks-page \.tasks-controls\[hidden\][^{]*\{\s*display:\s*none;/);
+});
+
 test("the page says so when there are no tasks", async () => {
   const page = await openTasks({ runs: [] });
   await until(() => page.el("tasks-empty").hidden === false, "the empty text");
