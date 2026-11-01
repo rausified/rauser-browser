@@ -639,6 +639,18 @@ missing-service, failed-launch and launch-timeout tests need the guard too.
 A boundary test that proves rejection without connecting but also verifies
 successful forwarding at the limit needs it for that forwarding step.
 
+`npm run test:adapter-diff -- --cases 5000` uses the same child-pipe probe
+before starting either engine. A denied pipe explicitly reports a skip and
+"no cases compared"; with `BRAUSER_REQUIRE_IPC_TESTS=1`, it exits 1 instead.
+Other probe failures fail, including a probe timeout. The child-pipe probe
+has a three-second timeout, and each engine batch has a 60-second timeout
+with a forceful kill; a stuck engine fails with its command, seed and batch
+indexes. These are process bounds for the test runner, independent of the
+production engines' evaluation-time checks. Successful runs still compare
+every result and report the generated case counts. Engine crashes, invalid
+JSON and incomplete result sets fail. Deterministic runner/probe regressions
+run in `npm run test:scripts`, including denial in required CI mode.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser
@@ -1162,3 +1174,14 @@ existing child-pipe IPC probe returned EPERM. The long run was interrupted
 and is not validation evidence. Follow-up `brwr-wg5` will identify the exact
 wait and bound the diagnostic; the required gate and engine vectors passed,
 and neither adapter engine changed here.
+
+2026-11-01 follow-up (`brwr-wg5`): an instrumented seed-1/case-0 run finished
+generation, then stalled inside `spawnSync` for `brauser adapters eval` with
+piped input/output; a three-second SIGKILL timeout returned ETIMEDOUT with
+no output. The Node engine and the shared child-pipe probe returned EPERM.
+The runner now probes before that call. Actual denial and simulated denial
+both returned an explicit skip in under a second; simulated denial with
+required IPC returned exit 1. A separate validation using regular files for
+child stdin/stdout exercises the real engines without those socketpairs;
+it is supplemental engine evidence, not a normal piped-runner pass. Normal
+piped comparisons remain CI/platform checks where IPC is allowed.
