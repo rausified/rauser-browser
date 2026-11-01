@@ -28,11 +28,13 @@ const el = (tag, ...children) => ({
 // `bodyText` as the body's innerText and `selection` as the user's selection.
 // `rendered` / `bodyRendered` false give the document element / body no
 // layout boxes (a display:none iframe; a display:none body), and `bodyNodes`
-// are the body's children. Without either option the fake has no
+// are the body's children. `rootText` is the rendered document root's
+// innerText, which still filters hidden children when the body has no box.
+// Without either option the fake has no
 // getClientRects, as in the older tests.
 function page({
   title = "Page title", article = null, articleTitle = "", bodyText = "", selection = "", href = PAGE_URL,
-  mainHeadings = [], rendered, bodyRendered = rendered, bodyNodes = [],
+  mainHeadings = [], rendered, bodyRendered = rendered, bodyNodes = [], rootText = bodyText,
 } = {}) {
   const seen = { clonedDeep: null, options: null, parsed: 0 };
   const rects = (shown) => (shown === undefined ? {} : { getClientRects: () => (shown ? [{ width: 1, height: 1 }] : []) });
@@ -40,7 +42,7 @@ function page({
   const document = {
     title,
     body,
-    documentElement: { ...rects(rendered) },
+    documentElement: { ...rects(rendered), innerText: rootText },
     querySelectorAll: () => mainHeadings,
     cloneNode(deep) {
       seen.clonedDeep = deep;
@@ -217,22 +219,36 @@ test("a frame that is not rendered contributes no content or selection", () => {
   assert.equal(run(article.scope).readable, false);
 });
 
-test("the body fallback never includes script, style, noscript or template text", () => {
-  // A rendered document whose body is not (display:none): innerText would
-  // return textContent, so the fallback walks the body without those.
+test("a display:contents body keeps the rendered root's visible-only innerText", () => {
+  // The body has no box, so its own innerText can return textContent.
+  // The root still has a box: its innerText excludes hidden descendants
+  // and non-rendered script/style/noscript/template text.
   const nodes = [
     el("p", "Visible ", el("script", "var leak = 1;"), "slide text"),
     el("style", ".leak { color: red }"),
     el("noscript", "Enable JavaScript leak"),
     el("template", el("p", "Template leak")),
     el("div", "Second block"),
+    el("div", "display:none leak"),
+    el("div", "[hidden] leak"),
   ];
   const leaky = nodes.map((node) => node.textContent).join("");
-  const { scope } = page({ title: "Deck", bodyText: leaky, bodyNodes: nodes, rendered: true, bodyRendered: false });
+  const visible = "Visible slide text\n\nSecond block";
+  const { scope } = page({
+    title: "Deck", bodyText: leaky, bodyNodes: nodes, rendered: true, bodyRendered: false, rootText: ` ${visible} `,
+  });
   const result = run(scope);
-  assert.equal(result.content, "Visible slide text\n\nSecond block");
+  assert.equal(result.content, visible);
   assert.doesNotMatch(result.content, /leak/i);
   assert.equal(result.readable, false);
+});
+
+test("a display:none body contributes no fallback content even when the root has a box", () => {
+  const { scope } = page({
+    bodyText: "Hidden body text", bodyNodes: [el("p", "Hidden body text"), el("script", TOKEN_SCRIPT)],
+    rendered: true, bodyRendered: false, rootText: "",
+  });
+  assert.equal(run(scope).content, "");
 });
 
 test("a rendered page's body fallback is still its innerText", () => {
@@ -563,6 +579,23 @@ test("a hidden script-only frame loses to a visible frame with short text", asyn
   // With no visible text anywhere, the hidden frame cannot make it readable.
   const alone = framesDeps(frames.slice(0, 2));
   await assert.rejects(readTab(TAB, alone.deps), (error) => error.code === "unreadable");
+});
+
+test("hidden descendants in a display:contents frame cannot outweigh visible frame text", async () => {
+  const visible = "Slide 1: Plan";
+  const hidden = "Hidden text ".repeat(1000);
+  const top = page({
+    title: "Deck.pptx", href: TAB.url, rendered: true, bodyRendered: false,
+    bodyText: `Menu ${hidden}`, rootText: "Menu", bodyNodes: [el("p", "Menu"), el("div", hidden)],
+  });
+  const slide = page({ bodyText: visible, rendered: true, href: "https://powerpoint.officeapps.live.com/p/editor" });
+  const { deps, requests } = framesDeps([
+    { frameId: 0, result: run(top.scope) },
+    { frameId: 4, result: run(slide.scope) },
+  ]);
+  await summarizeTab(TAB, deps);
+  assert.equal(requests[0].content, visible);
+  assert.doesNotMatch(requests[0].content, /Hidden text/);
 });
 
 test("a selection borrowed from another frame never pushes start_run past the cap", async () => {

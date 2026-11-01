@@ -140,6 +140,21 @@ title cases failed before the extractor preferred a unique main-page H1.
 These are local mocks; actual GitHub navigation and Chrome rendering remain
 macOS browser acceptance work.
 
+The fallback fixtures distinguish the body's `innerText` from the rendered
+document root's `innerText`. They cover a `display: contents` body with
+hidden/script/style/noscript/template descendants, a `display: none` body,
+and a non-rendered frame. An end-to-end mocked `summarizeTab` case ensures
+hidden bulk text cannot make the top frame displace a visible slide frame.
+These fixtures model browser-provided layout/text results; they do not run
+a CSS layout engine.
+
+`extension/tests/task-tracker.test.mjs` exercises the tracker directly with
+scripted host replies, deferred promises and mocked timers. It pins merged
+refreshes, a single polling timer, completion callbacks, off-page fetches,
+visibility and disposal. The Tasks page keyboard-focus regression triggers
+the existing hide/show refresh handler and waits for a rendered status pill
+or new row, so both focus assertions avoid racing the real polling interval.
+
 ## Panel status and artifact refresh coverage
 
 The built-panel tests assert adapter-based capture wording with zero and some

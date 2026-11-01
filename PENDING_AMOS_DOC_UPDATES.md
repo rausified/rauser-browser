@@ -232,3 +232,10 @@
 - **Brauser — Keep PR hygiene tests running after handoff edits (2026-11-01):** PR body edits now run Dev tools as well as PR owner validation, so canceling an earlier hygiene workflow cannot replace its Python test job with a skip. Uses the existing cancellation group; hosted event behavior was reviewed locally without a GitHub API call.
 
 - **Brauser — Complete cleanup from a removable linked worktree (2026-11-01):** Worktree hygiene now runs control commands from the main worktree, allowing --repo itself to be removed without breaking later removals or stale-lock checks. A failing-then-passing throwaway Git regression verifies both removals, preserved branches and common-lock cleanup; all 75 Python dev-tool tests pass.
+
+
+- **Brauser — Keep hidden text out of boxless-body extraction (2026-11-01):** No-article fallback now uses the rendered document root's `innerText` when the body has no box, preserving visibility filtering for `display: contents` and excluding hidden-body text. Extraction and mocked summary-entry regressions ensure hidden text cannot displace the visible document frame.
+
+- **Brauser — Verify task tracking directly (2026-11-01):** Seven dedicated unit tests pin merged refreshes, one poll timer, completion announcements, off-page completion fetches, visibility and disposal through deferred host replies and mocked timers. Included in the normal extension suite; runtime behavior is unchanged.
+
+- **Brauser — Remove the Tasks focus test's polling race (2026-11-01):** The regression now drives the existing visibility refresh and waits for rendered effects before checking retained-row and rebuilt-list focus. Ten isolated local repeat runs pass without depending on the two-second polling interval.
