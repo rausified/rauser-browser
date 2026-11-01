@@ -314,6 +314,56 @@ test("a stale revision after the AI run refuses as the structural flow does", as
   assert.equal(page.el("capture-site-improve").disabled, true);
 });
 
+test("a settings change cancels a queued or running AI draft and keeps the review stale", async () => {
+  for (const state of ["queued", "running"]) {
+    const page = await agentReview(WIKI_URL, {
+      start: () => ({ type: "run_started", run: siteRun({ state }), existing: false }),
+      fetch: () => ({ type: "run_fetched", run: siteRun({ state }), stream_text: "", next_offset: 0, more: false }),
+    });
+    page.el("capture-site-improve").click();
+    await until(() => page.el("capture-site-agent-run").children.length > 0, "the AI run");
+    page.state.revision = "2";
+    page.policyChanged();
+    await until(() => page.el("capture-site-message").textContent.includes("Settings changed"), "the stale review");
+    await until(() => page.sent("cancel_run").length === 1, "the stale run to cancel");
+    assert.equal(page.sent("cancel_run")[0].run_id, SITE_RUN_ID);
+    assert.equal(page.el("capture-site-agent-run").children.length, 0);
+    assert.equal(page.el("capture-site-save").disabled, true);
+    assert.equal(page.el("capture-site-improve").disabled, true);
+    // Repeated refreshes and closing must not cancel or judge it again.
+    page.policyChanged();
+    await settle(20);
+    page.el("capture-site-cancel").click();
+    await settle(20);
+    assert.equal(page.sent("cancel_run").length, 1);
+    assert.equal(judged(page).length, 0);
+    assert.equal(updates(page).length, 0);
+  }
+});
+
+test("an AI start that answers after settings changed is canceled without mounting or judging", async () => {
+  for (const existing of [false, true]) {
+    let answer;
+    const held = new Promise((resolve) => { answer = resolve; });
+    const page = await agentReview(WIKI_URL, { start: () => held });
+    page.el("capture-site-improve").click();
+    await until(() => page.sent("start_site_draft").length === 1, "the pending start");
+    page.state.revision = "2";
+    page.policyChanged();
+    await until(() => page.el("capture-site-message").textContent.includes("Settings changed"), "the stale review");
+    assert.equal(page.sent("cancel_run").length, 0, "the run id is not known yet");
+    answer({ type: "run_started", run: siteRun(), existing });
+    await until(() => page.sent("cancel_run").length === 1, "the late run to cancel");
+    await settle(20);
+    assert.equal(page.sent("cancel_run")[0].run_id, SITE_RUN_ID);
+    assert.equal(page.el("capture-site-agent-run").children.length, 0);
+    assert.equal(page.sent("get_run").filter((request) => request.run_id === SITE_RUN_ID).length, 0);
+    assert.equal(judged(page).length, 0);
+    assert.equal(page.el("capture-site-save").disabled, true);
+    assert.match(page.el("capture-site-message").textContent, /Settings changed/);
+  }
+});
+
 test("closing the review cancels an unfinished AI run and discards its shapes", async () => {
   const running = { fetch: (request) => ({ type: "run_fetched", run: siteRun({ run_id: request.run_id }), stream_text: "", next_offset: 0, more: false }) };
   for (const close of [

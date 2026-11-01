@@ -43,3 +43,4 @@ BOSUN_FEATURE_BACKLOG.md.bak-*
 
 # Python bytecode from scripts/ (render_backlog.py and its tests)
 __pycache__/
+.wardroom/

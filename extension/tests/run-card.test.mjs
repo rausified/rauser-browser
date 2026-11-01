@@ -1044,6 +1044,48 @@ test("summary restore asks list_runs for kind summary, and clears runsMayExist o
   kept.dispose();
 });
 
+test("summary restore retries an older host without kind and filters its mixed list", async () => {
+  const summary = view({ state: "succeeded", finished_at: new Date(NOW).toISOString() });
+  const page = restoreSetup({
+    reply: (request) => {
+      if (request.type === "list_runs") {
+        if (request.kind) return new HostError("invalid_request", "invalid or unsupported request JSON");
+        return { type: "runs_listed", runs: [
+          { ...summary, run_id: "task", kind: "task" },
+          { ...summary, run_id: "draft", kind: "site_draft" },
+          summary,
+        ] };
+      }
+      if (request.type === "get_run") return { type: "run_fetched", run: summary, stream_text: "", next_offset: 0, more: false };
+      return null;
+    },
+  });
+  await markRunsMayExist(page.storage, NOW - 1);
+  await page.restore();
+  await settle();
+  assert.equal(page.sent("list_runs").length, 2);
+  const [filtered, legacy] = page.sent("list_runs");
+  assert.equal(filtered.kind, "summary");
+  assert.equal("kind" in legacy, false);
+  assert.equal("before" in legacy, false);
+  assert.notEqual(legacy.request_id, filtered.request_id);
+  assert.equal(cards(page.summaryArea).length, 1);
+  assert.equal(page.summaryArea.textContent.includes("Rebuild"), false);
+  assert.equal(page.noticeArea.textContent, "");
+  assert.equal(await runsMayExist(page.storage), true);
+  page.dispose();
+});
+
+test("summary restore does not retry other invalid requests", async () => {
+  const page = restoreSetup({
+    reply: () => new HostError("invalid_request", "The cursor is invalid."),
+  });
+  await page.restore();
+  assert.equal(page.sent("list_runs").length, 1);
+  assert.match(page.noticeArea.textContent, /The cursor is invalid/);
+  page.dispose();
+});
+
 test("restoreRunCards shows one neutral notice in the named area when listing fails", async () => {
   const message = "The Brauser service did not answer.";
   let failure = new HostError("service_unavailable", message);
@@ -1070,9 +1112,11 @@ test("restoreRunCards shows one neutral notice in the named area when listing fa
   assert.equal(page.summaryArea.textContent, "");
   assert.ok(!buttonTexts(page.noticeArea).includes("Open settings"));
 
-  // An older host refuses the kind field: it needs rebuilding.
+  // Both the filtered and legacy requests fail: one rebuild notice remains.
   failure = new HostError("invalid_request", "invalid or unsupported request JSON");
+  const beforeLegacy = page.sent("list_runs").length;
   await page.restore();
+  assert.equal(page.sent("list_runs").length - beforeLegacy, 2);
   assert.equal(notices(page.noticeArea).length, 1);
   // The summary restore's own words: it restores agent runs, not task history.
   assert.equal(page.noticeArea.textContent, "Rebuild the Brauser host to restore agent runs.");

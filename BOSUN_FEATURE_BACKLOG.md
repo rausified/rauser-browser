@@ -62,122 +62,6 @@ Their line numbers predate step 6.6, so re-check them.
 ## Known Issues (Blocking Deploy)
 
 <!-- BEGIN GENERATED section=known show-closed: edit the beads, then run python3 scripts/render_backlog.py -->
-- [x] `brwr-7yp` **Adapter removal refused when two adapters share origin and type.**
-  `validate_adapter_transition` (host/src/config.rs ~1254) checks each old
-  adapter against a surviving sibling's id. Two `work.issue` adapters on one
-  origin (`/issues` id X, `/tickets` id Y): removing the second fails with a
-  misleading "id template ... cannot change" error. The same happens when
-  `adaptersForSites` drops only one of the pair. Fixed by comparing counted ID
-  template sets per origin and type, with a regression that preserves real ID
-  replacement refusal.
-- [x] `brwr-drp` **The id-template freeze can be bypassed** (host/src/config.rs ~1234).
-  Removals are never checked and identity is (origin, type). So you can remove
-  `jira.issue` and later re-add it with a new id, or change type and id in one
-  edit, and either way existing artifact records are orphaned. That
-  contradicts the doc comment's "impossible for a config edit to orphan
-  activity". Decide the intended rule (for example, remember retired ids per
-  origin), then enforce it. Fixed with host-owned durable recognition/ID
-  contracts: overlapping routes cannot return under a new ID or type, while
-  the original ID and genuinely disjoint routes remain available.
-- [x] `brwr-rhg` **No repair path while `adapter_issue` is set** (host/src/consent.rs
-  ~336, extension/options.ts ~161 and ~517). Every write that echoes the stored
-  adapter document fails full `validate()`. That includes harness setup,
-  denylist, and folder changes, and the UI disables every adapter control and
-  refuses format != 1. This breaks the "notes and AI settings remain usable
-  during adapter repair" contract. Non-adapter writes must succeed, and the UI
-  needs a way to replace or remove the bad document. Fixed by allowing only an
-  exact invalid-document echo for unrelated writes, keeping those controls and
-  Pause usable, and offering a revisioned remove-all repair that stays
-  fail-closed until the host re-reports a valid policy.
-- [x] `brwr-99f` **Adapter editor keys on a stale array index.** Fixed by
-  retaining the opened adapter's identity and canonical structural snapshot:
-  external reorders follow the same target, while a changed, removed, or
-  ambiguous target disables Save and keeps the newer config intact.
-- [x] `brwr-xsq` **Removing an adapter or site re-confirms every later adapter**
-  (host/src/consent.rs ~808, `approval_lines`). An index shift reads as a
-  policy change, so revoking one site asks for "Enable or change ..." plus the
-  every-account disclosure for each later unscoped adapter. With ~29 or more
-  unscoped adapters it passes the 8192-byte cap and refuses the removal. That
-  contradicts DESIGN "Removing or narrowing them takes effect immediately".
-  Fixed by matching survivors on `(origin, type, id)` and separately checking
-  relative order, so deletion shifts are immediate while real precedence
-  reorders still require confirmation.
-- [x] `brwr-uc0` **Invalid adapter policy discards recognized visits for good**
-  (host/src/native.rs ~534). `adapter_policy_invalid` returns terminal
-  Suppressed, while `config_issue` returns retryable. Visits recognized under
-  a valid lease are lost during a transient fault. Fixed across legacy visits,
-  single activity delivery, and current mixed batches: an invalid adapter
-  document now returns retryable for every capture event and leaves batch
-  overflow evidence pending, while an intentional Pause remains terminal.
-- [x] `brwr-4kh` **Chrome revocations not written back while `adapter_issue` is set**
-  (extension/settings.ts ~317; `removeSite` in options.ts).
-  `reconcileRevocations` throws, so the host keeps a revoked origin
-  allowlisted. Revocations must always narrow host policy. Fixed by committing
-  the narrower site and capture policy while preserving an invalid/future
-  adapter document exactly and suspended for explicit repair.
-- [x] `brwr-flu` **Full adapter compile on every navigation** (extension/model.ts ~153).
-  `isPolicyLease` runs `validateDocument` on every `readPolicy`, including the
-  never-enabled-site fast path, and `matchingArtifact` stringifies the document
-  for its cache key on every call. Fixed with a revision-keyed compiled-policy
-  cache: stored leases compile once per worker revision, matching does no
-  adapter serialization, every non-expired untrusted install still validates
-  afresh, and an expired install cannot alter the active revision's matcher.
-- [x] `brwr-mwg` **Quadratic overlap scan on every host refresh** (host/src/config.rs
-  ~950, ~1226). `read_disk_state` computes `overlap_report` on every Hello,
-  GetConfig, LoadNote, SaveNote, and RecordVisit, and `adapter_matches`
-  recompiles. Compute warnings only for GetConfig and post-commit, and reuse
-  one compiled Document per revision. Fixed by keeping one validated Rust
-  document on `ConfigStore` for each on-disk revision, reusing it across all
-  event evidence checks, and running the pairwise warning scan only for
-  settings reads or immediately after a successful commit.
-- [x] `brwr-7sb` **AGENTS.md "Current state" is stale.** It says the worker lease, the
-  TypeScript prefilter, and host recognition are unbuilt, but they shipped.
-  Fixed by aligning AGENTS.md, README.md, and DESIGN.md with the shipped lease,
-  defense-in-depth recognition, and hourly activity boundary, protected by a
-  whitespace-tolerant CI documentation regression.
-- [x] `brwr-5fg` Smaller ones from the same review:
-  - In `setStarterButtonState` (options.ts), `offer?.adapter !== null` is true
-    when `offer` is null.
-  - `hasAdapter` (starter-adapters.ts) can't see an existing GitHub adapter
-    until an org scope is typed.
-  - `StoredAdapters` uses `deny_unknown_fields`, so a newer `[adapters]` key
-    makes the whole config unreadable (backup-and-rewrite) instead of just
-    suspending adapter policy.
-  Fixed all three: starter availability now requires a real draft, installed
-  GitHub types are detected without typed scope, and future adapter-table keys
-  are preserved host-side as an adapter-only issue with explicit reset repair.
-- [x] `brwr-rto` **Restrict trail transitions to browser values.** Confirmed
-  the gap with a failing native-delivery regression, added the allowlist plus
-  `forward_back`, and retained older bounded activity without deriving unknown
-  edges. Both single and batch delivery terminally reject invented values.
-- [x] `brwr-1fo` **Bidi and zero-width characters spoof log rows.**
-  `safe_markdown_line` strips control chars but not Unicode format chars
-  (U+202E, U+200B–U+200F, U+2066–U+2069, U+FEFF), so a hostile title can
-  visually disguise an entry. Step 6.6's artifact renderer
-  (`index.rs::safe_markdown`) has the same gap. Cover both with one shared
-  sanitizer. Fixed with a shared bounded presentation sanitizer for both
-  delivery paths, YAML artifact titles, Markdown context, and plain worklogs;
-  exact encoded payloads and source logs survive regeneration unchanged.
-- [x] `brwr-992` **Activity checks are duplicated across delivery paths.**
-  Confirmed duplication and made single delivery reuse `check_activity_policy`.
-  No current behavioral divergence reproduced: 13-scenario parity passes both
-  before and after consolidation, with explicit policy outcomes and real writes.
-- [x] `brwr-ee5` **Recover missing index ingestion from durable logs.**
-  Reproduced the missing-B failure and fixed it with bounded per-file log
-  checkpoints checked before delivery and query use, including after restart.
-  Durable capture stays acknowledged during cache failure; history APIs report
-  unavailable until catch-up and publication succeed. Unchanged logs are skipped,
-  partial trailing markers are revisited, and old caches rebuild automatically.
-- [x] `brwr-ezb` **Keep artifact notes reachable after adapter or site removal.**
-  Verified native save/revisioned removal/load across adapter removal, rule
-  narrowing and site removal; recovered notes retain separate older URL notes
-  on all recorded routes, including mode and context-only evidence. Cache
-  deletion/reindex, stale keys and versions, ambiguity and capture suppression
-  pass without automatic merges or overwrites.
-- [x] `brwr-t61` **Refuse incomplete note scans before selecting an autosave target.**
-  Discovered during the removal review: primary recovery now refuses truncated,
-  oversized or unreadable candidate sets. Four injected scan faults preserve
-  note bytes and recover after cleanup; optional older-note lists stay usable.
 <!-- END GENERATED section=known -->
 - **Standing rule (not a task): keep the smoke runner's dialog count right.**
   When a change adds or removes a scripted dialog or smoke step, update the
@@ -219,40 +103,11 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
 <!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental
-  real-SQLite index.** Step 6.6 shipped a custom SQLite file writer
-  (`build_sqlite`) because the sandbox can't fetch crates. Every delivery
-  re-derives all history, rewrites a whole-history `index-state.json` (64 MiB
-  cap), and rewrites all of `index.db`. Move to `rusqlite` (bundled) with
-  incremental upserts in transactions, keeping the log authoritative and
-  `brauser reindex` as the rebuild. This is required for M3 FTS5. It is
-  blocked on **[human]** `brwr-mff`, which adds the crate outside the sandbox.
-- [ ] `brwr-mff` **[human] Add `rusqlite` (bundled) to the workspace and warm
-  the VM's cargo cache.** Update `Cargo.toml` and `Cargo.lock`, pass
-  `cargo deny`, and run `cargo fetch` on the VM so in-sandbox builds work
-  offline.
-- [ ] `brwr-7vf` **index.db across concurrent host processes.** The panel,
-  settings, and every worker sync each start a host, so `index.db` gets
-  several openers at once. Use WAL, a busy timeout, and one writer at a time
-  for index updates and dirty-set regeneration. Test concurrent hosts with no
-  surfaced `SQLITE_BUSY`, no lost or duplicated rows, and no double
-  regeneration. **Dependency-blocked:** `brwr-b2e` first requires human
-  `brwr-mff`; bundled `rusqlite` is still absent from the manifest, lockfile,
-  and local crate cache as of `5fb15210` (2026-10-28).
-- [ ] `brwr-5yn` **[human] M1.5a step 6.8 — Certify the three starter adapters.** Check
-  the Jira, SharePoint/OneDrive, and GitHub drafts against each live tool and
-  record the date in `docs/adapters/`. Needs John on macOS with real accounts;
-  Cookie must not change the "development draft" label or mark 6.8 done.
 - [ ] `brwr-hq8` **Plan re-learning impact before migrating identities.**
   Next prerequisite of `brwr-6x2`: derive a revision-bound plan from recorded
   evidence; report splits, merges and key reuse, reject insufficient query
   provenance, and inspect existing notes/summaries without changing them.
   The offline rehearsal is complete; durable apply remains later.
-- [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** After
-  Windows CI, record an isolated real-Chrome run with source and OS/browser
-  versions, native registration, the folder picker, standing HTTP(S) access,
-  background capture, Pause, notes, Recent/worklog and later Capture Site.
-  Windows remains unvalidated until its own acceptance is recorded.
 <!-- END GENERATED section=plan -->
 
 ### Gated plan work (do not start yet)
@@ -264,12 +119,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   7.2 (`brwr-6x2`). DESIGN.md gates the rest on M1.5a being in daily use for
   a few weeks; John will lift the gate here when it's time.
 <!-- BEGIN GENERATED section=gated: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-ooy` **Windows equivalent of the Brauser service (deferred).** The
-  cleared-environment harness lockdown it described is superseded by open
-  access. Agent runs live in the macOS-only Brauser service, which compiles
-  out elsewhere; the spec defers a Windows service. When Windows agent support
-  is scheduled, John approves a Windows design against the spec first.
-- [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
 <!-- END GENERATED section=gated -->
 - **M3 — Related** (FTS5 in `brauser reindex`, related pages, read later),
   **M4 — Omnibar** (built-in commands, free text, custom commands), and
@@ -279,28 +128,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 ### Focused quality follow-up
 
 <!-- BEGIN GENERATED section=quality: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-rl2` **list_runs: site-draft runs can push summary runs out of
-  the restore window.** Filter by kind before LIST_LIMIT, or reserve summary
-  slots (Codex review of #170).
-- [ ] `brwr-sdc` **Capture Site: cancel a running AI draft when the review
-  goes stale.** A config change elsewhere leaves the run using a harness slot
-  for a result the revision check will refuse (Codex review of #170).
-- [ ] `brwr-x0d` **Share list or run-card text rendering when a second consumer needs it.**
-  Step 6.7 shipped and Recent, the worklog and the artifact card did so
-  without a shared helper. Open access runs are polled through `get_run`
-  (spec §5.3), not streamed, so any text helper is an append of polled
-  run-card text. Keep this P3: extract a small framework-free primitive only
-  when Capture Site or the open access PR 3 run card repeats rendering the
-  panel already has; do not rewrite shipped views solely to create an
-  abstraction. Close it as not needed if no second consumer appears by PR 3.
-- [ ] `brwr-o1l` **Share one authorize-and-open path across delivery entry
-  points.** `record_visit`, `record_activity`, and `record_batch` repeat the
-  lock, refresh, policy, and store setup, and `capture.rs` has twin
-  mode/trail authorization loops. Extract the shared steps and set a removal
-  release for the legacy paths.
-- [ ] `brwr-ppn` **Curate a worklog before copying.** Select artifact-day rows
-  and preview the exact text to share without altering measured activity;
-  preserve selections across refreshes. This remains behind the ordered plan.
 <!-- END GENERATED section=quality -->
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
@@ -328,17 +155,6 @@ strip_params note-identity follow-up has shipped (see Shipped).
   (`brwr-6x2`) with a deliberate review that retains notes and considers
   intervening repository-only capture; never relax the freeze or infer a
   primary key from a canonical address.
-- [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Let a
-  person start and end one explicit local session from the panel so a Jira
-  issue, design document, and pull request can appear together under the
-  reason they were opened. Carry the stable session through worker restarts
-  and measured activity into the append-only log and derived worklog; never
-  infer a session from browsing or send it to a service. This should build on
-  the artifact card and worklog after M1.5a rather than delay those foundations.
-- [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The immediate repair
-  path removes the entire invalid document. Add copy-out and a whole-document,
-  format-1 replacement workspace so a user can salvage valid rules without
-  asking an older build to interpret or migrate an unsupported future format.
 <!-- END GENERATED section=proposals -->
 
 ### Task bar follow-ups
@@ -347,7 +163,6 @@ Follow-ups filed with the task bar (DESIGN.md §4.5, §5.6). They wait behind
 the plan work above.
 
 <!-- BEGIN GENERATED section=task-bar: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-67i` **list_runs: per-kind listing so one kind cannot crowd the other out of restore.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 32). host/src/service/supervisor.rs list_runs returns every active run, then fills the rest of LIST_LIMIT (20) with the newest finished runs of any kind. A burst of newer finished tasks (or… _(P2; labels: task-bar)_
 - [ ] `brwr-8qm` **Task completion notifications when the panel is closed.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decisions 21 and 26). Today a finished task announces itself only through #task-announce while the panel is open. Seam: the notifications permission in extension/manifest.json (a new permission, so it needs… _(P3; labels: task-bar)_
 - [ ] `brwr-cdq` **Omnibar: slash commands and custom [[commands]] config.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26; DESIGN.md §5.6). The task bar built the Omnibar's free-text row only. Slash commands (for example /summarize) and user-defined [[commands]] in config.toml are still not built. Seam: the… _(P3; labels: task-bar)_
 - [ ] `brwr-h1g` **Task history view.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). The panel restores only active tasks plus the 5 newest finished in 24 h (restorable in extension/run-card.ts); older tasks have no view. Seam: ListRunsRequest.kind (shared with the per-kind… _(P3; labels: task-bar)_
@@ -367,25 +182,37 @@ Live beads with no `backlog_section` (for example discovered work filed with
 queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-h7p` **PR hygiene: body edits can cancel the Dev tools run.** Codex review P2 on PR #183 (.github/workflows/pr-hygiene.yml:15). The workflow's concurrency group cancels an in-progress opened/synchronize run when the PR body is edited, and the replacement 'edited' run skips the dev-tools job (if: github.event.action != 'edited'). A quick… _(P2; labels: codex-review, dev-tools)_
-- [ ] `brwr-h7q` **worktree-hygiene: keep a stable control worktree during removals.** Codex review P2 on PR #183 (scripts/dev/worktree-hygiene, main(): git(repo, 'worktree', 'remove', ...)). When --repo names a removable linked worktree and the tool runs from elsewhere, removing that worktree deletes the directory used for every later git -C call, so later… _(P2; labels: codex-review, dev-tools)_
-- [ ] `brwr-dc7` **Extractor: keep visibility filtering when body has no box (display: contents).** Codex review of PR #186 (P2). extension/extract.ts: when document.body has no client rect, the fallback walks a script-stripped clone instead of innerText. A page with body { display: contents } has no body rect but renders its children, so this path ignores display:none /… _(P2; labels: extraction, task-bar)_
-- [ ] `brwr-z4j` **TaskTracker unit tests for refresh/track/finished behavior.** TaskTracker unit tests (extension/task-tracker.ts): two refresh() calls while one is in flight give two lists, not three; repeated refreshes leave one pending timer; track() + a terminal list give one finished(). (P2: the tracker is the panel's only source of finish… _(P2; labels: task-tracker, tasks-page)_
-- [ ] `brwr-b2p` **Flaky test: "the list keeps keyboard focus across a refresh" timed out on macos-15 CI.** Flaky test: tasks-page "the list keeps keyboard focus across a refresh" timed out (4044 ms) on macos-15 CI on PR #181 (step 'Run extension worker tests'); it passed on Windows, and #181 doesn't touch extension code. The test waits on the page's real 2000 ms poll through… _(P2; labels: flaky, tasks-page, tests)_
-- [ ] `brwr-f85` **bd: hydrate local DB from issues.jsonl before create to prevent ID collisions with closed rows.** The local bd DB must be hydrated from .beads/issues.jsonl before `bd create` (`bd import` with the updated_at guard), so new IDs can't collide with closed rows. scripts/check_queue_consistency.py should fail on duplicate IDs. Seen during PR #189, where `bd create` reused closed… _(P2; labels: beads, dev-tools)_
-- [ ] `brwr-jlz` **TaskTracker: guard against double-announcing a finish.** TaskTracker: a stale track() after an announce can announce a finish twice. Guard it with a Set of run ids already reported. _(P3; labels: task-tracker, tasks-page)_
-- [ ] `brwr-2p0` **TaskTracker: a failed refresh drops a merged "again" request.** TaskTracker: a failed refresh drops a merged `again` request. _(P3; labels: task-tracker, tasks-page)_
-- [ ] `brwr-7u4` **TaskTracker: add backoff after consecutive poll failures.** TaskTracker: no backoff. It polls every 2 s indefinitely against a failing host while a run is watched; stop after N consecutive failures. _(P3; labels: task-tracker, tasks-page)_
-- [ ] `brwr-4r1` **Panel: re-show trackerError after a worker-notice restore.** Panel: a worker-notice restore (showNotice -> restoreCards) can clear the tracker's failure notice; re-show trackerError after it. _(P3; labels: panel, tasks-page)_
-- [ ] `brwr-ug2` **TaskTracker: remove the unused now dependency.** TaskTracker: the `now` dependency is unused. _(P3; labels: task-tracker, tasks-page)_
-- [ ] `brwr-um4` **Tasks page: a hashchange during an in-flight refresh can miss a just-started run.** Tasks page: a hashchange during an in-flight refresh can miss a just-started run. The select signal mostly covers this. _(P3; labels: tasks-page)_
+- [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
+- [ ] `brwr-5yn` **[human] M1.5a step 6.8: certify the three starter adapters.** Check the Jira, SharePoint/OneDrive and GitHub drafts against each live tool and record the date in docs/adapters/. Needs John on macOS with real accounts; Cookie must not change the 'development draft' label or mark 6.8 done. _(P2; labels: human)_
+- [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2)_
+- [ ] `brwr-mff` **[human] Add rusqlite (bundled) to the workspace and warm the VM cargo cache.** Cookie's codex sandbox cannot fetch crates, so step 6.6 hand-wrote a SQLite file writer instead of using a library. Outside the sandbox: add rusqlite with the bundled feature to host/Cargo.toml, update Cargo.lock, pass cargo deny check --all-features --locked (license… _(P2; labels: human)_
+- [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
+- [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
+- [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
+- [ ] `brwr-h7p` **PR hygiene: body edits can cancel the Dev tools run.** Codex review P2 on PR #183 (.github/workflows/pr-hygiene.yml:15). The workflow's concurrency group cancels an in-progress opened/synchronize run when the PR body is edited, and the replacement 'edited' run skips the dev-tools job (if: github.event.action != 'edited'). A quick… _(P2; labels: assigned, codex-review, dev-tools)_
+- [ ] `brwr-h7q` **worktree-hygiene: keep a stable control worktree during removals.** Codex review P2 on PR #183 (scripts/dev/worktree-hygiene, main(): git(repo, 'worktree', 'remove', ...)). When --repo names a removable linked worktree and the tool runs from elsewhere, removing that worktree deletes the directory used for every later git -C call, so later… _(P2; labels: assigned, codex-review, dev-tools)_
+- [ ] `brwr-dc7` **Extractor: keep visibility filtering when body has no box (display: contents).** Codex review of PR #186 (P2). extension/extract.ts: when document.body has no client rect, the fallback walks a script-stripped clone instead of innerText. A page with body { display: contents } has no body rect but renders its children, so this path ignores display:none /… _(P2; labels: assigned, extraction, task-bar)_
+- [ ] `brwr-z4j` **TaskTracker unit tests for refresh/track/finished behavior.** TaskTracker unit tests (extension/task-tracker.ts): two refresh() calls while one is in flight give two lists, not three; repeated refreshes leave one pending timer; track() + a terminal list give one finished(). (P2: the tracker is the panel's only source of finish… _(P2; labels: assigned, task-tracker, tasks-page)_
+- [ ] `brwr-b2p` **Flaky test: "the list keeps keyboard focus across a refresh" timed out on macos-15 CI.** Flaky test: tasks-page "the list keeps keyboard focus across a refresh" timed out (4044 ms) on macos-15 CI on PR #181 (step 'Run extension worker tests'); it passed on Windows, and #181 doesn't touch extension code. The test waits on the page's real 2000 ms poll through… _(P2; labels: assigned, flaky, tasks-page, tests)_
+- [ ] `brwr-f85` **bd: hydrate local DB from issues.jsonl before create to prevent ID collisions with closed rows.** The local bd DB must be hydrated from .beads/issues.jsonl before `bd create` (`bd import` with the updated_at guard), so new IDs can't collide with closed rows. scripts/check_queue_consistency.py should fail on duplicate IDs. Seen during PR #189, where `bd create` reused closed… _(P2; labels: assigned, beads, dev-tools)_
+- [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
+- [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
+- [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
+- [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
+- [ ] `brwr-ppn` **Curate a worklog before copying it.** Recent and the native worklog make captured work visible, but copying a day or week currently includes every recorded artifact. Let a person prepare a concise update by selecting the artifact-day rows they want to share and previewing the result, without altering measured… _(P3)_
+- [ ] `brwr-jlz` **TaskTracker: guard against double-announcing a finish.** TaskTracker: a stale track() after an announce can announce a finish twice. Guard it with a Set of run ids already reported. _(P3; labels: assigned, task-tracker, tasks-page)_
+- [ ] `brwr-2p0` **TaskTracker: a failed refresh drops a merged "again" request.** TaskTracker: a failed refresh drops a merged `again` request. _(P3; labels: assigned, task-tracker, tasks-page)_
+- [ ] `brwr-7u4` **TaskTracker: add backoff after consecutive poll failures.** TaskTracker: no backoff. It polls every 2 s indefinitely against a failing host while a run is watched; stop after N consecutive failures. _(P3; labels: assigned, task-tracker, tasks-page)_
+- [ ] `brwr-4r1` **Panel: re-show trackerError after a worker-notice restore.** Panel: a worker-notice restore (showNotice -> restoreCards) can clear the tracker's failure notice; re-show trackerError after it. _(P3; labels: assigned, panel, tasks-page)_
+- [ ] `brwr-ug2` **TaskTracker: remove the unused now dependency.** TaskTracker: the `now` dependency is unused. _(P3; labels: assigned, task-tracker, tasks-page)_
+- [ ] `brwr-um4` **Tasks page: a hashchange during an in-flight refresh can miss a just-started run.** Tasks page: a hashchange during an in-flight refresh can miss a just-started run. The select signal mostly covers this. _(P3; labels: assigned, tasks-page)_
 - [ ] `brwr-64i` **Tasks page (Windows): hide .tasks-controls when search/filter/dismissed controls should be hidden.** Tasks page on Windows: the search, filter and Show dismissed controls are still visible; hide .tasks-controls. _(P3; labels: needs-windows, tasks-page, windows)_
-- [ ] `brwr-jzs` **tasks-page tests: avoid the 2.3s real-time wait and add an overlapping-refresh test.** tasks-page tests: the hidden-polling test waits 2.3 s of real time, and there is no overlapping-refresh test. _(P3; labels: tasks-page, tests)_
-- [ ] `brwr-90b` **Panel/page: dismissWrites queue can lose an id on simultaneous dismissals.** Panel/page: the dismissWrites queue covers one document only, so simultaneous dismissals from the panel and the Tasks page can lose one id. _(P3; labels: panel, tasks-page)_
-- [ ] `brwr-3wh` **Protocol test: use schema_subset::valid for the unknown_kind check.** Protocol test: the unknown_kind check uses serde instead of schema_subset::valid. _(P3; labels: protocol, tests)_
-- [ ] `brwr-3pv` **task-bar test: strengthen the sidePanel.open-fails fallback test.** task-bar test: the fallback test (sidePanel.open fails, so window_id is null) would pass on pre-Task-7 code alone; strengthen it. _(P3; labels: task-bar, tests)_
-- [ ] `brwr-sm8` **Tasks page: run off-page get_run fetches in refresh() in parallel.** Tasks page: off-page get_run fetches in refresh() run sequentially; consider running them in parallel. _(P3; labels: performance, tasks-page)_
-- [ ] `brwr-0at` **Protocol: tighten the RunCursor.created_at bound to match the RFC 3339 fields.** Protocol: the RunCursor.created_at bound (1..64) is looser than the RFC 3339 fields. _(P3; labels: protocol)_
+- [ ] `brwr-jzs` **tasks-page tests: avoid the 2.3s real-time wait and add an overlapping-refresh test.** tasks-page tests: the hidden-polling test waits 2.3 s of real time, and there is no overlapping-refresh test. _(P3; labels: assigned, tasks-page, tests)_
+- [ ] `brwr-90b` **Panel/page: dismissWrites queue can lose an id on simultaneous dismissals.** Panel/page: the dismissWrites queue covers one document only, so simultaneous dismissals from the panel and the Tasks page can lose one id. _(P3; labels: assigned, panel, tasks-page)_
+- [ ] `brwr-3wh` **Protocol test: use schema_subset::valid for the unknown_kind check.** Protocol test: the unknown_kind check uses serde instead of schema_subset::valid. _(P3; labels: assigned, protocol, tests)_
+- [ ] `brwr-3pv` **task-bar test: strengthen the sidePanel.open-fails fallback test.** task-bar test: the fallback test (sidePanel.open fails, so window_id is null) would pass on pre-Task-7 code alone; strengthen it. _(P3; labels: assigned, task-bar, tests)_
+- [ ] `brwr-sm8` **Tasks page: run off-page get_run fetches in refresh() in parallel.** Tasks page: off-page get_run fetches in refresh() run sequentially; consider running them in parallel. _(P3; labels: assigned, performance, tasks-page)_
+- [ ] `brwr-0at` **Protocol: tighten the RunCursor.created_at bound to match the RFC 3339 fields.** Protocol: the RunCursor.created_at bound (1..64) is looser than the RFC 3339 fields. _(P3; labels: assigned, protocol)_
 <!-- END GENERATED section=new -->
 
 ## In Progress / This Iteration
@@ -425,6 +252,12 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Cancel AI drafts when their review becomes stale (2026-11-01).** A settings change now detaches and cancels queued or running Capture Site AI drafts while retaining the stale message and disabled save. Late start answers, including rejoined runs for the still-open review, are canceled before mounting or judgment; repeated refresh and close do not cancel twice. **Metrics:** 20 Capture Site agent panel tests (+2); full gate green.
+
+- **Category:** Bug Fix. **Keep summary restoration compatible across run-list versions (2026-11-01).** Replaced the obsolete crowding test with per-kind regressions in both summary/task directions. Summary restoration retries once without kind only when an older host explicitly rejects the field; local filtering excludes tasks and site drafts. Older hosts retain their shared window until rebuilt. **Metrics:** 43 run-card unit tests, four-case Rust matrix, and 3 built-panel run-card tests; full gate green.
+
+- **Category:** Testing & Verification. **Verify summary restoration after AI-draft bursts (2026-11-01).** Confirmed the existing per-kind service listing and added a built-panel regression restoring a finished summary behind 21 newer site drafts. The host matrix also protects tasks from site-draft bursts. **Metrics:** Four-case Rust matrix and 3 panel run-card tests; full gate green.
+
 <!-- END GENERATED section=shipped -->
 
 - **Category:** Docs. **Split DESIGN.md into the current contract and an append-only history (2026-10-28).** Completed `brwr-m68` (Columbus session, John's request). Dated decision and as-built notes, probe results, review reproductions, superseded designs and the done-step build log moved verbatim to `docs/history.md`, grouped by DESIGN.md section, with pointers where a current rule depended on them; every section number, heading and §12.2 step number stays. AGENTS.md "Current state" is now a component table with invariants, and both files say new dated records go to `docs/history.md`. **Metrics:** DESIGN.md 341,373 → 275,922 bytes (1,831 → 1,604 lines); `docs/history.md` 111,854 bytes; AGENTS.md 48,143 → 22,567 bytes; 2,809 original sentences checked, none lost or duplicated beyond five glue edits. An independent review's findings are folded in: rules it found moved to history (credential refusal, the log marker format, the frozen-ID sibling rule, four headless limits now in TESTING.md) are restated, and stale §14 records are trimmed or moved.
@@ -1517,3 +1350,65 @@ stop product work, and no history reset or production IPC change is called for.
   remain useful later product work; no duplicate proposal or unrelated
   implementation was added ahead of this queue. This handoff updates the
   previous platform-evidence summary instead of adding another duplicate.
+
+### Cycle observations (2026-11-01 — queue health repair)
+
+The opening required build/test gate passed, but the additional README queue
+gate began red: seven generated sections were stale and the Re-learn parent
+named two IDs absent from the tracked export. This cycle is repair-only; no
+assigned feature was claimed or closed. A semantic comparison found all 173
+tracked rows matched the database, plus two stale database-only rows from an
+unmerged Re-learn attempt. Their claimed implementation is absent from this
+checkout. The pre-repair export is retained locally at
+`target/overnight-queue-audit.jsonl`. Removed those two database-only rows and
+the dangling dependency edges, restoring the parent's three tracked
+prerequisites; its human label, status, and policy remain unchanged. Exported
+with `bd`, then regenerated every backlog block. All tracked rows, issue
+statuses, and labels are preserved.
+
+The assigned hydration follow-up `brwr-f85` now carries this evidence; it is
+still open because no hydration implementation shipped. Future driver queue
+updates should validate dependency targets and regenerate the backlog before
+launch. Hydration should also distinguish committed issue history from stale
+database-only work, so a later export cannot revive unmerged completion
+claims. Next cycle should resume `bd ready --label assigned`: `brwr-rl2` and
+related `brwr-67i` already have per-kind filtering from task history, but still
+need explicit crowding regressions and an audit of the older-host acceptance.
+No new product proposal is needed while 23 assigned items remain actionable.
+
+Validation after the repair passed the complete required and README gates:
+1,207 reported Rust passes, all 37 extension test files, both Clippy builds,
+74 Python script tests, six Node script test files, and 10,696 inert Markdown
+renderings. Current-state and queue checks pass. Full diff reviewed locally;
+independent review and publication remain with the driver. Logs are in
+`target/overnight-health/2026-11-01-queue-repair/`.
+
+
+### Cycle observations (2026-11-01 — assigned run restoration and stale drafts)
+
+Completed `brwr-rl2`, `brwr-67i` and `brwr-sdc`. Task history had already
+supplied the per-kind service mechanism; this cycle replaced the obsolete
+known-crowding test, verified restoration from the built panel, and completed
+the older-host summary compatibility criterion. Legacy summary restoration
+can only use the old shared window; the Tasks page still requires filtered,
+paged listing. Capture Site now cancels attached stale drafts and cancels
+pending starts when their ids arrive, without mounting or judging them.
+
+The health check began green. The final required and README gates passed:
+1,207 reported Rust passes (92 return through the documented sandbox IPC
+guard), all 37 extension test files, both Clippy builds, 74 Python script
+tests, six Node script test files and 10,696 inert Markdown renderings.
+Focused files report 43 run-card unit tests, 3 built-panel run-card tests,
+and 20 Capture Site agent panel tests; five extension test cases were added.
+Logs are in `target/cookie-cycle-2/`. The full diff was reviewed locally;
+the driver owns independent review and publication.
+
+Twenty assigned items remain actionable. Continue from `bd ready --label
+assigned --exclude-label human,needs-macos,needs-windows`; next are the P2
+PR hygiene/worktree controls, extractor visibility, tracker tests, timing
+flake and queue hydration items. Keep the tracker implementation fixes and
+its tests together when their priority tier is reached. New product ideation
+is deferred while these assignments remain. A useful lesson for the next
+cycle is to audit older assigned acceptance against the current design:
+several follow-ups predate task history, and duplicating its mechanisms
+would add complexity without improving the user's experience.

@@ -24,6 +24,8 @@
 
 ## §5.1 Artifact logging — history
 
+**Stale AI draft cancellation (2026-11-01, `brwr-sdc`).** Capture Site now detaches and cancels its queued or running AI draft when a config refresh makes the review stale, retaining the settings-changed message and disabled save. A pending start is canceled when its answer arrives, including a rejoined run while that stale review remains open; it never mounts or gets judged. The existing best-effort cancellation and service timeout remain the bounds when cancellation cannot be delivered. Panel regressions cover queued, running and late starts, repeated refresh and close.
+
 *Create adapter, as designed for M1.5b before open access:*
 
 - **Starting.**
@@ -99,6 +101,8 @@ The older M2 design follows.
 **Local recovery (built 2026-10-27, `brwr-3nq`).** The rule this record introduced is now stated in DESIGN.md §5.3, “Local recovery”.
 
 ## §5.7 Side panel layout — history
+
+**Run-kind restore windows (2026-11-01, `brwr-rl2`, `brwr-67i`).** Task history had already added per-kind service listing and summary restore had adopted it. Replaced the obsolete test documenting crowding with a regression matrix: more than 20 newer tasks, summaries or site drafts cannot hide the other kind in a filtered query. A built panel test restores an older finished summary after newer task and site-draft bursts. The assigned compatibility criterion adds a single legacy summary-list retry for an explicit unsupported-field refusal; it uses the older host's shared window and filters other kinds locally. Task history still requires the filtered/paged protocol and retains its rebuild notice.
 
 **Capture exclusions (built 2026-10-28, `brwr-vny`).** The rule this record introduced is now stated in DESIGN.md §5.7, “Capture exclusions”.
 

@@ -215,3 +215,15 @@
   diagnostics logs, and the change is additive within protocol v8 (host and
   extension deploy together). Real-harness and hostile-page canary checks
   remain [human] work; notifications and task history are follow-ups.
+
+- **Brauser — Queue health repair (2026-11-01):** Reconciled stale local
+  database-only Re-learn records and dangling exported dependency links,
+  then regenerated the backlog. Preserved all 173 tracked issues and their
+  statuses and labels. Assigned product work and human review gates remain
+  open; this maintenance changes no product behavior or acceptance claim.
+
+- **Brauser — Verify summary restoration after AI-draft bursts (2026-11-01):** Added service and built-panel regressions proving that per-kind listing preserves retained summary cards after more than 20 newer Capture Site AI runs. This completes an older follow-up whose implementation arrived with task history.
+
+- **Brauser — Keep summary restoration compatible across list versions (2026-11-01):** Pinned summary/task restore isolation in both directions and added a single legacy summary-list retry when an older host explicitly rejects the filter field. Current hosts protect each kind before limiting; older hosts retain their shared-window limitation until rebuilt. Complete task history still requires the current listing protocol.
+
+- **Brauser — Cancel stale Capture Site AI drafts (2026-11-01):** A settings change that invalidates an open review now detaches and cancels its queued or running AI draft. Pending starts are canceled when their identifier arrives, before polling or judgment, and the review retains its stale message and disabled save.
