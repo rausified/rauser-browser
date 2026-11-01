@@ -10,6 +10,7 @@ use a scratch database under target/ (see AGENTS.md "Work queue").
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -27,7 +28,8 @@ def main(argv: list[str] | None = None, *, root: pathlib.Path | None = None) -> 
     # A create-side routing override would bypass the database we hydrated.
     # Keep the interface to create arguments; routing is owned here.
     routing = ("--db", "--database", "--directory", "--global", "--repo")
-    if any(arg.split("=", 1)[0] in routing or arg.startswith("-C") for arg in args):
+    # bd accepts boolean short flags clustered before -C (for example -qC).
+    if any(arg.split("=", 1)[0] in routing or re.match(r"^-[hqv]*C", arg) for arg in args):
         print("create-bead: database/directory overrides are not supported", file=sys.stderr)
         return 2
 

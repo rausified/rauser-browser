@@ -95,7 +95,8 @@ class CreateBeadTests(unittest.TestCase):
                     run.assert_not_called()
 
     def test_routing_overrides_are_rejected_before_hydration(self) -> None:
-        for arg in ("--db", "--db=other", "--database=other", "--directory", "-C", "-Cother", "--global", "--repo", "--repo=other"):
+        for arg in ("--db", "--db=other", "--database=other", "--directory", "-C", "-Cother",
+                    "-qC", "-vCother", "-vqC=other", "--global", "--repo", "--repo=other"):
             with self.subTest(arg=arg), patch("subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(create_bead(["New work", arg], root=self.root), 2)
                 run.assert_not_called()
