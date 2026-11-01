@@ -73,7 +73,7 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   };
 
   // NOSCRIPT and TEMPLATE hold no rendered text either; Readability already
-  // strips them from an article, and the body fallback walks past them.
+  // strips them from an article; the body fallback uses rendered innerText.
   const DROPPED = new Set(["IMG", "SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
   const BLOCKS = new Set([
     "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DD", "DETAILS", "DIV", "DL", "DT", "FIGCAPTION", "FIGURE",
@@ -169,18 +169,11 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
     // An unparseable page reads as body text below.
   }
   if (!readable && rendered && document.body) {
-    if (hasBoxes(document.body)) {
-      content = (document.body.innerText ?? "").trim();
-    } else {
-      // A body that is not rendered: its text without script, style,
-      // noscript, or template contents, never its textContent.
-      blocks.length = 0;
-      current = "";
-      prefix = "";
-      walk(document.body);
-      flush();
-      content = blocks.join("\n\n");
-    }
+    // A boxless body (display:contents or display:none) can return raw
+    // textContent from innerText. The rendered root still applies the
+    // browser's visibility filtering, including hidden descendants.
+    const source = hasBoxes(document.body) ? document.body : document.documentElement;
+    content = (source.innerText ?? "").trim();
   }
   // Replaced before measuring, so a cut never meets a lone half either.
   content = whole(content);

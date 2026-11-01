@@ -658,14 +658,19 @@ test("the list keeps keyboard focus across a refresh", async () => {
   page.el("tasks-list").dispatch("keydown", { key: "ArrowDown", preventDefault() {} });
   const focused = document.activeElement;
   assert.equal(focused.dataset.runId, runId(2));
-  // A refresh that changes no row updates the rows in place.
-  const lists = page.sent("list_runs").length;
-  await afterPoll(() => page.sent("list_runs").length > lists, "a list refresh");
-  await settle(20);
+  // The visibility handler runs the same refresh as the poll, without
+  // racing its two-second interval. A changed pill proves it has rendered;
+  // the unchanged row order keeps the existing elements in place.
+  page.state.runs[2].state = "failed";
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => page.pill(runId(3)).textContent.startsWith("Failed"), "the refreshed task status");
   assert.equal(document.activeElement, focused);
   assert.ok(page.rows().includes(focused), "the focused row is still in the list");
   // A refresh that adds a row rebuilds the list and puts focus back on the selected row.
   page.state.runs.unshift(task(0, { state: "running" }));
+  page.setHidden(true);
+  page.setHidden(false);
   await until(() => page.rows().some((row) => row.dataset.runId === runId(0)), "the new task");
   assert.equal(document.activeElement.dataset.runId, runId(2));
   assert.ok(page.rows().includes(document.activeElement));

@@ -189,9 +189,6 @@ queue".
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
-- [ ] `brwr-dc7` **Extractor: keep visibility filtering when body has no box (display: contents).** Codex review of PR #186 (P2). extension/extract.ts: when document.body has no client rect, the fallback walks a script-stripped clone instead of innerText. A page with body { display: contents } has no body rect but renders its children, so this path ignores display:none /… _(P2; labels: assigned, extraction, task-bar)_
-- [ ] `brwr-z4j` **TaskTracker unit tests for refresh/track/finished behavior.** TaskTracker unit tests (extension/task-tracker.ts): two refresh() calls while one is in flight give two lists, not three; repeated refreshes leave one pending timer; track() + a terminal list give one finished(). (P2: the tracker is the panel's only source of finish… _(P2; labels: assigned, task-tracker, tasks-page)_
-- [ ] `brwr-b2p` **Flaky test: "the list keeps keyboard focus across a refresh" timed out on macos-15 CI.** Flaky test: tasks-page "the list keeps keyboard focus across a refresh" timed out (4044 ms) on macos-15 CI on PR #181 (step 'Run extension worker tests'); it passed on Windows, and #181 doesn't touch extension code. The test waits on the page's real 2000 ms poll through… _(P2; labels: assigned, flaky, tasks-page, tests)_
 - [ ] `brwr-f85` **bd: hydrate local DB from issues.jsonl before create to prevent ID collisions with closed rows.** The local bd DB must be hydrated from .beads/issues.jsonl before `bd create` (`bd import` with the updated_at guard), so new IDs can't collide with closed rows. scripts/check_queue_consistency.py should fail on duplicate IDs. Seen during PR #189, where `bd create` reused closed… _(P2; labels: assigned, beads, dev-tools)_
 - [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
@@ -250,6 +247,12 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Testing & Verification. **Remove the Tasks focus test polling race (2026-11-01).** The focus regression now triggers the existing visibility refresh and waits for a rendered status change or added row before asserting retained-node and rebuilt-list focus. It no longer races the two-second poll or relies on a fixed settle delay. **Metrics:** 10/10 isolated local repeats; 38 extension test files; full required and README gates green.
+
+- **Category:** Testing & Verification. **Pin task tracker refresh and completion behavior (2026-11-01).** Seven direct tests use deferred replies and mocked timers to cover coalesced refreshes, one poll timer, one completion callback for tracked runs, off-page completion, visibility and disposal. The file is included in the normal extension suite. **Metrics:** 7 new tracker tests; 38 extension test files; full required and README gates green.
+
+- **Category:** Bug Fix. **Keep hidden text out of boxless-body extraction (2026-11-01).** The no-article fallback reads the rendered document root's innerText when the body has no box, preserving visibility filtering for display:contents and excluding hidden-body text. A summary-entry regression checks that hidden bulk text cannot displace a visible document frame; non-rendered frames still contribute nothing. **Metrics:** 33 extraction tests; 38 extension test files; 1,207 reported Rust passes; full required and README gates green.
+
 - **Category:** Bug Fix. **Complete cleanup after removing its starting worktree (2026-11-01).** Worktree hygiene selects the main worktree for control Git commands before removing candidates. Supplying a removable linked worktree no longer breaks subsequent removals or stale-lock checks; existing safety checks and branch preservation remain. **Metrics:** 75 Python dev-tool tests (+1 regression); full required and README gates green.
 
 - **Category:** Bug Fix. **Keep PR hygiene checks running after body edits (2026-11-01).** Dev tools now runs on edited events, so a handoff or owner edit that cancels an earlier hygiene workflow receives a tested replacement. PR owner still validates the updated body; existing workflow concurrency remains. **Metrics:** 75 Python dev-tool tests; full required and README gates green; hosted event behavior reviewed locally.
@@ -1424,3 +1427,35 @@ is deferred while these assignments remain. A useful lesson for the next
 cycle is to audit older assigned acceptance against the current design:
 several follow-ups predate task history, and duplicating its mechanisms
 would add complexity without improving the user's experience.
+
+
+### Cycle observations (2026-11-01 — extraction visibility and task test timing)
+
+Completed assigned `brwr-dc7`, `brwr-z4j` and `brwr-b2p`. The no-article
+extractor now uses rendered-root innerText for a body without a box. The
+manual walker alternative would duplicate CSS visibility behavior; relying
+on the browser removes that extra mechanism. Extraction tests model the
+layout/text APIs, so real CSS rendering remains browser acceptance work.
+Seven direct tracker tests now provide a deterministic starting point for
+the remaining assigned tracker fixes. The focus regression drives the
+existing visibility refresh and waits for rendered changes, keeping both
+focus assertions without racing the two-second poll.
+
+Health began green with a clean worktree and no quarantine file. The final
+required and README gates passed: 1,207 reported Rust passes (sandbox IPC
+guards apply), all 38 extension test files, both Clippy builds, 76 Python
+script tests, six Node script test files and 10,696 inert Markdown
+renderings. Focused coverage reports 33 extraction and seven tracker tests
+(nine new cases overall), plus ten isolated focus-regression repeats. One
+initial repeat batch overlapped bundle cleanup and failed to import dist;
+rerunning after the build passed 10/10. Do not run bundle consumers in
+parallel with build:extension. Logs: target/cookie-health/. Full diff
+reviewed locally; independent review and publication remain with the driver.
+
+Fifteen assigned items remain. The next ready P2 is `brwr-f85` (queue
+hydration); its earlier health-repair notes distinguish committed issue
+history from stale database-only rows and should guide that change. Keep
+new tracker regressions in the direct test file as the P3 tracker fixes
+arrive. Product ideation is deferred while assignments remain; the existing
+named focus-session proposal is still a useful future direction once the
+assigned queue is clear. No additional speculative quality items were added.

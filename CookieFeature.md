@@ -690,3 +690,46 @@ Editing a PR's owner or handoff text used to cancel its running hygiene workflow
 The worktree cleanup command now selects the repository's main worktree for its control commands before removing anything. A caller can point --repo at a finished linked worktree and still remove the remaining candidates and check stale locks after that directory disappears. Existing checks for local changes, ignored state, running processes, live-install references and locks still decide what may be removed; branches remain in place. A new throwaway-repository regression reproduced the old failure, then verified two worktree removals followed by clearing a stale common index lock. All 75 Python dev-tool tests pass, including that regression.
 
 Validation for this batch passed the complete required and README gates: 1,207 reported Rust passes, all 37 extension test files, both Clippy builds, 75 Python script tests (+1), six Node script files and 10,696 inert Markdown renderings. Queue and current-state checks pass. The full diff was reviewed locally; independent review and publication remain with the driver. Logs: `target/overnight-health/2026-11-01-dev-tools/full-gate.log`. No live API, service or real harness was used.
+
+
+## 2026-11-01 — Keep hidden text out of boxless-body extraction
+
+A page can show its children while its body has no layout box, as with
+`display: contents`. Brauser's previous fallback walked that body's nodes
+and could include hidden panels, sometimes enough to choose
+the wrong frame for a summary or task. The fallback now reads `innerText`
+from the rendered document root, letting the browser apply visibility
+filtering. A hidden body contributes no fallback text, and a non-rendered
+frame still contributes neither text nor selection. Local extraction and
+summary-entry regressions cover these cases; actual CSS rendering remains
+browser acceptance work.
+
+## 2026-11-01 — Pin task tracking behavior with deterministic unit tests
+
+The panel's task count and completion announcements now have direct unit
+coverage in a dedicated test file included in the extension suite. Seven
+tests use deferred host replies and mocked timers to verify that concurrent
+refresh requests merge into one follow-up, repeated refreshes leave one
+poll timer, and tracked tasks announce completion once. They also check
+off-page completion fetches, visibility changes and disposal during a
+request. This adds a focused test seam for the remaining assigned tracker
+fixes without changing its runtime behavior.
+
+## 2026-11-01 — Remove the keyboard-focus test's polling race
+
+The Tasks page focus regression now triggers the page's existing hide/show
+refresh handler explicitly. It waits for a changed status pill before
+checking that an existing row retains focus, then adds a row and waits for
+the rebuilt list before checking that focus returns to the selected task.
+Both checks exercise the real refresh and rendering code without depending
+on when the two-second poll fires. Ten isolated repeat runs passed after
+the extension build completed; this is local evidence, with hosted macOS
+CI left to the driver's publication gate.
+
+Validation for this batch passed the complete required and README gates:
+1,207 reported Rust passes, all 38 extension test files, both Clippy builds,
+76 Python script tests, six Node script files and 10,696 inert Markdown
+renderings. Nine extension cases were added overall. Queue and
+current-state checks pass. The full diff was reviewed locally; the driver
+owns independent review and publication. Logs: `target/cookie-health/`.
+No live API, deployed service or real harness was used.
