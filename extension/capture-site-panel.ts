@@ -435,13 +435,10 @@ export class CaptureSitePanel {
     this.starterCheck += 1;
     // An unfinished AI run is canceled: the shapes it drafts from are
     // discarded with this review.
-    const progress = this.agentProgress;
-    this.agentProgress = null;
-    if (progress) void progress.close();
+    this.closeAgentRun();
     this.agentPending = false;
     this.agentHarness = null;
     this.basicDraft = null;
-    this.agentRun.replaceChildren();
     this.drafterLine.textContent = "";
     this.drafterLine.hidden = true;
     this.target = null;
@@ -472,6 +469,14 @@ export class CaptureSitePanel {
     this.advanced.hidden = true;
     this.message.textContent = "";
     this.updateOffer();
+  }
+
+  private closeAgentRun(): void {
+    const progress = this.agentProgress;
+    // Detach before canceling so a concurrent poll cannot judge its result.
+    this.agentProgress = null;
+    if (progress) void progress.close();
+    this.agentRun.replaceChildren();
   }
 
   /** Read this page's shapes on the click, then have the host draft from
@@ -722,6 +727,7 @@ export class CaptureSitePanel {
 
   private updateControls(busy: boolean): void {
     const stale = this.target?.revision !== this.session.revision;
+    if (stale || this.draftProblem) this.closeAgentRun();
     const state = this.session.status;
     const origin = this.target?.origin ?? null;
     const removal = origin !== null && state?.pending_removals.includes(origin);
@@ -787,9 +793,11 @@ export class CaptureSitePanel {
       this.agentNotUsed(this.agentErrorText(error));
       return;
     }
-    if (this.target !== target) {
-      // The review closed while the run started; its shapes are discarded.
-      if (!started.existing) void new RunProgress(started.run, this.runDeps(), () => undefined).close();
+    if (this.target !== target || target.revision !== this.session.revision || this.draftProblem) {
+      // A stale review can no longer use even a rejoined run's result.
+      // Closing a review still leaves a run owned by another review alone.
+      if (this.target === target) this.agentPending = false;
+      if (!started.existing || this.target === target) void new RunProgress(started.run, this.runDeps(), () => undefined).close();
       return;
     }
     this.agentPending = false;

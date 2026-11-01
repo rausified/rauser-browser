@@ -824,11 +824,13 @@ export function showListFailure(
 export type RestoreDeps = Pick<RunCardDeps, "host" | "now" | "storage" | "openSettings">;
 
 /**
- * Lists the summary runs once and shows each card set the runs it should
+ * Lists the summary runs and shows each card set the runs it should
  * (see {@link restorable}). A failed list shows one notice, in `noticeArea`;
  * a list that works clears it. The record that runs may exist is cleared
  * only when no set shows a card and the caller does not `keepRecord` (it
- * knows of an active task, say).
+ * knows of an active task, say). An older host that explicitly refuses the
+ * kind field gets one legacy request; its mixed list has the old shared
+ * limit, and restorable still excludes tasks and site drafts.
  */
 export async function restoreRunCards(
   containers: readonly RunCards[], noticeArea: HTMLElement, deps: RestoreDeps,
@@ -837,9 +839,17 @@ export async function restoreRunCards(
   let runs: RunView[];
   const listedAt = deps.now();
   try {
-    runs = (await deps.host.call({
-      type: "list_runs", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), kind: "summary",
-    }, "runs_listed")).runs;
+    try {
+      runs = (await deps.host.call({
+        type: "list_runs", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), kind: "summary",
+      }, "runs_listed")).runs;
+    } catch (error) {
+      if (!(error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT)) throw error;
+      if (containers.some((cards) => cards.isDisposed)) return;
+      runs = (await deps.host.call({
+        type: "list_runs", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      }, "runs_listed")).runs;
+    }
   } catch (error) {
     if (containers.some((cards) => cards.isDisposed)) return;
     showListFailure(noticeArea, error, () => deps.openSettings(), SUMMARY_REBUILD_HOST_MESSAGE);

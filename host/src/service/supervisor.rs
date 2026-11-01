@@ -5386,43 +5386,52 @@ mod tests {
         }
     }
 
-    /// Known behaviour for this cut (decision 32): `list_runs` shares
-    /// [`LIST_LIMIT`] across kinds, so newer finished tasks push an older
-    /// finished summary out of the list, while active runs always stay.
-    /// Per-kind listing (`ListRunsRequest.kind`) is the P2 `brwr` bead filed
-    /// with the task bar's follow-ups.
+    /// Each restore/history query has its own window: a burst of another
+    /// kind cannot hide a retained run. The unfiltered legacy window stays
+    /// bounded and mixed, for older clients.
     #[test]
-    fn list_runs_lets_newer_finished_tasks_crowd_out_an_older_summary() {
-        let fixture = Fixture::new(BLOCK_THEN_ANSWER);
-        fixture.release();
-        let summary = fixture.start("old-summary");
-        assert_eq!(fixture.wait_finished(summary).state, RunState::Succeeded);
-        let mut tasks = Vec::new();
-        for _ in 0..LIST_LIMIT {
-            let id = fixture.start_task("a", INSTRUCTION);
-            fixture.wait_finished(id);
-            tasks.push(id.to_string());
+    fn list_runs_by_kind_keeps_older_runs_despite_other_kind_bursts() {
+        for (restored, newer) in [
+            (RunKind::Summary, RunKind::Task),
+            (RunKind::Task, RunKind::Summary),
+            (RunKind::Summary, RunKind::SiteDraft),
+            (RunKind::Task, RunKind::SiteDraft),
+        ] {
+            let fixture = Fixture::new(ANSWER);
+            let store = fixture.supervisor.store();
+            let cwd = fixture.dir.path();
+            let older = seed_record(store, cwd, RunState::Succeeded, "2026-10-27T08:00:00Z");
+            let mut status = store.status(older).unwrap();
+            status.kind = restored;
+            status.task = (restored == RunKind::Task).then(sentinel_task);
+            store.write_status(&status).unwrap();
+            for index in 0..(LIST_LIMIT + 1) {
+                let id = seed_record(
+                    store,
+                    cwd,
+                    RunState::Succeeded,
+                    &format!("2026-10-27T09:00:{index:02}Z"),
+                );
+                let mut status = store.status(id).unwrap();
+                status.kind = newer;
+                status.task = (newer == RunKind::Task).then(sentinel_task);
+                store.write_status(&status).unwrap();
+            }
+            let mixed = fixture.supervisor.list_runs();
+            assert_eq!(mixed.len(), LIST_LIMIT);
+            assert!(
+                mixed
+                    .iter()
+                    .all(|run| run.kind.unwrap_or(RunKind::Summary) == newer)
+            );
+            let (listed, more) = fixture.supervisor.list_runs_where(&ListQuery {
+                kind: Some(restored),
+                before: None,
+            });
+            assert_eq!(more, Some(false));
+            assert_eq!(listed.len(), 1, "{restored:?} after {newer:?}");
+            assert_eq!(listed[0].run_id, older.to_string());
+            assert_eq!(listed[0].kind.unwrap_or(RunKind::Summary), restored);
         }
-        let listed = fixture.supervisor.list_runs();
-        assert_eq!(listed.len(), LIST_LIMIT);
-        assert!(listed.iter().all(|view| view.kind == Some(RunKind::Task)));
-        assert!(!listed.iter().any(|view| view.run_id == summary.to_string()));
-        tasks.reverse();
-        assert_eq!(
-            listed
-                .iter()
-                .map(|view| view.run_id.clone())
-                .collect::<Vec<_>>(),
-            tasks
-        );
-        // An active summary is still listed.
-        std::fs::remove_file(fixture.path("release")).unwrap();
-        let active = fixture.start("new-summary");
-        fixture.wait_for(active, |view| view.state == RunState::Running);
-        let listed = fixture.supervisor.list_runs();
-        assert_eq!(listed.len(), LIST_LIMIT);
-        assert_eq!(listed[0].run_id, active.to_string());
-        fixture.release();
-        fixture.wait_finished(active);
     }
 }

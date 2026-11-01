@@ -24,6 +24,39 @@ test("run cards follow the page: another tab's card hides and comes back", async
   assert.equal(card().hidden, false);
 });
 
+test("a finished summary restores after more than a list window of newer tasks or site drafts", async () => {
+  for (const kind of ["task", "site_draft"]) {
+    const summary = {
+      ...RUN_VIEW, state: "succeeded", kind: "summary",
+      created_at: new Date(Date.now() - 60_000).toISOString(),
+      finished_at: new Date(Date.now() - 30_000).toISOString(),
+    };
+    const newer = Array.from({ length: 21 }, (_, i) => ({
+      ...summary, run_id: `00000000-0000-4000-8000-${String(i + 100).padStart(12, "0")}`,
+      kind, title: "Newer run", created_at: new Date().toISOString(),
+      ...(kind === "task" ? { instruction: "Newer task" } : {}),
+    }));
+    const mixed = [...newer, summary];
+    const page = await summarizePanel({ intercept: (request) => {
+      if (request.type === "list_runs") {
+        const runs = (request.kind ? mixed.filter((run) => run.kind === request.kind) : mixed).slice(0, 20);
+        return { type: "runs_listed", runs, more: false };
+      }
+      if (request.type === "get_run") {
+        return { type: "run_fetched", run: mixed.find((run) => run.run_id === request.run_id), stream_text: "", next_offset: 0, more: false };
+      }
+      return null;
+    } });
+    await until(() => /Readable title/.test(page.el("run-area").textContent), "the older summary card");
+    const cards = page.el("run-area").children.filter((child) => child.className.split(" ").includes("run-card"));
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].hidden, false);
+    assert.equal(page.sent("list_runs").filter((request) => request.kind === "summary").length, 1);
+    assert.equal(page.sent("start_run").length, 0);
+    assert.doesNotMatch(page.el("run-area").textContent, /Newer run|Newer task/);
+  }
+});
+
 test("run views with kind and site_draft pass the response shape check, and unknown kinds fail", () => {
   const table = { type: "work.doc", origin: "https://work.example", match: [{ path: "/docs/{num:int}" }], id: "work.doc:{host}/{num}" };
   const fetched = (run) => ({ type: "run_fetched", run, stream_text: "", next_offset: 0, more: false });
