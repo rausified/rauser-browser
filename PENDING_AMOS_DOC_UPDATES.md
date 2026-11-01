@@ -215,3 +215,9 @@
   diagnostics logs, and the change is additive within protocol v8 (host and
   extension deploy together). Real-harness and hostile-page canary checks
   remain [human] work; notifications and task history are follow-ups.
+
+- **Brauser — Queue health repair (2026-11-01):** Reconciled stale local
+  database-only Re-learn records and dangling exported dependency links,
+  then regenerated the backlog. Preserved all 173 tracked issues and their
+  statuses and labels. Assigned product work and human review gates remain
+  open; this maintenance changes no product behavior or acceptance claim.
