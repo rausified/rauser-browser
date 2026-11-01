@@ -462,6 +462,72 @@ test("dismissing two cards at once remembers both", async () => {
   page.runCards.dispose();
 });
 
+test("separate documents serialize dismissal reads with the same Web Lock", async (t) => {
+  // Distinct modules reproduce independent panel/page promise queues.
+  const other = await import("../dist/run-card.js?dismiss-other-document");
+  const navigatorBefore = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let tail = Promise.resolve();
+  const lockNames = [];
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    locks: { request(name, options, action) {
+      lockNames.push(name);
+      assert.equal(options.mode, "exclusive");
+      const result = tail.then(action);
+      tail = result.catch(() => undefined);
+      return result;
+    } },
+  } });
+  t.after(() => {
+    if (navigatorBefore) Object.defineProperty(globalThis, "navigator", navigatorBefore);
+    else delete globalThis.navigator;
+  });
+  const storage = storageArea(new Map([[DISMISSED_KEY, ["existing"]]]));
+  const get = storage.get;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let reads = 0;
+  storage.get = async (keys) => {
+    const snapshot = await get(keys);
+    reads += 1;
+    if (reads === 1) await held;
+    return snapshot;
+  };
+  const first = rememberDismissed(storage, "first");
+  await settle();
+  assert.equal(reads, 1);
+  const second = other.rememberDismissed(storage, "second");
+  await settle();
+  const readsBeforeRelease = reads;
+  release();
+  await Promise.all([first, second]);
+  assert.equal(readsBeforeRelease, 1, "the other document must wait to read");
+  assert.equal(lockNames.length, 2);
+  assert.equal(lockNames[0], lockNames[1], "both documents use one origin-wide name");
+  assert.deepEqual(await dismissedIds(storage), ["existing", "first", "second"]);
+  await other.rememberDismissed(storage, "first");
+  assert.deepEqual(await dismissedIds(storage), ["existing", "second", "first"], "a repeated dismissal is moved, never duplicated");
+});
+
+test("a rejected dismissal lock does not prevent the next dismissal", async (t) => {
+  const navigatorBefore = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let requests = 0;
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    locks: { async request(_name, _options, action) {
+      if (++requests === 1) throw new Error("lock unavailable");
+      return action();
+    } },
+  } });
+  t.after(() => {
+    if (navigatorBefore) Object.defineProperty(globalThis, "navigator", navigatorBefore);
+    else delete globalThis.navigator;
+  });
+  const storage = storageArea();
+  await rememberDismissed(storage, "first");
+  await rememberDismissed(storage, "second");
+  assert.equal(requests, 2);
+  assert.deepEqual(await dismissedIds(storage), ["second"]);
+});
+
 test("service_unavailable shows setup instructions", async () => {
   const message = "The Brauser service did not answer.";
   const page = setup({

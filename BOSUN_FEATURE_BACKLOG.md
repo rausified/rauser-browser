@@ -191,14 +191,7 @@ queue".
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
 - [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
 - [ ] `brwr-ppn` **Curate a worklog before copying it.** Recent and the native worklog make captured work visible, but copying a day or week currently includes every recorded artifact. Let a person prepare a concise update by selecting the artifact-day rows they want to share and previewing the result, without altering measured… _(P3)_
-- [ ] `brwr-um4` **Tasks page: a hashchange during an in-flight refresh can miss a just-started run.** Tasks page: a hashchange during an in-flight refresh can miss a just-started run. The select signal mostly covers this. _(P3; labels: assigned, tasks-page)_
 - [ ] `brwr-64i` **Tasks page (Windows): hide .tasks-controls when search/filter/dismissed controls should be hidden.** Tasks page on Windows: the search, filter and Show dismissed controls are still visible; hide .tasks-controls. _(P3; labels: needs-windows, tasks-page, windows)_
-- [ ] `brwr-jzs` **tasks-page tests: avoid the 2.3s real-time wait and add an overlapping-refresh test.** tasks-page tests: the hidden-polling test waits 2.3 s of real time, and there is no overlapping-refresh test. _(P3; labels: assigned, tasks-page, tests)_
-- [ ] `brwr-90b` **Panel/page: dismissWrites queue can lose an id on simultaneous dismissals.** Panel/page: the dismissWrites queue covers one document only, so simultaneous dismissals from the panel and the Tasks page can lose one id. _(P3; labels: assigned, panel, tasks-page)_
-- [ ] `brwr-3wh` **Protocol test: use schema_subset::valid for the unknown_kind check.** Protocol test: the unknown_kind check uses serde instead of schema_subset::valid. _(P3; labels: assigned, protocol, tests)_
-- [ ] `brwr-3pv` **task-bar test: strengthen the sidePanel.open-fails fallback test.** task-bar test: the fallback test (sidePanel.open fails, so window_id is null) would pass on pre-Task-7 code alone; strengthen it. _(P3; labels: assigned, task-bar, tests)_
-- [ ] `brwr-sm8` **Tasks page: run off-page get_run fetches in refresh() in parallel.** Tasks page: off-page get_run fetches in refresh() run sequentially; consider running them in parallel. _(P3; labels: assigned, performance, tasks-page)_
-- [ ] `brwr-0at` **Protocol: tighten the RunCursor.created_at bound to match the RFC 3339 fields.** Protocol: the RunCursor.created_at bound (1..64) is looser than the RFC 3339 fields. _(P3; labels: assigned, protocol)_
 - [ ] `brwr-dfd` **Container roll-up follow-ups (from PR #126 final review).** Deferred minors from the GitHub repo containers work (PR #126): (1) a rolled-up visit never advances a container row's latest_at (index.rs roll_up), a trap for future consumers; (2) a repos-only setup (no linked PR/issue rule) shows the latest sub-page title instead of… _(P3)_
 <!-- END GENERATED section=new -->
 
@@ -239,6 +232,20 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Align history cursor timestamp lengths (2026-11-01).** RunCursor.created_at now shares RunView timestamp length bounds of 20–64 characters. Boundary checks guard both definitions; regeneration leaves the Rust and TypeScript field types unchanged, and no timestamp syntax validation is claimed. **Metrics:** 13 protocol run cases (+1), covering lengths 19, 20, 64 and 65; full gate green.
+
+- **Category:** Performance & Resource Bounds. **Fetch off-page task states concurrently (2026-11-01).** Starts missing active-row reads together and merges settled results in candidate order. Successful finishes and pruning survive a sibling failure, failed rows retry, and late replies after closure are ignored. **Metrics:** Two new concurrency/teardown cases among 35 passing Tasks-page cases.
+
+- **Category:** Testing & Verification. **Verify Reuse fallback across windows (2026-11-01).** The regression asserts the source-window panel-open attempt before failure, then proves a panel in a different window consumes the untargeted instruction and fills its task bar. **Metrics:** Strengthened end-to-end case among 35 passing Tasks-page cases.
+
+- **Category:** Testing & Verification. **Check unknown run kinds against the schema (2026-11-01).** Asserts JSON schema rejection for unsupported list_runs kinds alongside the existing Rust deserializer check, keeping the test aligned with its stated contract. **Metrics:** 13 protocol run cases; full gate green.
+
+- **Category:** Bug Fix. **Preserve dismissals across panels and Tasks tabs (2026-11-01).** Serializes the shared dismissal read/write with an origin-wide Web Lock, retaining the document queue fallback. Lock or storage rejection cannot poison later writes; independent module instances reproduce simultaneous cross-document dismissals. **Metrics:** 45 run-card cases (+2); existing cap and duplicate handling remain covered.
+
+- **Category:** Testing & Verification. **Drive Tasks polling tests with a mocked clock (2026-11-01).** Replaces real-time polling sleeps with explicit mocked intervals and drained host replies. Held-response tests reproduce overlapping refreshes, failure recovery and latest-hash selection. **Metrics:** 35 Tasks-page cases; local direct runtime about 0.3 seconds versus about 17 seconds at baseline.
+
+- **Category:** Bug Fix. **Keep Tasks navigation current during refreshes (2026-11-01).** Coalesces overlapping page refreshes, including after failure, and follows the latest requested run only after the final pass. An initially empty history preserves the hash through intermediate replies; page closure suppresses rendering and queued work. **Metrics:** 35 Tasks-page cases, including five new navigation/teardown regressions; full gate green.
+
 - **Category:** Testing & Verification. **Separate supervisor waits from disk flush latency (2026-11-01).** Supervisor and retention fixtures explicitly choose unit-test-only temporary stores while keeping private writes, atomic replacements and filesystem errors. Production and normal storage tests still sync. Resumed-run limit and vocabulary checks are independent, retaining the one-second timeout and checking the full recorded-vocabulary prompt without racing a shell. **Metrics:** 1,209 Rust tests (+2), 87 supervisor cases, 38 extension test files and 85 Python tests; full required gate green, with sandbox IPC guards self-skipping.
 
 - **Category:** Maintenance. **Remove the task tracker unused clock dependency (2026-11-01).** Simplify the tracker dependency contract and update the panel and direct test constructors without a clock callback. **Metrics:** Typecheck and lint passed; 15 tracker tests passed.
@@ -1561,3 +1568,46 @@ ideation stays deferred until assignments are cleared; the existing curated
 worklog and page-free task proposals remain useful later product directions.
 Beads' default actor here is lowercase `cookie`; when the assignee is
 `Cookie`, use `bd --actor Cookie close` so the ownership check matches.
+
+### Cycle observations (2026-11-01 — assigned Tasks-page follow-ups)
+
+Built the seven ready PR #188 assignments together: `brwr-um4`, `brwr-jzs`,
+`brwr-90b`, `brwr-3wh`, `brwr-3pv`, `brwr-sm8` and `brwr-0at`. The small
+shared-promise/pending-flag controller preserves refresh demand; selection
+waits for the final pass so an initially empty history cannot replace a
+new run's hash with an intermediate fallback. Missing task reads start
+concurrently and retain partial successes. Cross-document dismissals use
+the existing Web Locks pattern around storage, keeping local queues and
+best-effort failure recovery.
+
+The design challenge and one read-only Codex review used a local reviewer
+session under this run's offline restriction. Review found the initially
+empty-history case; a failing test reproduced it before the two-line fix.
+No new test seam or broader redesign was needed. Focused checks pass with
+35 Tasks-page, 45 run-card and 13 protocol run cases, including ten new
+regressions overall. Mocked timer intervals cut the Tasks-page file from
+about 17 seconds to about 0.3 seconds in the local direct runs. The protocol
+generator was run; a schema length change does not alter the emitted types.
+
+No self-directed proposal was added while assigned work remained. Future
+product work can revisit the existing page-free task and curated-worklog
+proposals once the queue permits it. For async UI reviews, include a page
+with no initial selection as well as one already showing a run: fallback
+selection can mutate the very navigation state the next pass needs.
+
+The remaining assigned roots still need external input: `brwr-e7b0` needs
+an offline browser plus pinned axe-core/browser test tooling to prove its
+acceptance; `brwr-7lq` needs the existing human-gated Re-learn identity-plan
+decision (`brwr-hq8` / `brwr-6x2`). No labels or gates were relaxed, and no
+browser, accessibility or platform certification is claimed here.
+
+Health started green with a clean worktree and no quarantine report. The
+full required gate passed again after the review fix: 1,210 reported Rust
+passes (92 sandbox IPC guard returns), all 38 extension files, both clippy
+configurations and generated/build/fmt/type/lint checks. README supplemental
+checks passed: 85 Python tests, seven Node script files and 10,696 inert
+Markdown renderings. Queue consistency passes after export and regeneration.
+Logs are in `target/cookie-tasks-final-after-review/` and
+`target/cookie-tasks-final/`. Independent driver review and publication are
+next. A Wardroom summary carries the two existing gate requirements; no
+assigned item was closed without completing its local acceptance.

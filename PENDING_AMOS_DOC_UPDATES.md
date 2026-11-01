@@ -252,3 +252,11 @@
 - **Brauser — Simplify tracker dependencies (2026-11-01):** Brauser removes TaskTracker's unused clock callback from its dependency contract (`brwr-ug2`).
 
 - **Brauser — Stabilize supervisor timing tests on slow disks (2026-11-01):** Explicit temporary unit-test stores omit crash-durability flush waits while preserving real private writes, atomic replacements and filesystem failures. Production, scripted-dialogs builds and the normal storage tests retain durable writes. Supervisor deadlines remain unchanged; resumed-run vocabulary delivery is checked independently from its one-second timeout, avoiding a shell startup race (`brwr-pnti`).
+
+- **Brauser — Keep Tasks navigation current during refreshes (2026-11-01):** The Tasks page coalesces overlapping refreshes, retries a queued refresh after failure, follows the latest hash and ignores pending replies after closure (`brwr-um4`).
+- **Brauser — Drive Tasks polling tests with a mocked clock (2026-11-01):** Hidden and completed histories are checked across explicit polling intervals without real-time sleeps; deferred host replies reproduce refresh overlap and navigation races (`brwr-jzs`).
+- **Brauser — Preserve simultaneous cross-view dismissals (2026-11-01):** An origin-wide Web Lock serializes dismissal storage updates across panels and Tasks tabs, with queue recovery after lock/write failure; independent module tests reproduce the lost-update race (`brwr-90b`).
+- **Brauser — Test unknown run kinds at the schema layer (2026-11-01):** The wire regression now asserts schema rejection alongside Rust deserializer rejection (`brwr-3wh`).
+- **Brauser — Verify Reuse fallback across windows (2026-11-01):** The regression asserts the source-window panel-open attempt and proves another window consumes the untargeted instruction when opening fails (`brwr-3pv`).
+- **Brauser — Fetch off-page task states concurrently (2026-11-01):** Missing active rows now start get_run reads together, preserve partial successes and retry failed reads without rendering after closure (`brwr-sm8`).
+- **Brauser — Align cursor timestamp lengths (2026-11-01):** RunCursor.created_at now shares RunView's 20–64 character schema bounds; boundary tests guard alignment without claiming timestamp syntax validation (`brwr-0at`).

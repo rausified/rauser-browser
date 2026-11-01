@@ -752,10 +752,11 @@ export class RunProgress extends RunWatcher {
   }
 }
 
-/** Every panel's dismissals write one after another, whichever cards they
- * come from, so each read sees the last write and two quick dismissals (a
- * summary and a task, say) both stay remembered. */
+/** The local queue also covers environments without Web Locks. In Chrome,
+ * the origin-wide lock serializes the read/write across panels and Tasks
+ * tabs, so simultaneous dismissals in different documents both survive. */
 let dismissWrites: Promise<void> = Promise.resolve();
+const DISMISS_LOCK = storageKey("dismissed_runs_lock");
 
 export async function dismissedIds(storage: Pick<ChromeStorageArea, "get">): Promise<string[]> {
   try {
@@ -767,14 +768,17 @@ export async function dismissedIds(storage: Pick<ChromeStorageArea, "get">): Pro
 }
 
 export function rememberDismissed(storage: ChromeStorageArea, runId: string): Promise<void> {
-  const write = dismissWrites.then(async () => {
-    const ids = (await dismissedIds(storage)).filter((id) => id !== runId);
-    ids.push(runId);
-    try {
+  const write = dismissWrites.then(() => {
+    const action = async (): Promise<void> => {
+      const ids = (await dismissedIds(storage)).filter((id) => id !== runId);
+      ids.push(runId);
       await storage.set({ [DISMISSED_RUNS_KEY]: ids.slice(-MAX_DISMISSED_RUNS) });
-    } catch {
-      // The card is gone for this panel; a later panel may restore it.
-    }
+    };
+    const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
+    return locks?.request ? locks.request(DISMISS_LOCK, { mode: "exclusive" }, action) : action();
+  }).catch(() => {
+    // Best effort: the card is gone here; another document may restore it.
+    // Recover the queue so a storage or lock failure cannot block later writes.
   });
   dismissWrites = write;
   return write;
