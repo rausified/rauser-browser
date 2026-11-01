@@ -157,6 +157,8 @@ boundaries, the five-failure pause, successful recovery and an explicit
 refresh restarting the budget. Both list and off-page read failures are
 covered. Panel task-bar cases preserve a task-list error through a live
 worker notice or a stored notice consumed after following its tab.
+A recovered automatic task poll clears its error, and a later worker summary
+notice must not bring that old error back.
 The Tasks page keyboard-focus regression triggers
 the existing hide/show refresh handler and waits for a rendered status pill
 or new row, so both focus assertions avoid racing the real polling interval.

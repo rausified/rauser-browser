@@ -776,3 +776,9 @@ existing polling boundaries. The unused tracker clock dependency is removed.
 The panel now restores a task-list error after every summary-card restore,
 including live and stored worker notices. Direct tests use mocked timers and
 deferred host replies; panel tests exercise both notice delivery paths.
+
+Independent review found that a successful automatic task poll left the
+panel's cached list error behind, so a later worker summary restore could
+resurrect it. Successful tracker updates now clear that error and its notice;
+a panel regression reproduces the failed list, automatic recovery and later
+worker notice.

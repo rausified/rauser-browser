@@ -502,6 +502,37 @@ for (const delivery of ["live", "stored"]) {
   });
 }
 
+test("a worker summary notice does not resurrect a task-list error after polling recovers", async (t) => {
+  const setTimer = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) =>
+    setTimer(callback, delay === 2000 ? 0 : delay, ...args));
+  const recovered = held();
+  let lists = 0;
+  const done = { ...TASK_VIEW, state: "succeeded", finished_at: RECENT };
+  const page = await taskPanel({
+    intercept: (request) => {
+      if (request.type === "list_runs" && request.kind === "task") {
+        lists += 1;
+        if (lists === 2) return { type: "error", code: "internal", message: "temporary task-list failure" };
+        if (lists === 3) return recovered.promise;
+      }
+      return startsTask()(request);
+    },
+  });
+  await until(() => taskLists(page).length === 1 && summaryLists(page).length === 1, "the initial lists");
+  type(page, "Recover the task list");
+  enter(page);
+  await until(() => page.el("task-run-area").textContent.includes("temporary task-list failure"), "the failed list notice");
+  await until(() => lists === 3, "the automatic retry");
+  recovered.release({ type: "runs_listed", runs: [done], more: false });
+  await until(() => page.el("task-announce").textContent !== "", "the recovered poll's completion");
+  assert.doesNotMatch(page.el("task-run-area").textContent, /temporary task-list failure/);
+  page.notify({ kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() });
+  await until(() => summaryLists(page).length === 2, "the worker's summary restore");
+  await settle(20);
+  assert.doesNotMatch(page.el("task-run-area").textContent, /temporary task-list failure/);
+});
+
 test("summary restore asks list_runs for kind summary", async () => {
   const summary = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000060", title: "Summary page", state: "running" };
   const task = { ...TASK_VIEW, state: "running", instruction: "Restored task instruction" };

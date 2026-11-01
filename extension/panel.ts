@@ -1254,6 +1254,10 @@ function startTracker(): TaskTracker {
     host: session.host,
     visible: () => document.visibilityState !== "hidden",
     changed: ({ running, newestId }) => {
+      // Automatic polls recover too; a later summary restore must not
+      // bring back an error from a task list that has since succeeded.
+      if (trackerError !== null) clearNotice(taskRunArea);
+      trackerError = null;
       tasksRunning = running;
       newestTaskId = newestId;
       const label = running > 0 ? `Tasks · ${running} running ↗` : "Tasks ↗";
