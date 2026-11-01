@@ -13,8 +13,8 @@ Beads is issue tracking that lives in your repo, making it perfect for AI coding
 ### Essential Commands
 
 ```bash
-# Create new issues
-bd create "Add user authentication"
+# Create issues after hydrating the local database from tracked history
+scripts/dev/create-bead "Add user authentication"
 
 # View all issues
 bd list
@@ -57,20 +57,33 @@ Issues in Beads are:
 
 ## Get Started with Beads
 
-Try Beads in your own projects:
+Initialize this repository's local database after installing Beads:
 
 ```bash
-# Install Beads
-curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
-
-# Initialize in your repo
-bd init
+# Initialize once; an existing database still needs import before create
+bd init --init-if-missing --from-jsonl --skip-agents --skip-hooks --non-interactive --prefix brwr
 
 # Create your first issue
-bd create "Try out Beads"
+scripts/dev/create-bead "Try out Beads"
 ```
 
 ## Learn More
+
+In this repository, `.beads/issues.jsonl` is the committed work queue, and
+`BOSUN_FEATURE_BACKLOG.md` is generated from it. Initializing an existing
+database does not load new committed rows. Use `scripts/dev/create-bead` in
+the checkout that owns the database: it validates the export and runs
+`bd import` before `bd create`, reserving closed IDs as well as open ones.
+The import uses the default timestamp guard (never `--allow-stale`) to keep
+newer local scalar fields; related labels, comments and dependencies may
+still merge. It preserves local-only work rather than rebuilding the DB.
+Import progress goes to stderr so `--json` still returns only the created
+issue on stdout. A failed import prevents creation.
+
+Linked worktrees must use a scratch database under `target/`, hydrate that
+database from the branch's export before creating, and copy only the new
+row back. The helper refuses shared worktree databases and routing flags.
+See AGENTS.md "Work queue" for export, rendering and conflict rules.
 
 - **Documentation**: [github.com/steveyegge/beads/docs](https://github.com/steveyegge/beads/tree/main/docs)
 - **Quick Start Guide**: Run `bd quickstart`
