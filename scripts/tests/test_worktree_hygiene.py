@@ -172,6 +172,19 @@ class Candidates(Fixture):
         self.assertEqual(action, "skip")
         self.assertIn("no commits of its own", line)
 
+    def test_head_base_uses_the_supplied_worktree(self):
+        first = self.merged_worktree("wt-a", "feat/a")
+        second = self.merged_worktree("wt-z", "feat/z")
+
+        # Both branches are merged into the main worktree's HEAD, but neither
+        # is finished relative to the first linked worktree's HEAD.
+        code, out = self.hygiene("--apply", "--base", "HEAD", repo=first)
+
+        self.assertEqual(code, 0, out)
+        for path in (first, second):
+            self.assertEqual(self.line_for(out, path)[0], "skip", out)
+            self.assertTrue(path.exists())
+
     def test_detached_worktree_at_main_is_not_a_candidate(self):
         path = self.worktree("wt-detached")
         _, out = self.hygiene("--apply")
