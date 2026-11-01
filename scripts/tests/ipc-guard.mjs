@@ -86,8 +86,10 @@ async function socketProbe() {
   }
 }
 
-function childPipeProbe() {
-  const result = spawnSync(process.execPath, ["-e", "process.stdout.write('ok')"], { encoding: "utf8" });
+export function childPipeProbe(spawn = spawnSync) {
+  const result = spawn(process.execPath, ["-e", "process.stdout.write('ok')"], {
+    encoding: "utf8", timeout: 3_000, killSignal: "SIGKILL", maxBuffer: 1024,
+  });
   // A denied pipe can come back as status 0 with an error and no output, so
   // the error is checked before the status.
   if (result.error) return classify("child pipe", result.error);

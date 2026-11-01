@@ -144,11 +144,6 @@ strip_params note-identity follow-up has shipped (see Shipped).
 ### Cookie's own proposals (only after the plan work above)
 
 <!-- BEGIN GENERATED section=proposals: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-wg5` **Bound adapter comparisons when sandbox child pipes are denied.**
-  The optional 5,000-case differential check stalled; a one-case probe timed
-  out after 30 seconds, and the child-pipe guard reports EPERM. Establish the
-  exact wait and reuse explicit sandbox diagnostics with a bounded runner;
-  required CI mode must still fail on denial. No engine changed this cycle.
 - [ ] `brwr-7lq` **Restore overlapping recorded container groups with explicit identity review.**
   The removed-site flow refuses overlapping repository/PR history because it
   cannot establish one note identity. Extend the host's impact/alias planning
@@ -246,6 +241,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Testing & Verification. **Finish adapter comparisons in restricted sandboxes (2026-11-01).** Reproduced the stall inside the Rust engine child call and added the shared child-pipe probe before either engine starts. Confirmed permission denial explicitly skips outside required mode and fails in CI; probe and engine timeouts diagnose hangs, and incomplete output fails. Neither production engine changed. **Metrics:** 15 new regression cases (one guarded child-pipe case skipped here), 5,000 real cases matched through supplemental regular-file transport; 1,207 reported Rust passes, 38 extension files, 85 Python tests, seven Node script files and all required/README gates green.
+
 - **Category:** Documentation & Process. **Hydrate tracked bead history before issue creation (2026-11-01).** The new create-bead command validates and imports the committed queue before creating, reserving closed IDs with the existing timestamp guard and retaining local-only work. Failed imports stop creation, JSON output stays clean, and linked worktrees and routing overrides use the documented isolated workflow. The queue checker now has a direct closed/open ID collision regression. **Metrics:** 9 new regressions; 85 Python tests; 38 extension test files; 1,207 reported Rust passes; full required and README gates green.
 
 - **Category:** Testing & Verification. **Remove the Tasks focus test polling race (2026-11-01).** The focus regression now triggers the existing visibility refresh and waits for a rendered status change or added row before asserting retained-node and rebuilt-list focus. It no longer races the two-second poll or relies on a fixed settle delay. **Metrics:** 10/10 isolated local repeats; 38 extension test files; full required and README gates green.
@@ -1469,3 +1466,39 @@ new tracker regressions in the direct test file as the P3 tracker fixes
 arrive. Product ideation is deferred while assignments remain; the existing
 named focus-session proposal is still a useful future direction once the
 assigned queue is clear. No additional speculative quality items were added.
+
+
+### Cycle observations (2026-11-01 — bounded adapter comparisons)
+
+Completed assigned `brwr-wg5`. Instrumentation located the previous stall
+inside the Rust engine's piped synchronous child call after case generation
+had finished. Reusing the existing child-pipe probe is enough to avoid that
+wait in this sandbox; a three-second probe bound and 60-second engine-batch
+bound also diagnose other hangs. Only confirmed permission denial may skip
+outside required mode; engine failures and incomplete output fail. No
+production engine or evaluation-time bound changed.
+
+Health began green with no quarantine file and a clean worktree. Required
+and README gates passed: 1,207 reported Rust passes (documented sandbox IPC
+guards apply), all 38 extension files, both Clippy configurations, 85 Python
+tests, seven Node script files and 10,696 inert Markdown renderings. Fifteen
+new regression cases cover the runner/probe; one real-pipe case skips here.
+An additional regular-file transport validation matched 5,000 real Rust and
+TypeScript cases (seed 7). This supplements engine coverage; the normal CLI
+correctly reports no cases compared on denial, and required CI mode fails.
+Logs: `target/cookie-wg5-final/`, `target/cookie-diff-reproduction.log` and
+`target/cookie-diff-validation/`. Full diff reviewed locally; independent
+review and publication remain with the driver.
+
+`brwr-7lq` is blocked on `brwr-hq8`: its acceptance requires the host-derived
+identity impact plan whose direction the coordinator explicitly human-gated
+with parent `brwr-6x2`. The current overlapping-container test demonstrates
+why removing the refusal would lose the identity guarantee. The dependency
+is now explicit and the bead records the existing decision needed from John;
+no human label or gate was changed. Wardroom is not active in this workspace
+(no outbox directory), so there was no relay post. Twelve assigned items
+remain ready and one is blocked. Next is `brwr-jlz`; keep the existing tracker
+fixes together with their direct regressions when practical. Product ideation
+remains deferred while assignments are actionable. The recurring lesson is
+to distinguish blocked transport from engine behavior before changing a
+parser or adding another production mechanism.
