@@ -645,3 +645,23 @@ The optional 5,000-case engine comparison is not counted as passed: its
 one-case probe timed out, and Node child pipes are denied by this sandbox.
 The run was stopped and recorded as brwr-wg5. Both adapter engines are
 unchanged; their ordinary vector tests passed in the required gate.
+
+### 2026-11-01 — Repair the exported work queue before feature work
+
+This cycle repaired a failing queue check discovered during the opening
+health gate. The committed queue named two Re-learn prerequisites that were
+absent from the export, while the local database still held their stale rows
+from an unmerged attempt. One row claimed a completed journal whose source
+is absent from this checkout. After retaining a local backup, Cookie removed
+only those database-only rows and dangling links, exported the queue, and
+regenerated the backlog from its authoritative data. All 173 tracked issues
+and their statuses and labels remain intact; human review gates stay in
+place. The hydration follow-up now records the evidence. This is queue
+maintenance; assigned product fixes remain open for the next healthy cycle.
+
+Validation after the repair passed the complete required and README gates:
+1,207 reported Rust passes, all 37 extension test files, both Clippy builds,
+74 Python script tests, six Node script test files, and 10,696 inert Markdown
+renderings. Current-state and queue checks pass. Full diff reviewed locally;
+independent review and publication remain with the driver. Logs are in
+`target/overnight-health/2026-11-01-queue-repair/`.
