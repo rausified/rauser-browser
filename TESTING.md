@@ -150,8 +150,14 @@ a CSS layout engine.
 
 `extension/tests/task-tracker.test.mjs` exercises the tracker directly with
 scripted host replies, deferred promises and mocked timers. It pins merged
-refreshes, a single polling timer, completion callbacks, off-page fetches,
-visibility and disposal. The Tasks page keyboard-focus regression triggers
+refreshes (including a failed in-flight request), a single polling timer,
+completion callbacks after stale views, off-page fetches, visibility and
+disposal. Failure cases advance mocked timers across 2/4/8/16-second retry
+boundaries, the five-failure pause, successful recovery and an explicit
+refresh restarting the budget. Both list and off-page read failures are
+covered. Panel task-bar cases preserve a task-list error through a live
+worker notice or a stored notice consumed after following its tab.
+The Tasks page keyboard-focus regression triggers
 the existing hide/show refresh handler and waits for a rendered status pill
 or new row, so both focus assertions avoid racing the real polling interval.
 

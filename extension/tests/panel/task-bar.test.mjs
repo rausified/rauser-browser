@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ARTICLE_URL, CONFIG, PANEL_HTML, READY, REUSE_KEY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
+  ARTICLE_URL, CONFIG, PANEL_HTML, PANEL_NOTICE_KEY, READY, REUSE_KEY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
   buttonIn, descendants, install, readablePage, settle, startsRun, storageKey, teardown, until,
 } from "./harness.mjs";
 
@@ -470,6 +470,37 @@ test("a list_runs failure shows one notice, in the task area", async () => {
   assert.equal(older.el("task-run-area").textContent, "Rebuild the Brauser host to see task history.");
   assert.equal(tasksButton(older), "Tasks ↗");
 });
+
+for (const delivery of ["live", "stored"]) {
+  test(`a ${delivery} worker summary notice preserves a failed task-list notice`, async () => {
+    const restore = held();
+    let summaries = 0;
+    const session = new Map();
+    const notice = { kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: delivery === "stored" ? 2 : 1, at: Date.now() };
+    const page = await taskPanel({
+      session,
+      intercept: (request) => {
+        if (request.type === "list_runs" && request.kind === "task") {
+          return { type: "error", code: "internal", message: "task list broke" };
+        }
+        if (request.type === "list_runs" && request.kind === "summary" && ++summaries === 2) return restore.promise;
+        return startsTask()(request);
+      },
+    });
+    await until(() => page.el("task-run-area").textContent.includes("task list broke"), "the task-list notice");
+    await settle(20);
+    if (delivery === "live") page.notify(notice);
+    else {
+      session.set(PANEL_NOTICE_KEY, notice);
+      page.navigate(OTHER_URL, 2);
+    }
+    await until(() => summaries === 2, "the worker's summary restore");
+    restore.release({ type: "runs_listed", runs: [], more: false });
+    await settle(20);
+    assert.equal(page.el("task-run-area").textContent, "Could not list agent runs: task list broke");
+    assert.doesNotMatch(page.el("run-area").textContent, /task list broke/);
+  });
+}
 
 test("summary restore asks list_runs for kind summary", async () => {
   const summary = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000060", title: "Summary page", state: "running" };

@@ -763,3 +763,16 @@ result per input. Neither adapter engine nor its evaluation-time checks
 changed. `test:scripts` includes the runner regressions. Supplemental
 regular-file transport compared 5,000 real cases without differences;
 normal piped CI/platform checks remain separate evidence.
+
+
+### 2026-11-01 — Assigned task tracker follow-ups
+
+Cookie completed `brwr-jlz`, `brwr-2p0`, `brwr-7u4`, `brwr-4r1` and
+`brwr-ug2`: completion announcements remember run IDs, merged refreshes drain
+after failures, and consecutive unsuccessful list/off-page passes back off at
+2/4/8/16 seconds before pausing on the fifth failure. Explicit refreshes restart
+the budget, successful passes reset it, and hidden/disposed panels retain their
+existing polling boundaries. The unused tracker clock dependency is removed.
+The panel now restores a task-list error after every summary-card restore,
+including live and stored worker notices. Direct tests use mocked timers and
+deferred host replies; panel tests exercise both notice delivery paths.
