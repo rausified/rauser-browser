@@ -730,3 +730,21 @@ safety checks are unchanged. A temporary-repository regression reproduces
 the old failure and verifies two removals, branch preservation and stale
 common-lock cleanup. Hosted workflow cancellation remains unexercised locally;
 no live API or deployed service was used.
+
+
+### 2026-11-01 — Rendered text for boxless bodies and task test coverage
+
+`brwr-dc7`: the no-article extractor fallback uses the rendered document
+root's `innerText` when the body has no layout box, instead of walking the
+body's raw nodes. This keeps hidden descendants and scripts out of
+`display: contents` fallback text and leaves a `display: none` body's text
+out. The existing document-root box check still excludes non-rendered
+frames. `extension/tests/extract.test.mjs` covers both fallback cases and
+checks that hidden bulk text cannot win `summarizeTab` frame selection.
+
+`brwr-z4j`: `extension/tests/task-tracker.test.mjs` directly checks merged
+refreshes, polling, completion, missing-run fetches, visibility and disposal
+with mocked timers. `brwr-b2p`: the Tasks page keyboard-focus test now drives
+the existing visibility refresh and waits for rendered changes, removing
+its dependency on the real two-second poll. Production task behavior is
+unchanged. Browser CSS rendering and macOS CI remain separate validation.
