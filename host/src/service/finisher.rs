@@ -230,6 +230,7 @@ impl RunFinisher for SummaryFinisher {
         let (event_key, artifact_type) = summary_artifact(&config, &run.url, &key, index.as_ref())
             .ok_or_else(|| SaveFailure::retry_after_write(INDEX_UNAVAILABLE, &written))?;
         let summary = PageSummary {
+            overview: (!answer.overview.is_empty()).then(|| answer.overview.clone()),
             event_id: run.run_id.clone(),
             url: run.url.clone(),
             title,
@@ -1071,6 +1072,7 @@ mod tests {
         assert_eq!(event.record_key, url_record_key(PAGE).unwrap());
         assert_eq!(event.harness, HarnessId::Codex);
         assert_eq!(event.importance, ImportanceLevel::High);
+        assert_eq!(event.overview.as_deref(), answer()["overview"].as_str());
         assert_eq!(event.summary_path, slash(&relative));
 
         let id = web_page_artifact_id(PAGE).unwrap();
@@ -1078,6 +1080,7 @@ mod tests {
         assert_eq!(artifact.unwrap().artifact_type, "web.page");
         let summary = summary.unwrap();
         assert_eq!(summary.importance, ImportanceLevel::High);
+        assert_eq!(summary.overview, event.overview);
         assert_eq!(summary.summary_path, slash(&relative));
     }
 

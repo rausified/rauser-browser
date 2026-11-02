@@ -1121,3 +1121,52 @@ guard skips), 40 extension test files, both Clippy builds and 10,696 inert
 Markdown renderings. Accessibility passes two fixtures and explicitly skips
 36 browser cases inside the sandbox. This completes brwr-sm1; no live
 harness, external API or deployed runtime was used.
+
+## 2026-11-02 — Read the summary before reopening it (brwr-sm3)
+
+Saved summaries now tell you what a page is about directly in the panel and
+Recent: their one-sentence overview appears alongside the document type. A
+finished summary run leads its result with that same overview while keeping
+its type, category and importance details. Previously the overview reached
+only the summary file, so deciding what to reopen required opening that file.
+The host now carries the validated sentence through the daily-log event and
+run result to each view. Older summaries retain their familiar wording, and
+new and old overviews survive reopening the cache and rebuilding it from
+logs. Agent text stays literal, including markup-like strings. This additive
+protocol-v8 change needs the host and extension deployed together; older
+hosts cannot replay newly written overview fields.
+
+## 2026-11-02 — Keep dismissed summaries reachable (brwr-tsh1)
+
+Removing the harness no longer makes retained summary history disappear
+after a panel restore. Brauser keeps its browser-local history hint when a
+retained summary exists, even if its card was dismissed or aged out of the
+panel's one-day restore window. Tasks still lists those records and its Show
+dismissed control reveals them. An end-to-end controller regression follows
+a dismissed summary through panel restore, harness removal and Tasks, and
+additional cases cover older summaries and mixed legacy history.
+
+
+## 2026-11-02 — Recognize padded IDs in tab titles (brwr-tp1)
+
+Custom capture rules can now remove an identifier from a tab title even when
+it ends with base64 padding, such as `[uXjVM0uuBLo=] Roadmap`. The same ID
+already worked in URLs; the title matcher stopped before its `=` and left the
+whole title in place. Both the native host and browser now recognize the
+padded title in either direction, and tab-title alias suggestions retain the
+complete identifier. They still reject empty bodies, internal or excessive
+padding, and values whose padding exceeds the configured length limit.
+
+The fix reuses the existing longest-run matcher, with strict validation after
+scanning, following a separate parser design challenge. A custom template
+that uses `=` as the delimiter beside a token capture now fails validation;
+use a delimiter outside the token alphabet, such as brackets or spaces.
+Shipped starter rules do not use token title captures. The 26 shared regression
+vectors reproduced ten failures in each engine before the fix and now pass.
+The full local gate passed with 1,337 Rust-reported test outcomes, all 40
+extension files and both Clippy builds; 1,265 individual adapter JavaScript
+tests pass. A regular-file comparison also verified agreement on 2,024 cases.
+IPC and real Chromium checks explicitly skip in this sandbox; the ordinary
+differential runner skipped its blocked child pipes and fuzz compilation
+could not find the uncached `libfuzzer-sys` dependency. Those checks remain for
+the external gate/CI. No live service, harness or external API was used.

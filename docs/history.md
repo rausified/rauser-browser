@@ -214,6 +214,19 @@ external rerun; sandbox skips are still explicit and never count as passes.
 
 **As built (protocol v6, 2026-10-26).** The rule this record introduced is now stated in DESIGN.md §7.2, “Protocol v6 changes”.
 
+**Token title padding (2026-11-02, `brwr-tp1`).** Both title engines now
+consume `=` in their longest token runs before validating the complete value.
+Forward and backward captures can clean padded board titles and produce
+padded tab-title aliases. Internal padding, more than two `=`, padding alone
+and length overflow still reject that entry; the usual ordered-title fallback
+applies.
+Custom templates using `=` as the bounding delimiter now fail
+`title_capture_swallows`; no shipped starter uses token title captures.
+Shared vectors cover both directions and the existing whole-token oracle
+continues to reject malformed URL values. The pre-implementation reviewer
+kept the existing matcher rather than adding a padding-specific scanner;
+see [the plan](superpowers/plans/2026-11-02-token-title-padding.md).
+
 ## §8 Extension Permissions — history
 
 Protocol v6 (2026-10-26) replaced the earlier permission model. Before it, the manifest declared broad *optional* HTTP(S) patterns and Chrome granted only the exact origin the user enabled, wrote a first note on, or drafted an adapter for; `webNavigation` was optional; `activeTab`, a `note` command, and the toolbar action granted temporary access to one tab; and settings and the worker reconciled revoked grants.
@@ -979,3 +992,36 @@ The full fresh diff was reviewed manually, then the single local Codex
 reviewer pass found no P1–P3 issues. No external harness/API review was run;
 the driver retains its independent gate and publication review. The plan,
 feature briefing and pending documentation record the final contract.
+
+## 2026-11-02 — Summary overviews in the panel and retained history
+
+Cookie implemented brwr-sm3: the existing validated overview now travels in
+`PageSummary`, the optional `SummaryEvent.overview`, `SummaryView` and
+`RunAnswer`. The native host rechecks the 300-character, single-line bound
+on log replay; protocol runtime guards count Unicode characters, including
+astral characters. The saved-summary line and Recent show overview plus type;
+run results lead with overview and retain their classification. Old events
+and run results omit the field and keep their previous wording. Format-8
+cache reopen and log rebuild preserve both shapes without migration. Deploy
+host and extension together; older hosts cannot replay the new event field.
+
+Cookie also repaired brwr-tsh1: summary restore retains `runs_may_exist_v1`
+for any retained summary/task even when no panel card qualifies. A dismissed
+summary remains reachable on Tasks after the harness is removed. The empty
+list's existing timestamp guard still protects a concurrently started run.
+
+## 2026-11-02 — Preserve interrupted summary appends across the overview upgrade
+
+Independent review found that Retry save added `overview` to an older run's
+journaled event, so the exact payload check refused to complete it. Summary
+recording now tries the pre-overview payload after that mismatch, retaining
+all existing replay checks and returning the original event for indexing.
+Regressions cover rolled-back, partially written and complete old entries,
+byte-identical recovery after reopening the store, changed paths, and refusal
+to alter an overview already bound by a newer intent.
+
+Review also covered profiles where the old restore bug had already erased
+the history hint. A successful list of retained summaries now recreates that
+hint even when every card is dismissed or too old. The panel-to-Tasks
+regression exercises both an existing hint and an absent one before removing
+the harness.
