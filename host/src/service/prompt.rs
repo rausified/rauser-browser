@@ -1094,6 +1094,20 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_defines_each_access_value() {
+        let prompt = sample_summary_prompt(false);
+        assert!(prompt.contains("\"access\": \"ok | sign_in | denied | not_found\""));
+        for rule in [
+            "access: ok when you could read the artifact",
+            "sign_in when the page shows a sign-in or session-expired screen",
+            "denied for a no-permission screen",
+            "not_found for a not-found or deleted page",
+        ] {
+            assert!(prompt.contains(rule), "{rule} missing from:\n{prompt}");
+        }
+    }
+
+    #[test]
     fn summary_prompt_asks_for_every_answer_field() {
         let prompt = sample_summary_prompt(false);
         let schema = crate::answer::answer_schema();

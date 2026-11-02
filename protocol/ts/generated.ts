@@ -596,7 +596,10 @@ export interface RunAnswer {
   category: string;
   importance: ImportanceLevel;
   importance_reason: string;
+  access?: AnswerAccess;
 }
+
+export type AnswerAccess = "ok" | "sign_in" | "denied" | "not_found";
 
 export interface RunView {
   run_id: string;

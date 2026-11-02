@@ -10,7 +10,7 @@ import { APP_NAME, storageKey } from "./brand.js";
 import {
   HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId, type HostClient,
 } from "./native.js";
-import { summaryLine } from "./summary-text.js";
+import { notSavedText, summaryLine } from "./summary-text.js";
 
 export const POLL_MS = 1000;
 export const RESTORE_FINISHED_WITHIN_MS = 24 * 60 * 60 * 1000;
@@ -96,6 +96,8 @@ export function stateText(run: RunView): string {
 }
 
 export function answerLine(answer: RunAnswer): string {
+  const wall = notSavedText(answer.access);
+  if (wall !== null) return wall;
   return `Type: ${answer.document_type} · Category: ${answer.category} · ` +
     `Importance: ${answer.importance} — ${answer.importance_reason}`;
 }

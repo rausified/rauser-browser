@@ -228,6 +228,27 @@ pub fn owned_summary(bytes: &[u8], key: &RecordKey) -> bool {
     owned_frontmatter(bytes, "summary", &[(id, key.value.as_str())], &[forbidden])
 }
 
+/// The `read_scope` a summary file of `key` records in its leading
+/// frontmatter, or `None` for a file `owned_summary` does not accept, an
+/// older file without one, or an unknown value.
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
+pub fn recorded_read_scope(file: &[u8], key: &RecordKey) -> Option<ReadScope> {
+    if !owned_summary(file, key) {
+        return None;
+    }
+    let text = std::str::from_utf8(file).ok()?;
+    let (frontmatter, _) = text.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let value = frontmatter
+        .lines()
+        .find_map(|line| line.strip_prefix("read_scope: "))?;
+    match value {
+        "whole" => Some(ReadScope::Whole),
+        "partial" => Some(ReadScope::Partial),
+        "page_only" => Some(ReadScope::PageOnly),
+        _ => None,
+    }
+}
+
 /// The record and canonical URL a summary file's `brauser:` block names
 /// (`kind: summary`, its `canonical_url`, and one `url_id` or
 /// `artifact_id`), or `None` when it names no single record. This only
@@ -1327,6 +1348,7 @@ mod tests {
                 },
             ],
             read_scope: Some(ReadScope::Whole),
+            access: crate::answer::Access::Ok,
             document_type: "specification".into(),
             category: "technical specification".into(),
             entities: Entities {
@@ -1406,6 +1428,46 @@ mod tests {
                 serde_json::Value::from(importance_str(level))
             );
         }
+    }
+
+    #[test]
+    fn recorded_read_scope_reads_owned_files_only() {
+        let (_root, vault) = fixed_vault();
+        let key = url_record_key(PAGE_URL).unwrap();
+        let other = url_record_key("https://e.example/other").unwrap();
+        let note_link = vault
+            .note_link(&key, PAGE_URL, LinkStyle::Relative)
+            .unwrap();
+        for scope in [ReadScope::Whole, ReadScope::Partial, ReadScope::PageOnly] {
+            let mut answer = answer();
+            answer.read_scope = Some(scope);
+            let file = render_summary(
+                &document(&key, &answer, note_link.clone()),
+                LinkStyle::Relative,
+            );
+            assert_eq!(recorded_read_scope(file.as_bytes(), &key), Some(scope));
+            // Another record's file is not read.
+            assert_eq!(recorded_read_scope(file.as_bytes(), &other), None);
+        }
+        let mut old = answer();
+        old.read_scope = None;
+        let file = render_summary(
+            &document(&key, &old, note_link.clone()),
+            LinkStyle::Relative,
+        );
+        assert_eq!(recorded_read_scope(file.as_bytes(), &key), None);
+        // A body line is not frontmatter, and an unknown value is not a scope.
+        let mut forged = answer();
+        forged.read_scope = Some(ReadScope::Whole);
+        forged.description = "read_scope: page_only".into();
+        let file = render_summary(&document(&key, &forged, note_link), LinkStyle::Relative);
+        assert_eq!(
+            recorded_read_scope(file.as_bytes(), &key),
+            Some(ReadScope::Whole)
+        );
+        let odd = file.replace("read_scope: whole", "read_scope: most");
+        assert_eq!(recorded_read_scope(odd.as_bytes(), &key), None);
+        assert_eq!(recorded_read_scope(b"not a summary", &key), None);
     }
 
     #[test]

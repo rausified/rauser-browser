@@ -164,10 +164,17 @@ function isSiteDraftAnswer(value: unknown): boolean {
 const IMPORTANCE_LEVELS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 
 /** Exactly the v6 `RunAnswer` keys; the host bounds the strings. */
+const ANSWER_ACCESS: ReadonlySet<string> = new Set(["ok", "sign_in", "denied", "not_found"]);
+
 function isRunAnswer(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const answer = value as Record<string, unknown>;
-  return Object.keys(answer).length === 4 &&
+  // `access` is optional: an older service never sends it, and the host
+  // sends it only for a wall the agent met.
+  const keys = Object.keys(answer);
+  const hasAccess = "access" in answer;
+  return keys.length === (hasAccess ? 5 : 4) &&
+    (!hasAccess || (typeof answer.access === "string" && ANSWER_ACCESS.has(answer.access))) &&
     typeof answer.document_type === "string" && typeof answer.category === "string" &&
     typeof answer.importance === "string" && IMPORTANCE_LEVELS.has(answer.importance) &&
     typeof answer.importance_reason === "string";

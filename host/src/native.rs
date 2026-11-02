@@ -905,7 +905,23 @@ fn start_auto_summary(
         return skipped(Skip::NotAnArtifact);
     }
     match existing_summary(config, &key.value) {
-        Ok(Some(_)) => return skipped(Skip::AlreadySummarized),
+        Ok(Some(view)) => {
+            let home = config
+                .snapshot()
+                .storage
+                .as_ref()
+                .map(|storage| std::path::PathBuf::from(&storage.root));
+            let today = crate::capture::parse_event_time(&value.requested_at)
+                .ok()
+                .map(time::OffsetDateTime::date);
+            let blocks = match (home, today) {
+                (Some(home), Some(today)) => summary_blocks_auto(&view, &home, &key, today),
+                _ => true,
+            };
+            if blocks {
+                return skipped(Skip::AlreadySummarized);
+            }
+        }
         Ok(None) => {}
         Err(cause) => {
             warn_cause(&cause, "auto summary: history unavailable");
@@ -930,6 +946,32 @@ fn start_auto_summary(
         instruction: None,
     };
     forward(&Request::StartRun(request), service)
+}
+
+/// Whether an artifact's latest summary stops an automatic one. Only a
+/// summary whose file records `read_scope: page_only` and that was made on an
+/// earlier local day (in its own offset) does not, so a viewer-only summary
+/// is retried at most once a day. A file that is missing, unreadable or not
+/// this record's, or a timestamp that does not parse, blocks.
+#[cfg(unix)]
+fn summary_blocks_auto(
+    view: &brauser_protocol::SummaryView,
+    home: &std::path::Path,
+    key: &RecordKey,
+    today: time::Date,
+) -> bool {
+    let Ok(summarized) = time::OffsetDateTime::parse(
+        &view.summarized_at,
+        &time::format_description::well_known::Rfc3339,
+    ) else {
+        return true;
+    };
+    let Ok(file) = std::fs::read(home.join(&view.summary_path)) else {
+        return true;
+    };
+    let page_only =
+        crate::summary::recorded_read_scope(&file, key) == Some(crate::answer::ReadScope::PageOnly);
+    !(page_only && summarized.date() < today)
 }
 
 /// The artifact's latest summary in the index, if it has one.
@@ -10379,6 +10421,120 @@ id = "gdoc:{host}/{id}"
             assert_eq!(forwarded.selection, None);
             assert_eq!(forwarded.instruction, None);
             assert_eq!(forwarded.url, GDOC_URL);
+        }
+
+        fn page_only_view(summarized_at: &str) -> brauser_protocol::SummaryView {
+            brauser_protocol::SummaryView {
+                summarized_at: summarized_at.into(),
+                document_type: "report".into(),
+                category: "news".into(),
+                importance: brauser_protocol::ImportanceLevel::Low,
+                summary_path: "summaries/a.summary.md".into(),
+                harness: brauser_protocol::HarnessId::Claude,
+            }
+        }
+
+        /// A minimal summary file of `key` recording `scope`.
+        fn write_summary_file(home: &std::path::Path, key: &RecordKey, scope: &str) {
+            let id = match key.kind {
+                RecordKeyKind::Url => "url_id",
+                RecordKeyKind::Artifact => "artifact_id",
+            };
+            let dir = home.join("summaries");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("a.summary.md"),
+                format!(
+                    "---\nbrauser:\n  kind: summary\n  canonical_url: \"{GDOC_URL}\"\n  {id}: \"{}\"\nread_scope: {scope}\n---\nBody\n",
+                    key.value
+                ),
+            )
+            .unwrap();
+        }
+
+        fn gdoc_key() -> RecordKey {
+            RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "gdoc:docs.google.com/abcdefghijklmnopqrst".into(),
+            }
+        }
+
+        fn today() -> time::Date {
+            time::Date::from_calendar_date(2026, time::Month::November, 2).unwrap()
+        }
+
+        #[test]
+        fn a_page_only_summary_from_yesterday_does_not_block() {
+            let home = tempfile::tempdir().unwrap();
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            let view = page_only_view("2026-11-01T23:30:00-07:00");
+            assert!(!summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        #[test]
+        fn a_page_only_summary_from_today_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            // Its own offset's date is today, though UTC's is tomorrow.
+            let view = page_only_view("2026-11-02T20:00:00-07:00");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        #[test]
+        fn a_whole_summary_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            for scope in ["whole", "partial"] {
+                write_summary_file(home.path(), &gdoc_key(), scope);
+                let view = page_only_view("2026-10-01T09:00:00Z");
+                assert!(
+                    summary_blocks_auto(&view, home.path(), &gdoc_key(), today()),
+                    "{scope}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_missing_summary_file_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            let view = page_only_view("2026-10-01T09:00:00Z");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+            // So does another record's file, or an unreadable timestamp.
+            write_summary_file(home.path(), &url_record_key_for_test(), "page_only");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            assert!(summary_blocks_auto(
+                &page_only_view("yesterday"),
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        fn url_record_key_for_test() -> RecordKey {
+            RecordKey {
+                kind: RecordKeyKind::Url,
+                value: "https://example.com/".into(),
+            }
         }
 
         /// Only an automatic summary checks for an existing one: Summarize &

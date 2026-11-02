@@ -266,6 +266,7 @@ const FAKE_ANSWER = {
   metadata: { authors: [], owner: "", status: "", created: "", updated: "", version: "" },
   references: [],
   read_scope: "whole",
+  access: "ok",
   document_type: "article", category: "news",
   entities: { technologies: ["Smoke"], products: [], people: [], companies: [] },
   description: "A smoke article the fake agent read.",
@@ -284,6 +285,7 @@ const FIXTURE_SUMMARY_ANSWER = {
   metadata: { authors: [], owner: "", status: "", created: "", updated: "", version: "" },
   references: [],
   read_scope: "whole",
+  access: "ok",
   document_type: "specification", category: "technical specification",
   entities: { technologies: [FIXTURE_ENTITY], products: [], people: [], companies: [] },
   description: [

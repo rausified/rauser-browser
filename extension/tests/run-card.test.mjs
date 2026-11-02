@@ -181,6 +181,15 @@ test("resume command quotes the knowledge base path", () => {
   assert.equal(resumeCommand("/kb", "a;rm -rf ~"), "cd '/kb' && claude --resume 'a;rm -rf ~'");
 });
 
+test("aSignInRunShowsNotSaved: a wall the agent met replaces the answer line", () => {
+  assert.equal(answerLine({ ...ANSWER, access: "sign_in" }),
+    "Not saved: the agent saw a sign-in page. Sign in, then summarize again.");
+  assert.equal(answerLine({ ...ANSWER, access: "denied" }),
+    "Not saved: you don't have access to this page.");
+  assert.equal(answerLine({ ...ANSWER, access: "not_found" }), "Not saved: the page was not found.");
+  assert.equal(answerLine({ ...ANSWER, access: "ok" }), answerLine(ANSWER));
+});
+
 test("answer line shows type, category and importance", () => {
   assert.equal(answerLine(ANSWER), "Type: report · Category: news · Importance: high — Ships Friday");
   assert.equal(stateText(view({ state: "queued" })), "Queued");

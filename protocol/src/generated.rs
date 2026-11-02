@@ -830,6 +830,17 @@ pub struct RunAnswer {
     pub category: String,
     pub importance: ImportanceLevel,
     pub importance_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<AnswerAccess>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerAccess {
+    Ok,
+    SignIn,
+    Denied,
+    NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

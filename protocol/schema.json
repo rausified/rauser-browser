@@ -1998,8 +1998,14 @@
         "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
         "category": { "type": "string", "minLength": 1, "maxLength": 64 },
         "importance": { "$ref": "#/$defs/ImportanceLevel" },
-        "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 }
+        "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "access": { "description": "Optional; missing means ok (an older service's answer). Anything but ok means the agent met a wall and the run saved no summary.", "$ref": "#/$defs/AnswerAccess" }
       }
+    },
+    "AnswerAccess": {
+      "type": "string",
+      "description": "Whether the summary agent could see the artifact, or met a sign-in, no-access or not-found wall instead.",
+      "enum": ["ok", "sign_in", "denied", "not_found"]
     },
     "RunView": {
       "type": "object",

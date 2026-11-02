@@ -12,3 +12,18 @@ export function summaryLine(s: SummaryView): string {
 export function recentSummaryText(s: SummaryView): string {
   return `Summarized · ${s.document_type}, ${s.importance} importance`;
 }
+
+/** Why a summary run saved nothing: the agent met a sign-in, no-access or
+ * not-found wall instead of the artifact. `null` for an answer it read. */
+export function notSavedText(access: string | undefined): string | null {
+  switch (access) {
+    case "sign_in":
+      return "Not saved: the agent saw a sign-in page. Sign in, then summarize again.";
+    case "denied":
+      return "Not saved: you don't have access to this page.";
+    case "not_found":
+      return "Not saved: the page was not found.";
+    default:
+      return null;
+  }
+}

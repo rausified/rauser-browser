@@ -72,6 +72,27 @@ test("agentStateText_describes_each_state", () => {
     "AI commands are off (version 2.1.284): run setup again");
 });
 
+test("a run answer may carry access, and only a known one", () => {
+  const view = {
+    run_id: "00000000-0000-4000-8000-000000000001", state: "succeeded", harness: "claude",
+    record_key: { kind: "url", value: "https://a.example/x" }, written_record_key: null,
+    url: "https://a.example/x", title: "T", cwd: null, created_at: "2026-11-02T14:00:00-07:00",
+    started_at: null, finished_at: null, error: null, error_kind: null, thread_id: null,
+    session_id: null, summary_path: null, stream_bytes: 0, can_retry_save: false,
+    answer: { document_type: "report", category: "news", importance: "high", importance_reason: "r" },
+  };
+  const fetched = (run) => ({
+    type: "run_fetched", protocol_version: 8, request_id: "r", run, stream_text: "", next_offset: 0,
+    more: false,
+  });
+  assert.equal(isResponseShape(fetched(view)), true);
+  for (const access of ["ok", "sign_in", "denied", "not_found"]) {
+    assert.equal(isResponseShape(fetched({ ...view, answer: { ...view.answer, access } })), true, access);
+  }
+  assert.equal(isResponseShape(fetched({ ...view, answer: { ...view.answer, access: "blocked" } })), false);
+  assert.equal(isResponseShape(fetched({ ...view, answer: { ...view.answer, extra: 1 } })), false);
+});
+
 test("isConfig requires exactly the v6 keys", () => {
   assert.equal(isConfig(config), true);
   assert.equal(isConfig({ ...config, agent_denylist: [] }), false);

@@ -385,3 +385,25 @@ fn runs_listed_more_is_optional() {
         assert_eq!(listed.more, Some(more));
     }
 }
+
+#[test]
+fn run_answer_access_is_optional() {
+    // An older service's answer has no access; it reads as before.
+    let base = r#""answer":{"document_type":"report","category":"news","importance":"high","importance_reason":"New."}"#;
+    let view = RUN_VIEW.replace(r#""answer":null"#, base);
+    let parsed: Value = serde_json::from_str(&run_fetched(&view)).unwrap();
+    let response: Response = serde_json::from_value(parsed.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&response).unwrap(), parsed);
+    // A wall the agent met is carried for the run card.
+    for access in ["ok", "sign_in", "denied", "not_found"] {
+        let with = base.replace(r#""New."}"#, &format!(r#""New.","access":"{access}"}}"#));
+        let view = RUN_VIEW.replace(r#""answer":null"#, &with);
+        let parsed: Value = serde_json::from_str(&run_fetched(&view)).unwrap();
+        assert!(schema_subset::valid("RunFetched", &parsed), "{access}");
+        let response: Response = serde_json::from_value(parsed.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&response).unwrap(), parsed, "{access}");
+    }
+    let bad = base.replace(r#""New."}"#, r#""New.","access":"blocked"}"#);
+    let view = RUN_VIEW.replace(r#""answer":null"#, &bad);
+    assert!(serde_json::from_str::<Response>(&run_fetched(&view)).is_err());
+}

@@ -68,6 +68,7 @@ Answer with one JSON object of this shape:
   },
   "references": [{ "title": "…", "url": "…" }],
   "read_scope": "whole | partial | page_only",
+  "access": "ok | sign_in | denied | not_found",
   "importance": { "level": "high | medium | low", "reason": "one line" },
   "assessment": "A short paragraph: why this matters, or doesn't, given what is already in the knowledge base — what it adds, confirms, contradicts, or duplicates.",
   "related_notes": ["paths relative to the knowledge base folder that informed the assessment"]
@@ -88,6 +89,7 @@ Field rules:
 - metadata: what the artifact itself states, such as its authors, owner or assignee, status (for example draft, approved, open, merged), creation and last-update dates (YYYY-MM-DD when known) and version. Use "" for a value it does not state and [] for no authors.
 - references: the other documents, tickets, pull requests, specifications or sites the artifact cites or depends on, at most 20, most important first. Give each a short title and its http or https address, or "" when the artifact names it without an address. Use [] if it cites none. List them only; do not open them.
 - read_scope: whole if you read the artifact's full content (from the page file or by retrieving it), partial if you read only part of it, page_only if you could read only a viewer or preview that held little of its content.
+- access: ok when you could read the artifact, from the page file or by retrieving it. sign_in when the page shows a sign-in or session-expired screen instead of the artifact and you could not retrieve it; denied for a no-permission screen; not_found for a not-found or deleted page. When access is not ok, still fill every field from what you saw, briefly; Brauser then saves nothing.
 - importance: high for something the user is likely to act on or come back to, low for something incidental.
 - related_notes: each entry must name an existing note, by a path relative to the knowledge base folder, that informed the assessment; use [] if none did.
 
