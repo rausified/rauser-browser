@@ -108,31 +108,31 @@ export function taskFailureText(error: unknown): TaskFailure {
   return plain(`Could not start the task: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-/** Starts a task on `tab` with the user's `instruction`. An instruction
+/** Starts a task on `tab` (or without a page for null) with the user's `instruction`. An instruction
  * that cleaning leaves empty sends nothing and returns null. Otherwise the
- * tab is read (readTab, which throws `unreadable` or `page_changed` before
+ * tab, when present, is read (readTab, which throws `unreadable` or `page_changed` before
  * anything is sent) and start_task goes to the host, which answers with the
  * new run; a task never joins another. Runs are marked as possibly existing
  * before the start, so a panel closed mid-start still restores it, and
  * again after. */
 export async function startTask(
-  tab: { id: number; url: string; title: string },
+  tab: { id: number; url: string; title: string } | null,
   instruction: string,
   deps: SummarizeDeps,
 ): Promise<RunView | null> {
   const cleaned = cleanInstruction(instruction);
   if (cleaned === "") return null;
   await markRunsMayExist(deps.storage, deps.now().getTime());
-  const page = await readTab(tab, deps);
+  const page = tab === null ? null : await readTab(tab, deps);
   const response = await deps.host.call({
     type: "start_task",
     protocol_version: PROTOCOL_VERSION,
     request_id: newRequestId(),
-    url: page.url,
-    title: page.title,
-    content: page.content,
-    ...(page.truncated ? { capture_truncated: true } : {}),
-    selection: page.selection,
+    ...(page === null ? { no_page: true, selection: null } : {
+      url: page.url, title: page.title, content: page.content,
+      ...(page.truncated ? { capture_truncated: true } : {}),
+      selection: page.selection,
+    }),
     instruction: cleaned,
     harness: null,
     requested_at: localTimestamp(deps.now()),

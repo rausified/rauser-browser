@@ -63,6 +63,30 @@ function taskDeps({ page = framePage({ content: "Body text" }), answer } = {}) {
 
 const byteLength = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
 
+test("host task views accept only boolean no-page scope on task runs", async () => {
+  const { isRunView } = await import("../dist/protocol-shape.js");
+  assert.equal(isRunView({ ...RUN, no_page: true }), true);
+  assert.equal(isRunView({ ...RUN, no_page: false }), true);
+  assert.equal(isRunView({ ...RUN, no_page: "true" }), false);
+  const { instruction: _instruction, task_report: _report, ...summary } = RUN;
+  assert.equal(isRunView({ ...summary, kind: "summary", no_page: true }), false);
+});
+
+test("startTask without a page skips extraction and sends only the typed instruction", async () => {
+  const { deps, events, requests } = taskDeps();
+  const run = await startTask(null, "Organize my notes", deps);
+  assert.deepEqual(run, RUN);
+  assert.equal(requests.length, 1);
+  const request = requests[0].request;
+  assert.equal(request.no_page, true);
+  assert.equal(request.selection, null);
+  assert.equal(request.instruction, "Organize my notes");
+  for (const key of ["url", "title", "content", "capture_truncated", "kind", "record_key", "cwd"]) {
+    assert.equal(key in request, false, key);
+  }
+  assert.deepEqual(events, [`set:${RUNS_MAY_EXIST_KEY}`, "call:start_task", `set:${RUNS_MAY_EXIST_KEY}`]);
+});
+
 test("startTask carries a capped capture to the host", async () => {
   const { deps, requests } = taskDeps({ page: framePage({ content: "Excerpt", truncated: true }) });
   await startTask(TAB, "Read this", deps);

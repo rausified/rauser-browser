@@ -1539,3 +1539,24 @@ copies it, clears it and selects all using native keyboard actions, auditing
 both populated states. Its real-Chromium case can skip under the documented
 sandbox guard; mocked DOM tests do not replace that browser acceptance. The
 macOS smoke runner and its expected scripted-dialog count are unchanged.
+
+## Tasks without a page
+
+`brwr-qin` adds explicit scope tests, all using temporary files or mocked
+Chrome/native transport. `wire_tasks` checks legacy and no-page shapes; native
+`run_proxy::task_without_a_page*` checks host-built identity, mixed page fields,
+stale requests, and bypass attempts. `service::server::tests::no_page_admission*`
+checks actual admission before setup without a socket, so it runs inside the
+sandbox. Record tests check exact service input shape, scope persistence, legacy
+defaults and omission of `page.md`. Supervisor tests use the in-process recording
+harness to prove reports, knowledge-base cwd, independent runs and no page file.
+Prompt tests cover the absence of both page-reading exemptions, retrieval
+sections and truncation claims while retaining protected paths and `agent.env`.
+
+Built task, handoff, task-bar and Tasks-page tests cover non-web starts, explicit
+web-page opt-out, scope labels and Reuse without navigation. The existing
+unreadable/moved-page tests continue to refuse extraction failures. The real
+keyboard journey `task page scope can be changed by keyboard` checks the new
+checkbox with Space, draft preservation, exact submitted shape and axe; sandbox
+browser skips are not browser acceptance. No smoke steps or native dialog counts
+change; macOS Chrome command/menu checks remain separate.

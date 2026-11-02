@@ -55,6 +55,34 @@ fn task_view() -> Value {
 }
 
 #[test]
+fn tasks_without_a_page_round_trip_without_changing_legacy_tasks() {
+    let mut value = start_task();
+    for key in ["url", "title", "content"] {
+        value.as_object_mut().unwrap().remove(key);
+    }
+    value["no_page"] = json!(true);
+    let Request::StartTask(task) = assert_request_round_trips("StartTaskRequest", &value) else {
+        panic!("expected start_task");
+    };
+    assert_eq!(task.no_page, Some(true));
+    assert_eq!(task.url, None);
+    assert_eq!(task.title, None);
+    assert_eq!(task.content, None);
+    assert_eq!(task.selection, None);
+    let mut forwarded = start_run();
+    forwarded["no_page"] = json!(true);
+    forwarded["kind"] = json!("task");
+    forwarded["instruction"] = json!("Organize notes");
+    assert_request_round_trips("StartRunRequest", &forwarded);
+    let mut view = task_view();
+    view["no_page"] = json!(true);
+    assert_response_round_trips("RunFetched", &run_fetched(view));
+    value["no_page"] = json!("true");
+    assert!(serde_json::from_value::<Request>(value.clone()).is_err());
+    assert!(!schema_subset::valid("StartTaskRequest", &value));
+}
+
+#[test]
 fn capture_truncation_is_an_optional_boolean_on_start_task() {
     let mut value = start_task();
     let Request::StartTask(legacy) = assert_request_round_trips("StartTaskRequest", &value) else {
@@ -143,14 +171,9 @@ fn start_task_without_instruction_or_with_kind_or_record_key_does_not_parse() {
         assert!(!schema_subset::valid("StartTaskRequest", &extra), "{key}");
     }
 
-    for key in [
-        "selection",
-        "harness",
-        "requested_at",
-        "url",
-        "title",
-        "content",
-    ] {
+    // Page completeness is a native semantic check now that no_page permits
+    // these three fields to be omitted together.
+    for key in ["selection", "harness", "requested_at"] {
         let mut without = start_task();
         without.as_object_mut().unwrap().remove(key);
         assert!(serde_json::from_value::<Request>(without).is_err(), "{key}");

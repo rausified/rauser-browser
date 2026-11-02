@@ -31,6 +31,9 @@ export interface SummarizeDeps {
   now(): Date;
   /** Overrides ALL_FRAMES_TIMEOUT_MS (tests). */
   allFramesTimeoutMs?: number;
+  /** Override WORD_WAIT_MS and WORD_POLL_MS (tests). */
+  wordWaitMs?: number;
+  wordPollMs?: number;
 }
 
 /** Whether settings has a harness that answered its probe, so a run can
@@ -85,22 +88,26 @@ export function isMiroBoardUrl(url: string): boolean {
   return canonicalCapture("token(12)", segments[2]!.replaceAll(/%3d/gi, "=")) !== null;
 }
 
-/** Whether `url` is an Office for the web document address, as the host's
- * `service::office::office_document` recognises it (the shared vectors in
- * host/tests/fixtures/office-document-urls.json): an https
- * `*.sharepoint.com` address with a `:w:`, `:x:` or `:p:` path segment, or a
- * `/_layouts/15/Doc.aspx` or `WopiFrame.aspx` with a non-blank `sourcedoc`
- * or `file`; or an https `*.officeapps.live.com` viewer whose `src` is an
- * https URL. It only lets an Office page with no text start a run; the host
- * decides on its own what the run's page.md and prompt say. */
-export function isOfficeDocumentUrl(url: string): boolean {
+/** The kind of Office document an address names. */
+export type OfficeDocumentKind = "word" | "excel" | "powerpoint" | "unknown";
+
+/** The kind of Office for the web document `url` is, or null when it is not
+ * one, as the host's `service::office::office_document` recognises it (the
+ * shared vectors in host/tests/fixtures/office-document-urls.json): an https
+ * `*.sharepoint.com` address with a `:w:`, `:x:` or `:p:` path segment (which
+ * names the kind), or a `/_layouts/15/Doc.aspx` or `WopiFrame.aspx` with a
+ * non-blank `sourcedoc` or `file` (whose extension names it); or an https
+ * `*.officeapps.live.com` viewer whose `src` is an https URL (kind from
+ * `file`, else `src`'s last path segment). The host decides on its own what
+ * the run's page.md and prompt say. */
+export function officeDocumentKind(url: string): OfficeDocumentKind | null {
   let page: URL;
   try {
     page = new URL(url);
   } catch {
-    return false;
+    return null;
   }
-  if (page.protocol !== "https:") return false;
+  if (page.protocol !== "https:") return null;
   // The first value of a key (ASCII case-insensitive), when not blank.
   const param = (name: string): string | null => {
     for (const [key, value] of page.searchParams) {
@@ -108,22 +115,51 @@ export function isOfficeDocumentUrl(url: string): boolean {
     }
     return null;
   };
+  const kindOfName = (name: string): OfficeDocumentKind => {
+    const dot = name.lastIndexOf(".");
+    const extension = dot < 0 ? "" : name.slice(dot + 1).trim().toLowerCase();
+    if (["docx", "docm", "doc"].includes(extension)) return "word";
+    if (["xlsx", "xlsm", "xlsb", "xls"].includes(extension)) return "excel";
+    if (["pptx", "pptm", "ppt"].includes(extension)) return "powerpoint";
+    return "unknown";
+  };
   const host = page.hostname.toLowerCase();
+  const file = param("file");
   if (host.endsWith(".officeapps.live.com")) {
     const src = param("src");
-    if (src === null) return false;
+    if (src === null) return null;
+    let source: URL;
     try {
-      return new URL(src).protocol === "https:";
+      source = new URL(src);
     } catch {
-      return false;
+      return null;
+    }
+    if (source.protocol !== "https:") return null;
+    const named = file === null ? "unknown" : kindOfName(file);
+    if (named !== "unknown") return named;
+    return kindOfName(source.pathname.split("/").at(-1) ?? "");
+  }
+  if (!host.endsWith(".sharepoint.com")) return null;
+  const shareLetters: Record<string, OfficeDocumentKind> = { w: "word", x: "excel", p: "powerpoint" };
+  let share: OfficeDocumentKind | null = null;
+  for (const segment of page.pathname.split("/")) {
+    const match = /^(?::([wxp]):|%3a([wxp])%3a)$/i.exec(segment);
+    if (match) {
+      share = shareLetters[(match[1] ?? match[2]!).toLowerCase()]!;
+      break;
     }
   }
-  if (!host.endsWith(".sharepoint.com")) return false;
-  const share = page.pathname.split("/").some((segment) => /^(:[wxp]:|%3a[wxp]%3a)$/i.test(segment));
   const path = page.pathname.toLowerCase();
   const docPage = (path.endsWith("/_layouts/15/doc.aspx") || path.endsWith("/_layouts/15/wopiframe.aspx"))
-    && (param("sourcedoc") !== null || param("file") !== null);
-  return share || docPage;
+    && (param("sourcedoc") !== null || file !== null);
+  if (share === null && !docPage) return null;
+  return share ?? (file === null ? "unknown" : kindOfName(file));
+}
+
+/** Whether `url` is an Office for the web document address (officeDocumentKind
+ * is not null). It only lets an Office page with no text start a run. */
+export function isOfficeDocumentUrl(url: string): boolean {
+  return officeDocumentKind(url) !== null;
 }
 
 // A top frame with at least this much trimmed text is the page's content,
@@ -135,6 +171,11 @@ const CHROME_TOP_FRAME_RATIO = 5;
 // How long the all-frames extractor may take before a slow or hung subframe
 // is given up on and the top frame alone is read, as before 2026-10-28.
 export const ALL_FRAMES_TIMEOUT_MS = 10_000;
+// How long a Word document whose frames hold no rendered paragraphs yet (its
+// "Word is starting." splash) is read again before it is sent with empty
+// content, and how often it is read meanwhile.
+export const WORD_WAIT_MS = 5_000;
+export const WORD_POLL_MS = 500;
 
 /** A frame's extractor result, if it is one. */
 function framePage(value: unknown): ExtractedPage | undefined {
@@ -153,12 +194,14 @@ const encodedBytes = (value: string | null): number => new TextEncoder().encode(
  * editors render the document in a cross-origin iframe. A top frame with
  * no article (`readable === false`) also yields to a subframe holding at
  * least CHROME_TOP_FRAME_RATIO times its text, so page chrome such as
- * SharePoint's suite bar never stands in for the document. Missing,
+ * SharePoint's suite bar never stands in for the document. A frame that
+ * read Word paragraphs (`word`) is the document whatever the others hold;
+ * `word` says whether the chosen frame is one. Missing,
  * malformed, or failed frame results are skipped. The chosen content may be
  * blank; readTab decides whether that page is unreadable. */
 function choosePage(
   results: readonly { frameId: number; result?: unknown }[],
-): { top: ExtractedPage; content: string; selection: string | null; truncated: boolean } | undefined {
+): { top: ExtractedPage; content: string; selection: string | null; truncated: boolean; word: boolean } | undefined {
   let top: ExtractedPage | undefined;
   const pages: ExtractedPage[] = [];
   for (const entry of results) {
@@ -183,6 +226,8 @@ function choosePage(
     && length(longestSub) >= CHROME_TOP_FRAME_RATIO * length(top)) {
     chosen = longestSub;
   }
+  const wordPage = pages.find((page) => page.word === true);
+  if (wordPage) chosen = wordPage;
   // The chosen frame's own selection fits its content by construction; one
   // borrowed from another frame travels only if both still fit the cap.
   let selection = chosen.selection;
@@ -196,7 +241,7 @@ function choosePage(
       truncated ||= borrowedPage?.truncated === true;
     }
   }
-  return { top, content: chosen.content, selection, truncated };
+  return { top, content: chosen.content, selection, truncated, word: chosen.word === true };
 }
 
 /** The page a run sends: what readTab read from a tab. */
@@ -216,49 +261,76 @@ export interface TabPage {
  * with empty content: the host names the document or board in page.md and
  * the agent reads it itself; a top frame that by then holds another address
  * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`.
+ * A Word document address none of whose frames has rendered its paragraphs
+ * yet (Word's "Word is starting." splash) is read again every WORD_POLL_MS
+ * until one has, for at most WORD_WAIT_MS; past that it is read with empty
+ * content, never the splash. Other pages are read once.
  * It sends nothing to the host: Summarize & log and the task bar both read
  * pages through it. */
 export async function readTab(
   tab: { id: number; url: string; title: string },
-  deps: Pick<SummarizeDeps, "scripting" | "allFramesTimeoutMs">,
+  deps: Pick<SummarizeDeps, "scripting" | "allFramesTimeoutMs" | "wordWaitMs" | "wordPollMs">,
 ): Promise<TabPage> {
   const target = { tabId: tab.id, allFrames: true };
   const timeoutMs = deps.allFramesTimeoutMs ?? ALL_FRAMES_TIMEOUT_MS;
-  // Races `work` against the all-frames timeout, which then wins.
-  const withinTimeout = async <T>(work: Promise<T>): Promise<T | "timeout"> => {
+  // Races `work` against `ms`, which then wins.
+  const within = async <T>(work: Promise<T>, ms: number): Promise<T | "timeout"> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+      timer = setTimeout(() => resolve("timeout"), ms);
     });
     return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
   };
   try {
     // A hung subframe holds the injection too; past the timeout the
     // extractor runs without waiting for it.
-    await withinTimeout(deps.scripting.executeScript({ target, files: ["vendor/readability.js"] }));
+    await within(deps.scripting.executeScript({ target, files: ["vendor/readability.js"] }), timeoutMs);
   } catch {
     // The extractor falls back to body text where Readability did not load.
   }
   type FrameResults = { frameId: number; result?: unknown }[];
   const extract = (frames: typeof target | { tabId: number; frameIds: number[] }): Promise<FrameResults> =>
     deps.scripting.executeScript({ target: frames, func: extractReadablePage, args: [EXTRACT_LIMITS] });
-  let results: FrameResults;
-  try {
-    // Chrome rejects when the main frame fails its up-front permission check
-    // (the Web Store, other extensions' pages) or when exactly one frame was
-    // targeted; otherwise it drops every frame that failed, the top frame
-    // included, from the results and resolves. A missing top frame result
-    // (say, a navigation mid-injection) reads as unreadable below.
-    const all = await withinTimeout(extract(target));
-    // A slow or hung subframe holds the whole call, so the top frame is read
-    // alone, as before every frame was.
-    results = all === "timeout" ? await extract({ tabId: tab.id, frameIds: [0] }) : all;
-  } catch {
-    results = [];
-  }
-  const page = choosePage(Array.isArray(results) ? results : []);
+  const read = async (budgetMs: number): Promise<ReturnType<typeof choosePage>> => {
+    let results: FrameResults;
+    try {
+      // Chrome rejects when the main frame fails its up-front permission check
+      // (the Web Store, other extensions' pages) or when exactly one frame was
+      // targeted; otherwise it drops every frame that failed, the top frame
+      // included, from the results and resolves. A missing top frame result
+      // (say, a navigation mid-injection) reads as unreadable below.
+      const all = await within(extract(target), budgetMs);
+      // A slow or hung subframe holds the whole call, so the top frame is read
+      // alone, as before every frame was.
+      results = all === "timeout" ? await extract({ tabId: tab.id, frameIds: [0] }) : all;
+    } catch {
+      results = [];
+    }
+    return choosePage(Array.isArray(results) ? results : []);
+  };
+  let page = await read(timeoutMs);
   if (!page) throw new HostError("unreadable", UNREADABLE_MESSAGE);
-  if (page.content.trim().length === 0 && !isOfficeDocumentUrl(tab.url) && !isMiroBoardUrl(tab.url)) {
+  let content = page.content;
+  let truncated = page.truncated;
+  if (officeDocumentKind(tab.url) === "word" && !page.word) {
+    // Word shows a splash before it renders the document; whatever a frame
+    // reads meanwhile is not the document.
+    const waitMs = deps.wordWaitMs ?? WORD_WAIT_MS;
+    const pollMs = deps.wordPollMs ?? WORD_POLL_MS;
+    const deadline = Date.now() + waitMs;
+    while (!page.word && sameAddress(tab.url, page.top.href) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(0, deadline - Date.now()))));
+      // A poll never outlasts the wait; a slow one reads the top frame alone.
+      // A poll that lost the top frame (an injection racing Word's own
+      // navigation) keeps the last read; a real navigation shows next time.
+      const next = await read(Math.max(1, Math.min(timeoutMs, deadline - Date.now())));
+      if (next) page = next;
+    }
+    content = page.word ? page.content : "";
+    // Splash text is dropped whole, so nothing of it was cut.
+    truncated = page.word ? page.truncated : false;
+  }
+  if (content.trim().length === 0 && !isOfficeDocumentUrl(tab.url) && !isMiroBoardUrl(tab.url)) {
     throw new HostError("unreadable", UNREADABLE_MESSAGE);
   }
   // The run is keyed by `tab.url`, so its content must come from that page;
@@ -269,8 +341,8 @@ export async function readTab(
     // Chrome and a stale or older extractor may not have done it.
     url: wellFormed(tab.url),
     title: wellFormed(cutTitle(page.top.title || tab.title)),
-    content: wellFormed(page.content),
-    truncated: page.truncated,
+    content: wellFormed(content),
+    truncated,
     selection: page.selection === null ? null : wellFormed(page.selection),
   };
 }

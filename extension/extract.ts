@@ -20,6 +20,10 @@ export interface ExtractedPage {
   selection: string | null;
   truncated: boolean;
   readable: boolean;
+  // Whether the content is a Word for the web frame's rendered paragraphs.
+  // A Word document whose frames all say false is still loading (its splash,
+  // "Word is starting."), and readTab waits for them (DESIGN.md §5.2).
+  word: boolean;
   // window.location.href when the extractor ran.
   href: string;
 }
@@ -249,5 +253,7 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   const room = limits.maxRequestBytes - encoded(selection);
   const kept = fit(content, limits.maxContentChars, (prefix) => encoded(prefix) <= room);
   truncated ||= kept.length < content.length;
-  return { title, content: kept, selection, truncated, readable, href: String(window.location.href) };
+  return {
+    title, content: kept, selection, truncated, readable, word: wordLines.length > 0, href: String(window.location.href),
+  };
 }

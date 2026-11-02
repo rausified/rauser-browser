@@ -163,6 +163,7 @@ const taskBar = element<HTMLElement>("task-bar");
 const taskForm = element<HTMLFormElement>("task-form");
 const taskInput = element<HTMLTextAreaElement>("task-input");
 const taskRunButton = element<HTMLButtonElement>("task-run");
+const taskUsePage = element<HTMLInputElement>("task-use-page");
 const taskContext = element<HTMLParagraphElement>("task-context");
 const taskHint = element<HTMLParagraphElement>("task-hint");
 const taskHintText = element<HTMLSpanElement>("task-hint-text");
@@ -1299,10 +1300,10 @@ function taskBlocked(): { text: string; settings: boolean } | null {
   // The Brauser service runs on macOS (and Unix) only; settings cannot fix it.
   if (/^win/i.test(navigator.platform ?? "")) return { text: "Tasks are not supported on Windows yet.", settings: false };
   if (!harnessReady(session)) return { text: TASK_NEEDS_HARNESS_MESSAGE, settings: true };
-  if (pageState === "site-access") {
+  if (taskUsePage.checked && pageState === "site-access") {
     return { text: "Re-enable site access in Chrome so the agent can read this page.", settings: false };
   }
-  if (currentPage === null || currentPage.tabId === undefined) return { text: "Tasks work on http(s) pages.", settings: false };
+  if (followedTabId === null) return { text: "Open a browser tab to run a task.", settings: false };
   return null;
 }
 
@@ -1313,6 +1314,7 @@ function renderTaskBar(): void {
   const label = taskStarting ? "Starting…" : "Run";
   if (taskRunButton.textContent !== label) taskRunButton.textContent = label;
   taskInput.readOnly = taskStarting;
+  taskUsePage.disabled = taskStarting || (currentPage === null && pageState !== "site-access");
   taskHint.hidden = blocked === null;
   if (taskHintText.textContent !== (blocked?.text ?? "")) taskHintText.textContent = blocked?.text ?? "";
   taskHintSettings.hidden = blocked?.settings !== true;
@@ -1324,8 +1326,9 @@ function renderTaskBar(): void {
  * so the user sees which page a task will get. */
 function renderTaskContext(): void {
   const page = currentPage;
-  let text = "";
-  if (page !== null && page.tabId !== undefined) {
+  let text = "No page · Runs in your knowledge base";
+  if (taskUsePage.checked && pageState === "site-access") text = "Page access required · Uncheck Include this page to run without it";
+  if (taskUsePage.checked && page !== null && page.tabId !== undefined) {
     const selected = taskSelection !== null && taskSelection.selected &&
       taskSelection.tabId === page.tabId && taskSelection.url === page.url;
     text = `${selected ? "Uses this page and your selection: " : "Uses this page: "}${page.title}`;
@@ -1346,7 +1349,7 @@ function pageHasSelection(): boolean {
 async function probeSelection(): Promise<void> {
   const seq = ++selectionSeq;
   const page = currentPage;
-  if (page === null || page.tabId === undefined || !harnessReady(session)) {
+  if (!taskUsePage.checked || page === null || page.tabId === undefined || !harnessReady(session)) {
     taskSelection = null;
     renderTaskContext();
     return;
@@ -1379,18 +1382,20 @@ async function probeSelection(): Promise<void> {
 async function runTask(): Promise<void> {
   const page = currentPage;
   const instruction = taskInput.value;
-  if (taskStarting || taskBlocked() !== null || !page || page.tabId === undefined) return;
+  if (taskStarting || taskBlocked() !== null || followedTabId === null) return;
   if (cleanInstruction(instruction) === "") return;
-  const tabId = page.tabId;
+  const tabId = followedTabId;
+  const tab = taskUsePage.checked && page?.tabId !== undefined
+    ? { id: page.tabId, url: page.url, title: page.title } : null;
   const hadFocus = document.activeElement === taskRunButton || document.activeElement === taskInput;
   taskRecall.reset();
   taskStarting = true;
   updateControls();
-  showRunLine(taskRunArea, tabId, "Reading this page…");
+  showRunLine(taskRunArea, tabId, tab === null ? "Starting task…" : "Reading this page…");
   try {
     await showSetupWarningOnce(taskRunArea);
     const run = await startTask(
-      { id: tabId, url: page.url, title: page.title },
+      tab,
       instruction,
       { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
     );
@@ -1493,10 +1498,12 @@ async function checkReuse(): Promise<void> {
   if (taskStarting) return;
   const windowId = await panelWindowId;
   if (windowId === null) return;
-  const instruction = await takeReuse(chrome.storage.session, windowId).catch(() => null);
-  if (!closed && instruction !== null && !taskStarting) {
+  const reused = await takeReuse(chrome.storage.session, windowId).catch(() => null);
+  if (!closed && reused !== null && !taskStarting) {
     taskRecall.reset();
-    taskInput.value = instruction;
+    taskInput.value = reused.instruction;
+    taskUsePage.checked = !reused.no_page;
+    renderTaskBar();
     taskInput.focus();
   }
 }
@@ -2204,6 +2211,7 @@ taskInput.addEventListener("keydown", (event) => {
   event.preventDefault?.();
   void runTask();
 });
+taskUsePage.addEventListener("change", () => { renderTaskBar(); void probeSelection(); });
 taskInput.addEventListener("input", () => taskRecall.edited());
 taskInput.addEventListener("focus", () => void probeSelection());
 // The selection may have changed in the page since the bar got focus: check

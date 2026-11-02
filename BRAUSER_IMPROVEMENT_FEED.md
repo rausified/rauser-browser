@@ -260,6 +260,20 @@ injection by hand. Where: `extension/tests/a11y/fixture.mjs` and
 `pages.test.mjs`; the same state would let a screenshot check compare the
 panel against the design.
 
+## 2026-11-02 — Record which frame a page read came from and whether the Word wait timed out
+
+Change: have `readTab` return a small read report (each frame's host, trimmed
+character count and `word` flag, which frame was chosen, and whether the Word
+paragraph wait ended by paragraphs, timeout or navigation, with its elapsed
+ms), and log it through the extension's diagnostics and the host's
+`request done kind=start_run|start_task` line. Why: diagnosing run 92dcfad9
+("Word is starting." as page.md) had only the 17-character page.md and the
+host's `thin_office` flag; nothing said which frame produced the text, so the
+fix had to key on "no Word paragraphs yet" without ever seeing the splash's
+markup, and a future timeout (empty Word content) will look the same as an
+unrendered document. Where: extension/summarize.ts `readTab`/`choosePage`,
+extension/diag.ts, protocol/schema.json (an optional field on `start_run` and
+`start_task`), host/src/service/capture_quality.rs for the log line.
 ## 2026-11-02 — Show the source page when recalling a task
 
 Change: add a compact original-page cue and an explicit route to inspect or
@@ -279,3 +293,29 @@ a single busy day; choosing a shorter period cannot expose that remainder.
 Where: `ArtifactIndex::worklog_choices`, the protocol query and the Recent
 selection controls. Keep newly viewed rows unchecked and Copy equal to the
 checked preview; do not silently include omitted work.
+## 2026-11-02 — Stop docs/history.md from blocking PRs on append conflicts
+
+Change: decide how `docs/history.md` merges so that two PRs each adding a
+dated note no longer conflict. Either give it `merge=union` in
+`.gitattributes`, as the feed, `CookieFeature.md` and
+`PENDING_AMOS_DOC_UPDATES.md` already have, or, since history.md is sectioned
+and union would also silently keep both sides of a real mid-file edit, have
+new notes go to one append-only tail section that union can handle safely.
+Why: PR #246 (Word-loading fix) went DIRTY twice in one afternoon, once after
+Cookie's cycle-8 merge (#252). Both times the only real conflict was two new
+`2026-11-02` entries in history.md. A DIRTY PR runs no CI, so auto-merge sat
+for about four hours with nothing failing visibly, until a status check found
+it. Also: the PR owner check could flag a PR whose auto-merge is armed but
+whose state is DIRTY, so the owner hears about it. Where: `.gitattributes`,
+the AGENTS.md history.md rule, and `scripts/pr-owner.mjs` or a small hygiene
+job.
+
+## 2026-11-02 — Name the working folder before running a task
+
+Show the configured knowledge-base folder beside the task scope in the panel
+(`brwr-5xpb`), using host-projected configuration as text. The no-page task work
+(`brwr-qin`) makes the instruction independent of a tab, but its context line
+still says only “Runs in your knowledge base”; a person choosing among multiple
+note/project folders cannot see the actual working location before Run. Extend
+`extension/panel.ts`'s task context and its built panel tests, retaining setup
+hints and leaving the separate per-task chooser (`brwr-zla`) for later.

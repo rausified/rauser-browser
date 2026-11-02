@@ -319,16 +319,16 @@ const detailDeps: TaskDetailDeps = {
   // agent text), active in this window, so the panel follows that tab and
   // the reused instruction runs against the page it was first given on. A
   // page that fails to open still leaves the instruction in the bar.
-  reuse: (instruction, url) => {
+  reuse: (instruction, url, noPage = false) => {
     const windowId = pageWindowId;
     const opened = chrome.sidePanel.open(windowId === null ? {} : { windowId });
-    const tab: Promise<string | null> = /^https?:\/\//i.test(url)
+    const tab: Promise<string | null> = !noPage && /^https?:\/\//i.test(url)
       ? chrome.tabs.create(windowId === null ? { url, active: true } : { url, windowId, active: true })
         .then(() => null, (error: unknown) => describe(error))
       : Promise.resolve(null);
     void opened.then(
-      () => sendReuse(chrome.storage.session, instruction, windowId),
-      () => sendReuse(chrome.storage.session, instruction, null),
+      () => sendReuse(chrome.storage.session, instruction, windowId, noPage),
+      () => sendReuse(chrome.storage.session, instruction, null, noPage),
     ).then(
       async () => {
         const tabError = await tab;

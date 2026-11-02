@@ -35,7 +35,8 @@ function pageReader() {
 function startsTask(views = new Map()) {
   return (request) => {
     if (request.type === "start_task") {
-      const view = { ...TASK_VIEW, url: request.url, instruction: request.instruction };
+      const view = { ...TASK_VIEW, url: request.url ?? "brauser:task-without-page",
+        ...(request.no_page ? { no_page: true } : {}), instruction: request.instruction };
       if (!views.has(view.run_id)) views.set(view.run_id, view);
       return { type: "run_started", run: view, existing: false };
     }
@@ -152,6 +153,47 @@ test("panel tabs link their panels and keyboard selection keeps one tab stop", a
   }
 });
 
+test("a task from a non-web tab runs without extracting or attaching that tab", async () => {
+  const page = await install({ tab: { id: 1, url: "chrome://newtab/", title: "New Tab" },
+    config: SET_UP, agentStatus: READY, intercept: startsTask(),
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: () => { throw new Error("A non-web task must not script a tab"); },
+  });
+  await until(() => !page.el("task-run").disabled, "non-web task to enable");
+  assert.equal(page.el("task-use-page").disabled, true);
+  assert.equal(page.el("task-context").textContent, "No page · Runs in your knowledge base");
+  type(page, "Organize my notes");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1 && page.el("task-input").value === "", "task started");
+  const [request] = page.sent("start_task");
+  assert.equal(request.no_page, true);
+  for (const field of ["url", "title", "content", "capture_truncated"]) assert.equal(field in request, false);
+});
+
+test("unchecking Include this page preserves the draft and starts without page context", async () => {
+  const page = await taskPanel();
+  type(page, "Organize my notes");
+  page.el("task-use-page").checked = false;
+  page.el("task-use-page").dispatch("change");
+  assert.equal(page.el("task-input").value, "Organize my notes");
+  assert.equal(page.el("task-context").textContent, "No page · Runs in your knowledge base");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1, "task started");
+  assert.equal(page.sent("start_task")[0].no_page, true);
+});
+
+test("Reuse of a task without a page keeps that scope while a web page is followed", async () => {
+  const session = new Map([[REUSE_KEY, { instruction: "Organize my notes", no_page: true, window_id: 1, at: Date.now() }]]);
+  const page = await taskPanel({ session });
+  await until(() => page.el("task-input").value === "Organize my notes", "Reuse instruction");
+  assert.equal(page.el("task-use-page").checked, false);
+  assert.equal(page.el("task-context").textContent, "No page · Runs in your knowledge base");
+  assert.equal(page.sent("start_task").length, 0, "Reuse never submits");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1, "explicit Run");
+  assert.equal(page.sent("start_task")[0].no_page, true);
+});
+
 test("the hint explains each disabled state in order", async () => {
   const cases = [
     {
@@ -172,10 +214,6 @@ test("the hint explains each disabled state in order", async () => {
     {
       what: "no harness", text: "Set up an agent (Codex or Claude Code) in settings to run tasks.", settings: true,
       options: { agentStatus: "none" },
-    },
-    {
-      what: "not a web page", text: "Tasks work on http(s) pages.", settings: false,
-      options: { tab: { id: 1, url: "chrome://extensions/", title: "Extensions" } },
     },
     {
       what: "site access", text: "Re-enable site access in Chrome so the agent can read this page.", settings: false,
@@ -789,7 +827,7 @@ test("the context line says when the selection is used", async () => {
   await until(() => page.el("task-context").textContent === "Uses this page and your selection: Tab title", "the selection line again");
   // A page that is not a web page names nothing.
   page.navigate("chrome://extensions/", 3);
-  await until(() => page.el("task-context").textContent === "", "no context line");
+  await until(() => page.el("task-context").textContent === "No page · Runs in your knowledge base", "no-page context line");
 });
 
 test("the bar is never pre-filled from the page, the selection or agent text", async () => {

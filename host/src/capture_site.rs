@@ -929,6 +929,7 @@ pub fn start_site_draft(
         return error(id, ErrorCode::InvalidRequest, message);
     }
     let request = Request::StartRun(StartRunRequest {
+        no_page: None,
         protocol_version: PROTOCOL_VERSION,
         request_id: value.request_id.clone(),
         url: value.origin.clone(),

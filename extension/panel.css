@@ -469,6 +469,8 @@ body.panel-page {
   field-sizing: content;
 }
 .panel-page button.run-button { height: 34px; padding: 0 14px; flex: none; border-radius: 9px; font-weight: 650; }
+.panel-page .task-page-choice { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
+.panel-page .task-page-choice input { margin: 0; width: auto; }
 .panel-page .task-meta { display: flex; align-items: center; gap: 8px; padding: 0 2px; }
 .panel-page .task-meta #task-open { margin-left: auto; flex: none; }
 .panel-page .task-context, .panel-page .task-hint { margin: 0; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
