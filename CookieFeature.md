@@ -1090,3 +1090,34 @@ two assigned prerequisites add seven regression tests; the full local gate
 passes with 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension
 test files and both Clippy builds. Browser execution still skips 36 cases in
 this sandbox. Durable apply (`brwr-dbp`) and panel Re-learn remain unfinished.
+
+
+### 2026-11-02 — Keep recorded incoming navigation with a summary
+
+Summaries can now retain the recorded path into an artifact, so a reader
+returning later can see the planning ticket, document or other known artifact
+from which it was opened. The service looks up the existing recorded trail
+for the page's current host-derived identity and freezes up to five source and
+transition pairs when the summary is requested. The saved file's Incoming
+list gives each source's title and safe link, the browser transition and the
+last recorded date. It describes observed navigation; the agent's outgoing
+References still mean sources the artifact itself cites.
+
+The same bounded snapshot goes into a host-written section of page.md and
+stays with the private run record through queueing, restart and Retry save.
+The agent may use it as attributed assessment context, but may not open the
+source links or treat navigation as a dependency or endorsement. The host
+renders the final list itself, so it cannot be invented by the answer. Unsafe
+addresses and unattributed transitions are omitted, titles stay inert, and a
+run with no known incoming sources adds no section or prompt paragraph. Older
+runs keep their original behavior. A service rollback cannot read new run
+records containing the optional snapshot; finish queued/running runs first.
+
+Ten new offline tests cover actual recorded trails, cache loss and lookup
+failure, bounds and hostile text, Office/Miro boundaries, legacy records,
+queue/restart persistence and byte-identical Retry save. The full required
+and README gate passes with 1,331 reported Rust outcomes (92 explicit IPC
+guard skips), 40 extension test files, both Clippy builds and 10,696 inert
+Markdown renderings. Accessibility passes two fixtures and explicitly skips
+36 browser cases inside the sandbox. This completes brwr-sm1; no live
+harness, external API or deployed runtime was used.

@@ -226,6 +226,7 @@ mod tests {
             first_answered_at: None,
             save_final: false,
             office_section: false,
+            incoming: Vec::new(),
             kind: RunKind::Summary,
             task: None,
         }

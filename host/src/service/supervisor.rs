@@ -52,7 +52,7 @@ use super::prompt::{
 use super::queue::{Scheduler, Submit};
 use super::record::{
     MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, TaskStatus, cap_bytes,
-    fit_session_id, list_instruction, page_markdown,
+    fit_session_id, list_instruction, page_markdown_with_incoming,
 };
 use super::section::{PageSection, SectionKind};
 use crate::answer::parse_answer;
@@ -241,6 +241,8 @@ impl fmt::Debug for ServiceOptions {
 /// A task still queued when the service restarts is failed, never resumed.
 #[derive(Debug, Clone)]
 pub struct StartRun {
+    /// Optional host-derived summary context, never a native request field.
+    pub incoming: Vec<brauser_protocol::IncomingTrailView>,
     pub kind: RunKind,
     pub url: String,
     pub title: String,
@@ -632,6 +634,11 @@ impl Supervisor {
                 RunKind::Summary | RunKind::Task => PageSection::for_url(&req.url),
                 RunKind::SiteDraft => None,
             };
+            let incoming = if req.kind == RunKind::Summary {
+                crate::summary::incoming::snapshot(&req.incoming)
+            } else {
+                Vec::new()
+            };
             // Measured now, before a site draft's content moves into its page.
             let suspect = match req.kind {
                 RunKind::Summary | RunKind::Task => capture_quality::assess(
@@ -647,12 +654,13 @@ impl Supervisor {
             let (cwd, page) = match req.kind {
                 RunKind::Summary | RunKind::Task => (
                     req.cwd,
-                    page_markdown(
+                    page_markdown_with_incoming(
                         &req.title,
                         &req.url,
                         &req.content,
                         req.selection.as_deref(),
                         section.as_ref(),
+                        &incoming,
                     ),
                 ),
                 // Its own run directory, never the knowledge base; its page
@@ -688,6 +696,7 @@ impl Supervisor {
                 first_answered_at: None,
                 save_final: false,
                 office_section: section.is_some(),
+                incoming,
                 kind: req.kind,
                 task: req.task,
             };
@@ -1293,7 +1302,13 @@ impl Inner {
             .map(|section| section.kind());
         let (prompt, output_schema, title) = match status.kind {
             RunKind::Summary => (
-                summary_prompt(&page_path, &launch.cwd, &launch.vocabulary, section),
+                summary_prompt(
+                    &page_path,
+                    &launch.cwd,
+                    &launch.vocabulary,
+                    section,
+                    !status.incoming.is_empty(),
+                ),
                 OutputSchema::RunnerDefault,
                 status.title.clone(),
             ),
@@ -2249,6 +2264,7 @@ mod tests {
 
         fn request(&self, key: &str) -> StartRun {
             StartRun {
+                incoming: Vec::new(),
                 kind: RunKind::Summary,
                 url: format!("https://example.com/{key}"),
                 title: format!("Page {key}"),
@@ -3436,6 +3452,7 @@ mod tests {
             first_answered_at: None,
             save_final: false,
             office_section: false,
+            incoming: Vec::new(),
             kind: RunKind::Summary,
             task: None,
         }
@@ -3749,6 +3766,7 @@ mod tests {
             first_answered_at: None,
             save_final: false,
             office_section: false,
+            incoming: Vec::new(),
             kind: RunKind::Summary,
             task: None,
         };
@@ -3806,6 +3824,69 @@ mod tests {
         assert_eq!(status.run_timeout_secs, Some(900));
         assert_eq!(status.vocabulary, Some(custom_vocabulary()));
         fixture.wait_finished(id);
+    }
+
+    #[test]
+    fn incoming_navigation_is_frozen_in_the_queued_record_and_page() {
+        let fixture = Fixture::new(ANSWER);
+        let mut request = fixture.request("a");
+        request.incoming = vec![crate::summary::incoming::example()];
+        let expected = request.incoming.clone();
+        let (view, _) = fixture.supervisor.start_run(request).unwrap();
+        let id = Uuid::parse_str(&view.run_id).unwrap();
+        let store = fixture.supervisor.store();
+        assert_eq!(store.status(id).unwrap().incoming, expected);
+        let page = std::fs::read_to_string(store.page_path(id)).unwrap();
+        assert!(page.contains("## Incoming navigation"));
+        assert!(page.contains("Planning ticket"));
+        assert!(page.contains("## End incoming navigation\n\n## Page content"));
+        assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        assert_eq!(store.status(id).unwrap().incoming, expected);
+    }
+
+    #[test]
+    fn incoming_navigation_resume_keeps_context_and_enables_only_fixed_instructions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::ephemeral(dir.path().join("runs")).unwrap();
+        let id = seed_record(
+            &store,
+            dir.path(),
+            RunState::Queued,
+            "2026-10-26T09:00:01.000000000Z",
+        );
+        let mut status = store.status(id).unwrap();
+        status.incoming = vec![crate::summary::incoming::example()];
+        store.write_status(&status).unwrap();
+        let page = page_markdown_with_incoming(
+            &status.title,
+            &status.url,
+            "Body",
+            None,
+            None,
+            &status.incoming,
+        );
+        std::fs::write(store.page_path(id), &page).unwrap();
+        let seen = SharedSeen::default();
+        let runner = RecordingRunner {
+            answers: vec![TEST_ANSWER.into()],
+            seen: seen.clone(),
+        };
+        let fixture = Fixture::build(
+            dir,
+            HarnessRegistry::of(vec![Box::new(runner)]),
+            DEFAULT_RUN_TIMEOUT,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        assert_eq!(store.status(id).unwrap().incoming, status.incoming);
+        assert_eq!(std::fs::read_to_string(store.page_path(id)).unwrap(), page);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.prompts.len(), 1);
+        assert!(seen.prompts[0].contains("Do not retrieve these sources"));
+        assert!(!seen.prompts[0].contains("Planning ticket"));
+        assert!(!seen.prompts[0].contains("https://example.com/items/1"));
     }
 
     #[test]
@@ -3872,6 +3953,7 @@ mod tests {
                 fixture.dir.path(),
                 &custom_vocabulary(),
                 None,
+                false,
             )]
         );
     }
@@ -4718,6 +4800,7 @@ mod tests {
         /// ignores.
         fn site_draft_request(&self, origin: &str, input: &str) -> StartRun {
             StartRun {
+                incoming: Vec::new(),
                 kind: RunKind::SiteDraft,
                 url: origin.to_string(),
                 title: format!("Capture Site: {origin}"),
@@ -5099,6 +5182,7 @@ mod tests {
 
         fn task_request(&self, key: &str, instruction: &str) -> StartRun {
             StartRun {
+                incoming: Vec::new(),
                 kind: RunKind::Task,
                 task: Some(TaskStatus {
                     instruction: instruction.to_string(),
