@@ -21,6 +21,7 @@ pub(crate) mod sql;
 mod store;
 mod summaries;
 mod views;
+mod watermark;
 
 fn storage(root: &Path) -> StorageConfig {
     StorageConfig {

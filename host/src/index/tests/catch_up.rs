@@ -198,9 +198,11 @@ fn full_rebuilds_finish_in_bounded_passes_once_history_exceeds_one_pass() {
     assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 6);
     assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
 
-    // Duplicate reconciliation resumes its own rebuild.
+    // Duplicate reconciliation is the incremental catch-up: with no log
+    // changed it finishes at once and reads nothing.
     let (_, passes) = bounded_passes(limit, || index.reconcile_from_logs());
-    assert_eq!(passes, 3);
+    assert_eq!(passes, 1);
+    assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
     assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 6);
 
     // A deleted log resets and rebuilds the remaining five.

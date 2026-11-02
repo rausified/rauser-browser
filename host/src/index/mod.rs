@@ -47,6 +47,7 @@ use crate::vault::{
     sync_directory,
 };
 
+mod catchup;
 mod db;
 mod fold;
 mod legacy;
@@ -279,8 +280,9 @@ struct PendingCatchUp {
     /// log, or a rescan), so completion keeps the conflict winners the
     /// published cache chose.
     rebuild: bool,
-    /// Started by `reconcile_from_logs`: on completion, only artifacts whose
-    /// generated file changes become dirty.
+    /// Set by earlier builds, whose `reconcile_from_logs` rescanned from
+    /// scratch. Reconciling is now the incremental catch-up and never saves
+    /// a pass, so such a pass completes as an ordinary rebuild.
     reconcile: bool,
     state: IndexState,
     /// `IndexState::conflicts`, which the published cache does not keep.
@@ -711,51 +713,14 @@ impl ArtifactIndex {
     /// Reconcile a terminal replay or a newly drained legacy visit from the
     /// authoritative owned markers. In particular, never let an untrusted
     /// retry body replace the event that is already durable in the log.
-    /// Only artifacts whose generated file would change become dirty, so a
-    /// duplicate retry neither forces a full regeneration pass nor replaces
-    /// external edits to files that had no new activity.
-    ///
-    /// A history larger than one pass's read bound is rescanned over several
-    /// calls (or queries); until then this reports unavailable history.
+    /// This is the incremental catch-up: only changed logs are read, and
+    /// only events newly ingested from them make their artifacts dirty, so
+    /// a duplicate retry neither forces a regeneration pass nor replaces
+    /// external edits to files that had no new activity. A catch-up that
+    /// reaches the per-pass read bound reports unavailable history until a
+    /// later call finishes it.
     pub fn reconcile_from_logs(&self) -> Result<()> {
-        let Some((mut state, previous)) = self.rescan_logs(true)? else {
-            bail!(INCOMPLETE_CATCH_UP);
-        };
-        if let Some(previous) = previous {
-            self.keep_unchanged_files_clean(&mut state, previous);
-        }
-        self.publish_state_and_database(&state)
-    }
-
-    /// Mark dirty only the artifacts whose generated file differs from the
-    /// one `previous` derives, plus those `previous` already had dirty.
-    fn keep_unchanged_files_clean(&self, state: &mut IndexState, previous: IndexState) {
-        let rendered = |state: &IndexState| {
-            self.derive(state)
-                .artifacts
-                .into_iter()
-                .map(|(id, row)| (id, render_artifact(&self.storage.artifacts_dir, &row)))
-                .collect::<BTreeMap<_, _>>()
-        };
-        let (before, after) = (rendered(&previous), rendered(state));
-        let mut dirty = previous.dirty;
-        for id in before.keys().chain(after.keys()) {
-            if before.get(id) != after.get(id) {
-                dirty.insert(id.clone());
-            }
-        }
-        // `previous` is rendered with the current adapters too, so a
-        // document change since it was published is compared separately.
-        // A rescan stamps the new fingerprint before this runs, so the load
-        // path's own check (`load_current_state`) would never see it.
-        if previous.adapters != self.adapters_fingerprint() {
-            dirty.extend(previous.containers.iter().cloned());
-            dirty.extend(self.adapter_dependent_files(state));
-        }
-        state.dirty = dirty;
-        // The files on disk are still the ones `previous` regenerated.
-        state.containers = previous.containers;
-        state.container_files = previous.container_files;
+        self.load_or_rebuild().map(drop)
     }
 
     /// Artifacts whose generated file depends on the adapter document: a
@@ -1111,7 +1076,6 @@ impl ArtifactIndex {
             bail!(INCOMPLETE_CATCH_UP);
         };
         match previous {
-            Some(previous) if reconcile => self.keep_unchanged_files_clean(&mut state, *previous),
             // A rebuild starts with no container files; carry the cache's,
             // or, without a usable cache, find them on disk, so a container
             // that no longer derives a record still has its file removed.
@@ -1132,8 +1096,6 @@ impl ArtifactIndex {
         state.adapters = adapters;
         // Containers follow the adapters too: their files regenerate when
         // the document changes, not only after the next visit (§8.3).
-        // (A reconcile above compares against the published cache instead,
-        // because its rescan already carries the new fingerprint.)
         if resolution_changed {
             let dependent = self.adapter_dependent_files(&state);
             state.dirty.extend(dependent);
