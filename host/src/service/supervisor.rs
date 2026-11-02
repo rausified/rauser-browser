@@ -1235,7 +1235,7 @@ impl Inner {
         // report, and its Codex thread is named after its instruction.
         let (prompt, output_schema, title) = match status.kind {
             RunKind::Summary => (
-                summary_prompt(&page_path, &launch.cwd, &launch.vocabulary),
+                summary_prompt(&page_path, &launch.cwd, &launch.vocabulary, false),
                 OutputSchema::RunnerDefault,
                 status.title.clone(),
             ),
@@ -1255,6 +1255,7 @@ impl Inner {
                         &launch.cwd,
                         self.store.support_dir(),
                         &task.protected,
+                        false,
                     ),
                     OutputSchema::Omit,
                     task_title(&task.instruction),
@@ -5015,7 +5016,8 @@ mod tests {
                 &spec.page_path,
                 &spec.cwd,
                 fixture.dir.path(),
-                &fixture.protected()
+                &fixture.protected(),
+                false,
             )
         );
         // The service folder holding `runs/` is named, with its agent.env.
