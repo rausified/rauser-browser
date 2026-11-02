@@ -71,7 +71,7 @@ export async function fetchOffPageRun(host: Pick<HostClient, "call">, run: RunVi
  * the service answers `before` with finished runs strictly older than it,
  * so cursoring from an active run (an old queued task, say) would skip
  * every finished run between it and the last one actually walked. */
-function lastFinishedRun(runs: readonly RunView[]): RunView | undefined {
+export function lastFinishedRun(runs: readonly RunView[]): RunView | undefined {
   for (let index = runs.length - 1; index >= 0; index -= 1) {
     const run = runs[index]!;
     if (isTerminal(run)) return run;

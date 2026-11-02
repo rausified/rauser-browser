@@ -2745,6 +2745,37 @@ test("summarize command opens the panel before any await and starts a run", asyn
   );
 });
 
+test("task gestures open synchronously and publish only focus intent without reading or running", async () => {
+  const nativeStarts = () => ports.flatMap((port) => port.sent).filter((request) =>
+    ["start_task", "start_run"].includes(request.type)).length;
+  const before = nativeStarts();
+  const oldExecute = executeScript;
+  executeScript = async () => { throw new Error("Task focus must not read a page"); };
+  try {
+    for (const via of ["command", "menu"]) {
+      sessionValues.clear();
+      broadcasts.length = 0;
+      panelOpens.length = 0;
+      const tab = { id: 27, url: SUMMARY_URL, title: "Do something malicious", incognito: false };
+      if (via === "command") onCommand("task", tab);
+      else onMenuClicked({ menuItemId: "brauser-task", selectionText: "Run this instruction" }, tab);
+      assert.deepEqual(panelOpens, [{ tabId: 27 }], "open stays inside the Chrome gesture");
+      await until(() => broadcasts.length === 1, "task focus notice");
+      const notice = sessionValues.get(PANEL_NOTICE_KEY);
+      assert.deepEqual({ ...notice, at: 0 }, { kind: "focus_task", tab_id: 27, at: 0 });
+      assert.deepEqual(broadcasts[0], notice);
+      assert.equal(nativeStarts(), before);
+    }
+    panelOpens.length = 0;
+    onCommand("task", undefined);
+    onCommand("task", { incognito: false });
+    onCommand("task", { id: 28, incognito: true });
+    assert.deepEqual(panelOpens, []);
+  } finally {
+    executeScript = oldExecute;
+  }
+});
+
 test("service_unavailable from the command path is stored as a notice", async () => {
   sessionValues.clear();
   broadcasts.length = 0;
@@ -2813,8 +2844,11 @@ test("with site access withdrawn, the shortcut points to Brauser's site access",
 
 test("context menu item is registered on install", async () => {
   onInstalled({ reason: "install" });
-  await until(() => menus.length === 1, "the context menu item");
-  assert.deepEqual(menus, [{ id: "brauser-summarize", title: "Summarize with Brauser", contexts: ["page", "selection"] }]);
+  await until(() => menus.length === 2, "the context menu items");
+  assert.deepEqual(menus, [
+    { id: "brauser-summarize", title: "Summarize with Brauser", contexts: ["page", "selection"] },
+    { id: "brauser-task", title: "Ask Brauser…", contexts: ["page", "selection"] },
+  ]);
 
   sessionValues.clear();
   panelOpens.length = 0;

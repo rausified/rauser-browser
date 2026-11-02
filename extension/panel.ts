@@ -27,6 +27,7 @@ import {
 } from "./task.js";
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
+import { TaskRecall } from "./task-recall.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
 import {
   artifactLook, capturePill, compactDuration, importanceLabel, importanceTone, pageLook, summaryTimeLabel,
@@ -163,6 +164,7 @@ const taskRunArea = element<HTMLDivElement>("task-run-area");
 const taskOpenButton = element<HTMLButtonElement>("task-open");
 
 const session = new ConfigSession(render);
+const taskRecall = new TaskRecall(session.host);
 const runCards = new RunCards(runArea, {
   host: session.host,
   now: () => Date.now(),
@@ -260,6 +262,7 @@ let taskSelection: { tabId: number; url: string; selected: boolean } | null = nu
 let selectionSeq = 0;
 // The last worker notice shown, since one can arrive both live and stored.
 let shownNotice: string | null = null;
+let pendingTaskFocus: Extract<PanelNotice, { kind: "focus_task" }> | null = null;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
 // The shown Recent rows' Open summary buttons, disabled with the host.
 let recentOpenButtons: HTMLButtonElement[] = [];
@@ -1273,6 +1276,7 @@ function renderTaskBar(): void {
   if (taskHintText.textContent !== (blocked?.text ?? "")) taskHintText.textContent = blocked?.text ?? "";
   taskHintSettings.hidden = blocked?.settings !== true;
   renderTaskContext();
+  if (pendingTaskFocus !== null && showNotice(pendingTaskFocus)) void clearStoredNotice();
 }
 
 /** "Uses this page: <title>", naming the selection when the page has one,
@@ -1338,6 +1342,7 @@ async function runTask(): Promise<void> {
   if (cleanInstruction(instruction) === "") return;
   const tabId = page.tabId;
   const hadFocus = document.activeElement === taskRunButton || document.activeElement === taskInput;
+  taskRecall.reset();
   taskStarting = true;
   updateControls();
   showRunLine(taskRunArea, tabId, "Reading this page…");
@@ -1449,6 +1454,7 @@ async function checkReuse(): Promise<void> {
   if (windowId === null) return;
   const instruction = await takeReuse(chrome.storage.session, windowId).catch(() => null);
   if (!closed && instruction !== null && !taskStarting) {
+    taskRecall.reset();
     taskInput.value = instruction;
     taskInput.focus();
   }
@@ -1470,9 +1476,24 @@ async function restoreCards(): Promise<void> {
 /** Shows a notice from the worker's shortcut or context-menu summary when it
  * is about the followed tab. Returns whether it is now shown. */
 function showNotice(notice: PanelNotice): boolean {
+  if (closed) return false;
+  if (notice.kind === "focus_task" && !freshTaskFocus(notice)) {
+    pendingTaskFocus = null;
+    return false;
+  }
   if (notice.tab_id !== followedTabId) return false;
   const id = `${notice.kind}:${notice.tab_id}:${notice.at}`;
   if (id === shownNotice) return true;
+  if (notice.kind === "focus_task") {
+    // Startup can discover the tab before rendering its bar; a starting
+    // task temporarily makes the field read-only. Keep the focus intent.
+    pendingTaskFocus = notice;
+    if (taskStarting || taskBar.hidden) return false;
+    taskInput.focus();
+    pendingTaskFocus = null;
+    shownNotice = id;
+    return true;
+  }
   shownNotice = id;
   // The shortcut and the context menu start a summary without the panel's
   // button, so the one-time warning (spec §6.1) shows here for them.
@@ -1486,6 +1507,11 @@ function showNotice(notice: PanelNotice): boolean {
     void restoreCards();
   }
   return true;
+}
+
+function freshTaskFocus(notice: PanelNotice): boolean {
+  const age = Date.now() - notice.at;
+  return age >= 0 && age < PANEL_NOTICE_MAX_AGE_MS;
 }
 
 function clearStoredNotice(): Promise<void> {
@@ -1506,10 +1532,13 @@ async function showStoredNotice(dropOthers: boolean): Promise<void> {
     return;
   }
   if (stored === undefined) return;
-  const current = isPanelNotice(stored) && Date.now() - stored.at < PANEL_NOTICE_MAX_AGE_MS ? stored : null;
+  const current = isPanelNotice(stored) && Date.now() - stored.at < PANEL_NOTICE_MAX_AGE_MS &&
+    (stored.kind !== "focus_task" || freshTaskFocus(stored)) ? stored : null;
   if (current && current.tab_id !== followedTabId && !dropOthers) return;
-  await clearStoredNotice();
-  if (current) showNotice(current);
+  // Focus is consumed only after the bar can accept it. Summary notices
+  // retain their existing one-shot behavior.
+  const shown = current ? showNotice(current) : false;
+  if (current?.kind !== "focus_task" || shown || current.tab_id !== followedTabId) await clearStoredNotice();
 }
 
 // --- Page area and note (§5.3, §5.7) ---------------------------------------
@@ -2009,13 +2038,52 @@ taskForm.addEventListener("submit", (event) => {
   event.preventDefault?.();
   void runTask();
 });
+// Slash is a panel shortcut only. Native text fields, editable descendants,
+// composed text and modified shortcuts keep their ordinary keys.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "/" || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+      event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || closed || taskStarting || taskBar.hidden) return;
+  const target = event.target as HTMLElement | null;
+  if (target && (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
+      target.isContentEditable || target.closest?.("[contenteditable]"))) return;
+  event.preventDefault();
+  taskInput.focus();
+});
+
+async function recallTask(direction: 1 | -1): Promise<void> {
+  try {
+    const text = await taskRecall.move(direction, taskInput.value);
+    if (text === null) return;
+    clearRunLine(taskRunArea);
+    taskInput.value = text;
+    const caret = direction === 1 ? 0 : text.length;
+    taskInput.setSelectionRange(caret, caret);
+  } catch (error) {
+    if (followedTabId !== null) {
+      showRunLine(taskRunArea, followedTabId, `Could not recall earlier instructions: ${describe(error)}. Try again.`, true);
+    }
+  }
+}
+
 // Enter runs the task; Shift+Enter adds a newline, and Enter that ends an
 // IME composition is left to the input method.
 taskInput.addEventListener("keydown", (event) => {
+  if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !taskStarting && !closed &&
+      session.connected && harnessReady(session) && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229 &&
+      !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    const caret = taskInput.selectionStart;
+    if (caret === taskInput.selectionEnd &&
+        (event.key === "ArrowUp" ? caret === 0 : caret === taskInput.value.length)) {
+      event.preventDefault();
+      void recallTask(event.key === "ArrowUp" ? 1 : -1);
+      return;
+    }
+  }
   if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
   event.preventDefault?.();
   void runTask();
 });
+taskInput.addEventListener("input", () => taskRecall.edited());
 taskInput.addEventListener("focus", () => void probeSelection());
 // The selection may have changed in the page since the bar got focus: check
 // again as Run is pressed and when the panel's window gets focus back.
@@ -2095,6 +2163,8 @@ const pollTimer = setInterval(() => {
 }, STATUS_POLL_MS);
 window.addEventListener("pagehide", () => {
   closed = true;
+  taskRecall.reset();
+  pendingTaskFocus = null;
   clearInterval(pollTimer);
   if (reloadTimer !== null) clearTimeout(reloadTimer);
   if (recentTimer !== null) clearTimeout(recentTimer);
