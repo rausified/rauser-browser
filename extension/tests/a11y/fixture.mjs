@@ -61,6 +61,7 @@ export function installChrome({ state, runs, pageUrl, pageName }) {
       capture_enabled: configured, strip_params: [],
       agent: configured ? { harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: "2026-11-01T12:00:00Z" } : null,
       summary_vocabulary: { document_types: ["report"], categories: ["work"] },
+      auto_summary: { enabled: true, dwell_secs: 0 },
       adapters: { format: 1, artifacts: [] },
     },
   };

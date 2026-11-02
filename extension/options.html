@@ -147,6 +147,15 @@
           <textarea id="vocab-categories" rows="7" spellcheck="false"></textarea>
           <button id="save-vocabulary" type="button" class="secondary" disabled>Save vocabulary</button>
         </div>
+
+        <div class="field">
+          <h3>Automatic summaries</h3>
+          <small>When this is on, {{APP_NAME}} summarizes each recognized artifact you open that has no summary yet, one at a time in the order you opened them. Summarize &amp; log still works on any page.</small>
+          <label class="check-label"><input id="auto-summary-enabled" type="checkbox" /> Summarize recognized artifacts automatically</label>
+          <label for="auto-summary-dwell">Wait before summarizing (seconds of the tab in front; 0 = right away)</label>
+          <input id="auto-summary-dwell" type="number" min="0" max="3600" step="1" inputmode="numeric" />
+          <button id="save-auto-summary" type="button" class="secondary" disabled>Save automatic summaries</button>
+        </div>
       </section>
 
       <section aria-labelledby="diagnostics-heading">
