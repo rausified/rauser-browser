@@ -1001,3 +1001,32 @@ fn more_namespaces_than_one_alternation_holds_split_per_word() {
         );
     }
 }
+
+/// Miro board IDs end in base64 padding (`uXjVM0uuBLo=`). The shaper reads
+/// them as `{id}`, so the drafter proposes a token rule, and the drafted rule
+/// records the real board URL (with its trailing slash and query) under the
+/// padded ID.
+#[test]
+fn miro_board_with_base64_padded_id_drafts_a_rule_that_records_the_board() {
+    let site = draft(
+        "https://miro.com",
+        &empty(),
+        &["/app/board/{id}/?{param}={num}"],
+        &[],
+    );
+    assert_eq!(site.adapters.len(), 1, "{site:?}");
+    let board = &site.adapters[0];
+    assert_eq!(rules(board), ["/app/board/{token:token(1,128)}"]);
+    let doc = drafted_document(&site);
+    let hit = doc
+        .evaluate(
+            "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764600000000000",
+            None,
+        )
+        .expect("board matches");
+    assert!(
+        hit.artifact_id.ends_with("miro.com/uXjVM0uuBLo="),
+        "{}",
+        hit.artifact_id
+    );
+}

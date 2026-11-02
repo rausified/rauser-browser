@@ -78,6 +78,10 @@ test("the review lists what will and will not be captured with the real current 
   ruleBox(page, 0, 0).checked = false;
   ruleBox(page, 0, 0).dispatch("input");
   assert.match(page.el("capture-site-preview").textContent, /This page: will not be captured/);
+  // Not recording the page the user is on is called out, not just listed.
+  const notice = page.el("capture-site-preview").children.find((node) => /This page: will not be captured/.test(node.textContent));
+  assert.equal(notice.className, "warning");
+  assert.match(notice.textContent, /If you want pages like this one remembered, these rules will not record them\./);
   // Nothing checked leaves nothing to save.
   ruleBox(page, 0, 1).checked = false;
   ruleBox(page, 0, 1).dispatch("input");

@@ -86,7 +86,13 @@ impl BaseType {
             BaseType::Hex => (in_len(v.len()) && v.bytes().all(|b| b.is_ascii_hexdigit()))
                 .then(|| v.to_ascii_lowercase()),
             BaseType::Token => {
-                (in_len(v.len()) && v.chars().all(|c| self.in_alphabet(c))).then(|| v.to_owned())
+                // Up to two trailing `=` are base64 padding (Miro board IDs).
+                let body = v
+                    .strip_suffix("==")
+                    .or_else(|| v.strip_suffix('='))
+                    .unwrap_or(v);
+                (in_len(v.len()) && !body.is_empty() && body.chars().all(|c| self.in_alphabet(c)))
+                    .then(|| v.to_owned())
             }
             BaseType::Name => {
                 (in_len(v.len()) && v != "." && v != ".." && v.chars().all(|c| self.in_alphabet(c)))
