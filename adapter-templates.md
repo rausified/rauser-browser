@@ -213,7 +213,7 @@ All types are fixed by the host. Every type's alphabet is ASCII, and no type adm
 |---|---|---|---|
 | `int` | ASCII digits, without a leading zero unless the value is `0` | 1–19 | as matched |
 | `hex` | `0-9`, `a-f`, `A-F` | 1–64 | lowercase |
-| `token` | `A-Z`, `a-z`, `0-9`, `_`, `-` | 1–128 | as matched |
+| `token` | `A-Z`, `a-z`, `0-9`, `_`, `-`, then at most two trailing `=` (base64 padding, as in Miro's `/app/board/uXjVM0uuBLo=/`); at least one character before any `=`, and `=` nowhere else | 1–128, padding included | as matched |
 | `name` | `A-Z`, `a-z`, `0-9`, `.`, `_`, `-`, but not `.` or `..` | 1–100 | as matched |
 | `jira_key` | a letter, then letters, digits, or `_`; then `-`; then an `int`. Letters match in either case | project part 1–255 | uppercase |
 | `uuid` | 8-4-4-4-12 hex digits, optionally wrapped in `{ }` | fixed | lowercase, braces removed |
@@ -460,6 +460,16 @@ match     = [
   { path = "/personal/{_}/_layouts/15/Doc.aspx",                                 query = { sourcedoc = "{doc:uuid}" } },
 ]
 id        = "sharepoint:{host}/{doc}"
+
+# Miro: one origin for every account, no account in the URL; a 12-character
+# board ID ending in base64 padding (§7.1). Query parameters such as
+# share_link_id never change the ID. See docs/adapters/miro.board.md.
+[[artifacts]]
+type   = "miro.board"
+origin = "https://miro.com"
+match  = [{ path = "/app/board/{board:token(12)}" }]
+id     = "miro.board:{host}/{board}"
+title  = "{title} - Miro"
 ```
 
 Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; Google Docs cannot be scoped by URL; and a scope miss is terminal rather than falling through to a container, so a pull request outside `github.pr`'s scope but inside `github.repo`'s is dropped, not recorded as a repository visit.

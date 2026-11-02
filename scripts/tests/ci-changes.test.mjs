@@ -23,9 +23,10 @@ test("root Markdown, docs/ and the beads queue are docs or queue files", () => {
   }
 });
 
-test("everything else counts as code, including nested Markdown that tests or builds read", () => {
+test("everything else counts as code, including SUMMARY.md and nested Markdown that tests or builds read", () => {
   for (const path of [
     "host/src/native.rs",
+    "SUMMARY.md",
     "host/tests/fixtures/pre-home-layout/README.md",
     "protocol/README.md",
     "protocol/adapter-templates/README.md",

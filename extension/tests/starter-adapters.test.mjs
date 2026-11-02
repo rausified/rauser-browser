@@ -32,8 +32,9 @@ test("generated starters stay identical to the shared cross-engine fixtures", ()
     ...starterOffers("https://github.com", ["acme-corp"]),
     ...starterOffers("https://acme.sharepoint.com", []),
     ...starterOffers("https://acme-my.sharepoint.com", []),
+    ...starterOffers("https://miro.com", []),
   ].map((offer) => offer.adapter);
-  const expectedTypes = new Set(["jira.issue", "github.pr", "github.issue", "github.repo", "sharepoint.doc"]);
+  const expectedTypes = new Set(["jira.issue", "github.pr", "github.issue", "github.repo", "sharepoint.doc", "miro.board"]);
   const expected = recorded.filter((adapter) => expectedTypes.has(adapter.type));
   assert.deepEqual(generated, expected);
 });
@@ -105,6 +106,10 @@ test("starter origins are classified narrowly", () => {
   assert.equal(starterKind("https://github.com"), "github");
   assert.equal(starterKind("http://github.com"), null);
   assert.equal(starterKind("https://github.com.evil.example"), null);
+  assert.equal(starterKind("https://miro.com"), "miro");
+  assert.equal(starterKind("http://miro.com"), null);
+  assert.equal(starterKind("https://www.miro.com"), null);
+  assert.equal(starterKind("https://miro.com.evil.example"), null);
   assert.deepEqual(starterOffers("https://example.com", []), []);
   assert.equal(starterOffers("https://acme.atlassian.net", []).length, 1);
 });
@@ -168,6 +173,22 @@ test("SharePoint and OneDrive drafts key documents by sourcedoc and ignore roots
   assert.equal(evaluate(doc, `${origin}/personal/alex/Documents/Forms/AllItems.aspx`).match, false);
 });
 
+test("Miro draft keys boards by their padded board ID and ignores dashboards", () => {
+  const [offer, ...rest] = starterOffers("https://miro.com", []);
+  assert.equal(rest.length, 0);
+  assert.equal(offer.needs_scope, false);
+  assert.match(offer.description, /every Miro account/);
+  const doc = compiled([offer]);
+  const board = evaluate(doc, "https://miro.com/app/board/uXjVM0uuBLo=/", "SSE ZTA SWOT - Miro");
+  assert.equal(board.match, true);
+  assert.equal(board.artifact_id, "miro.board:miro.com/uXjVM0uuBLo=");
+  assert.equal(board.title, "SSE ZTA SWOT");
+  const shared = evaluate(doc, "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990");
+  assert.equal(shared.artifact_id, board.artifact_id);
+  assert.equal(evaluate(doc, "https://miro.com/app/dashboard/").match, false);
+  assert.equal(evaluate(doc, "https://miro.com/login/").match, false);
+});
+
 test("GitHub drafts are scoped and preserve PR modes", () => {
   const offers = starterOffers("https://github.com", ["acme-corp"]);
   const doc = compiled(offers);
@@ -192,9 +213,10 @@ test("every starter type is reserved in the host catalog", () => {
     ...starterOffers("https://github.com", []),
     ...starterOffers("https://acme.sharepoint.com", []),
     ...starterOffers("https://acme-my.sharepoint.com", []),
+    ...starterOffers("https://miro.com", []),
   ];
   const types = new Set(offers.map((offer) => offer.artifact_type));
-  assert.deepEqual([...types].sort(), ["github.issue", "github.pr", "github.repo", "jira.issue", "sharepoint.doc"]);
+  assert.deepEqual([...types].sort(), ["github.issue", "github.pr", "github.repo", "jira.issue", "miro.board", "sharepoint.doc"]);
   for (const type of types) assert.ok(catalog.starter_types.includes(type), type);
 });
 

@@ -115,6 +115,22 @@ test("Capture Site recognizes OneDrive document routes without scope or JSON", a
   assert.equal(updates(page)[0].config.adapters.artifacts[0].id, "sharepoint:{host}/{doc}");
 });
 
+test("Capture Site offers Miro boards as a starter, keyed by the padded board ID", async () => {
+  const url = "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990";
+  const page = await captureReview(url);
+  assert.equal(page.el("capture-site-github").hidden, true);
+  const preview = page.el("capture-site-preview").textContent;
+  assert.match(preview, /Miro boards/);
+  assert.match(preview, /every Miro account signed in to this Chrome profile/);
+  assert.match(preview, /This page: will be captured/);
+  assert.doesNotMatch(preview, /"match"|"id"/);
+  await saveCapture(page);
+  const [saved] = updates(page)[0].config.adapters.artifacts;
+  assert.equal(saved.type, "miro.board");
+  assert.equal(saved.id, "miro.board:{host}/{board}");
+  assert.equal(saved.unscoped, undefined);
+});
+
 test("Capture Site pre-fills the organization from the current GitHub page", async () => {
   const page = await captureReview(GITHUB_URL);
   assert.equal(page.el("capture-site-github").hidden, false);

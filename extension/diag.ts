@@ -4,9 +4,11 @@
 // page can copy for a bug report. The request_id field on native requests
 // joins these entries with the host's host.jsonl and service.jsonl lines.
 //
-// Privacy: entries never carry page text, titles, note text, prompts, answers,
-// or agent output. A URL appears only as its origin (diagOrigin). Field values
-// are reduced to primitives and error name/message pairs before they are kept.
+// Privacy is not a constraint for Brauser (DESIGN.md §14, 2026-11-01): an
+// entry may carry a URL, a title, or page text when a log review needs it;
+// existing entries log origins (diagOrigin) by habit. Never log credentials.
+// Field values are reduced to primitives and error name/message pairs before
+// they are kept.
 import { APP_NAME, storageKey } from "./brand.js";
 
 export type DiagLevel = "debug" | "info" | "warn" | "error";
