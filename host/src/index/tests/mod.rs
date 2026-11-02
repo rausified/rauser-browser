@@ -3,7 +3,6 @@
 use super::*;
 use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
 use std::fs::File;
-use std::process::Command;
 use tempfile::TempDir;
 
 mod catch_up;
@@ -16,6 +15,7 @@ mod ordering;
 mod presentation;
 mod regeneration;
 mod scan;
+pub(crate) mod sql;
 mod summaries;
 mod views;
 
@@ -57,27 +57,17 @@ fn index(root: &TempDir, cache: &TempDir) -> ArtifactIndex {
     ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap()
 }
 
-/// Run SQLite's own integrity check on `path`, then one query whose
-/// rows are printed one per line.
+/// Run SQLite's own integrity checks on `path`, then one query whose
+/// rows are printed one per line, values separated by spaces.
 fn sqlite_check(path: &Path, query: &str) -> String {
-    let output = Command::new("python3")
-            .args([
-                "-c",
-                "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('pragma integrity_check').fetchone()[0]); [print(*r) for r in c.execute(sys.argv[2])]",
-            ])
-            .arg(path)
-            .arg(query)
-            .output()
-            .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    // Python writes \r\n on Windows.
-    String::from_utf8(output.stdout)
-        .unwrap()
-        .replace("\r\n", "\n")
+    let mut text = sql::integrity(path);
+    text.push('\n');
+    for row in sql::sql_rows(path, query) {
+        let values = row.iter().map(sql::display).collect::<Vec<_>>();
+        text.push_str(&values.join(" "));
+        text.push('\n');
+    }
+    text
 }
 
 fn activity_marker(event: &ActivityEvent) -> String {

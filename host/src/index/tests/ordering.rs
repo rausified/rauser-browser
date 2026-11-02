@@ -17,16 +17,10 @@ fn an_event_id_cannot_replace_different_indexed_content() {
     forged.title = Some("Forged retry".into());
     assert!(index.record_activity(&forged, &[]).is_err());
 
-    let output = Command::new("python3")
-            .args([
-                "-c",
-                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select title from artifacts').fetchone()[0])",
-            ])
-            .arg(index.database_path())
-            .output()
-            .unwrap();
-    assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "Original");
+    assert_eq!(
+        sql::sql_rows(&index.database_path(), "select title from artifacts")[0],
+        [sql::Value::Text("Original".into())]
+    );
 }
 
 #[test]
@@ -117,15 +111,10 @@ fn a_year_of_daily_opens_has_a_bounded_timeline() {
         fs::metadata(index.database_path()).unwrap().len() > (5 * SQLITE_PAGE_SIZE) as u64,
         "the SQLite fixture did not exercise an interior B-tree page"
     );
-    let output = Command::new("python3").args([
-            "-c", "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])",
-        ]).arg(index.database_path()).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    assert_eq!(
+        sql::sql_rows(&index.database_path(), "select count(*) from visits"),
+        [[sql::Value::Integer(365)]]
     );
-    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "365");
 }
 
 #[test]
@@ -186,21 +175,13 @@ fn old_unknown_trail_transitions_preserve_activity_but_never_become_edges() {
         assert_eq!(artifact.linked_count, 1);
         assert_eq!(artifact.incoming_trails.len(), 1);
         assert_eq!(artifact.incoming_trails[0].transition, "link");
-        let output = Command::new("python3")
-                .args([
-                    "-c",
-                    "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select count(*) from visits').fetchone()[0]); print([r[0] for r in c.execute('select kind from edges')])",
-                ])
-                .arg(index.database_path())
-                .output()
-                .unwrap();
-        assert!(output.status.success(), "{:?}", output.stderr);
-        // Python writes \r\n on Windows.
         assert_eq!(
-            String::from_utf8(output.stdout)
-                .unwrap()
-                .replace("\r\n", "\n"),
-            "2\n['link']\n"
+            sql::sql_rows(&index.database_path(), "select count(*) from visits"),
+            [[sql::Value::Integer(2)]]
+        );
+        assert_eq!(
+            sql::sql_rows(&index.database_path(), "select kind from edges"),
+            [[sql::Value::Text("link".into())]]
         );
         // Do not rewrite historical payloads: their exact content detects
         // conflicting reuse of an event ID during replay and rebuilding.

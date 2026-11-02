@@ -55,7 +55,7 @@ mod render;
 mod scan;
 mod snapshot;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use fold::*;
 pub(crate) use fold::{unvisited_container, unvisited_within};
