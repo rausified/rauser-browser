@@ -2507,18 +2507,26 @@ async function run() {
 
       await step("Restore", async () => {
         await panelOnArticle();
-        const card = await waitFor(async () => {
-          const shown = await runCards();
-          const ids = new Set(shown.map((candidate) => candidate.id));
-          requireCondition(Object.values(runIds).every((id) => ids.has(id)),
-            `The reopened panel shows ${JSON.stringify([...ids])}; expected ${JSON.stringify(runIds)}`);
-          return shown.find((candidate) => candidate.id === runIds.codex);
+        // One card per page, its newest run's (DESIGN.md §5.7): the
+        // article's canceled slow run, and the failing run's own page. The
+        // article's older summary runs are not cards; they are on the
+        // Tasks page.
+        const newestCards = [runIds.slow, runIds.fail];
+        const olderRuns = [runIds.codex, runIds.claude, runIds.badjson];
+        await waitFor(async () => {
+          const ids = new Set((await runCards()).map((candidate) => candidate.id));
+          requireCondition(newestCards.every((id) => ids.has(id)) && olderRuns.every((id) => !ids.has(id)),
+            `The reopened panel shows ${JSON.stringify([...ids])}; expected only ${JSON.stringify(newestCards)}`);
         }, { timeout: 20_000, signal: abort.signal });
-        requireCondition(card.state.startsWith("Summarized") && /Importance: high/.test(card.answer),
-          `The restored Codex card: ${JSON.stringify(card)}`);
-        // Finished tasks keep their state and report on the Tasks page,
+        // Finished tasks and summaries keep their state on the Tasks page,
         // which lists every run from the service directly rather than
-        // restoring cards into the panel's task bar.
+        // restoring cards into the panel. Reloaded first: no run is active
+        // to keep its list polling since these summaries finished.
+        await onTasksPage((page) => cdp.send("Page.reload", {}, page.sessionId));
+        await selectTaskRow(runIds.codex);
+        const summary = await taskDetailIn(runIds.codex, ["Summarized"], 20_000);
+        requireCondition(/Importance: high/.test(summary.report) && summary.buttons.includes("Open summary"),
+          `The Tasks page's Codex summary: ${JSON.stringify(summary)}`);
         for (const id of Object.values(taskRunIds)) {
           await selectTaskRow(id);
           const task = await taskDetailIn(id, ["Done"], 20_000);
@@ -2650,11 +2658,12 @@ async function run() {
         await closeTab(targetId);
         requireCondition((await dialogLogLines()).length === dialogsBefore, "Improve with AI opened a native dialog");
 
-        // The panel's summary cards restore summary runs only.
+        // The panel's summary cards restore summary runs only (the
+        // article's card is its newest run's, the canceled slow one).
         await panelOnArticle();
         await waitFor(async () => {
           const ids = (await runCards()).map((card) => card.id);
-          requireCondition(ids.includes(runIds.codex), `The reopened panel shows ${JSON.stringify(ids)}`);
+          requireCondition(ids.includes(runIds.slow), `The reopened panel shows ${JSON.stringify(ids)}`);
           requireCondition(!ids.includes(runId), `The panel restored the site-draft run ${runId} as a summary card`);
         }, { timeout: 20_000, signal: abort.signal });
 
