@@ -6,6 +6,7 @@ use std::fs::File;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+mod bounds;
 mod catch_up;
 mod containers;
 mod database;
