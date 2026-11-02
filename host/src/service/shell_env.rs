@@ -13,10 +13,14 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use rustix::process::{Pid, Signal, kill_process_group};
 
 /// How long the login shell may take to start and print its environment.
 /// Interactive start-up files are slow (a zsh with plugins took 4 to 7
@@ -42,18 +46,44 @@ const PROVIDER_PREFIXES: &[&str] = &[
 const NAMES_SHOWN: usize = 3;
 
 /// How setup asks for the login shell's variable names: given the run
-/// environment, the names, or None when they cannot be read.
-pub type ShellNames = dyn Fn(&[(OsString, OsString)]) -> Option<Vec<String>>;
+/// environment and the time left, the names, or None when they cannot be
+/// read in that time.
+pub type ShellNames = dyn Fn(&[(OsString, OsString)], Duration) -> Option<Vec<String>>;
+
+/// The shortest time worth giving the shell; less than this left in setup's
+/// budget, and setup reports the probe failure without asking.
+pub const MIN_SHELL_TIME: Duration = Duration::from_secs(2);
 
 /// The variable names the user's login shell exports, or None when the
-/// shell cannot be found or does not answer in time. Tests and the
-/// scripted-dialogs smoke build never start the user's real shell.
-pub fn login_shell_names(run_env: &[(OsString, OsString)]) -> Option<Vec<String>> {
+/// shell cannot be found or does not answer within `timeout` (at most
+/// [`SHELL_TIMEOUT`]). Tests and the scripted-dialogs smoke build never
+/// start the user's real shell.
+pub fn login_shell_names(
+    run_env: &[(OsString, OsString)],
+    timeout: Duration,
+) -> Option<Vec<String>> {
     if cfg!(any(test, feature = "scripted-dialogs")) {
         return None;
     }
     let shell = login_shell(run_env)?;
-    names_from_shell(&shell, run_env, SHELL_TIMEOUT)
+    names_from_shell(&shell, run_env, timeout.min(SHELL_TIMEOUT))
+}
+
+/// The arguments that make `shell` run `script` with the user's start-up
+/// files. csh and tcsh accept `-l` only as their sole option, so they get
+/// `-c` alone; they read `~/.cshrc` for every shell, where their exports
+/// live. Every other shell runs as an interactive login shell, so both its
+/// login files and its interactive files (`~/.zshrc`, `~/.bashrc`) are read.
+fn shell_args<'a>(shell: &Path, script: &'a str) -> Vec<&'a str> {
+    let name = shell
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default();
+    if matches!(name, "csh" | "tcsh") {
+        vec!["-c", script]
+    } else {
+        vec!["-l", "-i", "-c", script]
+    }
 }
 
 /// The provider variable names in `shell_names` that `run_env` lacks, sorted
@@ -153,49 +183,55 @@ fn account_shell(user: &str) -> Option<PathBuf> {
     })
 }
 
-/// Start `shell` as an interactive login shell with exactly `run_env`, have
-/// it print `env -0` after [`MARKER`], and return the names it printed. The
-/// shell is killed at `timeout`.
+/// Start `shell` with its start-up files ([`shell_args`]) and exactly
+/// `run_env`, have it print `env -0` after [`MARKER`], and return the names it
+/// printed. The shell leads its own process group; at `timeout` the whole
+/// group is killed, and output is waited for only until `timeout`, so a
+/// process a start-up file left holding the pipe cannot hold setup up.
 pub(crate) fn names_from_shell(
     shell: &Path,
     run_env: &[(OsString, OsString)],
     timeout: Duration,
 ) -> Option<Vec<String>> {
     let script = format!("printf '%s\\0' {MARKER}; exec /usr/bin/env -0");
+    let deadline = Instant::now() + timeout;
     let mut child = Command::new(shell)
-        .args(["-l", "-i", "-c", &script])
+        .args(shell_args(shell, &script))
         .env_clear()
         .envs(run_env.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .ok()?;
     let stdout = child.stdout.take()?;
-    let reader = thread::spawn(move || {
+    let (sender, output) = mpsc::channel();
+    // A process left holding the pipe keeps this reader blocked; it is never
+    // joined, and ends when that process does.
+    thread::spawn(move || {
         let mut output = Vec::new();
-        stdout
-            .take(MAX_OUTPUT_BYTES)
-            .read_to_end(&mut output)
-            .map(|_| output)
+        let read = stdout.take(MAX_OUTPUT_BYTES).read_to_end(&mut output);
+        let _ = sender.send(read.map(|_| output));
     });
-    let deadline = Instant::now() + timeout;
     let exited = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status.success(),
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
             _ => {
-                let _ = child.kill();
+                // The shell is not reaped yet, so its group id is still its own.
+                let _ = kill_process_group(Pid::from_child(&child), Signal::KILL);
                 let _ = child.wait();
                 break false;
             }
         }
     };
-    let output = reader.join().ok()?.ok()?;
-    if !exited {
-        return None;
-    }
-    Some(parse_names(&output))
+    let left = deadline.saturating_duration_since(Instant::now());
+    let output = output
+        .recv_timeout(left.max(Duration::from_millis(100)))
+        .ok()?
+        .ok()?;
+    exited.then(|| parse_names(&output))
 }
 
 /// The variable names in `env -0` output after [`MARKER`]. Each value is
@@ -334,6 +370,69 @@ mod tests {
     }
 
     #[test]
+    fn a_start_up_file_holding_the_pipe_cannot_outlast_the_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        // The shell waits; its background child holds stdout open.
+        let hangs = fake_shell(dir.path(), "sleep 30 &\nexec sleep 30");
+        let started = Instant::now();
+        let run = env(&[("PATH", "/usr/bin:/bin")]);
+        assert_eq!(
+            names_from_shell(&hangs, &run, Duration::from_millis(500)),
+            None
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        // The shell exits, but a background child it left still holds stdout.
+        let leaves = fake_shell(dir.path(), "sleep 30 &");
+        let started = Instant::now();
+        assert_eq!(
+            names_from_shell(&leaves, &run, Duration::from_millis(500)),
+            None
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn csh_and_tcsh_get_c_alone_and_others_a_login_shell() {
+        let script = "true";
+        for shell in ["/bin/csh", "/bin/tcsh"] {
+            assert_eq!(shell_args(Path::new(shell), script), ["-c", "true"]);
+        }
+        for shell in ["/bin/zsh", "/bin/bash", "/bin/sh", "/opt/homebrew/bin/fish"] {
+            assert_eq!(
+                shell_args(Path::new(shell), script),
+                ["-l", "-i", "-c", "true"]
+            );
+        }
+        // A tcsh that refuses -l with other options still answers.
+        let dir = tempfile::tempdir().unwrap();
+        let tcsh = dir.path().join("tcsh");
+        fs::write(
+            &tcsh,
+            "#!/bin/sh\nif [ \"$1\" = -l ]; then echo \"Unknown option: '-l'\" >&2; exit 1; fi\nexport CLAUDE_CODE_USE_BEDROCK=1\nfor last; do :; done\neval \"$last\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&tcsh, fs::Permissions::from_mode(0o755)).unwrap();
+        let found = names_from_shell(
+            &tcsh,
+            &env(&[("PATH", "/usr/bin:/bin")]),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(
+            found.contains(&"CLAUDE_CODE_USE_BEDROCK".to_owned()),
+            "{found:?}"
+        );
+    }
+
+    #[test]
     fn a_shell_that_prints_no_marker_gives_no_names() {
         assert!(parse_names(b"PATH=/bin\0HOME=/x\0").is_empty());
         let mut output = b"noise\0".to_vec();
@@ -360,6 +459,6 @@ mod tests {
             ("USER", "nobody"),
             ("PATH", "/usr/bin:/bin"),
         ]);
-        assert_eq!(login_shell_names(&run), None);
+        assert_eq!(login_shell_names(&run, SHELL_TIMEOUT), None);
     }
 }

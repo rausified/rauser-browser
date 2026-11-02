@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use brauser_protocol::{
     AgentConfig, ConfigSnapshot, ErrorCode, HarnessFound, SetUpHarnessRequest, StorageConfig,
@@ -31,6 +31,10 @@ use crate::harness::{self, Adapter, Detected, HarnessEnv, PROBE_PROMPT};
 
 /// How long the probe may take, including a harness's own startup.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(90);
+/// All of setup, from detection to the login-shell check after a failed
+/// probe, finishes inside this, so the host's 115-second wait for the setup
+/// exchange (`SETUP_EXCHANGE_TIMEOUT` in client.rs) still gets the answer.
+pub const SETUP_BUDGET: Duration = Duration::from_secs(110);
 const MAX_PROBLEM_BYTES: usize = 512;
 const MAX_BINARY_BYTES: usize = 4096;
 const UNSAFE_PATH: &str = "the harness path cannot be shown safely; move it to a plain path";
@@ -168,6 +172,7 @@ pub fn set_up(
     env: Vec<(OsString, OsString)>,
     shell_names: &shell_env::ShellNames,
 ) -> Result<(ConfigSnapshot, String), (ErrorCode, String)> {
+    let started = Instant::now();
     let refuse = |code, message: &str| (code, message.to_owned());
     if config.refresh().is_err() {
         return Err(refuse(
@@ -285,7 +290,8 @@ pub fn set_up(
             "{name} failed its test run ({}); summaries stay off",
             bounded(reason, MAX_PROBLEM_BYTES)
         );
-        let missing = shell_names(&spec.env)
+        let missing = shell_time(started.elapsed())
+            .and_then(|time| shell_names(&spec.env, time))
             .map(|names| shell_env::missing_provider_names(&names, &spec.env))
             .unwrap_or_default();
         if let Some(hint) = shell_env::hint(&missing) {
@@ -325,6 +331,16 @@ pub fn set_up(
             format!("could not save configuration: {error:#}"),
         )),
     }
+}
+
+/// The time the login-shell check may take after `elapsed` of setup: what is
+/// left of [`SETUP_BUDGET`], at most [`shell_env::SHELL_TIMEOUT`], or None
+/// when less than [`shell_env::MIN_SHELL_TIME`] is left.
+fn shell_time(elapsed: Duration) -> Option<Duration> {
+    SETUP_BUDGET
+        .checked_sub(elapsed)
+        .map(|left| left.min(shell_env::SHELL_TIMEOUT))
+        .filter(|time| *time >= shell_env::MIN_SHELL_TIME)
 }
 
 /// Truncate host-authored text at a character boundary.
@@ -419,7 +435,7 @@ mod tests {
             };
             let registry = self.registry();
             let env = self.run_env();
-            set_up(&mut self.config, &registry, &request, env, &|_| None)
+            set_up(&mut self.config, &registry, &request, env, &|_, _| None)
         }
     }
 
@@ -544,9 +560,13 @@ mod tests {
         };
         let registry = setup.registry();
         let env = setup.run_env();
-        let (code, message) = set_up(&mut setup.config, &registry, &request, env.clone(), &|_| {
-            None
-        })
+        let (code, message) = set_up(
+            &mut setup.config,
+            &registry,
+            &request,
+            env.clone(),
+            &|_, _| None,
+        )
         .unwrap_err();
         assert_eq!(code, ErrorCode::InvalidConfig);
         assert!(message.contains("content folders are fixed"), "{message}");
@@ -555,7 +575,8 @@ mod tests {
         assert!(!setup.runner.with_extension("ran").exists());
 
         request.summaries_dir = Some("summaries".into());
-        let (config, _) = set_up(&mut setup.config, &registry, &request, env, &|_| None).unwrap();
+        let (config, _) =
+            set_up(&mut setup.config, &registry, &request, env, &|_, _| None).unwrap();
         assert_eq!(
             config.storage.as_ref().unwrap().summaries_dir.as_deref(),
             Some("summaries")
@@ -602,7 +623,11 @@ mod tests {
         let registry = setup.registry();
         let env = setup.run_env();
         // PATH reaches the run, so only the two provider names are missing.
-        let shell = |run: &[(OsString, OsString)]| {
+        let shell = |run: &[(OsString, OsString)], time: Duration| {
+            assert!(
+                time <= shell_env::SHELL_TIMEOUT && time >= shell_env::MIN_SHELL_TIME,
+                "{time:?}"
+            );
             assert!(
                 run.iter().any(|(key, _)| key == "PROBE_MARK"),
                 "the run environment"
@@ -646,10 +671,23 @@ mod tests {
         };
         let registry = setup.registry();
         let env = setup.run_env();
-        set_up(&mut setup.config, &registry, &request, env, &|_| {
+        set_up(&mut setup.config, &registry, &request, env, &|_, _| {
             panic!("the login shell is read only after a failed probe")
         })
         .unwrap();
+    }
+
+    #[test]
+    fn the_shell_check_fits_in_what_is_left_of_the_setup_budget() {
+        assert_eq!(shell_time(Duration::ZERO), Some(shell_env::SHELL_TIMEOUT));
+        assert_eq!(
+            shell_time(Duration::from_secs(100)),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(shell_time(Duration::from_secs(109)), None);
+        assert_eq!(shell_time(Duration::from_secs(200)), None);
+        // The whole budget leaves the host's exchange wait a margin.
+        assert!(SETUP_BUDGET + Duration::from_secs(5) <= Duration::from_secs(115));
     }
 
     #[test]
@@ -718,7 +756,8 @@ mod tests {
         fs::write(&setup.runner, "#!/bin/sh\n: > \"$0.ran\"\necho OK\n").unwrap();
         let registry = setup.registry();
         let env = setup.run_env();
-        let (code, _) = set_up(&mut setup.config, &registry, &request, env, &|_| None).unwrap_err();
+        let (code, _) =
+            set_up(&mut setup.config, &registry, &request, env, &|_, _| None).unwrap_err();
         assert_eq!(code, ErrorCode::Conflict);
         assert!(!setup.runner.with_extension("ran").exists());
     }
@@ -738,7 +777,7 @@ mod tests {
             let registry = setup.registry();
             let env = setup.run_env();
             let (code, _) =
-                set_up(&mut setup.config, &registry, &request, env, &|_| None).unwrap_err();
+                set_up(&mut setup.config, &registry, &request, env, &|_, _| None).unwrap_err();
             assert_eq!(code, ErrorCode::InvalidRequest, "{timeout_secs}");
         }
     }
