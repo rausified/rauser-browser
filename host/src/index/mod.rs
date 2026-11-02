@@ -557,8 +557,13 @@ impl ArtifactIndex {
                         if outcome == store::Ingest::Conflict {
                             conflicts += 1;
                         }
-                        changes.record(outcome, &event_identity(event).0, groups.clone());
-                        dirty.extend(groups);
+                        // A body already indexed (by an earlier delivery, or
+                        // by this catch-up from its own log append) changes
+                        // no row, so it neither marks nor bumps a generation.
+                        if matches!(outcome, store::Ingest::Inserted | store::Ingest::Moved) {
+                            dirty.extend(groups.iter().cloned());
+                        }
+                        changes.record(outcome, &event_identity(event).0, groups);
                     }
                 }
                 store::apply(tx, adapters, &changes)?;
