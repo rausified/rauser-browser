@@ -1,8 +1,9 @@
 # Jira issue starter draft
 
-Status: development draft. The adapter grammar and recorded examples were
-verified by both adapter-template engines on 2026-10-16. A live Jira Cloud UI
-check is still required before this draft is release-certified.
+Status: release-certified 2026-11-02. John checked this draft against the live
+Jira Cloud UI on macOS with real Chrome on 2026-11-02, after both
+adapter-template engines verified its grammar and recorded examples on
+2026-10-16.
 
 Brauser offers this draft when an enabled exact HTTPS origin is a Jira Cloud
 tenant, such as `https://acme.atlassian.net`. It recognizes both the canonical

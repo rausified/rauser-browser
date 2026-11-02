@@ -31,6 +31,10 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "json", "env-filter", "registry"] }
 time = { version = "0.3", features = ["formatting", "parsing"] }
+# SQLite for the artifact index (brwr-mff, brwr-b2e). `bundled` compiles the
+# vendored SQLite, so no system library is needed; the crate holds the unsafe
+# FFI, and our crates keep #![forbid(unsafe_code)].
+rusqlite = { version = "0.41", features = ["bundled"] }
 url = "2.5"
 uuid = { version = "1", features = ["v4"] }
 

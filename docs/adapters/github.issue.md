@@ -1,8 +1,9 @@
 # GitHub issue starter draft
 
-Status: development draft. The adapter grammar and recorded examples were
-verified by both adapter-template engines on 2026-10-16. A live GitHub UI check
-is still required before this draft is release-certified.
+Status: release-certified 2026-11-02. John checked this draft against the live
+GitHub UI on macOS with real Chrome on 2026-11-02, after both
+adapter-template engines verified its grammar and recorded examples on
+2026-10-16.
 
 GitHub is a shared origin, so the settings gallery refuses to create this
 draft until the user names one or more work organizations. Names are normalized

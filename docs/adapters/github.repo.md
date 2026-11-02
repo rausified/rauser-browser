@@ -1,10 +1,10 @@
 # GitHub repository starter draft
 
-Status: development draft. The adapter grammar and the sample URLs below were
-verified by both adapter-template engines on 2026-10-27 through the shared
-vectors (`eval.github.repo_*` and the other `starters` GitHub cases in
-`protocol/adapter-templates/vectors.json`). A live GitHub UI check is still
-required before this draft is release-certified; record it here when done.
+Status: release-certified 2026-11-02. John checked this draft against the live
+GitHub UI on macOS with real Chrome on 2026-11-02, after both
+adapter-template engines verified its grammar and recorded examples on
+2026-10-27 (`eval.github.repo_*` and the other `starters` GitHub cases in
+`protocol/adapter-templates/vectors.json`).
 
 GitHub is a shared origin, so this draft is created only for organizations the
 user names. Names are normalized to lowercase, deduplicated, and placed in
