@@ -68,6 +68,7 @@ export class FakeElement {
   append(...children) { this.children.push(...children); }
   add(child) { this.children.push(child); }
   replaceChildren(...children) { this.children = children; }
+  contains(node) { return this === node || this.children.some((child) => child.contains?.(node)); }
   // Agent text reaches the panel; markup must never be parsed from it.
   set innerHTML(_value) { throw new Error("The panel must set text through textContent, not innerHTML"); }
   insertAdjacentHTML() { throw new Error("The panel must set text through textContent, not insertAdjacentHTML"); }

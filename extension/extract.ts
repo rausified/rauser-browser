@@ -151,11 +151,59 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   // selection and can never be the frame a summary reads.
   const rendered = hasBoxes(document.documentElement);
 
+  // Word for the web renders each paragraph as a `p.Paragraph` inside a
+  // `.OutlineElement` under #PagesContainer. Readability cannot read that
+  // frame: on a clone with no layout it picks Fluent's screen-reader keytip
+  // layer ("Control Period, fzczazmzs02h, zzh, …", whose commas outscore the
+  // document), and without that layer it still keeps only part of the
+  // document. So a Word frame is read paragraph by paragraph: role=heading
+  // with aria-level gives a heading, an `li` outline element a list item
+  // indented by its aria-level, and aria-hidden list-marker glyphs are
+  // skipped. Word renders only the pages near the viewport, so a long
+  // document's later pages are absent; the host's Office document section
+  // tells the agent to read the document itself when the page falls short.
+  const wordLines: { text: string; item: boolean }[] = [];
+  if (rendered) {
+    // Text the reader sees: hidden, aria-hidden, and boxless (display:none)
+    // elements contribute nothing, and a `br` is a line break.
+    const visibleText = (node: Node): string => {
+      if (node.nodeType === 3) return node.nodeValue ?? "";
+      if (node.nodeType !== 1) return "";
+      const element = node as Element;
+      if (element.tagName.toUpperCase() === "BR") return "\n";
+      if (element.getAttribute("aria-hidden") === "true" || element.getAttribute("hidden") !== null) return "";
+      if (!hasBoxes(element)) return "";
+      return Array.from(node.childNodes).map(visibleText).join("");
+    };
+    for (const paragraph of Array.from(document.querySelectorAll("#PagesContainer .Paragraph"))) {
+      const outline = paragraph.closest(".OutlineElement");
+      if (!outline || paragraph.closest("[hidden], [aria-hidden='true']")) continue;
+      const line = visibleText(paragraph).replace(/[\u200b\ufeff]/g, "").split("\n")
+        .map((part) => part.replace(/\s+/g, " ").trim()).filter((part) => part !== "").join("\n");
+      if (line === "") continue;
+      const level = Number(paragraph.getAttribute("aria-level"));
+      const depth = Math.max(1, Number(outline.getAttribute("aria-level")) || 1);
+      if (paragraph.getAttribute("role") === "heading" && level >= 1 && level <= 6) {
+        wordLines.push({ text: "#".repeat(level) + " " + line, item: false });
+      } else if (outline.tagName.toUpperCase() === "LI") {
+        wordLines.push({ text: "  ".repeat(depth - 1) + "- " + line, item: true });
+      } else {
+        wordLines.push({ text: line, item: false });
+      }
+    }
+  }
+
   let title = "";
   let content = "";
   let readable = false;
+  if (wordLines.length > 0) {
+    // Consecutive list items stay one block, as the article walker writes them.
+    content = wordLines.map((line, index) =>
+      (index === 0 ? "" : line.item && wordLines[index - 1]?.item === true ? "\n" : "\n\n") + line.text).join("");
+    readable = true;
+  }
   try {
-    if (rendered && typeof Readability === "function") {
+    if (!readable && rendered && typeof Readability === "function") {
       const clone = document.cloneNode(true) as Document;
       // Readability re-parses the clone's HTML when it retries, and Chrome
       // checks every inline handler attribute it parses against the page's

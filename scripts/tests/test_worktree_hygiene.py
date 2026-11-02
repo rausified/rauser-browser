@@ -450,5 +450,103 @@ class Locks(Fixture):
                          [(12, "git", "/a/b"), (12, "git", "/a/b/.git/index.lock"), (13, "vim", "/c")])
 
 
+
+class LocksOnly(Fixture):
+    """--locks-only: the lock rules of --clear-locks, and no worktree work at all."""
+
+    make_lock = Locks.make_lock
+
+    @staticmethod
+    def no_gh(_repo, _branch):
+        raise AssertionError("--locks-only must not ask GitHub for PR state")
+
+    def test_apply_clears_a_stale_lock_and_never_removes_a_worktree(self):
+        merged = self.merged_worktree()
+        lock = self.make_lock()
+        code, out = self.hygiene("--locks-only", "--apply", prs=self.no_gh)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"cleared {lock}", out)
+        self.assertFalse(lock.exists())
+        # The merged worktree would be removed by a plain --apply run.
+        self.assertTrue(merged.exists())
+        self.assertNotIn(str(merged), out)
+        for word in ("remove", "removed", "skip"):
+            self.assertNotRegex(out, rf"^\s+{word}\s", out)
+        self.assertIn(str(merged), run(self.repo, "worktree", "list"))
+
+    def test_dry_run_reports_without_clearing(self):
+        lock = self.make_lock()
+        code, out = self.hygiene("--locks-only", prs=self.no_gh)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"clear   {lock}: stale (dry run)", out)
+        self.assertTrue(lock.exists())
+
+    def test_base_need_not_resolve(self):
+        lock = self.make_lock()
+        code, out = self.hygiene("--locks-only", "--apply", "--base", "origin/no-such-branch",
+                                 prs=self.no_gh)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("does not exist", out)
+        self.assertFalse(lock.exists())
+
+    def test_runs_from_a_linked_worktree_and_finds_its_lock(self):
+        path = self.worktree("wt-linked", "feat/linked")
+        main_lock = self.make_lock()
+        wt_lock = self.make_lock(path)
+        code, out = self.hygiene("--locks-only", "--apply", repo=path, prs=self.no_gh)
+        self.assertEqual(code, 0, out)
+        self.assertFalse(main_lock.exists())
+        self.assertFalse(wt_lock.exists())
+        self.assertTrue(path.exists())
+
+    def test_no_locks(self):
+        code, out = self.hygiene("--locks-only", "--apply", prs=self.no_gh)
+        self.assertEqual(code, 0, out)
+        self.assertIn("no index.lock files", out)
+
+    def test_young_lock_is_kept(self):
+        lock = self.make_lock(age=1)
+        _, out = self.hygiene("--locks-only", "--apply", prs=self.no_gh)
+        self.assertIn(f"keep    {lock}: only", out)
+        self.assertIn("minimum 60s", out)
+        self.assertTrue(lock.exists())
+
+    def test_min_lock_age_still_applies(self):
+        lock = self.make_lock(age=120)
+        _, out = self.hygiene("--locks-only", "--apply", "--min-lock-age", "600", prs=self.no_gh)
+        self.assertIn("minimum 600s", out)
+        self.assertTrue(lock.exists())
+
+    def test_held_lock_is_kept(self):
+        lock = self.make_lock()
+        probe = FakeProbe(holders={str(lock): [wh.OpenFile(21, str(lock), "git")]})
+        _, out = self.hygiene("--locks-only", "--apply", probe=probe, prs=self.no_gh)
+        self.assertIn("held open by git[21]", out)
+        self.assertTrue(lock.exists())
+
+    def test_running_git_keeps_the_lock(self):
+        lock = self.make_lock()
+        probe = FakeProbe(git_processes=[wh.GitProcess(22, str(self.repo), "git pull")])
+        _, out = self.hygiene("--locks-only", "--apply", probe=probe, prs=self.no_gh)
+        self.assertIn("git is running for this repository: pid 22", out)
+        self.assertTrue(lock.exists())
+
+    def test_probe_failure_keeps_the_lock(self):
+        lock = self.make_lock()
+        for fail in ("holders", "git"):
+            _, out = self.hygiene("--locks-only", "--apply", probe=FakeProbe(fail={fail}),
+                                  prs=self.no_gh)
+            self.assertIn("cannot", out)
+            self.assertTrue(lock.exists())
+
+    def test_open_files_probe_is_never_used(self):
+        # Worktree safety probes (system-wide lsof) are skipped entirely.
+        self.merged_worktree()
+        self.make_lock()
+        code, out = self.hygiene("--locks-only", "--apply", probe=FakeProbe(fail={"open"}),
+                                 prs=self.no_gh)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("cannot check open files", out)
+
 if __name__ == "__main__":
     unittest.main()

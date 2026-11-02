@@ -47,7 +47,11 @@ class FakeElement {
     for (const listener of this.listeners.get("click") ?? []) listener({ type: "click", target: this });
   }
   append(...children) { this.children.push(...children); }
-  replaceChildren(...children) { this.children = children; }
+  replaceChildren(...children) {
+    if (this.children.includes(document.activeElement)) document.activeElement = document.body;
+    this.children = children;
+  }
+  focus(options) { document.activeElement = this; this.focusOptions = options; }
 }
 
 function walk(root, visit) {
@@ -94,11 +98,19 @@ function storageArea(entries = new Map()) {
 
 const NOW = Date.parse("2026-10-27T16:00:00Z");
 
+const DEFAULT_RUN_ID = "00000000-0000-4000-8000-000000000040";
+
+// A view of the default run on https://read.example/a. Another run_id gets a
+// page of its own unless the test names the url: the panel shows one card
+// per page (its newest run's), so runs a test means as separate cards need
+// separate pages.
 function view(overrides = {}) {
+  const runId = overrides.run_id ?? DEFAULT_RUN_ID;
+  const url = runId === DEFAULT_RUN_ID ? "https://read.example/a" : `https://read.example/a?run=${runId.slice(-4)}`;
   return {
-    run_id: "00000000-0000-4000-8000-000000000040", state: "running", harness: "codex",
-    record_key: { kind: "url", value: "https://read.example/a" }, written_record_key: null,
-    url: "https://read.example/a", title: "A readable article", cwd: "/Users/me/Notes",
+    run_id: DEFAULT_RUN_ID, state: "running", harness: "codex",
+    record_key: { kind: "url", value: url }, written_record_key: null,
+    url, title: "A readable article", cwd: "/Users/me/Notes",
     created_at: "2026-10-27T15:59:00.000000000Z", started_at: "2026-10-27T15:59:30.000000000Z",
     finished_at: null, error: null, error_kind: null, thread_id: null, session_id: null,
     summary_path: null, stream_bytes: 0, can_retry_save: false, answer: null,
@@ -348,7 +360,9 @@ test("other failures offer no Retry save but keep Copy", async () => {
     state: "failed", finished_at: "2026-10-27T16:00:00Z", error: "The answer was not valid JSON.",
     error_kind: "invalid_output", can_retry_save: false,
   });
-  const silent = view({ ...failed, run_id: "00000000-0000-4000-8000-000000000043", error: "The harness exited." });
+  const silent = view({
+    ...failed, run_id: "00000000-0000-4000-8000-000000000043", url: "https://read.example/b", error: "The harness exited.",
+  });
   const page = setup({
     reply: (request) => request.type === "get_run"
       ? { type: "run_fetched", run: request.run_id === failed.run_id ? failed : silent, stream_text: request.run_id === failed.run_id ? "partial text" : "", next_offset: 12, more: false }
@@ -1239,7 +1253,8 @@ const { TaskDetail } = await import("../dist/run-card.js");
 
 // A TaskDetail with a scripted host; `reply` answers get_run.
 function detailSetup(initial, { reply = () => null, storage = storageArea() } = {}) {
-  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  const body = new FakeElement("body");
+  globalThis.document = { body, activeElement: body, createElement: (tag) => new FakeElement(tag) };
   const requests = [];
   const copied = [];
   const reused = [];
@@ -1273,6 +1288,39 @@ function detailSetup(initial, { reply = () => null, storage = storageArea() } = 
 function output(detail) {
   return byClass(detail.element, "task-detail-output");
 }
+
+test("TaskDetail polls retain the focused action without stealing focus from elsewhere", async () => {
+  const run = taskView();
+  const page = detailSetup(run, { reply: () => ({ type: "run_fetched", run, stream_text: "", next_offset: 0, more: false }) });
+  page.detail.start();
+  await settle();
+  button(page.detail.element, "Cancel").focus();
+  await tick();
+  assert.equal(document.activeElement, button(page.detail.element, "Cancel"));
+  // A poll's restore must not scroll the reader back to the action.
+  assert.deepEqual(button(page.detail.element, "Cancel").focusOptions, { preventScroll: true });
+  const outside = new FakeElement("input");
+  outside.focus();
+  await tick();
+  assert.equal(document.activeElement, outside);
+  page.detail.dispose();
+});
+
+test("TaskDetail Cancel restores focus after disabled actions become terminal actions", async () => {
+  const run = taskView();
+  let resolveCancel;
+  const canceled = new Promise((resolve) => { resolveCancel = resolve; });
+  const page = detailSetup(run, { reply: (request) => request.type === "cancel_run" ? canceled
+    : { type: "run_fetched", run, stream_text: "", next_offset: 0, more: false } });
+  const cancel = button(page.detail.element, "Cancel");
+  cancel.focus();
+  cancel.click();
+  assert.equal(document.activeElement, document.body);
+  resolveCancel({ type: "run_updated", run: { ...run, state: "canceled", finished_at: new Date(NOW).toISOString() } });
+  await settle();
+  assert.equal(document.activeElement, button(page.detail.element, "Open page"));
+  page.detail.dispose();
+});
 
 test("TaskDetail shows Running with live output open, then Done with the report and output closed", async () => {
   const pages = [
@@ -1519,4 +1567,77 @@ test("TaskDetail never shows Retry save or Open summary, even when can_retry_sav
   assert.ok(!buttonTexts(page.detail.element).includes("Open summary"));
   assert.deepEqual(page.requests.filter((request) => request.type === "get_artifact"), []);
   page.detail.dispose();
+});
+
+test("a new run for a page replaces that page's older card without dismissing it", async () => {
+  const page_ = "https://read.example/doc";
+  const older = view({
+    run_id: "00000000-0000-4000-8000-000000000051", url: page_, state: "succeeded", answer: ANSWER,
+    created_at: "2026-10-27T15:50:00.000000000Z", finished_at: "2026-10-27T15:52:00Z",
+  });
+  const newer = view({
+    run_id: "00000000-0000-4000-8000-000000000052", url: `${page_}#part`, state: "running",
+    created_at: "2026-10-27T15:58:00.000000000Z",
+  });
+  const other = view({ run_id: "00000000-0000-4000-8000-000000000053", url: "https://read.example/other" });
+  const runs = [older, newer, other];
+  const storage = storageArea();
+  const page = setup({
+    storage,
+    reply: (request) => request.type === "get_run"
+      ? { type: "run_fetched", run: runs.find((run) => run.run_id === request.run_id), stream_text: "", next_offset: 0, more: false }
+      : null,
+  });
+  page.runCards.show(older);
+  page.runCards.show(other);
+  await settle();
+  assert.equal(cards(page.container).length, 2);
+
+  page.runCards.show(newer);
+  await settle();
+  assert.deepEqual(cards(page.container).map((card) => card.dataset.runId).sort(), [newer.run_id, other.run_id].sort());
+  assert.deepEqual(await dismissedIds(storage), [], "a replaced card is not dismissed");
+  // The replaced card stops polling.
+  const polled = page.sent("get_run").filter((request) => request.run_id === older.run_id).length;
+  await tick();
+  await settle();
+  assert.equal(page.sent("get_run").filter((request) => request.run_id === older.run_id).length, polled);
+
+  // A late restore, even one listing only the older run (answered before
+  // the newer one started), does not bring it back.
+  page.runCards.restoreFrom(runs, new Set());
+  page.runCards.restoreFrom([older], new Set());
+  await settle();
+  assert.deepEqual(cards(page.container).map((card) => card.dataset.runId).sort(), [newer.run_id, other.run_id].sort());
+
+  // Nor after the newer run's card is dismissed.
+  runs[1] = { ...newer, state: "succeeded", answer: ANSWER, finished_at: "2026-10-27T15:59:00Z" };
+  await tick();
+  await settle();
+  const newerCard = cards(page.container).find((card) => card.dataset.runId === newer.run_id);
+  button(newerCard, "Dismiss").click();
+  await settle();
+  page.runCards.restoreFrom([older], new Set());
+  await settle();
+  assert.deepEqual(cards(page.container).map((card) => card.dataset.runId), [other.run_id]);
+  page.runCards.dispose();
+});
+
+test("restorable keeps each page's newest run only, and a dismissed newest run hides the page", () => {
+  const at = (minutes) => new Date(NOW - minutes * 60_000).toISOString();
+  const run = (n, url, minutes, overrides = {}) => view({
+    run_id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`, url, state: "succeeded", answer: ANSWER,
+    created_at: at(minutes + 1), finished_at: at(minutes), ...overrides,
+  });
+  const a1 = run(1, "https://read.example/a1", 30);
+  const a2 = run(2, "https://read.example/a1#x", 10);
+  const b1 = run(3, "https://read.example/b1", 20);
+  const b2 = run(4, "https://read.example/b1", 5);
+  const c1 = run(5, "https://read.example/c1", 40);
+  const c2 = run(6, "https://read.example/c1", 0, { state: "running", finished_at: null });
+  const shown = restorable([a1, a2, b1, b2, c1, c2], NOW, new Set([b2.run_id]));
+  assert.deepEqual(shown.map((r) => r.run_id), [c2.run_id, a2.run_id]);
+  // Seven pages with one finished run each still restore five pages.
+  const many = Array.from({ length: 7 }, (_, n) => run(10 + n, `https://read.example/p${n}`, n));
+  assert.equal(restorable([...many, run(30, "https://read.example/p0", 50)], NOW, new Set()).length, MAX_RESTORED_FINISHED);
 });

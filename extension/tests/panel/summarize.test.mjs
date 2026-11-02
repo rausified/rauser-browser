@@ -312,9 +312,12 @@ test("a started summary records that runs may exist", async () => {
   await until(() => typeof local.get(RUNS_MAY_EXIST_KEY) === "number", "the record");
 });
 
-test("the panel restores run cards on load and shows a run the shortcut started", async () => {
+test("the panel restores run cards on load and a run the shortcut started replaces its page's card", async () => {
   const restored = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000040", title: "Restored run", state: "running" };
-  const started = { ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000041", title: "Shortcut run" };
+  const started = {
+    ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000041", title: "Shortcut run",
+    created_at: new Date(Date.parse(RUN_VIEW.created_at) + 60_000).toISOString(),
+  };
   let runs = [restored];
   const page = await summarizePanel({
     intercept: (request) => {
@@ -329,5 +332,8 @@ test("the panel restores run cards on load and shows a run the shortcut started"
   runs = [started, restored];
   page.notify({ kind: "run_started", run_id: started.run_id, tab_id: 1, at: Date.now() });
   await until(() => page.el("run-area").textContent.includes("Shortcut run"), "the shortcut's card");
-  assert.equal(page.el("run-area").textContent.split("Restored run").length, 2, "each run shows once");
+  // One card per page: the newer run's (the older stays on the Tasks page).
+  assert.doesNotMatch(page.el("run-area").textContent, /Restored run/);
+  const cards = page.el("run-area").children.filter((child) => child.className.split(" ").includes("run-card"));
+  assert.equal(cards.length, 1);
 });

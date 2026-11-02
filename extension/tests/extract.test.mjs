@@ -35,6 +35,7 @@ const el = (tag, ...children) => ({
 function page({
   title = "Page title", article = null, articleTitle = "", bodyText = "", selection = "", href = PAGE_URL,
   mainHeadings = [], rendered, bodyRendered = rendered, bodyNodes = [], rootText = bodyText, cloneElements = [],
+  wordParagraphs = [],
 } = {}) {
   const seen = { clonedDeep: null, options: null, parsed: 0 };
   const rects = (shown) => (shown === undefined ? {} : { getClientRects: () => (shown ? [{ width: 1, height: 1 }] : []) });
@@ -43,7 +44,7 @@ function page({
     title,
     body,
     documentElement: { ...rects(rendered), innerText: rootText },
-    querySelectorAll: () => mainHeadings,
+    querySelectorAll: (selector) => (selector.includes("#PagesContainer") ? wordParagraphs : mainHeadings),
     cloneNode(deep) {
       seen.clonedDeep = deep;
       return { clone: true, querySelectorAll: () => cloneElements };
@@ -196,6 +197,79 @@ test("extracts article blocks as text and drops images", () => {
     readable: true,
     href: PAGE_URL,
   });
+});
+
+// An element with attributes, as Word for the web's markup needs.
+const tagged = (tag, attrs, ...children) => Object.assign(el(tag, ...children), {
+  getAttribute: (name) => attrs[name] ?? null,
+});
+
+// One Word for the web paragraph, as its editor frame renders it: a
+// `p.Paragraph` (with role=heading and aria-level for a heading) inside a
+// `.OutlineElement`, which is an `li` with aria-level for a list item. A
+// list item starts with an aria-hidden marker glyph from a symbol font, and
+// every paragraph ends with an EOP span holding a no-break space.
+function wordParagraph(runs, { heading, list } = {}) {
+  const outline = { tagName: list ? "LI" : "DIV", getAttribute: (name) => (name === "aria-level" && list ? String(list) : null) };
+  const children = [];
+  if (list) children.push(tagged("span", { class: "ListMarkerWrappingSpan" }, tagged("span", { class: "ListMarker", "aria-hidden": "true" }, "\uf0b7")));
+  children.push(tagged("span", { class: "TextRun" }, ...runs.map((run) => tagged("span", { class: "NormalTextRun" }, run))));
+  children.push(tagged("span", { class: "EOP" }, "\u00a0"));
+  const attrs = heading ? { class: "Paragraph", role: "heading", "aria-level": String(heading) } : { class: "Paragraph" };
+  return Object.assign(tagged("p", attrs, ...children), { closest: (selector) => (selector === ".OutlineElement" ? outline : null) });
+}
+
+test("Word for the web is read from its paragraphs, not Readability's keytip pick", () => {
+  // Readability, on a clone with no layout, picks Fluent's screen-reader
+  // keytip layer (its many commas outscore the document) and keeps only part
+  // of the document even without it, so a Word frame never reaches it.
+  const keytips = el("div", "Control Period, fzczazmzs02h, zzh, ch, fph, fsh, fgh, fkh, 1h, 2h, 3h");
+  const { scope, seen } = page({
+    title: "User story mapping.docx", article: keytips, rendered: true,
+    bodyText: "File Home Insert Layout Control Period, fzczazmzs02h",
+    wordParagraphs: [
+      wordParagraph(["User story mapping"], { heading: 1 }),
+      wordParagraph(["\u200b"]),
+      wordParagraph(["U", "s", "er story mapping is a technique."], { list: 1 }),
+      wordParagraph(["Nested   point"], { list: 2 }),
+      wordParagraph(["Onboarding"], { heading: 2 }),
+      wordParagraph(["Link the ", "Umbrella", " and Meraki orgs."]),
+    ],
+  });
+  const result = run(scope);
+  assert.equal(seen.parsed, 0);
+  assert.equal(result.readable, true);
+  assert.equal(result.title, "User story mapping.docx");
+  assert.equal(result.content, [
+    "# User story mapping",
+    "- User story mapping is a technique.\n  - Nested point",
+    "## Onboarding",
+    "Link the Umbrella and Meraki orgs.",
+  ].join("\n\n"));
+});
+
+test("Word paragraphs keep their soft line breaks and drop hidden text", () => {
+  const boxless = (node) => Object.assign(node, { getClientRects: () => [] });
+  const soft = wordParagraph(["first"]);
+  soft.childNodes.splice(1, 0, tagged("br", {}), tagged("span", { class: "TextRun" }, "second"));
+  const hiddenSpan = wordParagraph(["shown"]);
+  hiddenSpan.childNodes.splice(1, 0, boxless(tagged("span", { class: "TextRun" }, " secret")));
+  const hiddenParagraph = Object.assign(wordParagraph(["gone"]), {
+    getAttribute: (name) => (name === "hidden" ? "" : name === "class" ? "Paragraph" : null),
+  });
+  const insideHidden = wordParagraph(["also gone"]);
+  const outline = insideHidden.closest(".OutlineElement");
+  insideHidden.closest = (selector) => (selector === ".OutlineElement" ? outline : selector.includes("aria-hidden") ? {} : null);
+  const { scope } = page({ rendered: true, wordParagraphs: [soft, hiddenSpan, hiddenParagraph, insideHidden] });
+  assert.equal(run(scope).content, "first\nsecond\n\nshown");
+});
+
+test("a Word frame with no paragraph text yet falls back to Readability", () => {
+  const { scope, seen } = page({
+    article: el("p", "Article body"), rendered: true, wordParagraphs: [wordParagraph(["\u00a0"])],
+  });
+  assert.equal(run(scope).content, "Article body");
+  assert.equal(seen.parsed, 1);
 });
 
 test("falls back to body text when Readability finds no article", () => {

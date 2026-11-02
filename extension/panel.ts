@@ -10,7 +10,7 @@ import {
   type PanelNotice,
   type WorkerStatus,
 } from "./model.js";
-import { ConfigSession, captureStateText, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
+import { ConfigSession, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
 import { evaluate } from "./adapter-templates.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
@@ -878,9 +878,7 @@ async function reloadConfig(): Promise<void> {
   if (response.config_issue || response.adapter_issue) {
     show(response.config_issue ?? response.adapter_issue ?? "Adapter policy is invalid.", true);
   }
-  else show(session.config!.capture_enabled
-    ? captureStateText(session.config!)
-    : "Capture is paused. Resume it in settings.");
+  else show(session.config!.capture_enabled ? "" : "Capture is paused. Resume it in settings.");
   if (session.status?.pause_pending && session.config?.capture_enabled &&
       !session.configIssue && !session.adapterIssue) {
     // This status can outlive the connection. The live Why hint names the
@@ -1074,6 +1072,7 @@ async function summarize(): Promise<void> {
   const page = currentPage;
   if (summarizing || !page || page.tabId === undefined) return;
   const tabId = page.tabId;
+  const hadFocus = document.activeElement === summarizeButton;
   summarizing = true;
   updateControls();
   showRunLine(runArea, tabId, "Reading this page…");
@@ -1095,6 +1094,7 @@ async function summarize(): Promise<void> {
   } finally {
     summarizing = false;
     updateControls();
+    if (hadFocus && document.activeElement === document.body) summarizeButton.focus();
   }
 }
 
@@ -1193,6 +1193,7 @@ async function runTask(): Promise<void> {
   if (taskStarting || taskBlocked() !== null || !page || page.tabId === undefined) return;
   if (cleanInstruction(instruction) === "") return;
   const tabId = page.tabId;
+  const hadFocus = document.activeElement === taskRunButton || document.activeElement === taskInput;
   taskStarting = true;
   updateControls();
   showRunLine(taskRunArea, tabId, "Reading this page…");
@@ -1223,6 +1224,8 @@ async function runTask(): Promise<void> {
   } finally {
     taskStarting = false;
     updateControls();
+    if (hadFocus && followedTabId === tabId &&
+        (document.activeElement === document.body || document.activeElement === taskRunButton)) taskInput.focus();
     // A Reuse value that arrived while this start was in flight was left in
     // storage (checkReuse); take it now that the bar is free again.
     void checkReuse();
@@ -1658,6 +1661,8 @@ function selectView(view: "page" | "recent"): void {
   recentTab.classList.toggle("active", recent);
   pageTab.setAttribute("aria-selected", String(!recent));
   recentTab.setAttribute("aria-selected", String(recent));
+  pageTab.tabIndex = recent ? -1 : 0;
+  recentTab.tabIndex = recent ? 0 : -1;
   if (recent) {
     void Promise.all([loadRecent(), loadWorklog()]);
   }
@@ -1814,6 +1819,16 @@ element<HTMLButtonElement>("copy-preserved-note").addEventListener("click", () =
 });
 pageTab.addEventListener("click", () => selectView("page"));
 recentTab.addEventListener("click", () => selectView("recent"));
+for (const tab of [pageTab, recentTab]) {
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const target = event.key === "Home" ? pageTab : event.key === "End" ? recentTab
+      : tab === pageTab ? recentTab : pageTab;
+    selectView(target === pageTab ? "page" : "recent");
+    target.focus();
+  });
+}
 recentType.addEventListener("change", () => void loadRecent());
 recentTitle.addEventListener("input", scheduleRecent);
 worklogPeriod.addEventListener("change", () => void loadWorklog());

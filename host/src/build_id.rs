@@ -35,7 +35,11 @@ pub fn build_id(commit: Option<&str>, status: Option<&str>) -> String {
 }
 
 pub fn git(dir: &Path, args: &[&str]) -> Option<String> {
+    // No optional index lock: a plain `git status` takes `index.lock` to
+    // refresh the index, and an editor that kills this build script leaves
+    // that lock behind in the checkout (2026-11-01).
     let output = Command::new("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -89,6 +93,47 @@ mod tests {
 
     fn run(dir: &Path, args: &[&str]) {
         assert!(git(dir, args).is_some(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn git_build_id_never_rewrites_the_index() {
+        // A plain `git status` refreshes stale stat data by taking
+        // `index.lock` and rewriting the index. Editors run this build
+        // script in the background and kill it when they cancel, and a
+        // killed git leaves that lock behind, so the build must not take it.
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let host = root.join("host");
+        fs::create_dir_all(host.join("src")).unwrap();
+        fs::write(host.join("src/main.rs"), "fn main() {}\n").unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "test@example.com"],
+            &["config", "user.name", "Test"],
+            &["config", "commit.gpgsign", "false"],
+            &["add", "."],
+            &["commit", "-q", "-m", "first"],
+        ] {
+            run(root, args);
+        }
+        let index = root.join(".git/index");
+        let before = fs::read(&index).unwrap();
+        // Same content, new modification time: the index's stat data is stale.
+        let source = fs::File::options()
+            .write(true)
+            .open(host.join("src/main.rs"))
+            .unwrap();
+        source
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+        let commit = git(root, &["rev-parse", "HEAD"]).unwrap()[..COMMIT_LENGTH].to_owned();
+        assert_eq!(git_build_id(&host), commit);
+        assert_eq!(
+            fs::read(&index).unwrap(),
+            before,
+            "git_build_id rewrote the index"
+        );
+        assert!(!root.join(".git/index.lock").exists());
     }
 
     #[test]

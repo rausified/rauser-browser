@@ -36,6 +36,7 @@ class FakeElement {
   focus() { FakeElement.focused = this; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
+  contains(node) { return this === node || this.children.some((child) => child.contains?.(node)); }
   querySelectorAll(selector) {
     const tag = selector.toUpperCase();
     const found = [];

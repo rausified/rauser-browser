@@ -52,6 +52,12 @@ export class SitePatternPanel {
       this.cancel();
       this.start.focus();
     });
+    this.review.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      this.cancel();
+      this.start.focus();
+    });
     // A reload or document replacement keeps the tab ID and can keep the URL,
     // so the URL alone cannot tell the review that its links are stale. Any
     // new load or URL change in the reviewed tab discards the review,
@@ -86,6 +92,7 @@ export class SitePatternPanel {
     this.target = target;
     this.review.hidden = false;
     this.start.hidden = true;
+    this.close.focus();
     this.message.textContent = "Reviewing page patterns…";
     this.rows.replaceChildren();
     try {

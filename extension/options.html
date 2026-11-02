@@ -20,9 +20,9 @@
         <p>Choose a home folder, then add an adapter for each site you want logged. A site is on while it has at least one adapter; {{APP_NAME}} records nothing automatically anywhere else. Page notes work on every page either way.</p>
 
         <div class="field">
-          <label>Home folder</label>
+          <label for="folder-path">Home folder</label>
           <output id="folder-path">None selected</output>
-          <button id="choose-folder" type="button" disabled>Choose…</button>
+          <button id="choose-folder" type="button" aria-label="Choose home folder" disabled>Choose…</button>
           <small>{{APP_NAME}} writes only inside this folder, in fixed folders it creates as needed:</small>
           <ul id="home-layout" class="plain-list">
             <li><code>notes/</code> page notes</li>
@@ -95,7 +95,7 @@
             </div>
           </div>
           <p><strong>Match preview</strong> — your example plus fixed search, login, dashboard, auth, sharing, and capability probes. A probe match is highlighted for review.</p>
-          <ul id="adapter-preview" class="plain-list adapter-preview"><li>Enter a valid adapter to preview it.</li></ul>
+          <ul id="adapter-preview" class="plain-list adapter-preview" tabindex="0" aria-label="Match preview"><li>Enter a valid adapter to preview it.</li></ul>
 
           <button id="save-adapter" type="button" disabled>Save</button>
           <button id="cancel-adapter" type="button" class="secondary">Cancel</button>
@@ -121,9 +121,9 @@
         </div>
 
         <div class="field">
-          <label>Knowledge base folder</label>
+          <label for="kb-path">Knowledge base folder</label>
           <output id="kb-path">Same as the home folder</output>
-          <button id="choose-kb" type="button" class="secondary" disabled>Choose…</button>
+          <button id="choose-kb" type="button" class="secondary" aria-label="Choose knowledge base folder" disabled>Choose…</button>
           <button id="kb-use-notes" type="button" class="secondary" disabled>Use home folder</button>
           <small>The folder a summary agent reads to judge how a page fits what you already know. {{APP_NAME}} never writes there.</small>
         </div>
