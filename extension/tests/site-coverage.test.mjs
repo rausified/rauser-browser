@@ -36,7 +36,8 @@ test("GitHub coverage names the record types in record order and the scoped acco
 });
 
 test("starter adapters use their starter label; custom adapters use their type", () => {
-  const jira = siteCoverage(adaptersOf("https://acme.atlassian.net"), "https://acme.atlassian.net/jira/your-work");
+  const jiraOnly = adaptersOf("https://acme.atlassian.net").filter((adapter) => adapter.type === "jira.issue");
+  const jira = siteCoverage(jiraOnly, "https://acme.atlassian.net/jira/your-work");
   assert.deepEqual(jira, { host: "acme.atlassian.net", types: ["Jira issues"], accounts: [], moreAccounts: 0 });
   assert.equal(coverageSentence(jira, "no_rule"), "acme.atlassian.net captures Jira issues; this page isn't one of them.");
   assert.equal(coverageSentence(jira, "out_of_scope"), null, "no accounts: keep today's sentence");
@@ -45,6 +46,9 @@ test("starter adapters use their starter label; custom adapters use their type",
   assert.deepEqual(siteCoverage(adaptersOf("https://acme.sharepoint.com"), "https://acme.sharepoint.com/").types,
     ["SharePoint documents"]);
   assert.deepEqual(siteCoverage(adaptersOf("https://miro.com"), "https://miro.com/app/dashboard/").types, ["Miro boards"]);
+  const atlassian = siteCoverage(adaptersOf("https://acme.atlassian.net"), "https://acme.atlassian.net/wiki/spaces/ENG/overview");
+  assert.equal(coverageSentence(atlassian, "no_rule"),
+    "acme.atlassian.net captures Jira issues and Confluence pages; this page isn't one of them.");
   const custom = [
     { type: "example.page", origin: "https://example.com", match: [{ path: "/p/{id:int}" }], id: "example.page:{host}/{id}" },
     { type: "example.page", origin: "https://example.com", match: [{ path: "/q/{id:int}" }], id: "example.q:{host}/{id}" },
@@ -133,6 +137,17 @@ test("a hand-narrowed adapter is offered exactly the starter rule for the page",
   const url = `https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=${GUID}`;
   assert.deepEqual(noRule([narrowed()], url),
     { kind: "starter_rule", adapter: 0, label: "SharePoint documents", rule: PERSONAL_RULE });
+});
+
+test("a Confluence adapter without the history rule is offered it on a version-history page", () => {
+  const [jira, confluence] = adaptersOf("https://acme.atlassian.net");
+  const history = confluence.match[2];
+  const saved = { ...confluence, match: confluence.match.filter((rule) => rule !== history) };
+  const url = "https://acme.atlassian.net/wiki/spaces/ENG/history/1493076381/Release+Plan";
+  assert.deepEqual(noRule([jira, saved], url), { kind: "starter_rule", adapter: 1, label: "Confluence pages", rule: history });
+  // A Jira-only site is not offered Confluence as a near-miss: the Confluence
+  // starter is added from the settings gallery, not as a rule of Jira's.
+  assert.equal(noRule([jira], "https://acme.atlassian.net/wiki/spaces/ENG/pages/1493076381"), null);
 });
 
 test("a starter rule the adapter's own scope rejects is not a near-miss", () => {

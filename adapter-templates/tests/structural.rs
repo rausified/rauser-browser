@@ -125,7 +125,7 @@ fn starter_recorded_urls_draft_to_matching_adapters_one_per_kind() {
         .collect();
     assert_eq!(
         starters.len(),
-        5,
+        6,
         "every starter has a recorded URL: {starters:?}"
     );
 

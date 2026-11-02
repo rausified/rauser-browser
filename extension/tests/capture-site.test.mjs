@@ -9,12 +9,15 @@ const CONFIG = {
   storage: { root: "/vault" }, capture_enabled: false,
   adapters: { format: 1, artifacts: [] },
 };
-const BOTH = { organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true };
+const BOTH = {
+  organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true, jiraIssues: true, confluencePages: true,
+};
 const plan = (url, config = CONFIG, choice = BOTH) => {
   const result = planCaptureSite(config, url, choice);
   assert.equal(result.ok, true, result.message);
   return result.plan;
 };
+const GITHUB_PR_URL = "https://github.com/acme-corp/widget/pull/12/files";
 const match = (plan, url) => {
   const result = compileDocument(plan.document);
   assert.equal(result.ok, true);
@@ -36,6 +39,34 @@ test("Jira and OneDrive start from the current URL and retain starter identities
     assert.ok(result.examples.every((row) => !row.probe && row.result.match));
     assert.deepEqual(result.document.artifacts, starterOffers(new URL(url).origin, []).map((offer) => offer.adapter));
   }
+});
+
+test("Atlassian sites plan Jira issues and Confluence pages together or alone", () => {
+  const url = "https://acme.atlassian.net/wiki/spaces/ENG/pages/1493076381/Release+Plan?atl_f=PAGETREE";
+  const both = plan(url);
+  assert.deepEqual(both.document.artifacts.map((adapter) => adapter.type), ["jira.issue", "confluence.page"]);
+  assert.deepEqual(both.offers.map((offer) => offer.label), ["Jira issues", "Confluence pages"]);
+  assert.equal(both.current.result.artifact_id, "confluence.page:acme.atlassian.net/1493076381");
+  assert.equal(both.probes.length, 27);
+  assert.ok(both.probes.every((row) => !row.result.match));
+  assert.deepEqual(both.examples.map((row) => row.result.type), ["jira.issue", "confluence.page"]);
+  assert.ok(both.examples.every((row) => row.result.match));
+  assert.equal(match(both, "https://acme.atlassian.net/browse/OPS-12").artifact_id, "jira:acme.atlassian.net/OPS-12");
+
+  const confluenceOnly = plan(url, CONFIG, { ...BOTH, jiraIssues: false });
+  assert.deepEqual(confluenceOnly.document.artifacts.map((adapter) => adapter.type), ["confluence.page"]);
+  assert.equal(confluenceOnly.current.result.match, true);
+  assert.equal(match(confluenceOnly, "https://acme.atlassian.net/browse/OPS-12").match, false);
+
+  const jiraOnly = plan(url, CONFIG, { ...BOTH, confluencePages: false });
+  assert.deepEqual(jiraOnly.document.artifacts.map((adapter) => adapter.type), ["jira.issue"]);
+  assert.equal(jiraOnly.current.result.match, false, "the review warns that this page will not be captured");
+
+  const neither = planCaptureSite(CONFIG, url, { ...BOTH, jiraIssues: false, confluencePages: false });
+  assert.deepEqual(neither, { ok: false, message: "Choose Jira issues, Confluence pages, or both." });
+  // GitHub's choices never change an Atlassian plan, and the reverse.
+  assert.equal(plan(url, CONFIG, { ...BOTH, repositories: false, pullRequests: false, issues: false }).document.artifacts.length, 2);
+  assert.equal(plan(GITHUB_PR_URL, CONFIG, { ...BOTH, jiraIssues: false, confluencePages: false }).document.artifacts.length, 3);
 });
 
 test("one organization field scopes every checked GitHub type", () => {
