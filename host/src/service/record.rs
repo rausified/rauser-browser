@@ -847,6 +847,12 @@ mod tests {
         // The widest answer the validation lets through: four-byte chars.
         let wide = |chars: usize| "\u{1F600}".repeat(chars);
         let answer = serde_json::to_value(crate::answer::SummaryAnswer {
+            overview: String::new(),
+            key_points: Vec::new(),
+            keywords: Vec::new(),
+            metadata: crate::answer::Metadata::default(),
+            references: Vec::new(),
+            read_scope: None,
             document_type: wide(crate::answer::MAX_LABEL_CHARS),
             category: wide(crate::answer::MAX_LABEL_CHARS),
             entities: crate::answer::Entities {

@@ -2856,7 +2856,8 @@ mod tests {
             error.starts_with("The agent's answer was not valid after one correction: "),
             "{error}"
         );
-        assert!(error.contains("category"), "{error}");
+        // The first field checked, in SUMMARY.md order, is missing.
+        assert!(error.contains("overview"), "{error}");
         assert!(!view.can_retry_save);
         assert_eq!(view.answer, None);
         assert_eq!(
@@ -3901,7 +3902,10 @@ mod tests {
         );
         fixture.wait_finished(queued.unwrap());
         let prompt = read(&fixture.path("count.prompt"));
-        assert!(prompt.starts_with("Summarize a web page"), "{prompt}");
+        assert!(
+            prompt.starts_with("You are writing a summary of one work artifact"),
+            "{prompt}"
+        );
         assert!(!prompt.contains(office_summary_paragraph()), "{prompt}");
     }
 
@@ -4888,7 +4892,9 @@ mod tests {
             seen_summary.starts[0].0.output_schema,
             OutputSchema::RunnerDefault
         );
-        assert!(seen_summary.prompts[0].starts_with("Summarize a web page"));
+        assert!(
+            seen_summary.prompts[0].starts_with("You are writing a summary of one work artifact")
+        );
     }
 
     #[test]
@@ -5402,7 +5408,7 @@ mod tests {
         let id = Uuid::parse_str(&view.run_id).unwrap();
         assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
         let seen = seen.lock().unwrap();
-        assert!(seen.prompts[0].starts_with("Summarize a web page"));
+        assert!(seen.prompts[0].starts_with("You are writing a summary of one work artifact"));
         assert!(seen.prompts[0].contains(office_summary_paragraph()));
         assert!(!seen.prompts[0].contains("X.pptx"));
         // An ordinary page's summary prompt has no such paragraph.
