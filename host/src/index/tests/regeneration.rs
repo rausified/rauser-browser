@@ -44,8 +44,11 @@ fn case_collisions_external_edits_and_unchanged_files_are_handled() {
     let replaced = fs::read_to_string(first_path).unwrap();
     assert!(!replaced.contains("external edit"));
     let modified = fs::metadata(first_path).unwrap().modified().unwrap();
+    // A redelivery of an indexed body marks nothing, so the pass has
+    // nothing to render and the file is not touched.
     index.record_activity(&replacement, &[]).unwrap();
-    assert_eq!(index.regenerate_dirty().unwrap().unchanged, 1);
+    let report = index.regenerate_dirty().unwrap();
+    assert_eq!((report.written, report.unchanged), (0, 0), "{report:?}");
     assert_eq!(
         fs::metadata(first_path).unwrap().modified().unwrap(),
         modified

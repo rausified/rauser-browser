@@ -337,9 +337,15 @@ fn every_mark_takes_a_newer_generation() {
     index.record_activities([&a, &b], &[]).unwrap();
     let before = generations(&index);
     assert_eq!(before.len(), 2);
-    // A same-body redelivery marks its artifact again, so a pass that
-    // snapshotted the older generation cannot clear the new mark.
-    index.record_activity(&a, &[]).unwrap();
+    // A new event for A marks it again, so a pass that snapshotted the
+    // older generation cannot clear the new mark.
+    let again = activity(
+        "00000000-0000-4000-8000-000000000003",
+        "A",
+        "A",
+        "2026-10-15T13:00:00Z",
+    );
+    index.record_activity(&again, &[]).unwrap();
     let after = generations(&index);
     assert!(after[&a.artifact_id] > before[&a.artifact_id]);
     assert!(after[&a.artifact_id] > before[&b.artifact_id]);
@@ -347,6 +353,112 @@ fn every_mark_takes_a_newer_generation() {
     // A completed pass clears both marks.
     index.regenerate_dirty().unwrap();
     assert!(generations(&index).is_empty());
+}
+
+/// Deliver `events` as the native host does: append them to the daily log
+/// through `CaptureStore`, then index the persisted ones.
+fn deliver_logged(
+    capture: &crate::capture::CaptureStore,
+    index: &ArtifactIndex,
+    origins: &[String],
+    events: &[&ActivityEvent],
+) {
+    use crate::capture::{CaptureOutcome, CapturePolicy};
+    let policy = CapturePolicy {
+        enabled: true,
+        origins,
+        strip_params: &[],
+    };
+    for event in events {
+        let outcome = capture.record_activity(policy, event);
+        assert!(
+            matches!(outcome, CaptureOutcome::Persisted { .. }),
+            "{outcome:?}"
+        );
+    }
+    index
+        .record_activities(events.iter().copied(), &[])
+        .unwrap();
+}
+
+fn at_minute(minute: i64) -> String {
+    (crate::capture::fixtures::event_time() + time::Duration::minutes(minute))
+        .format(&Rfc3339)
+        .unwrap()
+}
+
+#[test]
+fn an_in_order_logged_delivery_takes_the_fast_path() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let document = github_document(true);
+    let index = index(&root, &cache).with_adapters(Some(&document));
+    let capture =
+        crate::capture::CaptureStore::open_in(&index.storage, None, state.path()).unwrap();
+    let origins = [
+        "https://example.com".to_owned(),
+        "https://github.com".to_owned(),
+    ];
+    let pr = |n: u32, minute| github_pr(n, 3, &at_minute(minute));
+    let page = |id: &str, minute| activity(id, "PAGE", "Page", &at_minute(minute));
+    // History: PR 3 and its repo, and an unrelated page, each derived once.
+    let (first, second) = (pr(1, -30), pr(2, -20));
+    let earlier = page("00000000-0000-4000-8000-000000000700", -25);
+    deliver_logged(&capture, &index, &origins, &[&first, &earlier, &second]);
+    // Each delivery appends to the log and indexes the same events: the
+    // catch-up ingests the appended markers with their positions, and the
+    // caller's copies are the same bodies. Every group extends by the
+    // fast path; nothing stored is re-read and nothing re-derives.
+    reset_counters();
+    let next = page("00000000-0000-4000-8000-000000000701", -10);
+    deliver_logged(&capture, &index, &origins, &[&next]);
+    assert_eq!(counters(), [1, 0, 0, 0]);
+    reset_counters();
+    let (third, fourth) = (pr(3, -5), pr(4, -4));
+    deliver_logged(&capture, &index, &origins, &[&third, &fourth]);
+    // PR 3 and the repo, once each.
+    assert_eq!(counters(), [2, 0, 0, 0]);
+    // A backdated logged delivery still takes the exact re-derive.
+    reset_counters();
+    let backdated = page("00000000-0000-4000-8000-000000000702", -60);
+    deliver_logged(&capture, &index, &origins, &[&backdated]);
+    let [fast, derives, _, full] = counters();
+    assert_eq!([fast, derives, full], [0, 1, 0]);
+}
+
+#[test]
+fn a_repeat_delivery_of_an_indexed_event_is_a_no_op() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let document = github_document(true);
+    let index = index(&root, &cache).with_adapters(Some(&document));
+    let capture =
+        crate::capture::CaptureStore::open_in(&index.storage, None, state.path()).unwrap();
+    let origins = ["https://github.com".to_owned()];
+    let pull = github_pr(1, 3, &at_minute(-30));
+    let unlogged = github_pr(2, 4, "2026-10-15T12:00:00Z");
+    deliver_logged(&capture, &index, &origins, &[&pull]);
+    index.record_activity(&unlogged, &[]).unwrap();
+    index.regenerate_dirty().unwrap();
+    assert!(generations(&index).is_empty());
+    let meta = |index: &ArtifactIndex| {
+        sql::sql_rows(
+            &index.database_path(),
+            "select key, value from brauser_meta order by key",
+        )
+    };
+    let before = meta(&index);
+    // A retry of a logged event and of one only the index holds, singly
+    // and in a batch: the same bodies, already indexed.
+    reset_counters();
+    index.record_activity(&pull, &[]).unwrap();
+    index.record_activity(&unlogged, &[]).unwrap();
+    index.record_activities([&pull, &unlogged], &[]).unwrap();
+    assert_eq!(counters(), [0, 0, 0, 0]);
+    assert!(generations(&index).is_empty());
+    assert_eq!(meta(&index), before);
 }
 
 #[test]
