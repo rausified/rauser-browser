@@ -398,11 +398,33 @@ def _timestamp(record: dict[str, object] | None) -> str | None:
         return None
     import datetime  # local: only the merge path needs it
 
-    stamp = datetime.datetime.fromisoformat(
-        f"{match.group(1)}T{match.group(2)}.{(match.group(3) or '.')[1:].ljust(6, '0')[:6]}"
-        f"{'+00:00' if match.group(4) == 'Z' else match.group(4)}"
-    )
+    try:
+        stamp = datetime.datetime.fromisoformat(
+            f"{match.group(1)}T{match.group(2)}.{(match.group(3) or '.')[1:].ljust(6, '0')[:6]}"
+            f"{'+00:00' if match.group(4) == 'Z' else match.group(4)}"
+        )
+    except ValueError:  # a calendar-invalid date such as 2026-02-30
+        return None
     return stamp.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
+def _after_both(ours: dict[str, object], theirs: dict[str, object]) -> str | None:
+    """An `updated_at` one second after the later of the two sides', or None.
+
+    A combined bead differs from both inputs, so it must be newer than both:
+    `bd import`'s updated_at guard keeps a database row whose timestamp ties
+    the imported one, which would silently drop the other side's fields when
+    a workspace hydrates its database from the merged queue. The value only
+    depends on the inputs, so every merge of the same versions agrees.
+    """
+    import datetime
+
+    stamps = [_timestamp(ours), _timestamp(theirs)]
+    if None in stamps:
+        return None
+    latest = datetime.datetime.strptime(max(stamps), "%Y-%m-%dT%H:%M:%S.%f")
+    bumped = latest.replace(microsecond=0) + datetime.timedelta(seconds=1)
+    return bumped.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _merge_values(base: object, ours: object, theirs: object, newer: str | None) -> tuple[object, bool]:
@@ -452,7 +474,8 @@ def merge_record(
 
     A field changed on one side takes that side; `metadata` merges key by key
     the same way. A field both sides changed differently takes the side with
-    the newer `updated_at`, and the result carries the newer `updated_at`.
+    the newer `updated_at`. `merge_jsonl` stamps a combined bead one second
+    after both sides (`_after_both`).
     Returns (record, note); record is None when both sides changed the same
     field and their `updated_at` is equal or unreadable, which nothing can
     order.
@@ -559,6 +582,9 @@ def merge_jsonl(base: str, ours: str, theirs: str) -> tuple[str, list[str], list
             elif record == t_val:
                 chosen = t
             else:
+                stamp = _after_both(o[1], t[1])
+                if stamp is not None and "updated_at" in record:
+                    record["updated_at"] = stamp
                 rows.append((export_order(record), [dump_record(record)]))
                 continue
         if chosen is not None:
@@ -691,7 +717,8 @@ def resolve(root: pathlib.Path) -> int:
         if prose_conflicts:
             print(
                 f"{BACKLOG_PATH}: generated sections re-rendered, but {prose_conflicts} "
-                f"hand-written conflict(s) remain; resolve the markers, then rerun"
+                f"hand-written conflict(s) remain; resolve the markers, then rerun "
+                f"(to keep ours exactly, `git add` the file yourself)"
             )
             status = 1
         else:

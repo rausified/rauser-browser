@@ -692,7 +692,10 @@ on its VM) used to stop on them. `.gitattributes` gives each a merge driver:
   a field changed on one side takes that side, `metadata` merges key by
   key, a field both sides changed takes the newer `updated_at`, a delete
   against an edit keeps the edit, and lines come out in `bd export`'s order
-  (priority, newest `created_at`, id) and byte format. Only two different
+  (priority, newest `created_at`, id) and byte format. A combined bead (equal
+  to neither side) gets an `updated_at` one second after both, because `bd
+  import` keeps a database row whose `updated_at` ties the imported one and
+  would otherwise drop the other side's fields when a workspace hydrates. Only two different
   values for one field with an equal or unreadable `updated_at` stop the
   merge, as markers around that bead.
 - `bosun-backlog` merges the hand-written text three ways and renders the
