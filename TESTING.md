@@ -1054,8 +1054,12 @@ This standard is meant to improve with use. When you change it:
   binary, configured only through each child's `Command` environment, rather
   than threads, because the hosts that share the index are separate
   processes, and only real processes exercise the file locks, and a kill in
-  the middle of a pass, the way they happen. No browser or native dialog is
-  involved.
+  the middle of a pass, the way they happen. A first-open race (two hosts
+  each clearing a format 8 `index.db`, so the second deleted the first's new
+  database, and two WAL switches answering `SQLITE_BUSY` at once) failed
+  about 1 run in 15 with two openers and every run with four over 20
+  rounds; repeat a concurrency test in a loop before trusting one green run.
+  No browser or native dialog is involved.
 
 - 2026-11-01: Branch `feat/conflict-free-bookkeeping-merges`. A merge
   driver sees one file at a time and git merges paths in an unspecified
@@ -1362,13 +1366,26 @@ The index tests read `index.db` through rusqlite, never `python3`.
 of trusting the writer. Never keep a connection open across a tempdir
 cleanup; on Windows an open handle makes the cleanup fail.
 
-- **Goldens.** Each directory under `host/tests/fixtures/index/` is a frozen
-  log tree with the read calls to make and what the pre-SQLite index
+- **Goldens.** Each directory under `host/tests/fixtures/index/` listed in
+  `FIXTURES` is a frozen log tree with the read calls to make and what the pre-SQLite index
   answered: the relearn revision, every read API's output, and a canonical
   dump of the five public tables (`host/src/index/tests/golden.rs`). Keep
   them green without editing them. `bless_golden_fixtures` adds a new
   fixture only with `--ignored` and `BRAUSER_BLESS_GOLDENS=1`; rewriting an
   existing golden needs a stated reason in the commit.
+- **Format 8 migration.** `host/tests/fixtures/index/v8/` (listed in
+  `MIGRATION_FIXTURES`, not a golden) holds the logs, artifact files,
+  `index-state.json` and hand-written `index.db` that the pre-change build
+  `48d80d6` wrote, committed as bytes; regenerate it only from that build.
+  `host/src/index/tests/migration.rs` copies it into a fresh root and cache
+  and checks the one-time import: the dirty set, container files and user
+  edits survive, the tables equal a fresh reindex, an unusable JSON cache
+  dirties only missing files, the `-wal` and `-shm` sidecars go before the
+  legacy file, the JSON files go only after the commit, and an older host's
+  rename over `index.db` is recovered. First opens racing across threads
+  (`two_first_opens_converge`, and `many_concurrent_first_opens_never_fail`
+  with four threads, each its own index handle, over 20 rounds) must never fail or lose the other's file;
+  a flaky failure there is a real race in `index-open.lock`, not noise.
 - **The full-derive oracle.** Under `cfg(test)`, every index write
   transaction ends by checking that the derived tables equal a full derive
   of `brauser_events` written through the same writer
