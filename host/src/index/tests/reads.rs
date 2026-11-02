@@ -184,3 +184,38 @@ fn an_adapter_change_is_caught_up_before_a_read() {
     let repo = adapted.artifact(GITHUB_REPO_ID).unwrap().unwrap();
     assert_eq!(repo.contained.len(), 1);
 }
+
+/// A read whose logs are ahead while another connection holds the write
+/// lock serves the snapshot after about one busy timeout, not after the
+/// schema check and the catch-up each waited out every retry.
+#[test]
+fn a_read_behind_a_held_write_lock_serves_the_snapshot_within_one_timeout() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (index, event) = recorded(&root, &cache);
+    let later = activity(
+        "00000000-0000-4000-8000-0000000000c4",
+        "B",
+        "Later",
+        "2026-10-15T11:00:00Z",
+    );
+    write_log(root.path(), "2026-10-15.md", &[&event, &later]);
+    let holder = rusqlite::Connection::open(index.database_path()).unwrap();
+    holder.execute("BEGIN IMMEDIATE", []).unwrap();
+    let timeout = Duration::from_millis(400);
+    let _short = BusyTimeout::set(timeout);
+    let started = Instant::now();
+    let (recent, _, _) = index.recent(None, None, 10).unwrap();
+    let waited = started.elapsed();
+    assert_eq!(
+        recent
+            .into_iter()
+            .map(|item| item.title)
+            .collect::<Vec<_>>(),
+        ["Über Straße"]
+    );
+    assert!(waited < timeout * 3, "{waited:?}");
+    holder.execute("ROLLBACK", []).unwrap();
+    drop(holder);
+    assert_eq!(index.recent(None, None, 10).unwrap().0.len(), 2);
+}

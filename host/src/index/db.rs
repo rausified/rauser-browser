@@ -36,7 +36,7 @@ pub(crate) const LEGACY_APPLICATION_ID: u32 = 0x4252_5752;
 pub(crate) const SCHEMA_VERSION: i64 = super::STATE_VERSION as i64;
 /// How long one statement waits for another connection's lock.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(10_000);
-/// Retries of `BEGIN IMMEDIATE` after the busy timeout has expired.
+/// Retries of a busy `BEGIN IMMEDIATE` within one busy timeout.
 pub(crate) const BEGIN_RETRIES: u32 = 3;
 const JOURNAL_SIZE_LIMIT: i64 = 8 * 1024 * 1024;
 /// Sidecars removed, in this order, before a legacy main file.
@@ -467,8 +467,16 @@ fn check_identity(application_id: i64, user_version: i64) -> Result<()> {
 }
 
 /// Creates the schema in a fresh file. Re-checked inside the transaction, so
-/// hosts opening for the first time at once converge on one schema.
+/// hosts opening for the first time at once converge on one schema. A file
+/// whose header already reads as this format needs no write lock: the
+/// schema and both pragmas commit together, so they are never seen apart,
+/// and waiting behind another connection's write here would spend a read's
+/// whole busy budget before its catch-up even begins.
 fn ensure_schema(conn: &mut Connection) -> Result<()> {
+    let (application_id, user_version) = identity(conn).map_err(sqlite)?;
+    if application_id != 0 || user_version != 0 {
+        return check_identity(application_id, user_version);
+    }
     write_txn(conn, |tx| {
         let (application_id, user_version) = identity(tx)?;
         if application_id == 0 && user_version == 0 {
@@ -623,12 +631,22 @@ pub(crate) fn write_txn<T>(
     Ok(value)
 }
 
+/// `BEGIN IMMEDIATE`, retried for a busy answer only while the busy timeout
+/// has not yet run out overall. The retries cover a busy answer SQLite gives
+/// without waiting (a snapshot that moved, WAL recovery); they never wait
+/// the full timeout again, so a busy lock surfaces after about one timeout,
+/// well inside the extension's 30 s request timeout.
 fn begin_immediate(conn: &Connection) -> Result<Transaction<'_>> {
+    let started = std::time::Instant::now();
     let mut attempt = 0;
     loop {
         match Transaction::new_unchecked(conn, TransactionBehavior::Immediate) {
             Ok(tx) => return Ok(tx),
-            Err(error) if is_busy(&error) && attempt < BEGIN_RETRIES => {
+            Err(error)
+                if is_busy(&error)
+                    && attempt < BEGIN_RETRIES
+                    && started.elapsed() < busy_timeout() =>
+            {
                 attempt += 1;
                 std::thread::sleep(retry_delay(attempt));
             }
@@ -1103,6 +1121,42 @@ mod tests {
         assert!(started.elapsed() >= hold);
         release.join().unwrap();
         assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn opening_a_current_store_takes_no_write_lock() {
+        let dir = TempDir::new().unwrap();
+        let holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let _short = BusyTimeout::set(Duration::from_millis(50));
+        let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
+        // The schema already exists, so checking it needs no BEGIN
+        // IMMEDIATE behind another connection's write.
+        let mut conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let rows: i64 = read_txn(&mut conn, |tx| {
+            Ok(tx.query_row("SELECT count(*) FROM brauser_meta", [], |row| row.get(0))?)
+        })
+        .unwrap();
+        assert_eq!(rows, 0);
+        tx.rollback().unwrap();
+    }
+
+    #[test]
+    fn a_held_write_lock_surfaces_busy_within_about_one_busy_timeout() {
+        let dir = TempDir::new().unwrap();
+        let holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let timeout = Duration::from_millis(400);
+        let _short = BusyTimeout::set(timeout);
+        let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
+        let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
+        let started = std::time::Instant::now();
+        let error = write_txn(&mut waiter, |_| Ok(())).unwrap_err();
+        let waited = started.elapsed();
+        assert!(matches!(db_error(&error), DbError::Busy), "{error:#}");
+        // Retries never multiply the busy timeout: a read's catch-up must
+        // give up well inside the extension's 30 s request timeout.
+        assert!(waited >= timeout, "{waited:?}");
+        assert!(waited < timeout * 3, "{waited:?}");
+        tx.rollback().unwrap();
     }
 
     #[test]
