@@ -1117,7 +1117,8 @@ pub(super) mod oracle {
 
     /// Turn the oracle off on this thread until the guard drops: only for
     /// the year-scale bounds test, whose deliveries a full derive after
-    /// every write would dominate.
+    /// every write would dominate, and for a write by a host whose adapter
+    /// document another host has just replaced in the store.
     pub(in crate::index) fn off() -> Off {
         OFF.with(|off| off.set(true));
         Off(())

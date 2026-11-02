@@ -490,6 +490,13 @@ pub(super) fn finalize(
         .execute(params![id, path])?;
         dirty.insert(id.clone());
     }
+    // An artifact already marked may be mid-write by a regenerator that
+    // snapshotted its mark before this rebuild: `render_sha256` still holds
+    // the render from before that write, so comparing with it says nothing
+    // about the file that write leaves. A fresh generation makes the
+    // regenerator's conditional clear fail, and the next pass writes what
+    // the rebuilt rows derive.
+    dirty.extend(ids(tx, "SELECT artifact_id FROM dirty_artifacts")?);
     store::mark_dirty(tx, &dirty)?;
     for table in STAGE_TABLES {
         tx.execute(&format!("DROP TABLE IF EXISTS {table}"), [])?;
@@ -591,6 +598,9 @@ pub(super) fn adapter_change(
             dirty.insert(group.clone());
         }
     }
+    // As in `finalize`: an artifact already marked may be mid-write with a
+    // render this comparison cannot see, so it gets a fresh generation.
+    dirty.extend(marked()?);
     store::set_meta(tx, "adapters", fingerprint)?;
     store::mark_dirty(tx, &dirty)?;
     marked()

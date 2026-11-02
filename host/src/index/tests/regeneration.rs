@@ -652,3 +652,95 @@ fn sweep_keeps_wal_shm_journal_and_lock_files() {
             .is_some()
     );
 }
+
+/// A rebuild that finalizes while a pass is between writing a file and
+/// clearing its mark: the artifact derives its old render again, which
+/// matches the render the store still believes, but the in-flight write is
+/// of the newer one. The mark must outlive that clear, so the next pass puts
+/// the file back to what the logs now say.
+#[test]
+fn a_rebuild_that_finalizes_mid_pass_re_marks_an_already_dirty_artifact() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let first = typed_activity(1, "A", "work.item");
+    write_log(root.path(), "2026-10-14.md", &[&first]);
+    index.reconcile_from_logs().unwrap();
+    index.regenerate_dirty().unwrap();
+    assert!(dirty_ids(&index).is_empty());
+    let mut later = typed_activity(2, "A", "work.item");
+    later.title = Some("Renamed".into());
+    later.occurred_at = "2026-10-15T13:00:00-07:00".into();
+    let today = write_log(root.path(), "2026-10-15.md", &[&later]);
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(dirty_ids(&index), [first.artifact_id.clone()]);
+    let report = index
+        .regenerate_with(|step, _| {
+            if step == RegenStep::Written {
+                // The file now shows "Renamed". The log that said so goes
+                // away and another caller finishes the rebuild before the
+                // clear.
+                fs::remove_file(&today).unwrap();
+                index.reconcile_from_logs().unwrap();
+            }
+        })
+        .unwrap();
+    assert_eq!(report.written, 1);
+    assert!(only_file_text(root.path()).contains("Renamed"));
+    assert_eq!(
+        dirty_ids(&index),
+        [first.artifact_id.clone()],
+        "the stale file's mark was cleared"
+    );
+    index.regenerate_dirty().unwrap();
+    assert!(!only_file_text(root.path()).contains("Renamed"));
+    assert!(dirty_ids(&index).is_empty());
+}
+
+/// The same for an adapter change that lands mid-pass and puts a
+/// container's render back to the one the store still believes.
+#[test]
+fn an_adapter_change_mid_pass_re_marks_an_already_dirty_artifact() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let flat_document = github_document(false);
+    let flat = index(&root, &cache).with_adapters(Some(&flat_document));
+    let repo = github_activity(
+        1,
+        ("github.repo", GITHUB_REPO_ID),
+        "https://github.com/acme-corp/widgets",
+        "2026-10-15T09:00:00-07:00",
+        (60, 0),
+    );
+    let pr = github_pr(2, 7, "2026-10-15T10:00:00-07:00");
+    write_log(root.path(), "2026-10-15.md", &[&repo, &pr]);
+    flat.reconcile_from_logs().unwrap();
+    flat.regenerate_dirty().unwrap();
+    let flat_repo = github_file(root.path(), "repo");
+    assert!(dirty_ids(&flat).is_empty());
+    let nested_document = github_document(true);
+    let nested = index(&root, &cache).with_adapters(Some(&nested_document));
+    nested.reconcile_from_logs().unwrap();
+    assert!(dirty_ids(&nested).contains(&GITHUB_REPO_ID.to_owned()));
+    let mut oracle = None;
+    nested
+        .regenerate_with(|step, id| {
+            if step == RegenStep::Written && id == GITHUB_REPO_ID {
+                // The repo file now rolls the PR up. A host still on the
+                // flat document changes the adapters back before the clear.
+                flat.reconcile_from_logs().unwrap();
+                // The nested host's clear would check the flat store against
+                // its own document.
+                oracle = Some(crate::index::store::oracle::off());
+            }
+        })
+        .unwrap();
+    drop(oracle);
+    assert_ne!(github_file(root.path(), "repo"), flat_repo);
+    assert!(
+        dirty_ids(&flat).contains(&GITHUB_REPO_ID.to_owned()),
+        "the stale roll-up's mark was cleared"
+    );
+    flat.regenerate_dirty().unwrap();
+    assert_eq!(github_file(root.path(), "repo"), flat_repo);
+}
