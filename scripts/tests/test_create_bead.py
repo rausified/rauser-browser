@@ -20,7 +20,10 @@ class CreateBeadTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = pathlib.Path(self.tmp.name)
+        # Production resolves its root (macOS /var -> /private/var, Windows
+        # 8.3 short names such as RUNNER~1), so build expectations from the
+        # same resolved path.
+        self.root = pathlib.Path(self.tmp.name).resolve()
         (self.root / ".git").mkdir()
         (self.root / ".beads").mkdir()
         self.source = self.root / ".beads" / "issues.jsonl"

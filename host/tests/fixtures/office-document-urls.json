@@ -1,0 +1,117 @@
+{
+  "description": "Shared cases for recognising an Office for the web document from a page URL (DESIGN.md §4.5, docs/superpowers/plans/2026-11-01-office-document-content.md decision 2). host/src/service/office.rs office_document checks every field; extension/summarize.ts isOfficeDocumentUrl checks only `office`. On an `office: true` case, `kind` is word, excel, powerpoint or unknown, and `file` and `sourcedoc` are null when absent.",
+  "cases": [
+    {
+      "name": "the goal's PowerPoint sample: the /:p:/r prefix and extra parameters are dropped from the address",
+      "url": "https://cisco-my.sharepoint.com/:p:/r/personal/u_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true",
+      "office": true,
+      "kind": "powerpoint",
+      "file": "X.pptx",
+      "sourcedoc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+      "document_url": "https://cisco-my.sharepoint.com/personal/u_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx"
+    },
+    {
+      "name": "a Word sharing link on a site keeps its address",
+      "url": "https://contoso.sharepoint.com/:w:/g/sites/team/EaBcDeFgHiJ?e=xyz",
+      "office": true,
+      "kind": "word",
+      "file": null,
+      "sourcedoc": null,
+      "document_url": "https://contoso.sharepoint.com/:w:/g/sites/team/EaBcDeFgHiJ?e=xyz"
+    },
+    {
+      "name": "an Excel Doc.aspx under /:x:/r/sites",
+      "url": "https://contoso.sharepoint.com/:x:/r/sites/team/_layouts/15/Doc.aspx?sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D&file=Budget.xlsx&action=default",
+      "office": true,
+      "kind": "excel",
+      "file": "Budget.xlsx",
+      "sourcedoc": "11111111-2222-3333-4444-555555555555",
+      "document_url": "https://contoso.sharepoint.com/sites/team/_layouts/15/Doc.aspx?sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D&file=Budget.xlsx"
+    },
+    {
+      "name": "a short guest link keeps e= and loses its fragment",
+      "url": "https://contoso-my.sharepoint.com/:p:/g/personal/u/EbCd?e=abc#slide=2",
+      "office": true,
+      "kind": "powerpoint",
+      "file": null,
+      "sourcedoc": null,
+      "document_url": "https://contoso-my.sharepoint.com/:p:/g/personal/u/EbCd?e=abc"
+    },
+    {
+      "name": "a percent-encoded share segment",
+      "url": "https://contoso.sharepoint.com/%3Aw%3A/r/sites/s/EaB?e=1",
+      "office": true,
+      "kind": "word",
+      "file": null,
+      "sourcedoc": null,
+      "document_url": "https://contoso.sharepoint.com/%3Aw%3A/r/sites/s/EaB?e=1"
+    },
+    {
+      "name": "Doc.aspx with no share segment takes its kind from the file",
+      "url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?sourcedoc=%7BAAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE%7D&file=Plan.docx&action=default",
+      "office": true,
+      "kind": "word",
+      "file": "Plan.docx",
+      "sourcedoc": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "document_url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?sourcedoc=%7BAAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE%7D&file=Plan.docx"
+    },
+    {
+      "name": "WopiFrame.aspx with only a sourcedoc",
+      "url": "https://contoso-my.sharepoint.com/personal/u/_layouts/15/WopiFrame.aspx?sourcedoc=%7BAAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE%7D&action=view",
+      "office": true,
+      "kind": "unknown",
+      "file": null,
+      "sourcedoc": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "document_url": "https://contoso-my.sharepoint.com/personal/u/_layouts/15/WopiFrame.aspx?sourcedoc=%7BAAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE%7D"
+    },
+    {
+      "name": "DOC.ASPX in upper case with only a file",
+      "url": "https://contoso.sharepoint.com/sites/s/_layouts/15/DOC.ASPX?file=Notes.DOCX&wdOrigin=x",
+      "office": true,
+      "kind": "word",
+      "file": "Notes.DOCX",
+      "sourcedoc": null,
+      "document_url": "https://contoso.sharepoint.com/sites/s/_layouts/15/DOC.ASPX?file=Notes.DOCX"
+    },
+    {
+      "name": "a top-level Office viewer with a non-SharePoint src",
+      "url": "https://view.officeapps.live.com/op/view.aspx?src=https%3A%2F%2Fx.example%2FA.xlsx",
+      "office": true,
+      "kind": "excel",
+      "file": null,
+      "sourcedoc": null,
+      "document_url": "https://x.example/A.xlsx"
+    },
+    {
+      "name": "an invalid sourcedoc gives no ID but stays in the address",
+      "url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?sourcedoc=not-a-guid&file=Deck.pptx",
+      "office": true,
+      "kind": "powerpoint",
+      "file": "Deck.pptx",
+      "sourcedoc": null,
+      "document_url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?sourcedoc=not-a-guid&file=Deck.pptx"
+    },
+    {
+      "name": "a file name holding a newline and a heading is flattened",
+      "url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?file=A%0A%23%23%20Forged.docx",
+      "office": true,
+      "kind": "word",
+      "file": "A ## Forged.docx",
+      "sourcedoc": null,
+      "document_url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?file=A%0A%23%23+Forged.docx"
+    },
+    { "name": "http is not recognised", "url": "http://contoso.sharepoint.com/:p:/r/sites/s/_layouts/15/Doc.aspx?file=X.pptx", "office": false },
+    { "name": "bare sharepoint.com", "url": "https://sharepoint.com/:p:/r/sites/s/_layouts/15/Doc.aspx?file=X.pptx", "office": false },
+    { "name": "a lookalike host", "url": "https://evil-sharepoint.com.example/:p:/r/sites/s/_layouts/15/Doc.aspx?file=X.pptx", "office": false },
+    { "name": "a SharePoint site home page", "url": "https://contoso.sharepoint.com/sites/team", "office": false },
+    { "name": "a SharePoint site page", "url": "https://contoso.sharepoint.com/sites/team/SitePages/Home.aspx", "office": false },
+    { "name": "Doc.aspx with neither parameter", "url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?action=view", "office": false },
+    { "name": "Doc.aspx with empty parameters", "url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?sourcedoc=&file=", "office": false },
+    { "name": "a file parameter on another site", "url": "https://example.com/?file=a.pptx", "office": false },
+    { "name": "officeapps without src", "url": "https://view.officeapps.live.com/op/view.aspx", "office": false },
+    { "name": "officeapps with a non-https src", "url": "https://view.officeapps.live.com/op/view.aspx?src=http%3A%2F%2Fx.example%2FA.xlsx", "office": false },
+    { "name": "officeapps with a src that is not a URL", "url": "https://view.officeapps.live.com/op/view.aspx?src=not%20a%20url", "office": false },
+    { "name": "an officeapps lookalike host", "url": "https://officeapps.live.com.evil.example/op/view.aspx?src=https%3A%2F%2Fx.example%2FA.xlsx", "office": false },
+    { "name": "not a URL", "url": "not a url", "office": false }
+  ]
+}
