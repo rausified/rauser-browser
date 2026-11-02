@@ -36,6 +36,7 @@ export const PANEL_NOTICE_MAX_AGE_MS = 2 * 60_000;
 export const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 
 export type PanelNotice =
+  | { kind: "focus_task"; tab_id: number; at: number }
   | { kind: "run_started"; run_id: string; tab_id: number; at: number }
   | { kind: "summarize_failed"; message: string; tab_id: number; at: number };
 
@@ -46,7 +47,8 @@ export function isPanelNotice(value: unknown): value is PanelNotice {
       typeof notice.at !== "number" || !Number.isFinite(notice.at)) {
     return false;
   }
-  return (notice.kind === "run_started" && typeof notice.run_id === "string") ||
+  return notice.kind === "focus_task" ||
+    (notice.kind === "run_started" && typeof notice.run_id === "string") ||
     (notice.kind === "summarize_failed" && typeof notice.message === "string");
 }
 

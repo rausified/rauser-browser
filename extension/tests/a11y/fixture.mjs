@@ -252,3 +252,13 @@ export async function activate(page, target, key = "Enter") {
 export async function focused(page, selector) {
   assert.equal(await page.locator(selector).evaluate((node) => node === document.activeElement), true, `${selector} should hold focus`);
 }
+
+/** Composite entry: only the selected panel tab participates in Tab order. */
+export async function enterPanelTab(page, id) {
+  assert.ok(["tab-page", "tab-recent"].includes(id));
+  await activate(page, page.locator('[role="tab"][aria-selected="true"]'), null);
+  await page.keyboard.press(id === "tab-page" ? "Home" : "End");
+  await focused(page, `#${id}`);
+  assert.equal(await page.locator(`#${id}`).getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator(`#${id}`).getAttribute("tabindex"), "0");
+}
