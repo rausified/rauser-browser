@@ -268,11 +268,19 @@ pub(crate) fn open(cache_dir: &Path, mode: Mode) -> Result<Option<Connection>> {
     open_with(cache_dir, mode, &mut |path| fs::remove_file(path))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread opened `index.db` (tests of reuse).
+    pub(crate) static OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn open_with(
     cache_dir: &Path,
     mode: Mode,
     remove: &mut dyn FnMut(&Path) -> io::Result<()>,
 ) -> Result<Option<Connection>> {
+    #[cfg(test)]
+    OPENS.with(|opens| opens.set(opens.get() + 1));
     let path = db_path(cache_dir);
     // Held from deciding to create or replace the file until it is in WAL
     // with its schema, so another host never sees it half made.

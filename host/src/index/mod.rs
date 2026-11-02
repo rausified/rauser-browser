@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 use adapter_templates::{Document, Ref};
@@ -125,6 +125,64 @@ pub struct ArtifactIndex {
     /// The confirmed adapter document, used only to resolve title refs
     /// into mentions edges (adapter-templates.md §10.1).
     adapters: Option<Arc<Document>>,
+    /// One read connection for this handle's reads. native.rs opens a
+    /// handle per request, so a request's several reads share one open of
+    /// `index.db` and its `-wal`/`-shm` (opening files is slow where
+    /// endpoint security scans each open), and the handle is closed with
+    /// the request, so no long-lived handle blocks replacing the file on
+    /// Windows. Dropped whenever a catch-up runs, since it may replace it.
+    reader: ReaderCache,
+}
+
+/// [`ArtifactIndex::reader`]: a clone starts with no connection of its own.
+/// The connection is kept with the identity of the `index.db` it opened and
+/// reused only while the path still names that file, so a replaced or
+/// deleted database is never read through a stale handle. On Windows
+/// nothing is cached: an open handle there would block another host from
+/// replacing the file.
+#[derive(Default)]
+struct ReaderCache(Mutex<Option<(rusqlite::Connection, (u64, u64))>>);
+
+impl Clone for ReaderCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl ReaderCache {
+    /// The cached connection, if `db` still names the file it opened.
+    fn take(&self, db: &Path) -> Option<rusqlite::Connection> {
+        let (conn, identity) = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()?;
+        (file_identity(db) == Some(identity)).then_some(conn)
+    }
+
+    /// Keep `conn`, opened on `db`, for this handle's next read.
+    fn put(&self, conn: rusqlite::Connection, db: &Path) {
+        if cfg!(unix)
+            && let Some(identity) = file_identity(db)
+        {
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some((conn, identity));
+        }
+    }
+}
+
+/// `path`'s device and inode, or `None` where that is not available.
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path).ok()?;
+        Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -421,6 +479,7 @@ impl ArtifactIndex {
             storage: storage.clone(),
             root_identity: identity,
             adapters: None,
+            reader: ReaderCache::default(),
         })
     }
 
@@ -945,54 +1004,89 @@ impl ArtifactIndex {
         catch_up: impl FnOnce() -> Result<()>,
         query: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
     ) -> Result<T> {
-        let probe = self.probe();
-        if probe != Probe::Current
-            && let Err(error) = catch_up()
+        // Usually the snapshot is current: the freshness check and the
+        // query then share one read transaction on one connection.
+        let mut query = Some(query);
+        let probe = match self.reader_connection() {
+            None => Probe::Unusable,
+            Some(mut conn) => {
+                let outcome = db::read_txn(&mut conn, |tx| {
+                    let probe = self.probe_in(tx).unwrap_or(Probe::Unusable);
+                    if probe != Probe::Current {
+                        return Ok((probe, None));
+                    }
+                    if catchup::rebuilding(tx)? {
+                        bail!(INCOMPLETE_CATCH_UP);
+                    }
+                    let query = query.take().expect("the query runs once");
+                    query(tx).map(|value| (probe, Some(value)))
+                });
+                match outcome {
+                    Ok((_, Some(value))) => {
+                        self.reader.put(conn, &self.database_path());
+                        return Ok(value);
+                    }
+                    Ok((probe, None)) => probe,
+                    // The query itself failed: that is the read's answer.
+                    Err(error) if query.is_none() => return Err(error),
+                    Err(_) => Probe::Unusable,
+                }
+            }
+        };
+        // The catch-up may replace or create `index.db`, so the cached
+        // connection (already taken) is not reused past it.
+        if let Err(error) = catch_up()
             && !(probe == Probe::Behind && busy(&error))
         {
             return Err(error);
         }
         // The catch-up succeeded; with no database it found nothing to
         // commit, and `index.db` is never created just to answer a read.
-        let mut conn = match db::open(&self.cache_dir, db::Mode::IfExists)? {
-            Some(conn) => conn,
-            None => db::empty()?,
+        let (mut conn, cached) = match db::open(&self.cache_dir, db::Mode::IfExists)? {
+            Some(conn) => (conn, true),
+            None => (db::empty()?, false),
         };
         query::register(&conn)?;
-        db::read_txn(&mut conn, |tx| {
+        let query = query.take().expect("the query runs once");
+        let value = db::read_txn(&mut conn, |tx| {
             if catchup::rebuilding(tx)? {
                 bail!(INCOMPLETE_CATCH_UP);
             }
             query(tx)
-        })
+        })?;
+        if cached {
+            self.reader.put(conn, &self.database_path());
+        }
+        Ok(value)
+    }
+
+    /// This handle's read connection, opened (and its functions
+    /// registered) on first use; `None` when there is no usable database.
+    fn reader_connection(&self) -> Option<rusqlite::Connection> {
+        if let Some(conn) = self.reader.take(&self.database_path()) {
+            return Some(conn);
+        }
+        let conn = db::open(&self.cache_dir, db::Mode::IfExists).ok()??;
+        query::register(&conn).ok()?;
+        Some(conn)
     }
 
     /// The stat-only freshness check: no log byte or cache file is read.
     /// Any doubt (no database, a legacy file, an unreadable log folder) is
     /// [`Probe::Unusable`], and the catch-up then reports or repairs it.
-    fn probe(&self) -> Probe {
-        let probe = || -> Result<Probe> {
-            let Some(mut conn) = db::open(&self.cache_dir, db::Mode::IfExists)? else {
-                return Ok(Probe::Unusable);
-            };
-            db::read_txn(&mut conn, |tx| {
-                let adapters = store::meta(tx, "adapters")?;
-                if !self.location_matches(tx)?
-                    || adapters.as_deref() != Some(self.adapters_fingerprint().as_str())
-                {
-                    return Ok(Probe::Unusable);
-                }
-                Ok(
-                    match catchup::freshness(tx, &self.storage, &self.root_identity)? {
-                        catchup::Freshness::Current => Probe::Current,
-                        catchup::Freshness::Behind | catchup::Freshness::Rebuilding => {
-                            Probe::Behind
-                        }
-                    },
-                )
-            })
-        };
-        probe().unwrap_or(Probe::Unusable)
+    fn probe_in(&self, tx: &rusqlite::Transaction<'_>) -> Result<Probe> {
+        let adapters = store::meta(tx, "adapters")?;
+        if !self.location_matches(tx)?
+            || adapters.as_deref() != Some(self.adapters_fingerprint().as_str())
+        {
+            return Ok(Probe::Unusable);
+        }
+        Ok(
+            match catchup::freshness(tx, &self.storage, &self.root_identity)? {
+                catchup::Freshness::Current => Probe::Current,
+                catchup::Freshness::Behind | catchup::Freshness::Rebuilding => Probe::Behind,
+            },
+        )
     }
 
     /// Whether the store's rows were built for this folder and layout

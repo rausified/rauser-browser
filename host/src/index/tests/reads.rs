@@ -219,3 +219,33 @@ fn a_read_behind_a_held_write_lock_serves_the_snapshot_within_one_timeout() {
     drop(holder);
     assert_eq!(index.recent(None, None, 10).unwrap().0.len(), 2);
 }
+
+/// A handle's reads of a current index share one open of `index.db`
+/// (opening it and its `-wal`/`-shm` is slow where endpoint security scans
+/// each open), and a database replaced underneath is never read through
+/// the stale handle.
+#[test]
+fn a_handles_reads_share_one_connection_and_follow_a_replaced_file() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (index, event) = recorded(&root, &cache);
+    index.artifact(&event.artifact_id).unwrap().unwrap();
+    let before = db::OPENS.with(std::cell::Cell::get);
+    for _ in 0..3 {
+        index.artifact(&event.artifact_id).unwrap().unwrap();
+        index.summary_for(&event.artifact_id).unwrap();
+        index.latest_why(&event.artifact_id).unwrap();
+    }
+    let opens = db::OPENS.with(std::cell::Cell::get) - before;
+    if cfg!(unix) {
+        assert_eq!(opens, 0, "reads reuse the handle's connection");
+    } else {
+        assert_eq!(opens, 9, "Windows opens per read and caches nothing");
+    }
+
+    // The database goes away underneath: the next read rebuilds it from the
+    // log instead of answering from the deleted file.
+    remove_database(&index);
+    assert!(index.artifact(&event.artifact_id).unwrap().is_some());
+    assert!(index.database_path().exists());
+}
