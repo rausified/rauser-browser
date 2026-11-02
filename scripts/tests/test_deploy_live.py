@@ -480,6 +480,13 @@ class DryRun(Fixture):
         self.assertIn("dry run", out)
         self.assertEqual((self.repo / "extension" / "dist" / "build.txt").read_text(), before)
 
+    def test_summary_says_npm_ci_would_run(self):
+        shutil.rmtree(self.repo / "node_modules")
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("npm ci: would run (node_modules is missing)", out)
+        self.assertNotIn("npm ci: ran", out)
+
     def test_reports_locks_without_clearing_them(self):
         self.runner.hygiene_out = "  clear   /r/.git/index.lock: stale (dry run)\n"
         code, out = self.deploy("--dry-run")

@@ -402,7 +402,7 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         elif npm_reason:
             d.say(f"    {npm_reason}")
             d.act(["npm", "ci", "--ignore-scripts"], "npm ci")
-            npm_note = f"npm ci: ran ({npm_reason})"
+            npm_note = f"npm ci: {'would run' if args.dry_run else 'ran'} ({npm_reason})"
         else:
             npm_note = "npm ci: skipped (package-lock.json unchanged, node_modules present)"
             d.say("    " + npm_note)

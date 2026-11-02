@@ -37,6 +37,8 @@ npm run test:queue
 npm run test:dev-tools   # macOS/Linux only: scripts/dev tooling
 ```
 
+To deploy the live install (the main checkout Chrome and the native host run from), use `scripts/dev/deploy-live` (`--dry-run` first); AGENTS.md "PR ownership and handoff" has the details and `scripts/dev/index-lock-watch` for stale `.git/index.lock` files.
+
 To rehearse artifact identity changes offline, use
 `target/debug/brauser adapters aliases-preview < requests.jsonl`.
 It shows canonical groups and pending suggestions from supplied adapter
