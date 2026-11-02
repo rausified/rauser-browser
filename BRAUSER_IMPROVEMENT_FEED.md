@@ -127,6 +127,47 @@ Why: testing the SUMMARY.md v2 rewrite against real pages (a Jira ticket and a G
 
 Where: `host/src/main.rs` (CLI), `host/src/service/prompt.rs` `summary_prompt`, `host/src/answer.rs` `parse_answer`, `host/src/summary.rs` `render_summary`; document it in TESTING.md.
 
+
+## 2026-11-02 — Show summary overviews where people choose what to reopen
+
+Change: finish brwr-sm3 by carrying SUMMARY.md's overview into run answers and
+saved-summary views, then show it in the run card, artifact card and Recent,
+with today's wording for older records. Why: brwr-sm1 now preserves the
+recorded path into an artifact in its saved summary, but the person deciding
+which summary to reopen still sees only its type and importance. The existing
+one-sentence overview is the useful decision aid at that point. Where:
+protocol/schema.json, host/src/summary.rs and service/record.rs,
+extension/summary-text.ts, extension/run-card.ts and the panel. Use the
+existing brwr-sm3 rather than create another proposal for the same work.
+
+- Done 2026-11-02: brwr-sm3 carries overview through events, views and run answers; panel, Recent and run cards show it with legacy fallbacks.
+
+## 2026-11-02 — Search the topic a summary actually describes
+
+Change: extend Tasks history search to match a summary's overview as well as
+its page title, keeping existing matches for older results. Why: brwr-sm3
+now delivers the useful one-sentence description to each retained run, but
+`filterTasks` still searches only the title and task instruction; remembering
+a decision described by the summary does not find its run. Where:
+`extension/task-history.ts`, `extension/tasks.ts`, their tests, and brwr-khqi
+(discovered from brwr-sm3).
+
+## 2026-11-02 — Exercise upgrade retries when extending durable event payloads
+
+Change: keep a pre-change journal fixture and replay it with the new caller
+payload whenever adding a summary event field. Why: the overview tests covered
+old log reading and cache reopen, but an older interrupted append failed Retry
+save because its payload hash lacked the new field. The review regression in
+`host/src/capture.rs` now covers this transition; apply the same check to future
+event extensions alongside the frozen single-event recovery tests.
+
+## 2026-11-02 — Include platform smoke expectations in UI wording reviews
+
+Change: add an explicit check of `scripts/smoke-macos.mjs` when reviewing changes
+to panel or run-card text. Why: PR #242 updated the summary unit tests but left
+the macOS smoke assertion expecting the old labels; the built panel reproduced
+the mismatch on Linux even though the macOS runner itself cannot run there.
+Where: the UI change checklist in `TESTING.md` and the platform smoke assertions.
 ## 2026-11-02 — Give the a11y browser launch a deadline and a clear failure
 
 What: in `scripts/a11y-browser.mjs`, wrap the Playwright `launch` (and the first page open) in a bounded timeout, for example 60 s, that fails the whole `npm run test:a11y` run at once with "Chrome did not start within 60 s (CHROME_PATH=…); is another Chrome using the profile, or is the machine overloaded?", instead of letting `node --test` wait forever.

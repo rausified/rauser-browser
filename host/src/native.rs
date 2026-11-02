@@ -6158,6 +6158,7 @@ id = "work:{host}/{id}"
             strip_params: &config.snapshot().strip_params,
         };
         let summary = crate::summary::PageSummary {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             url: url.into(),
             title: "A summarized page".into(),
@@ -6188,6 +6189,7 @@ id = "work:{host}/{id}"
 
     fn expected_summary(event: &crate::summary::SummaryEvent) -> brauser_protocol::SummaryView {
         brauser_protocol::SummaryView {
+            overview: event.overview.clone(),
             summarized_at: event.occurred_at.clone(),
             document_type: "specification".into(),
             category: "technical specification".into(),
@@ -10435,6 +10437,7 @@ id = "gdoc:{host}/{id}"
         fn page_only_view(summarized_at: &str) -> brauser_protocol::SummaryView {
             brauser_protocol::SummaryView {
                 summarized_at: summarized_at.into(),
+                overview: None,
                 document_type: "report".into(),
                 category: "news".into(),
                 importance: brauser_protocol::ImportanceLevel::Low,

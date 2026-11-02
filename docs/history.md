@@ -931,3 +931,84 @@ checks and explicitly skips 36 sandbox-blocked browser cases. Fresh manual
 diff review and one local Codex reviewer pass found no remaining issues;
 external harness/API review was not invoked. Durable apply brwr-dbp, then
 panel Re-learn under brwr-6x2, remain next; no migration acceptance is claimed.
+
+
+### 2026-11-02 — Freeze recorded incoming navigation for summary context
+
+brwr-sm1 adds a summary-only host snapshot of the current artifact view's
+incoming navigation. The service derives identity from its own adapter match
+under the config lock; no protocol field accepts incoming rows or aliases.
+Lookup failure is optional context loss and logs a warning. Existing index
+selection supplies only known attributed navigation sources, capped at five.
+The shared summary/incoming.rs helper bounds source titles to 512 characters,
+keeps only safe unchanged HTTP(S) URLs up to 8192 bytes, validates dates and
+transitions, and reuses inline/page_destination escaping in both outputs.
+
+RunStatusFile's optional incoming array is absent for empty/legacy records.
+It is the frozen queue-time snapshot, persisted with page.md and reused on
+restart and Retry save. The host places its Incoming navigation section
+immediately after Source, closes it with End incoming navigation, then writes
+Office/Miro metadata and Page content. The new conditional SUMMARY.md block
+is enabled from the persisted snapshot, never from headings in page text.
+It treats labels and addresses as untrusted observations, grants no source
+retrieval and forbids inferring dependencies or endorsement. Tasks retain
+their existing page layout. The saved summary's host-rendered Incoming list
+follows Assessment and precedes the answer's outgoing References; it is
+omitted without observations. Older services reject a status record holding
+the new field, matching the existing unreleased optional-field contract.
+
+The pre-build design challenge considered file-only rendering; the snapshot
+was kept to satisfy the requested agent context while adopting the reviewer's
+conditional instruction and fixed-boundary restrictions. Ten new tests pass,
+including real log/index fixtures, cache loss/failure, hostile titles and
+URLs, legacy decoding, in-process runner restart and byte-identical save
+retry. All required/README checks pass: 1,331 workspace Rust-reported outcomes
+(92 IPC guard skips), 40 extension files, both Clippy configurations,
+10,696 inert corpus renderings, eight script test files and 221 Python tests
+(92 platform skips). A11y passes two fixtures and reports 36 sandbox-blocked
+browser skips. Linux tests do not establish macOS/Windows UI acceptance.
+
+Queue reconciliation found the earlier brwr-ruwj implementation only in
+archived commit 396d0bf6 / held PR #238, gated by human/pr-held brwr-37ca.
+The provisional restoration was fully reversed. Its prerequisite was reopened
+as blocked, and the assigned apply/panel/restoration chain now records that
+real blocker. No held code is duplicated and no Re-learn apply is enabled.
+
+
+The full fresh diff was reviewed manually, then the single local Codex
+reviewer pass found no P1–P3 issues. No external harness/API review was run;
+the driver retains its independent gate and publication review. The plan,
+feature briefing and pending documentation record the final contract.
+
+## 2026-11-02 — Summary overviews in the panel and retained history
+
+Cookie implemented brwr-sm3: the existing validated overview now travels in
+`PageSummary`, the optional `SummaryEvent.overview`, `SummaryView` and
+`RunAnswer`. The native host rechecks the 300-character, single-line bound
+on log replay; protocol runtime guards count Unicode characters, including
+astral characters. The saved-summary line and Recent show overview plus type;
+run results lead with overview and retain their classification. Old events
+and run results omit the field and keep their previous wording. Format-8
+cache reopen and log rebuild preserve both shapes without migration. Deploy
+host and extension together; older hosts cannot replay the new event field.
+
+Cookie also repaired brwr-tsh1: summary restore retains `runs_may_exist_v1`
+for any retained summary/task even when no panel card qualifies. A dismissed
+summary remains reachable on Tasks after the harness is removed. The empty
+list's existing timestamp guard still protects a concurrently started run.
+
+## 2026-11-02 — Preserve interrupted summary appends across the overview upgrade
+
+Independent review found that Retry save added `overview` to an older run's
+journaled event, so the exact payload check refused to complete it. Summary
+recording now tries the pre-overview payload after that mismatch, retaining
+all existing replay checks and returning the original event for indexing.
+Regressions cover rolled-back, partially written and complete old entries,
+byte-identical recovery after reopening the store, changed paths, and refusal
+to alter an overview already bound by a newer intent.
+
+Review also covered profiles where the old restore bug had already erased
+the history hint. A successful list of retained summaries now recreates that
+hint even when every card is dismissed or too old. The panel-to-Tasks
+regression exercises both an existing hint and an absent one before removing
+the harness.

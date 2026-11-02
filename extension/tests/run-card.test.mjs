@@ -199,6 +199,19 @@ test("answer line shows type, category and importance", () => {
   assert.equal(stateText(view({ state: "canceled" })), "Canceled");
 });
 
+test("a summary card leads with the overview and retains its classification", async () => {
+  const overview = '<img src="https://remote.example/pixel"> Release choices and their tradeoffs.';
+  const answer = { ...ANSWER, overview };
+  assert.equal(answerLine(answer), `${overview}\n${answerLine(ANSWER)}`);
+  const run = view({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer });
+  const page = setup({ reply: () => ({ type: "run_fetched", run, stream_text: "", next_offset: 0, more: false }) });
+  page.runCards.show(run);
+  await tick();
+  const [card] = cards(page.container);
+  assert.ok(card.textContent.includes(`${overview}\nType: report`));
+  page.runCards.dispose();
+});
+
 test("stateText says Done for a task, Drafted for a site draft, Summarized for a summary", () => {
   assert.equal(stateText(view({ state: "succeeded", kind: "task", instruction: "Go" })), "Done");
   assert.equal(stateText(view({ state: "succeeded", kind: "site_draft" })), "Drafted");
@@ -1093,7 +1106,7 @@ function restoreSetup({ reply, storage = storageArea() }) {
   };
 }
 
-test("summary restore asks list_runs for kind summary, and clears runsMayExist only when nothing shows", async () => {
+test("summary restore asks list_runs for kind summary, and clears runsMayExist only with no retained history", async () => {
   let runs = [view({ state: "running" })];
   const reply = (request) => {
     if (request.type === "list_runs") return { type: "runs_listed", runs, more: false };
@@ -1131,6 +1144,20 @@ test("summary restore asks list_runs for kind summary, and clears runsMayExist o
   await settle();
   assert.equal(await runsMayExist(kept.storage), true);
   kept.dispose();
+});
+
+test("old summaries and fallback task history retain the hint without showing summary cards", async () => {
+  for (const run of [
+    view({ state: "succeeded", finished_at: new Date(NOW - 2 * RESTORE_FINISHED_WITHIN_MS).toISOString() }),
+    taskView({ state: "succeeded", finished_at: new Date(NOW).toISOString() }),
+  ]) {
+    const page = restoreSetup({ reply: () => ({ type: "runs_listed", runs: [run], more: false }) });
+    await markRunsMayExist(page.storage, NOW - 1);
+    await page.restore();
+    assert.equal(cards(page.summaryArea).length, 0);
+    assert.equal(await runsMayExist(page.storage), true);
+    page.dispose();
+  }
 });
 
 test("summary restore retries an older host without kind and filters its mixed list", async () => {

@@ -194,6 +194,7 @@ impl RunFinisher for SummaryFinisher {
             session: session_link(run),
             note_link,
             answer: &answer,
+            incoming: &run.incoming,
         };
         let markdown = render_summary(&document, style);
         // A run retried (or saved late) after a later run of the same record
@@ -240,6 +241,7 @@ impl RunFinisher for SummaryFinisher {
         let (event_key, artifact_type) = summary_artifact(&config, &run.url, &key, index.as_ref())
             .ok_or_else(|| SaveFailure::retry_after_write(INDEX_UNAVAILABLE, &written))?;
         let summary = PageSummary {
+            overview: (!answer.overview.is_empty()).then(|| answer.overview.clone()),
             event_id: run.run_id.clone(),
             url: run.url.clone(),
             title,
@@ -810,6 +812,7 @@ mod tests {
             first_answered_at: None,
             save_final: false,
             office_section: false,
+            incoming: Vec::new(),
             kind: RunKind::Summary,
             task: None,
         }
@@ -1080,6 +1083,7 @@ mod tests {
         assert_eq!(event.record_key, url_record_key(PAGE).unwrap());
         assert_eq!(event.harness, HarnessId::Codex);
         assert_eq!(event.importance, ImportanceLevel::High);
+        assert_eq!(event.overview.as_deref(), answer()["overview"].as_str());
         assert_eq!(event.summary_path, slash(&relative));
 
         let id = web_page_artifact_id(PAGE).unwrap();
@@ -1087,6 +1091,7 @@ mod tests {
         assert_eq!(artifact.unwrap().artifact_type, "web.page");
         let summary = summary.unwrap();
         assert_eq!(summary.importance, ImportanceLevel::High);
+        assert_eq!(summary.overview, event.overview);
         assert_eq!(summary.summary_path, slash(&relative));
     }
 
@@ -1141,6 +1146,30 @@ mod tests {
                 .unwrap()
                 .contains("private-value")
         );
+    }
+
+    #[test]
+    fn incoming_navigation_snapshot_is_kept_on_reload_and_retry_save() {
+        let world = World::new();
+        world.configure(&world.root, WORK_ADAPTER);
+        let mut status = run(&world, WORK_PAGE, HarnessId::Codex);
+        status.answered_at = Some(timestamp(fixed_now()));
+        status.first_answered_at = status.answered_at.clone();
+        status.incoming = vec![crate::summary::incoming::example()];
+        let saved = world.finisher().save(&status, &answer()).unwrap();
+        let path = world.root.join(saved.summary_path.unwrap());
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(before.contains("## Incoming"));
+        assert!(before.contains("Planning ticket"));
+        assert!(before.contains("last recorded 2026-11-02"));
+        // Current history has no incoming observations. A retry must keep
+        // what this run saw, rather than silently refreshing that evidence.
+        assert!(crate::service::section::recorded_incoming(&world.config(), WORK_PAGE).is_empty());
+        let reloaded: RunStatusFile =
+            serde_json::from_slice(&serde_json::to_vec(&status).unwrap()).unwrap();
+        world.later_finisher().save(&reloaded, &answer()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        assert_eq!(world.summary_events().len(), 1);
     }
 
     /// A 64-character label of multibyte letters passes the answer's

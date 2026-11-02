@@ -527,7 +527,7 @@ impl Server {
             return error(&id, ErrorCode::InvalidRequest, message);
         }
         let setup = match kind {
-            RunKind::Summary => self.run_setup(value.harness),
+            RunKind::Summary => self.run_setup(value.harness, &value.url),
             RunKind::SiteDraft => self.site_draft_setup(value.harness),
             RunKind::Task => self.task_setup(value.harness),
         };
@@ -545,6 +545,7 @@ impl Server {
             protected: setup.protected,
         });
         match self.supervisor.start_run(StartRun {
+            incoming: setup.incoming,
             kind,
             url: value.url,
             title: value.title,
@@ -608,6 +609,7 @@ impl Server {
     fn run_setup(
         &self,
         requested: Option<HarnessId>,
+        url: &str,
     ) -> Result<RunSetup, (ErrorCode, &'static str)> {
         let mut config = lock(&self.config);
         let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
@@ -618,6 +620,7 @@ impl Server {
             timeout,
             vocabulary: config.snapshot().summary_vocabulary.clone(),
             protected: Vec::new(),
+            incoming: super::section::recorded_incoming(&config, url),
         })
     }
 
@@ -640,6 +643,7 @@ impl Server {
             timeout: timeout.map(task_timeout),
             vocabulary: config.snapshot().summary_vocabulary.clone(),
             protected,
+            incoming: Vec::new(),
         })
     }
 
@@ -661,6 +665,7 @@ impl Server {
             timeout,
             vocabulary: default_summary_vocabulary(),
             protected: Vec::new(),
+            incoming: Vec::new(),
         })
     }
 }
@@ -797,6 +802,7 @@ pub(crate) fn checked_knowledge_base(
 
 /// What [`Server::run_setup`] resolved for a new run.
 struct RunSetup {
+    incoming: Vec<brauser_protocol::IncomingTrailView>,
     harness: HarnessId,
     cwd: PathBuf,
     timeout: Option<Duration>,

@@ -31,6 +31,8 @@ use crate::markdown::{LinkStyle, inline, neutralize_remote, wikilink, yaml_strin
 use crate::presentation::plain_line;
 use crate::vault::{note_filename, owned_frontmatter};
 
+pub(crate) mod incoming;
+
 pub const MAX_TITLE_BYTES: usize = 2048;
 /// The most characters (not bytes) of a summary's document type and
 /// category: the answer's and the vocabulary's own bound, so a label the
@@ -47,6 +49,7 @@ pub const MAX_SUMMARY_PATH_BYTES: usize = 1024;
 /// supply one.
 #[derive(Clone, Debug)]
 pub struct PageSummary {
+    pub overview: Option<String>,
     pub event_id: String,
     pub url: String,
     pub title: String,
@@ -63,11 +66,13 @@ pub struct PageSummary {
 /// The durable, indexed form of a `PageSummary`: the marker payload stored in
 /// the daily log and replayed by `ArtifactIndex`. `url` and `artifact_id`
 /// hold the normalized URL and the identity derived from it, not whatever a
-/// caller originally supplied. Every field is required: no caller wrote a
-/// summary event before `record_key` and `harness` existed.
+/// caller originally supplied. `overview` is absent on older events.
+/// No caller wrote a summary event before `record_key` and `harness` existed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SummaryEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
     pub event_id: String,
     pub artifact_id: String,
     pub artifact_type: String,
@@ -90,6 +95,13 @@ pub const MAX_ARTIFACT_TYPE_BYTES: usize = 64;
 pub const MAX_ARTIFACT_KEY_BYTES: usize = 512;
 
 pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'static str> {
+    if summary.overview.as_ref().is_some_and(|value| {
+        value.trim().is_empty()
+            || value.chars().count() > MAX_OVERVIEW_CHARS
+            || value.chars().any(char::is_control)
+    }) {
+        return Err("invalid_summary_overview");
+    }
     if summary.title.trim().is_empty() || summary.title.len() > MAX_TITLE_BYTES {
         return Err("invalid_summary_title");
     }
@@ -176,6 +188,7 @@ pub(crate) fn check_summary_path(path: &str) -> Result<(), &'static str> {
 /// own `url`.
 pub(crate) fn validate_summary_event(event: &SummaryEvent) -> bool {
     let as_summary = PageSummary {
+        overview: event.overview.clone(),
         event_id: event.event_id.clone(),
         url: event.url.clone(),
         title: event.title.clone(),
@@ -332,6 +345,8 @@ pub struct SummaryDocument<'a> {
     pub session: SessionLink,
     pub note_link: String,
     pub answer: &'a SummaryAnswer,
+    /// The host's frozen queue-time navigation snapshot, never agent output.
+    pub incoming: &'a [brauser_protocol::IncomingTrailView],
 }
 
 /// The importance level's wire name, as `ImportanceLevel` serializes.
@@ -634,6 +649,11 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
     out.push_str("\n## Assessment\n");
     out.push_str(&neutralize_remote(&answer.assessment));
     out.push('\n');
+    let incoming = incoming::list(doc.incoming);
+    if !incoming.is_empty() {
+        out.push_str("\n## Incoming\n\nRecorded navigation when this summary was requested.\n\n");
+        out.push_str(&incoming);
+    }
     if !answer.references.is_empty() {
         out.push_str("\n## References\n");
         for reference in &answer.references {
@@ -677,6 +697,7 @@ mod tests {
 
     fn summary() -> PageSummary {
         PageSummary {
+            overview: None,
             event_id: "11111111-1111-1111-1111-111111111111".into(),
             url: HN_URL.into(),
             title: "A good discussion".into(),
@@ -695,6 +716,7 @@ mod tests {
     fn event() -> SummaryEvent {
         let s = summary();
         SummaryEvent {
+            overview: None,
             event_id: s.event_id,
             artifact_id: web_page_artifact_id(HN_URL).unwrap(),
             artifact_type: s.artifact_type,
@@ -790,6 +812,38 @@ mod tests {
             validate_page_summary(&long),
             Err("invalid_summary_category")
         );
+    }
+
+    #[test]
+    fn overview_round_trips_and_old_events_still_validate() {
+        let mut event = event();
+        let old = serde_json::to_value(&event).unwrap();
+        assert!(old.get("overview").is_none());
+        assert!(validate_summary_event(
+            &serde_json::from_value(old).unwrap()
+        ));
+        event.overview = Some("A decision about the next release.".into());
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: SummaryEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, event);
+        assert!(validate_summary_event(&decoded));
+    }
+
+    #[test]
+    fn replay_rejects_invalid_overviews_but_accepts_the_unicode_bound() {
+        let mut event = event();
+        for value in [
+            "".into(),
+            "  ".into(),
+            "two\nlines".into(),
+            "a\0b".into(),
+            "x".repeat(MAX_OVERVIEW_CHARS + 1),
+        ] {
+            event.overview = Some(value);
+            assert!(!validate_summary_event(&event));
+        }
+        event.overview = Some("日".repeat(MAX_OVERVIEW_CHARS));
+        assert!(validate_summary_event(&event));
     }
 
     #[test]
@@ -1382,7 +1436,26 @@ mod tests {
             session: SessionLink::CodexThread("t-1".into()),
             note_link,
             answer,
+            incoming: &[],
         }
+    }
+
+    #[test]
+    fn summary_incoming_navigation_is_host_rendered_and_absent_without_observations() {
+        let key = url_record_key(PAGE_URL).unwrap();
+        let answer = answer();
+        let mut doc = document(&key, &answer, "Page note".into());
+        let plain = render_summary(&doc, LinkStyle::Relative);
+        assert!(!plain.contains("## Incoming"));
+        let incoming = [incoming::example()];
+        doc.incoming = &incoming;
+        let rendered = render_summary(&doc, LinkStyle::Relative);
+        assert!(
+            rendered.contains("## Incoming\n\nRecorded navigation when this summary was requested")
+        );
+        assert!(rendered.contains("Link navigation from [Planning ticket](<https://example.com/items/1>) · last recorded 2026-11-02"));
+        assert!(rendered.contains("## References"));
+        assert_eq!(frontmatter(&rendered), frontmatter(&plain));
     }
 
     /// The leading frontmatter of a rendered summary, without its fences.

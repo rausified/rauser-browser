@@ -163,17 +163,22 @@ function isSiteDraftAnswer(value: unknown): boolean {
 
 const IMPORTANCE_LEVELS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 
-/** Exactly the v6 `RunAnswer` keys; the host bounds the strings. */
 const ANSWER_ACCESS: ReadonlySet<string> = new Set(["ok", "sign_in", "denied", "not_found"]);
 
+function isOverview(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0 && Array.from(value).length <= 300;
+}
+
+/** The `RunAnswer` keys: `overview` is optional for results retained from
+ * before SUMMARY.md v2, and the host sends `access` only for a wall the agent
+ * met (an older service never sends it). */
 function isRunAnswer(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const answer = value as Record<string, unknown>;
-  // `access` is optional: an older service never sends it, and the host
-  // sends it only for a wall the agent met.
-  const keys = Object.keys(answer);
-  const hasAccess = "access" in answer;
-  return keys.length === (hasAccess ? 5 : 4) &&
+  const hasOverview = Object.hasOwn(answer, "overview");
+  const hasAccess = Object.hasOwn(answer, "access");
+  return Object.keys(answer).length === 4 + Number(hasOverview) + Number(hasAccess) &&
+    (!hasOverview || isOverview(answer.overview)) &&
     (!hasAccess || (typeof answer.access === "string" && ANSWER_ACCESS.has(answer.access))) &&
     typeof answer.document_type === "string" && typeof answer.category === "string" &&
     typeof answer.importance === "string" && IMPORTANCE_LEVELS.has(answer.importance) &&
@@ -258,7 +263,7 @@ function isArtifact(value: unknown): boolean {
     artifact.incoming_trails.every(isIncomingTrail);
 }
 
-/** Exactly the v6 `SummaryView` keys; the host bounds the strings. */
+/** The required summary keys; older events carry no overview. */
 const SUMMARY_VIEW_KEYS: readonly string[] = [
   "summarized_at", "document_type", "category", "importance", "summary_path", "harness",
 ];
@@ -266,7 +271,9 @@ const SUMMARY_VIEW_KEYS: readonly string[] = [
 export function isSummaryView(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const summary = value as Record<string, unknown>;
-  return hasExactKeys(summary, SUMMARY_VIEW_KEYS) &&
+  const hasOverview = Object.hasOwn(summary, "overview");
+  return hasExactKeys(summary, hasOverview ? [...SUMMARY_VIEW_KEYS, "overview"] : SUMMARY_VIEW_KEYS) &&
+    (!hasOverview || isOverview(summary.overview)) &&
     typeof summary.summarized_at === "string" && typeof summary.document_type === "string" &&
     typeof summary.category === "string" &&
     typeof summary.importance === "string" && IMPORTANCE_LEVELS.has(summary.importance) &&

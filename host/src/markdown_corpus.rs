@@ -222,6 +222,9 @@ fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
         LinkStyle::Relative => "[Page note](../notes/e-example-a.md)".to_owned(),
         LinkStyle::Wikilink => wikilink("notes/e-example-a", Some("Page note")),
     };
+    let mut incoming = crate::summary::incoming::example();
+    incoming.source.title = input.into();
+    incoming.source.url = url.into();
     render_summary(
         &SummaryDocument {
             key: &key,
@@ -233,6 +236,7 @@ fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
             session: SessionLink::CodexThread(input.into()),
             note_link,
             answer: &answer,
+            incoming: &[incoming],
         },
         style,
     )

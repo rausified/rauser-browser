@@ -1467,3 +1467,22 @@ config/log bytes and the absence of cache and journal writes.
 These tests use no browser or harness and do not establish panel Re-learn or
 migration acceptance. POSIX symlink fixtures state their Windows exclusion;
 all other planning tests are portable.
+
+
+## Recorded incoming navigation in summaries
+
+`cargo test --locked -p brauser --lib incoming_navigation` exercises the host-owned
+summary context and file list: real log/index trails, cache deletion and failed
+lookup, five-row bounds, rejected unsafe URLs and invalid dates, hostile titles
+and Unicode line separators, plain/Office/Miro section boundaries, legacy run
+records, queued snapshot persistence, restart with an in-process fake runner,
+and byte-identical Retry save. Empty snapshots omit both the section and the
+prompt paragraph. The existing Office/Miro prompt tests retain their retrieval
+checks; malformed SUMMARY.md tests include the new conditional block.
+
+`npm run test:markdown-neutralizer` now also puts every hostile corpus value
+into Incoming source titles and destinations across both summary profiles.
+These are offline tests: they do not fetch a source or run a real harness.
+The private run record's optional `incoming` field is omitted when empty;
+older services cannot read records containing it. Before rollback, leave no
+queued/running runs; preserved newer records remain unreadable to that build.

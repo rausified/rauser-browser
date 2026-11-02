@@ -1556,6 +1556,7 @@
       "description": "An artifact's latest summary, from its summary log event. summarized_at is RFC 3339 in the offset of the click that requested it; summary_path is relative to the home folder.",
       "required": ["summarized_at", "document_type", "category", "importance", "summary_path", "harness"],
       "properties": {
+        "overview": { "type": "string", "minLength": 1, "maxLength": 300 },
         "summarized_at": { "type": "string", "maxLength": 32 },
         "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
         "category": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -1995,6 +1996,7 @@
       "description": "The validated summary answer's headline fields, kept in the run's result.",
       "required": ["document_type", "category", "importance", "importance_reason"],
       "properties": {
+        "overview": { "type": "string", "minLength": 1, "maxLength": 300 },
         "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
         "category": { "type": "string", "minLength": 1, "maxLength": 64 },
         "importance": { "$ref": "#/$defs/ImportanceLevel" },
