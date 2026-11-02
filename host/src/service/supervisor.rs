@@ -626,7 +626,13 @@ impl Supervisor {
             let (cwd, page) = match req.kind {
                 RunKind::Summary | RunKind::Task => (
                     req.cwd,
-                    page_markdown(&req.title, &req.url, &req.content, req.selection.as_deref()),
+                    page_markdown(
+                        &req.title,
+                        &req.url,
+                        &req.content,
+                        req.selection.as_deref(),
+                        None,
+                    ),
                 ),
                 // Its own run directory, never the knowledge base; its page
                 // is the host's untrusted-data block as it came.
