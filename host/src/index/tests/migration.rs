@@ -345,6 +345,66 @@ fn two_first_opens_converge() {
     assert_eq!(canonical(&v8.index()), reindexed(&v8));
 }
 
+/// A v8 cache derived under another adapter document: a directly visited
+/// artifact whose type is a container type under this host's document (so
+/// its file is now named for its ID) is dirty although nothing rolled up
+/// into it, as a format 8 host's own adapter change marked it.
+#[test]
+fn an_import_under_another_document_dirties_adapter_dependent_files() {
+    let v8 = V8::load();
+    let gadgets = "github.repo:github.com/acme-corp/gadgets";
+    let visit = github_activity(
+        805,
+        ("github.repo", gadgets),
+        "https://github.com/acme-corp/gadgets",
+        "2026-10-17T09:00:00Z",
+        (10, 5),
+    );
+    write_log(v8.root.path(), "2026-10-17.md", &[&visit]);
+    // The cached event exactly as the log holds it.
+    let scratch = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    copy_tree(&v8.root.path().join("log"), &scratch.0.path().join("log"));
+    let fresh = index(&scratch.0, &scratch.1);
+    fresh.reindex().unwrap();
+    let cached = fresh.store_state().unwrap().events[&visit.event_id].clone();
+    let mut state: serde_json::Value = serde_json::from_slice(&v8.legacy_state()).unwrap();
+    state["events"][&visit.event_id] = serde_json::to_value(&cached).unwrap();
+    state["positions"][&visit.event_id] = serde_json::json!(["2026-10-17.md", 1]);
+    state["adapters"] = "an-older-document".into();
+    fs::write(v8.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+
+    v8.index().reconcile_from_logs().unwrap();
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    let marked = dirty(&v8);
+    assert!(marked.contains(&vec![text(gadgets)]), "{marked:?}");
+    assert!(marked.contains(&vec![text(GITHUB_REPO_ID)]), "{marked:?}");
+    assert!(!marked.contains(&vec![text(V8_CLEAN)]), "{marked:?}");
+}
+
+/// A host that read the migration as pending while another host finished
+/// it resumes nothing: no second staged rebuild begins.
+#[test]
+fn a_migration_finished_by_another_host_is_not_rebuilt_again() {
+    let v8 = V8::load();
+    let (first, second) = (v8.index(), v8.index());
+    let step = first.legacy_step().unwrap();
+    assert_eq!(
+        step,
+        Legacy::Rebuild(crate::index::rebuild::Finish::Changed)
+    );
+    second.migrate_legacy(true).unwrap();
+    let rebuild_id = || v8.rows("SELECT value FROM brauser_meta WHERE key = 'rebuild_id'");
+    let finished = rebuild_id();
+
+    SCAN_LIMIT.with(|limit| limit.set(1));
+    let resumed = first.advance_legacy(step, false);
+    SCAN_LIMIT.with(|limit| limit.set(MAX_SCAN_BYTES));
+    resumed.unwrap();
+    assert_eq!(rebuild_id(), finished);
+    assert!(!first.store_rebuilding());
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+}
+
 #[test]
 fn an_m1_legacy_visit_counts_one_open_with_a_dated_timeline_line() {
     let root = TempDir::new().unwrap();

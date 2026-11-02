@@ -157,6 +157,20 @@ fn import(
     // adapter document, whose renders this host cannot reproduce.
     let derived = store::fold_events(adapters, &stored);
     let same_adapters = state.adapters == fingerprint;
+    // Under another document the v8 render is unknown, so, as a format 8
+    // host's own adapter change did (`adapter_dependent_files`), every
+    // roll-up and every artifact whose render depends on the document at
+    // all (it differs from the render with none) is dirty.
+    let plain = (!same_adapters).then(|| store::fold_events(None, &stored));
+    let depends_on_adapters = |id: &str, row: &ArtifactRow| {
+        plain.as_ref().is_some_and(|plain| {
+            plain
+                .artifacts
+                .get(id)
+                .map(|plain| render_artifact(artifacts_dir, plain))
+                != Some(render_artifact(artifacts_dir, row))
+        })
+    };
     let mut dirty = state.dirty.clone();
     let file_path = |id: &str| {
         state
@@ -166,7 +180,7 @@ fn import(
     };
     for (id, row) in &derived.artifacts {
         let rolled_up = row.rolled_up || state.containers.contains(id);
-        if !same_adapters && rolled_up {
+        if !same_adapters && (rolled_up || depends_on_adapters(id, row)) {
             dirty.insert(id.clone());
         }
         let render = (same_adapters && !dirty.contains(id))
@@ -321,10 +335,18 @@ impl ArtifactIndex {
     /// with `all_passes`), then clean up once the rebuild has committed.
     /// While passes remain, history is unavailable.
     pub(super) fn migrate_legacy(&self, all_passes: bool) -> Result<()> {
-        match self.legacy_step()? {
+        let step = self.legacy_step()?;
+        self.advance_legacy(step, all_passes)
+    }
+
+    /// Advance the migration from `step`. Its rebuild only resumes: when
+    /// another host has finished it since `step` was read, no new one
+    /// begins.
+    pub(super) fn advance_legacy(&self, step: Legacy, all_passes: bool) -> Result<()> {
+        match step {
             Legacy::None => return Ok(()),
             Legacy::Rebuild(finish) => {
-                while !self.rebuild_pass(finish)? {
+                while !self.resume_rebuild_pass(finish)? {
                     if !all_passes {
                         bail!(INCOMPLETE_CATCH_UP);
                     }

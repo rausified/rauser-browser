@@ -568,15 +568,32 @@ impl ArtifactIndex {
     /// the rebuild finished. The roll-up file scan runs between the two
     /// transactions, never inside one.
     pub(super) fn rebuild_pass(&self, finish: Finish) -> Result<bool> {
+        self.staged_pass(finish, false)
+    }
+
+    /// [`Self::rebuild_pass`] for a rebuild already in progress: when none
+    /// is (another host finished it), nothing begins and it reports done.
+    pub(super) fn resume_rebuild_pass(&self, finish: Finish) -> Result<bool> {
+        self.staged_pass(finish, true)
+    }
+
+    fn staged_pass(&self, finish: Finish, resume_only: bool) -> Result<bool> {
         let adapters = self.adapters.as_deref();
         let fingerprint = self.adapters_fingerprint();
         // Passes touch only the stage tables, so they skip the derived-rows
         // oracle, which the finalize then runs (the live rows may still be
         // derived under an earlier adapter document until then).
         let mut conn = store::open(&self.cache_dir)?;
-        let staged = db::write_txn(&mut conn, |tx| pass(tx, &self.storage, &self.root_identity))?;
-        if !staged {
-            return Ok(false);
+        let staged = db::write_txn(&mut conn, |tx| {
+            if resume_only && !catchup::rebuilding(tx)? {
+                return Ok(None);
+            }
+            pass(tx, &self.storage, &self.root_identity).map(Some)
+        })?;
+        match staged {
+            None => return Ok(true),
+            Some(false) => return Ok(false),
+            Some(true) => {}
         }
         let known = self.owned_rollup_files();
         db::write_txn(&mut conn, |tx| {
