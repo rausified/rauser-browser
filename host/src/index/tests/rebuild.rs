@@ -176,8 +176,7 @@ fn rebuild_progress_resumes_after_a_crash_mid_pass() {
     // derived is published before the rebuild finishes.
     assert_eq!(meta(&cache, "rebuild"), text("staging"));
     assert_eq!(stage_tables(&cache).len(), 4);
-    assert!(!first.pending_path().exists());
-    assert!(!first.state_path().exists());
+    assert_no_json_cache(cache.path());
     assert_eq!(
         sql::sql_rows(&first.database_path(), "SELECT count(*) FROM artifacts"),
         [[sql::Value::Integer(0)]]
@@ -206,8 +205,7 @@ fn rebuild_progress_resumes_after_a_crash_mid_pass() {
     SCAN_LIMIT.with(|value| value.set(MAX_SCAN_BYTES));
 }
 
-/// A reindex stopped between passes, with the JSON cache still current and
-/// no log changed since, resumes on the next read and the next pass rather
+/// A reindex stopped between passes, with no log changed since, resumes on the next read and the next pass rather
 /// than leaving history unavailable until some log changes.
 #[test]
 fn a_stopped_reindex_resumes_on_reads_when_no_log_changed() {
@@ -216,7 +214,6 @@ fn a_stopped_reindex_resumes_on_reads_when_no_log_changed() {
     let (_, size) = three_logs(&root);
     let first = index(&root, &cache);
     assert_eq!(first.recent(None, None, 32).unwrap().0.len(), 3);
-    assert!(first.state_path().exists());
     // `brauser reindex` commits one pass of two logs and is killed.
     SCAN_LIMIT.with(|value| value.set(size * 5 / 2));
     assert!(

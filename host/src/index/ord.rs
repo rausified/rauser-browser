@@ -2,7 +2,7 @@
 //! format 9).
 //!
 //! The key is a byte string whose `memcmp` order equals the
-//! `ordered_events` tuple order `(instant, position.is_none(), position,
+//! replay tuple order `(instant, position.is_none(), position,
 //! sequence or u64::MAX, id)`, so SQLite can order and compare events by an
 //! indexed BLOB column. It is concatenated from:
 //!
@@ -99,7 +99,7 @@ mod tests {
     use std::path::PathBuf;
     use time::UtcOffset;
 
-    /// The `ordered_events` sort key (`fold.rs`), field for field.
+    /// The replay sort key the JSON cache used, field for field.
     type Tuple<'a> = (
         OffsetDateTime,
         bool,

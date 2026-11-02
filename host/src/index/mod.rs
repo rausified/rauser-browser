@@ -1,16 +1,15 @@
 //! Rebuildable artifact index and lazily generated artifact Markdown.
 //!
-//! The append-only daily log is authoritative. `index-state.json` is a small
-//! host cache used to avoid reparsing old logs after every delivery, while
-//! `index.db` is a rusqlite database (`store`) whose `brauser_events` hold
-//! every indexed event and whose derived tables serve current and future
-//! readers; a delivery re-derives only the groups it touches. Either file
-//! may be deleted; `brauser reindex` recreates both.
-//! A rebuild (reindex, a lost cache, a removed or shrunk log) is staged in
-//! `index.db` (`rebuild.rs`): each bounded pass commits its progress there,
-//! the previous rows keep serving, and the next pass resumes. An incremental
-//! catch-up that needs more than one pass's read bound saves its progress in
-//! `index-catch-up.json`, which is never served, until plan T15.
+//! The append-only daily log is authoritative. `index.db` is a rusqlite
+//! database (`store`) whose `brauser_events` hold every indexed event and
+//! whose derived tables serve current and future readers; a delivery
+//! catches up with the logs through the bounded `brauser_logs` watermark
+//! (`catchup`) and re-derives only the groups it touches. The database may
+//! be deleted; `brauser reindex` recreates it.
+//! A rebuild (reindex, a lost or foreign database, a removed or shrunk log)
+//! is staged in `index.db` (`rebuild.rs`): each bounded pass commits its
+//! progress there, the previous rows keep serving, and the next pass
+//! resumes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions as StdOpenOptions};
@@ -59,10 +58,6 @@ mod rebuild;
 mod regen;
 mod render;
 mod scan;
-// The hand-written snapshot writer, unused since index.db became the
-// rusqlite store (plan T8); plan T15 deletes it.
-#[allow(dead_code)]
-mod snapshot;
 mod store;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -75,29 +70,17 @@ use query::*;
 use regen::*;
 use render::*;
 use scan::*;
-#[cfg(test)]
-use snapshot::*;
 
-// v2 (main, independently) forces a rescan for the artifact-history
-// recovery fix. v3 adds `EventData::Summary` on top of it; bumping again
-// forces a v1 *or* v2 cache to rescan rather than silently omit summaries
-// already durable in the log. v4 records log positions and the adapter
-// document fingerprint. v5 counts M1 visits as opens and bounds logged
-// titles. v6 gives `SummaryEvent` its record key and harness, attaches
-// summaries to adapter artifacts, and dates summary Timeline lines. A v4 or
-// v5 cache is migrated in place (`migrate_state`) rather than rescanned, so
-// its checkpoints survive the upgrade. V7 adds per-URL stripped query names;
-// v6 caches and v5/v6 pending passes keep their checkpoints with unknown
-// evidence for older events, never manufactured empty lists.
-// V8 indexes overflow notices. Older checkpoints skipped those markers, so
-// migration retains their events but rechecks the logs once to recover gaps.
-const STATE_VERSION: u8 = 8;
+/// The cache format: 9 is the rusqlite `index.db` (`PRAGMA user_version`).
+/// Format 8 kept a JSON cache, which `legacy.rs` imports once; older JSON
+/// formats take that migration's fallback.
+const STATE_VERSION: u8 = 9;
+/// The bound on the one read of a legacy JSON cache (`legacy.rs`).
 const MAX_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SCAN_FILES: usize = 100_000;
 const MAX_WORKLOG_BYTES: usize = 96 * 1024;
-const SQLITE_PAGE_SIZE: usize = 65_536;
 /// The longest agent or page field rendered on one line of an artifact file.
 const MAX_RENDERED_FIELD_CHARS: usize = 2048;
 const LOG_HEADER: &str = concat!("<!-- ", crate::namespace!(), ":daily-log v1 -->");
@@ -106,9 +89,11 @@ const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 #[cfg(test)]
 thread_local! {
     static LOG_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static PUBLICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    /// Derives of a whole (nonempty) history. A delivery runs none.
+    /// Derives of a whole (nonempty) history: a rebuild's finalize or an
+    /// adapter change. A delivery runs none.
     static FULL_DERIVES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Committed `db::write_txn` transactions.
+    static TRANSACTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static SCAN_LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(MAX_SCAN_BYTES) };
 }
 
@@ -144,54 +129,6 @@ pub struct RegenerationReport {
     pub first_failure: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct IndexState {
-    version: u8,
-    root: String,
-    root_identity: String,
-    log_dir: String,
-    artifacts_dir: String,
-    events: BTreeMap<String, CachedEvent>,
-    #[serde(default)]
-    gaps: BTreeMap<String, CachedGap>,
-    /// Kept separately so upgrading can rescan skipped overflow markers
-    /// without losing the event checkpoints used to detect removed logs.
-    #[serde(default)]
-    gap_logs: BTreeMap<PathBuf, LogCheckpoint>,
-    /// Each logged event's durable position (log path, line), which breaks
-    /// ties between equal instants (context is saved with one-second
-    /// resolution) the same way whichever order catch-up discovered the
-    /// files in.
-    positions: BTreeMap<String, (PathBuf, u64)>,
-    /// Arrival order, only for events indexed before any log copy was seen.
-    sequence: BTreeMap<String, u64>,
-    next_sequence: u64,
-    /// The adapter document index.db's resolved mentions were derived with.
-    adapters: String,
-    /// Conflicting bodies seen for an indexed ID during this pass, each with
-    /// its earliest log position, so a rebuild can keep the winner (and its
-    /// position) a valid cache already recorded.
-    #[serde(skip)]
-    conflicts: BTreeMap<String, Vec<Conflict>>,
-    dirty: BTreeSet<String>,
-    logs: BTreeMap<PathBuf, LogCheckpoint>,
-    /// Containers whose generated files hold a roll-up of the visits within
-    /// them, as of the last regeneration pass. An adapter change can take
-    /// that roll-up away without changing what the new document derives
-    /// (`within` removed, a narrowed scope, a changed child route), so
-    /// these files are rewritten then too. Omitted when empty, so a cache
-    /// without containers stays readable by an earlier host.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    containers: BTreeSet<String>,
-    /// Where each container's generated file was written, relative to the
-    /// home folder, kept until that file is removed when its container no
-    /// longer derives a record (its only activity was a roll-up the adapter
-    /// document no longer makes). Omitted when empty, like `containers`.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    container_files: BTreeMap<String, PathBuf>,
-}
-
 #[derive(PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CachedGap {
@@ -199,128 +136,8 @@ struct CachedGap {
     position: (PathBuf, u64),
 }
 
-impl IndexState {
-    /// Add one event. A reused event ID with different content keeps the
-    /// body indexed first and never one chosen by an untrusted later
-    /// delivery (which capture can append to an earlier-dated log), so one
-    /// bad duplicate neither replaces durable history nor makes the rest of
-    /// it unavailable. A full rebuild, having only the logs, keeps the copy
-    /// at the earliest log position (`earliest_wins`), whichever pass read it
-    /// first. Returns false on such a conflict.
-    fn ingest(
-        &mut self,
-        event: CachedEvent,
-        position: Option<(PathBuf, u64)>,
-        earliest_wins: bool,
-    ) -> bool {
-        let (id, artifact_id) = event_identity(&event);
-        let Some(previous) = self.events.get(&id) else {
-            self.sequence.insert(id.clone(), self.next_sequence);
-            self.next_sequence += 1;
-            if let Some(position) = position {
-                self.positions.insert(id.clone(), position);
-            }
-            self.events.insert(id, event);
-            self.dirty.insert(artifact_id);
-            return true;
-        };
-        if previous != &event {
-            let earlier = earliest_wins
-                && position.as_ref().is_some_and(|position| {
-                    self.positions
-                        .get(&id)
-                        .is_some_and(|indexed| position < indexed)
-                });
-            let (event, position) = if earlier {
-                // A rebuild resumed over several passes can read an
-                // earlier-sorting log after a later one.
-                let rejected_at = self.positions.insert(id.clone(), position.clone().unwrap());
-                let rejected = self.events.insert(id.clone(), event).unwrap();
-                self.dirty.insert(artifact_id);
-                self.dirty.insert(rejected.artifact_id().to_owned());
-                (rejected, rejected_at)
-            } else {
-                (event, position)
-            };
-            let chosen = &self.events[&id];
-            let seen = self.conflicts.entry(id).or_default();
-            seen.retain(|(body, _)| body != chosen);
-            if let Some((_, earliest)) = seen.iter_mut().find(|(body, _)| body == &event) {
-                if let Some(position) = position
-                    && earliest.as_ref().is_none_or(|indexed| &position < indexed)
-                {
-                    *earliest = Some(position);
-                }
-            } else if seen.len() < 8 {
-                seen.push((event, position));
-            }
-            return false;
-        }
-        // The same body seen at an earlier position (a file discovered
-        // later) takes that position, as a fresh rebuild would.
-        if let Some(position) = position
-            && self
-                .positions
-                .get(&id)
-                .is_none_or(|indexed| &position < indexed)
-        {
-            self.positions.insert(id, position);
-        }
-        true
-    }
-}
-
-/// A catch-up pass that reached the per-pass read bound before reading every
-/// changed log. It is saved apart from the published cache and never served,
-/// so no partial checkpoint is published; the next pass resumes from it.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PendingCatchUp {
-    /// The pass started from no state (a missing cache, a removed or shrunk
-    /// log, or a rescan), so completion keeps the conflict winners the
-    /// published cache chose.
-    rebuild: bool,
-    /// Set by earlier builds, whose `reconcile_from_logs` rescanned from
-    /// scratch. Reconciling is now the incremental catch-up and never saves
-    /// a pass, so such a pass completes as an ordinary rebuild.
-    reconcile: bool,
-    state: IndexState,
-    /// `IndexState::conflicts`, which the published cache does not keep.
-    conflicts: BTreeMap<String, Vec<Conflict>>,
-}
-
-#[derive(Serialize)]
-struct PendingCatchUpRef<'a> {
-    rebuild: bool,
-    reconcile: bool,
-    state: &'a IndexState,
-    conflicts: &'a BTreeMap<String, Vec<Conflict>>,
-}
-
 /// A rejected body for an indexed event ID and its earliest log position.
 type Conflict = (CachedEvent, Option<(PathBuf, u64)>);
-
-/// What one `catch_up_logs` pass did.
-struct LogPass {
-    /// Logs changed since `state`'s checkpoints.
-    changed: bool,
-    /// A removed or shrunk log reset `state` to empty.
-    reset: bool,
-    /// Every changed log was read; otherwise the read bound stopped the pass.
-    complete: bool,
-}
-
-/// A bounded catch-up pass, after saving or completing it.
-enum CatchUp {
-    /// The pass reached its read bound; its progress is saved.
-    Incomplete,
-    /// Every log is read. `previous` is the published cache a rebuild kept
-    /// its conflict winners from.
-    Complete {
-        changed: bool,
-        previous: Option<Box<IndexState>>,
-    },
-}
 
 /// What a read's stat-only check found (`ArtifactIndex::probe`).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -335,11 +152,6 @@ enum Probe {
     /// does not yet hold every event its watermark covers.
     Unusable,
 }
-
-/// The `brauser_meta` key that holds `ArtifactIndex::mirror_location` while
-/// the store holds every event of the logs its watermark covers, and is
-/// empty otherwise. It goes with the JSON cache (plan T15).
-const MIRROR_KEY: &str = "json_mirror";
 
 /// Whether `error` is the write lock staying busy past its timeout.
 fn busy(error: &anyhow::Error) -> bool {
@@ -616,14 +428,6 @@ impl ArtifactIndex {
             })
     }
 
-    fn derive(&self, state: &IndexState) -> Derived {
-        #[cfg(test)]
-        if !state.events.is_empty() {
-            FULL_DERIVES.with(|count| count.set(count.get() + 1));
-        }
-        derive(state, self.adapters.as_deref())
-    }
-
     pub fn record_activity(&self, event: &ActivityEvent, strip_params: &[String]) -> Result<()> {
         self.record_events([CachedEvent::activity(event, strip_params)?])
     }
@@ -663,67 +467,15 @@ impl ArtifactIndex {
     /// read the authoritative log, so a body that disagrees with an indexed
     /// event is skipped (and reported) without dropping the rest.
     ///
-    /// The events go into `brauser_events` in one transaction that derives
-    /// only the affected groups (each event's artifact and container), by
-    /// the append fast path where it is exact, and marks them dirty with
-    /// fresh generations; no full derive runs. Until
-    /// plan T15 the JSON cache takes the same events, and the store is first
-    /// brought level with it when catch-up changed it. Catch-up (delivery
-    /// step 2) is the `brauser_logs` watermark's tail parse
-    /// ([`Self::catch_up_logs`]), and this transaction first levels a
-    /// watermark that lags the cache ([`Self::level_watermark`]).
+    /// The events go into `brauser_events` in one transaction that first
+    /// catches the `brauser_logs` watermark up with the logs (delivery step
+    /// 2, usually just this delivery's own append), then derives only the
+    /// affected groups (each event's artifact and container), by the append
+    /// fast path where it is exact, and marks them dirty with fresh
+    /// generations; no full derive runs.
     fn record_events(&self, events: impl IntoIterator<Item = CachedEvent>) -> Result<()> {
-        let (mut state, publish) = self.load_current_state()?;
         let events = events.into_iter().collect::<Vec<_>>();
-        let adapters = self.adapters.as_deref();
-        let fingerprint = self.adapters_fingerprint();
-        let mut conn = store::open(&self.cache_dir)?;
-        let conflicts = store::write(&mut conn, adapters, |tx| {
-            self.level_watermark(tx, &state)?;
-            let mut remarked = if publish || !store::mirrors(tx, &state, &fingerprint)? {
-                store::sync_to_state(tx, adapters, &fingerprint, &state)?
-            } else {
-                BTreeSet::new()
-            };
-            let mut containers = Containers::new(adapters);
-            let mut changes = store::Changes::default();
-            let mut conflicts = 0usize;
-            for event in &events {
-                let (outcome, groups) = store::ingest(tx, &mut containers, event, None)?;
-                let (event_id, artifact_id) = event_identity(event);
-                changes.record(outcome, &event_id, groups.clone());
-                remarked.extend(groups);
-                match state.events.get(&event_id) {
-                    Some(previous) if previous.data != event.data => conflicts += 1,
-                    Some(_) => {
-                        state.dirty.insert(artifact_id);
-                    }
-                    None => {
-                        state.ingest(event.clone(), None, false);
-                    }
-                }
-                debug_assert_eq!(
-                    matches!(outcome, store::Ingest::Conflict),
-                    state
-                        .events
-                        .get(&event_id)
-                        .is_some_and(|indexed| indexed.data != event.data)
-                );
-            }
-            store::apply(tx, adapters, &changes)?;
-            self.dirty_containers(&mut state);
-            store::sync_dirty(tx, &state.dirty, &remarked)?;
-            #[cfg(test)]
-            assert!(
-                store::sync_to_state(tx, adapters, &fingerprint, &state)?.is_empty(),
-                "the store and the JSON cache took the delivery differently"
-            );
-            self.mark_mirror(tx, &state)?;
-            Ok(conflicts)
-        })?;
-        drop(conn);
-        self.write_state(&state)?;
-        if conflicts > 0 {
+        if self.catch_up_store(&events)? > 0 {
             bail!("an indexed event ID cannot be reused with different content");
         }
         Ok(())
@@ -739,129 +491,117 @@ impl ArtifactIndex {
     /// reaches the per-pass read bound reports unavailable history until a
     /// later call finishes it.
     pub fn reconcile_from_logs(&self) -> Result<()> {
-        let (state, publish) = self.load_current_state()?;
-        if publish {
-            self.publish_state_and_database(&state)
-        } else {
-            // Nothing to republish, but a store whose watermark lags the
-            // JSON cache (one written before the watermark existed) is
-            // levelled here rather than on the next change.
-            self.sync_store(&state, false)
-        }
+        self.catch_up_store(&[]).map(|_| ())
     }
 
-    /// Bring the `brauser_logs` watermark and `brauser_gaps` level with
-    /// `state`'s log checkpoints when they are not: a store written before
-    /// the watermark, or a pass the JSON cache made itself (its first build,
-    /// a resumed or reset pass). The events come from `state` through
-    /// `store::sync_to_state`, so this pass only advances the watermark.
-    fn level_watermark(&self, tx: &rusqlite::Transaction<'_>, state: &IndexState) -> Result<()> {
-        if catchup::checkpoints(tx)? != state.logs {
-            let mut ignore =
-                |_: &rusqlite::Transaction<'_>, _: CachedEvent, _: (PathBuf, u64)| Ok(());
-            // A shrunk or removed log the cache has not seen yet leaves the
-            // staged rebuild requested; the next catch-up runs it.
-            catchup::catch_up(tx, &self.storage, &self.root_identity, &mut ignore)?;
-        }
-        // Once level, the watermark's gaps are exactly the cache's.
-        #[cfg(test)]
-        if catchup::checkpoints(tx)? == state.logs {
-            assert!(
-                catchup::gaps(tx)? == state.gaps,
-                "brauser_gaps differs from the JSON cache's gaps"
-            );
-        }
-        Ok(())
-    }
-
-    /// Level the watermark, then make the store mirror `state` (always with
-    /// `force`, else only when its events visibly differ) and its dirty set.
-    fn sync_store(&self, state: &IndexState, force: bool) -> Result<()> {
-        if self.nothing_to_commit(state)? {
-            return Ok(());
+    /// Bring `index.db` level with the logs and then ingest `events`, all in
+    /// one write transaction. Returns how many of `events` conflicted with
+    /// an indexed body.
+    ///
+    /// - A pending format 8 migration advances first, one bounded pass.
+    /// - With no database and nothing to index (no events, no logs), nothing
+    ///   is created: `index.db` is opened only to commit ingested data.
+    /// - A store for another folder or layout (or a new one), or one with a
+    ///   staged rebuild pending (a shrunk or removed log, a stopped
+    ///   reindex), runs one bounded staged-rebuild pass; until it finishes,
+    ///   history is unavailable.
+    /// - A changed adapter document re-derives the store once.
+    /// - A catch-up that reaches the per-pass read bound commits what it
+    ///   read and reports unavailable history; the next call resumes.
+    fn catch_up_store(&self, events: &[CachedEvent]) -> Result<usize> {
+        self.migrate_legacy(false)?;
+        if events.is_empty() && self.nothing_to_commit()? {
+            return Ok(0);
         }
         let adapters = self.adapters.as_deref();
         let fingerprint = self.adapters_fingerprint();
-        let mut conn = store::open(&self.cache_dir)?;
-        store::write(&mut conn, adapters, |tx| {
-            self.level_watermark(tx, state)?;
-            let changed = if force || !store::mirrors(tx, state, &fingerprint)? {
-                store::sync_to_state(tx, adapters, &fingerprint, state)?
-            } else {
-                BTreeSet::new()
-            };
-            store::sync_dirty(tx, &state.dirty, &changed)?;
-            self.mark_mirror(tx, state)
+        // A catch-up that finds a shrunk or removed log commits the rebuild
+        // request, which the next round's staged pass then serves.
+        for _ in 0..2 {
+            if self.needs_rebuild()? && !self.rebuild_pass(rebuild::Finish::Changed)? {
+                bail!(INCOMPLETE_CATCH_UP);
+            }
+            let mut conn = store::open(&self.cache_dir)?;
+            let outcome = store::write(&mut conn, adapters, |tx| {
+                if !self.location_matches(tx)? || catchup::rebuilding(tx)? {
+                    return Ok(None);
+                }
+                rebuild::adapter_change(tx, adapters, &fingerprint, &self.storage.artifacts_dir)?;
+                let mut containers = Containers::new(adapters);
+                let mut changes = store::Changes::default();
+                let mut dirty = BTreeSet::new();
+                let caught = {
+                    let mut sink = |tx: &rusqlite::Transaction<'_>,
+                                    event: CachedEvent,
+                                    position: (PathBuf, u64)| {
+                        let (outcome, groups) =
+                            store::ingest(tx, &mut containers, &event, Some(&position))?;
+                        if matches!(outcome, store::Ingest::Inserted | store::Ingest::Moved) {
+                            dirty.extend(groups.iter().cloned());
+                        }
+                        changes.record(outcome, &event_identity(&event).0, groups);
+                        Ok(())
+                    };
+                    catchup::catch_up(tx, &self.storage, &self.root_identity, &mut sink)?
+                };
+                let complete = match caught {
+                    catchup::CatchUp::Rebuilding => return Ok(None),
+                    catchup::CatchUp::Caught { complete, .. } => complete,
+                };
+                // An incomplete pass ingests only what it read: the caller's
+                // events are logged, so a later pass reaches them in order.
+                let mut conflicts = 0;
+                if complete {
+                    for event in events {
+                        let (outcome, groups) = store::ingest(tx, &mut containers, event, None)?;
+                        if outcome == store::Ingest::Conflict {
+                            conflicts += 1;
+                        }
+                        changes.record(outcome, &event_identity(event).0, groups.clone());
+                        dirty.extend(groups);
+                    }
+                }
+                store::apply(tx, adapters, &changes)?;
+                store::mark_dirty(tx, &dirty)?;
+                Ok(Some((complete, conflicts)))
+            })?;
+            match outcome {
+                Some((true, conflicts)) => return Ok(conflicts),
+                Some((false, _)) => bail!(INCOMPLETE_CATCH_UP),
+                None => {}
+            }
+        }
+        bail!(INCOMPLETE_CATCH_UP)
+    }
+
+    /// Whether the store must be (re)built from the logs before it can take
+    /// a catch-up: it is new, it describes another folder or layout, or a
+    /// staged rebuild is pending.
+    fn needs_rebuild(&self) -> Result<bool> {
+        let Some(mut conn) = db::open(&self.cache_dir, db::Mode::IfExists)? else {
+            return Ok(true);
+        };
+        db::read_txn(&mut conn, |tx| {
+            Ok(!self.location_matches(tx)? || catchup::rebuilding(tx)?)
         })
     }
 
     /// `index.db` is opened (and so created) only to commit ingested data.
-    /// With no database yet and nothing in `state` to store (no events,
-    /// gaps, dirty marks or container files), a read, a pass or a
+    /// With no database yet, no logs to index and no owned roll-up file a
+    /// rebuild would adopt for removal (a lost cache), a read, a pass or a
     /// reconciliation leaves the cache without one. Anything else at the
     /// path (a directory, a damaged or foreign file) is left to
     /// [`db::open`], which reports history unavailable without touching it.
-    fn nothing_to_commit(&self, state: &IndexState) -> Result<bool> {
-        if !(state.events.is_empty()
-            && state.gaps.is_empty()
-            && state.dirty.is_empty()
-            && state.container_files.is_empty())
-        {
-            return Ok(false);
-        }
+    fn nothing_to_commit(&self) -> Result<bool> {
         let path = db::db_path(&self.cache_dir);
         match db::detect_legacy(&path) {
-            Ok(db::FileState::Missing) => Ok(true),
+            Ok(db::FileState::Missing) => {
+                Ok(!self.logs_exist() && self.owned_rollup_files().is_empty())
+            }
             Ok(_) => Ok(false),
             Err(error) => Err(error)
                 .with_context(|| format!("artifact history is unavailable: {}", path.display())),
         }
-    }
-
-    /// Artifacts whose generated file depends on the adapter document: a
-    /// container's roll-up of the visits within it, which no other
-    /// derivation has. An adapter change marks only these dirty, so other
-    /// owned files keep any external edits.
-    fn adapter_dependent_files(&self, state: &IndexState) -> BTreeSet<String> {
-        if Containers::new(self.adapters.as_deref()).types.is_empty() {
-            return BTreeSet::new();
-        }
-        let rendered = |adapters: Option<&Document>| {
-            derive(state, adapters)
-                .artifacts
-                .into_iter()
-                .map(|(id, row)| (id, render_artifact(&self.storage.artifacts_dir, &row)))
-                .collect::<BTreeMap<_, _>>()
-        };
-        let (plain, contained) = (rendered(None), rendered(self.adapters.as_deref()));
-        contained
-            .into_iter()
-            .filter(|(id, markdown)| plain.get(id) != Some(markdown))
-            .map(|(id, _)| id)
-            .collect()
-    }
-
-    /// Mark dirty the container of every dirty artifact within one, since
-    /// a visit to the child changes the container's roll-up too.
-    fn dirty_containers(&self, state: &mut IndexState) {
-        let mut containers = Containers::new(self.adapters.as_deref());
-        if containers.types.is_empty() || state.dirty.is_empty() {
-            return;
-        }
-        let mut found = BTreeSet::new();
-        for event in state.events.values() {
-            let (url, artifact_id) = match &event.data {
-                EventData::Activity(event) => (&event.url, &event.artifact_id),
-                EventData::Legacy(event) => (&event.url, &event.artifact_id),
-                EventData::Why(_) | EventData::Summary(_) => continue,
-            };
-            if state.dirty.contains(artifact_id)
-                && let Some((_, container, _)) = containers.of(url, artifact_id)
-            {
-                found.insert(container);
-            }
-        }
-        state.dirty.extend(found);
     }
 
     /// Rebuild `index.db` in place from owned log markers through the staged
@@ -881,17 +621,15 @@ impl ArtifactIndex {
         }
         // Vanished container files were adopted from the store and from the
         // owned roll-up files on disk; a replaced file is not Brauser's.
-        let state = self.store_state()?;
-        self.write_state(&state)?;
-        let report = self.regenerate_state(state, false);
+        let report = self.regenerate_with(|_, _| {});
         self.checkpoint_wal();
         report
     }
 
     /// Best-effort lifecycle pass used at native-host connection boundaries.
     pub fn regenerate_dirty(&self) -> Result<RegenerationReport> {
-        let (state, publish) = self.load_current_state()?;
-        self.regenerate_state(state, publish)
+        self.reconcile_from_logs()?;
+        self.regenerate_with(|_, _| {})
     }
 
     /// Whether no pass has completed yet on the current local day (§6.7), so
@@ -944,129 +682,6 @@ impl ArtifactIndex {
 
     fn pass_marker_path(&self) -> PathBuf {
         self.cache_dir.join("regenerated.json")
-    }
-
-    /// The JSON cache, caught up and published. Reads no longer use it
-    /// (they answer from `index.db`); tests still inspect it until plan T15.
-    #[cfg(test)]
-    fn load_or_rebuild(&self) -> Result<IndexState> {
-        let (state, publish) = self.load_current_state()?;
-        if publish {
-            self.publish_state_and_database(&state)?;
-        }
-        Ok(state)
-    }
-
-    /// The published cache caught up with the logs, resuming a saved
-    /// partial pass first. A pass that reaches the read bound saves its
-    /// progress and reports unavailable history.
-    fn load_current_state(&self) -> Result<(IndexState, bool)> {
-        // A format 8 cache is migrated first, one rebuild pass per call.
-        self.migrate_legacy(false)?;
-        let (mut state, mut rebuild, reconcile, republish) = match self.read_pending() {
-            Some(pending) => (pending.state, pending.rebuild, pending.reconcile, true),
-            None => match self.read_current_state() {
-                Some((state, migrated)) => (state, false, false, migrated),
-                None => (self.empty_state(), true, false, true),
-            },
-        };
-        let CatchUp::Complete { changed, previous } =
-            self.catch_up_pass(&mut state, &mut rebuild, reconcile)?
-        else {
-            bail!(INCOMPLETE_CATCH_UP);
-        };
-        match previous {
-            // A rebuild starts with no container files; carry the cache's,
-            // or, without a usable cache, find them on disk, so a container
-            // that no longer derives a record still has its file removed.
-            Some(previous) if rebuild => {
-                let derived = self.derive(&state);
-                adopt_vanished_container_files(&mut state, &derived, previous.container_files);
-            }
-            None if rebuild => {
-                let derived = self.derive(&state);
-                adopt_vanished_container_files(&mut state, &derived, self.owned_rollup_files());
-            }
-            _ => {}
-        }
-        // Ref resolution follows the current adapters, so a policy change
-        // republishes index.db's edges even when no log changed.
-        let adapters = self.adapters_fingerprint();
-        let resolution_changed = state.adapters != adapters;
-        state.adapters = adapters;
-        // Containers follow the adapters too: their files regenerate when
-        // the document changes, not only after the next visit (§8.3).
-        // The store re-derives for the new document once and marks only
-        // the files whose render changes; without a store the cache marks
-        // every file that depends on the adapters at all.
-        if resolution_changed {
-            match self.store_adapter_change()? {
-                Some(dirty) => state.dirty.extend(dirty),
-                None => {
-                    let dependent = self.adapter_dependent_files(&state);
-                    state.dirty.extend(dependent);
-                    let previous = std::mem::take(&mut state.containers);
-                    state.dirty.extend(previous);
-                }
-            }
-        }
-        if republish || changed || resolution_changed {
-            self.dirty_containers(&mut state);
-        }
-        let publish = republish || changed || resolution_changed || !self.database_path().is_file();
-        Ok((state, publish))
-    }
-
-    /// Run one bounded `catch_up_logs` pass over `state`. An incomplete pass
-    /// saves its progress (never served) for the next pass to resume. A
-    /// complete rebuild (`rebuild`, also set when the pass reset `state`)
-    /// keeps, for a reused event ID, the body the published cache chose when
-    /// that body is still in the logs. Log position is not arrival order
-    /// (capture can append a backdated duplicate to an earlier-dated log), so
-    /// only a rebuild with no usable cache falls back to the earliest
-    /// position.
-    fn catch_up_pass(
-        &self,
-        state: &mut IndexState,
-        rebuild: &mut bool,
-        reconcile: bool,
-    ) -> Result<CatchUp> {
-        let pass = self.catch_up_logs(state, *rebuild)?;
-        *rebuild |= pass.reset;
-        if !pass.complete {
-            self.save_pending(state, *rebuild, reconcile)?;
-            return Ok(CatchUp::Incomplete);
-        }
-        let previous = if *rebuild {
-            self.read_current_state()
-                .map(|(previous, _)| Box::new(previous))
-        } else {
-            None
-        };
-        if let Some(previous) = &previous {
-            for (id, seen) in std::mem::take(&mut state.conflicts) {
-                let Some(winner) = previous.events.get(&id) else {
-                    continue;
-                };
-                let Some((_, position)) = seen.into_iter().find(|(body, _)| body == winner) else {
-                    continue;
-                };
-                // The winner's own position, so same-instant ties order as
-                // in the cache rather than by the rejected body's position.
-                match position {
-                    Some(position) => state.positions.insert(id.clone(), position),
-                    None => state.positions.remove(&id),
-                };
-                if let Some(chosen) = state.events.insert(id, winner.clone()) {
-                    state.dirty.insert(chosen.artifact_id().to_owned());
-                    state.dirty.insert(winner.artifact_id().to_owned());
-                }
-            }
-        }
-        Ok(CatchUp::Complete {
-            changed: pass.changed,
-            previous,
-        })
     }
 
     /// Owned artifact files on disk marked `brauser.rollup: true`, by
@@ -1123,255 +738,6 @@ impl ArtifactIndex {
             }
         }
         Ok(found)
-    }
-
-    fn pending_path(&self) -> PathBuf {
-        self.cache_dir.join("index-catch-up.json")
-    }
-
-    /// A saved partial pass for this root, layout, and cache format, if any.
-    /// An unreadable one is ignored like an unreadable cache.
-    fn read_pending(&self) -> Option<PendingCatchUp> {
-        let mut pending: PendingCatchUp = read_bounded_json(&self.pending_path()).ok()??;
-        // The progress file exists since v5. V5–v7 passes retain event
-        // checkpoints but recheck their prefix for gaps; older/future ones restart.
-        if !self.state_location_matches(&pending.state)
-            || !matches!(pending.state.version, 5 | 6 | 7 | STATE_VERSION)
-            || !migrate_state(&mut pending.state)
-            || pending
-                .conflicts
-                .values()
-                .flatten()
-                .any(|(event, _)| !event.valid_provenance())
-        {
-            return None;
-        }
-        pending.state.conflicts = std::mem::take(&mut pending.conflicts);
-        Some(pending)
-    }
-
-    fn save_pending(&self, state: &IndexState, rebuild: bool, reconcile: bool) -> Result<()> {
-        let bytes = serde_json::to_vec(&PendingCatchUpRef {
-            rebuild,
-            reconcile,
-            state,
-            conflicts: &state.conflicts,
-        })
-        .context("serializing artifact index catch-up progress")?;
-        if bytes.len() as u64 > MAX_STATE_BYTES {
-            bail!("artifact index state exceeds its 64 MiB limit");
-        }
-        fs::create_dir_all(&self.cache_dir).context("creating artifact index cache directory")?;
-        atomic_write(&self.pending_path(), &bytes)
-    }
-
-    /// The cache for this root and layout, if any. A version 4 or 5 cache
-    /// is migrated in place; the flag reports that it must be republished.
-    fn read_current_state(&self) -> Option<(IndexState, bool)> {
-        let mut state = read_state(&self.state_path()).ok()??;
-        if !self.state_location_matches(&state) {
-            return None;
-        }
-        let migrated = state.version != STATE_VERSION;
-        migrate_state(&mut state).then_some((state, migrated))
-    }
-
-    fn state_location_matches(&self, state: &IndexState) -> bool {
-        state.root == self.storage.root
-            && state.root_identity == self.root_identity
-            && state.log_dir == self.storage.log_dir
-            && state.artifacts_dir == self.storage.artifacts_dir
-    }
-
-    fn empty_state(&self) -> IndexState {
-        IndexState {
-            version: STATE_VERSION,
-            root: self.storage.root.clone(),
-            root_identity: self.root_identity.clone(),
-            log_dir: self.storage.log_dir.clone(),
-            artifacts_dir: self.storage.artifacts_dir.clone(),
-            events: BTreeMap::new(),
-            gaps: BTreeMap::new(),
-            gap_logs: BTreeMap::new(),
-            positions: BTreeMap::new(),
-            sequence: BTreeMap::new(),
-            next_sequence: 0,
-            adapters: self.adapters_fingerprint(),
-            conflicts: BTreeMap::new(),
-            dirty: BTreeSet::new(),
-            logs: BTreeMap::new(),
-            containers: BTreeSet::new(),
-            container_files: BTreeMap::new(),
-        }
-    }
-
-    /// Called under the native host's configuration/write lock. Limit the
-    /// total bytes read in one pass as well as individual files and file count.
-    /// A pass that reaches the byte bound stops before the next changed log,
-    /// in sorted order, so a rebuild split over several passes ingests the
-    /// logs in the same order as one pass; `state` then checkpoints only the
-    /// logs it read. Callers never publish an incomplete pass.
-    ///
-    /// The logs are read through the `brauser_logs` watermark
-    /// (`catchup::catch_up`), whose tail parse reads only what was appended
-    /// to a log. Its rows and gaps commit with each pass, and `state` takes
-    /// the events it found, its checkpoints and its gaps. A watermark that
-    /// does not describe `state` (a store written before the watermark, a
-    /// crash between the commit and the cache's publication) is reset
-    /// first, so that pass reads every log in full.
-    ///
-    /// A rebuild (`rebuild`, a removed or shrunk log, or a staged rebuild
-    /// the store already has in progress) is instead one pass of the
-    /// store's staged rebuild, which keeps the previous winner of a reused
-    /// event ID by joining with `brauser_events`; once it finishes, `state`
-    /// becomes the store's contents.
-    fn catch_up_logs(&self, state: &mut IndexState, rebuild: bool) -> Result<LogPass> {
-        let (root, _) =
-            open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
-        let log_dir = checked_relative_dir(&self.storage.log_dir)?;
-        let logs = match root.open_dir(&log_dir) {
-            Ok(logs) => logs,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && state.logs.is_empty() => {
-                return Ok(LogPass {
-                    changed: false,
-                    reset: false,
-                    complete: true,
-                });
-            }
-            Err(error) => {
-                return Err(error).context("artifact history is unavailable: opening logs");
-            }
-        };
-        let mut files = Vec::new();
-        collect_markdown(&logs, Path::new(""), 0, &mut files, false)?;
-        let shown = |relative: &Path| log_dir.join(relative).display().to_string();
-        let mut checkpoints = BTreeMap::new();
-        for relative in files {
-            // The watermark never indexes such a log (it warns once per pass).
-            if catchup::portable_path(&relative).is_none() {
-                continue;
-            }
-            let metadata = logs
-                .symlink_metadata(&relative)
-                .with_context(|| format!("checking artifact log file {}", shown(&relative)))?;
-            if !metadata.is_file() {
-                bail!(
-                    "artifact history is unavailable: {} is not a regular file",
-                    shown(&relative)
-                );
-            }
-            checkpoints.insert(relative, LogCheckpoint::read(&metadata)?);
-        }
-        // A removed/truncated file invalidates the old ingestion snapshot.
-        // Rebuild from remaining authoritative logs instead of retaining ghosts.
-        let reset = state.logs.iter().any(|(path, old)| {
-            checkpoints
-                .get(path)
-                .is_none_or(|new| new.bytes < old.bytes)
-        });
-        if reset {
-            *state = self.empty_state();
-        }
-        let changed = reset || state.logs != checkpoints || state.gap_logs != checkpoints;
-        // A staged rebuild in progress (a reindex stopped between passes, a
-        // failed finalize, or one the watermark requested) resumes even when
-        // no log changed since the cache was published; its reads are
-        // unavailable until it finishes.
-        let staged = self.store_rebuilding();
-        if !changed && !staged {
-            return Ok(LogPass {
-                changed,
-                reset,
-                complete: true,
-            });
-        }
-        // A rebuild (no usable cache, a removed or shrunk log, or one the
-        // store already has in progress) is the store's staged rebuild: each
-        // call advances one bounded pass, and the finished store becomes
-        // the cache. Only artifacts whose render changed are marked dirty.
-        if rebuild || reset || staged {
-            if !self.rebuild_pass(rebuild::Finish::Changed)? {
-                bail!(INCOMPLETE_CATCH_UP);
-            }
-            *state = self.store_state()?;
-            return Ok(LogPass {
-                changed: true,
-                reset: true,
-                complete: true,
-            });
-        }
-        let mut found = Vec::new();
-        let mut conn = store::open(&self.cache_dir)?;
-        let (complete, watermark, gaps) = db::write_txn(&mut conn, |tx| {
-            if state.gap_logs != state.logs || catchup::checkpoints(tx)? != state.logs {
-                catchup::reset(tx)?;
-            }
-            // This pass advances the watermark, but its events reach the
-            // store only when the JSON cache is published.
-            store::set_meta(tx, MIRROR_KEY, "")?;
-            let mut sink = |_: &rusqlite::Transaction<'_>, event, position| {
-                found.push((event, position));
-                Ok(())
-            };
-            match catchup::catch_up(tx, &self.storage, &self.root_identity, &mut sink)? {
-                catchup::CatchUp::Caught { complete, .. } => {
-                    Ok((complete, catchup::checkpoints(tx)?, catchup::gaps(tx)?))
-                }
-                // A log shrank since it was stat'ed above; rolled back.
-                catchup::CatchUp::Rebuilding => {
-                    bail!("artifact history is unavailable: a log changed during catch-up")
-                }
-            }
-        })?;
-        drop(conn);
-        for (event, position) in found {
-            state.ingest(event, Some(position), false);
-        }
-        // Retries reuse the marker ID. Conflicting copies always keep the
-        // earliest log position, including after reindex.
-        for (id, found) in gaps {
-            match state.gaps.get(&id) {
-                Some(gap) if gap.position <= found.position => {}
-                _ => {
-                    state.gaps.insert(id, found);
-                }
-            }
-        }
-        state.gap_logs = watermark.clone();
-        state.logs = watermark;
-        Ok(LogPass {
-            changed,
-            reset,
-            complete,
-        })
-    }
-
-    /// Bring `index.db` level with `state` (re-deriving only the groups whose
-    /// events changed, and mirroring its dirty set), then publish the JSON
-    /// cache. Plan T15 removes the JSON half.
-    fn publish_state_and_database(&self, state: &IndexState) -> Result<()> {
-        #[cfg(test)]
-        PUBLICATIONS.with(|count| count.set(count.get() + 1));
-        self.sync_store(state, true)?;
-        self.write_state(state)
-    }
-
-    /// Publish the JSON cache, last: if a write fails, a subsequent read
-    /// still sees the older checkpoint and retries the catch-up.
-    fn write_state(&self, state: &IndexState) -> Result<()> {
-        fs::create_dir_all(&self.cache_dir).context("creating artifact index cache directory")?;
-        let bytes = serde_json::to_vec(state).context("serializing artifact index state")?;
-        if bytes.len() as u64 > MAX_STATE_BYTES {
-            bail!("artifact index state exceeds its 64 MiB limit");
-        }
-        atomic_write(&self.state_path(), &bytes)?;
-        // The published cache now covers any saved partial pass.
-        match fs::remove_file(self.pending_path()) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                Err(error).context("removing artifact index catch-up progress")
-            }
-            _ => Ok(()),
-        }
     }
 
     /// Return the current derived record for one recognized artifact. The
@@ -1532,7 +898,7 @@ impl ArtifactIndex {
             };
             db::read_txn(&mut conn, |tx| {
                 let adapters = store::meta(tx, "adapters")?;
-                if store::meta(tx, MIRROR_KEY)? != Some(self.mirror_location())
+                if !self.location_matches(tx)?
                     || adapters.as_deref() != Some(self.adapters_fingerprint().as_str())
                 {
                     return Ok(Probe::Unusable);
@@ -1550,33 +916,20 @@ impl ArtifactIndex {
         probe().unwrap_or(Probe::Unusable)
     }
 
-    /// This store's folder and layout, as `MIRROR_KEY` records it.
-    fn mirror_location(&self) -> String {
-        serde_json::json!([
-            self.storage.root,
-            self.root_identity,
-            self.storage.log_dir,
-            self.storage.artifacts_dir,
-        ])
-        .to_string()
-    }
-
-    /// Record whether the store now holds every event of the logs its
-    /// watermark covers, as `state` (the JSON cache it mirrors) does. Until
-    /// plan T15, only `catch_up_logs` advances the watermark without the
-    /// events, and it clears this mark.
-    fn mark_mirror(&self, tx: &rusqlite::Transaction<'_>, state: &IndexState) -> Result<()> {
-        let level = self.state_location_matches(state) && catchup::checkpoints(tx)? == state.logs;
-        let value = if level {
-            self.mirror_location()
-        } else {
-            String::new()
-        };
-        store::set_meta(tx, MIRROR_KEY, &value)
-    }
-
-    fn state_path(&self) -> PathBuf {
-        self.cache_dir.join("index-state.json")
+    /// Whether the store's rows were built for this folder and layout
+    /// (`brauser_meta` as a rebuild's finalize records it).
+    fn location_matches(&self, tx: &rusqlite::Transaction<'_>) -> Result<bool> {
+        for (key, value) in [
+            ("root", self.storage.root.as_str()),
+            ("root_identity", self.root_identity.as_str()),
+            ("log_dir", self.storage.log_dir.as_str()),
+            ("artifacts_dir", self.storage.artifacts_dir.as_str()),
+        ] {
+            if store::meta(tx, key)?.as_deref() != Some(value) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     pub fn database_path(&self) -> PathBuf {
@@ -1618,10 +971,6 @@ fn normalized_activity(event: &ActivityEvent, strip_params: &[String]) -> Result
 
 fn sha256_hex(value: &[u8]) -> String {
     hex::encode(Sha256::digest(value))
-}
-
-fn read_state(path: &Path) -> Result<Option<IndexState>> {
-    read_bounded_json(path)
 }
 
 fn read_bounded_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {

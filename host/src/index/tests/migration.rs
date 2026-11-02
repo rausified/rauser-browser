@@ -366,7 +366,7 @@ fn an_import_under_another_document_dirties_adapter_dependent_files() {
     copy_tree(&v8.root.path().join("log"), &scratch.0.path().join("log"));
     let fresh = index(&scratch.0, &scratch.1);
     fresh.reindex().unwrap();
-    let cached = fresh.store_state().unwrap().events[&visit.event_id].clone();
+    let cached = stored_events(&fresh)[&visit.event_id].clone();
     let mut state: serde_json::Value = serde_json::from_slice(&v8.legacy_state()).unwrap();
     state["events"][&visit.event_id] = serde_json::to_value(&cached).unwrap();
     state["positions"][&visit.event_id] = serde_json::json!(["2026-10-17.md", 1]);

@@ -42,7 +42,22 @@ fn index_db_has_queryable_tables_and_capture_does_not_touch_artifact_files() {
             "visits"
         ]
     );
-    assert!(tables.iter().any(|name| name == "brauser_events"));
+    // The internal tables, with no stage left over once nothing rebuilds.
+    assert_eq!(
+        tables
+            .iter()
+            .filter(|name| name.starts_with("brauser_"))
+            .collect::<Vec<_>>(),
+        [
+            "brauser_artifact_days",
+            "brauser_events",
+            "brauser_gaps",
+            "brauser_group_state",
+            "brauser_logs",
+            "brauser_meta"
+        ]
+    );
+    assert_no_json_cache(cache.path());
     assert_eq!(
         sql::sql_rows(&db, "select title, url from artifacts")[0],
         [
@@ -106,8 +121,10 @@ fn stripped_url_evidence_survives_cache_rebuild_and_sqlite_queries() {
             },
         ]
     );
-    let original = fs::read(index.state_path()).unwrap();
-    assert!(!String::from_utf8_lossy(&original).contains("private-value"));
+    // Only the parameter names are kept, never their values.
+    let bodies = sql::sql_rows(&index.database_path(), "SELECT body FROM brauser_events");
+    assert_eq!(bodies.len(), 1);
+    assert!(!sql::display(&bodies[0][0]).contains("private-value"));
     index.reindex().unwrap();
     assert_eq!(
         index.artifact_url_evidence(&event.artifact_id).unwrap(),
@@ -129,34 +146,6 @@ fn stripped_url_evidence_survives_cache_rebuild_and_sqlite_queries() {
             ["url", "https://example.com/items/ABC", "[\"utm_source\"]"],
         ]
         .map(|row| row.map(|value| sql::Value::Text(value.into())).to_vec())
-    );
-    // A v6 cache has no evidence. Upgrade schedules a gap rescan and does
-    // not manufacture an empty list for an older stripped address.
-    let mut old: serde_json::Value = serde_json::from_slice(&original).unwrap();
-    old["version"] = 6.into();
-    for event in old["events"].as_object_mut().unwrap().values_mut() {
-        event.as_object_mut().unwrap().remove("url_provenance");
-    }
-    fs::write(index.state_path(), serde_json::to_vec(&old).unwrap()).unwrap();
-    let (migrated, changed) = index.read_current_state().unwrap();
-    assert!(changed);
-    assert_eq!(migrated.version, STATE_VERSION);
-    assert_eq!(serde_json::to_value(&migrated.logs).unwrap(), old["logs"]);
-    assert!(migrated.gap_logs.is_empty());
-    assert!(
-        migrated
-            .events
-            .values()
-            .all(|event| event.url_provenance.is_none())
-    );
-    // Malformed positional evidence is ignored as an unusable cache.
-    let mut invalid: serde_json::Value = serde_json::from_slice(&original).unwrap();
-    invalid["events"][&event.event_id]["url_provenance"]["modes"] = serde_json::json!([]);
-    fs::write(index.state_path(), serde_json::to_vec(&invalid).unwrap()).unwrap();
-    assert!(index.read_current_state().is_none());
-    assert_eq!(
-        index.artifact_url_evidence(&event.artifact_id).unwrap(),
-        evidence
     );
 }
 
@@ -212,13 +201,13 @@ fn a_logged_title_over_the_capture_limit_is_skipped_without_stopping_the_index()
 }
 
 #[test]
-fn an_oversize_cached_row_is_stored_in_index_db_without_stopping_publication() {
+fn an_oversize_row_is_stored_and_rendered_bounded() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
     let index = index(&root, &cache);
-    // Log parsing bounds titles, so only a hand-edited or otherwise
-    // unexpected cache can hold an event whose rows exceed one SQLite
-    // page. SQLite stores it on overflow pages, and publication survives.
+    // Log parsing bounds titles, but a delivery's title is not: its rows
+    // exceed one SQLite page, so SQLite stores them on overflow pages, and
+    // its artifact file renders the title truncated at 2048 characters.
     let oversize = activity(
         "00000000-0000-4000-8000-0000000000b1",
         "OVERSIZE",
@@ -231,11 +220,7 @@ fn an_oversize_cached_row_is_stored_in_index_db_without_stopping_publication() {
         "Good",
         "2026-10-15T11:00:00Z",
     );
-    let mut state = index.empty_state();
-    for event in [&oversize, &good] {
-        state.ingest(EventData::Activity(event.clone()).into(), None, false);
-    }
-    index.publish_state_and_database(&state).unwrap();
+    index.record_activities([&oversize, &good], &[]).unwrap();
     let later = activity(
         "00000000-0000-4000-8000-0000000000b3",
         "LATER",
@@ -254,46 +239,80 @@ fn an_oversize_cached_row_is_stored_in_index_db_without_stopping_publication() {
         sqlite_check(&index.database_path(), "select count(*) from artifacts"),
         "ok\n3\n"
     );
-    assert!(index.artifact(&oversize.artifact_id).unwrap().is_some());
-    // A version 4 cache (from before log titles were bounded) drops
-    // the event while it migrates, as a log rescan now would.
-    let mut cached: serde_json::Value =
-        serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
-    cached["version"] = 4.into();
-    fs::write(index.state_path(), serde_json::to_vec(&cached).unwrap()).unwrap();
-    // Reads answer from index.db; the next write reads the JSON cache.
-    index.reconcile_from_logs().unwrap();
-    assert!(index.artifact(&oversize.artifact_id).unwrap().is_none());
-    assert!(index.artifact(&good.artifact_id).unwrap().is_some());
     assert_eq!(
-        read_state(&index.state_path()).unwrap().unwrap().version,
-        STATE_VERSION
+        index
+            .artifact(&oversize.artifact_id)
+            .unwrap()
+            .unwrap()
+            .title,
+        oversize.title.clone().unwrap()
     );
+    assert_eq!(index.regenerate_dirty().unwrap().written, 3);
+    let rendered = artifact_files(root.path())
+        .into_iter()
+        .map(|path| fs::read_to_string(path).unwrap())
+        .find(|text| text.contains(&"T".repeat(2000)))
+        .unwrap();
+    let title = rendered
+        .lines()
+        .find(|line| line.starts_with("title: "))
+        .unwrap();
+    assert!(title.contains(&"T".repeat(2000)), "{title}");
+    assert!(!title.contains(&"T".repeat(2049)), "{title}");
 }
 
 #[test]
-fn index_db_rows_up_to_the_local_payload_limit_are_readable_and_larger_ones_are_left_out() {
-    // A table-leaf payload over U-35 = 65,501 bytes must spill to
-    // overflow pages, which this writer does not emit. A one-column text
-    // record has a 4-byte header here, so 65,497 bytes is the limit.
-    let at_limit = "a".repeat(65_497);
-    let over_limit = "b".repeat(65_498);
-    let image = build_sqlite(&[SqlTable {
-        name: "t",
-        sql: "CREATE TABLE t(v TEXT)",
-        rows: vec![
-            vec![SqlValue::Text(at_limit.clone())],
-            vec![SqlValue::Text(over_limit)],
-            vec![SqlValue::Text("small".into())],
-        ],
-    }])
-    .unwrap();
-    assert_eq!(image.skipped_rows, 1);
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("t.db");
-    fs::write(&path, image.bytes).unwrap();
-    assert_eq!(
-        sqlite_check(&path, "select length(v) from t order by rowid"),
-        "ok\n65497\n5\n"
-    );
+fn no_legacy_writer_remains() {
+    let modules = [
+        ("mod.rs", include_str!("../mod.rs")),
+        ("catchup.rs", include_str!("../catchup.rs")),
+        ("db.rs", include_str!("../db.rs")),
+        ("fold.rs", include_str!("../fold.rs")),
+        ("legacy.rs", include_str!("../legacy.rs")),
+        ("ord.rs", include_str!("../ord.rs")),
+        ("query.rs", include_str!("../query.rs")),
+        ("rebuild.rs", include_str!("../rebuild.rs")),
+        ("regen.rs", include_str!("../regen.rs")),
+        ("render.rs", include_str!("../render.rs")),
+        ("scan.rs", include_str!("../scan.rs")),
+        ("store.rs", include_str!("../store.rs")),
+    ];
+    // Spelled in pieces so this file never matches itself.
+    let forbidden = [
+        concat!("build_", "sqlite"),
+        concat!("Sqlite", "Image"),
+        concat!("Sql", "Table"),
+        concat!("sqlite_", "snapshot"),
+        concat!("SQLITE_", "PAGE_SIZE"),
+        concat!("mod ", "snapshot"),
+        concat!("publish_state_", "and_database"),
+        concat!("Pending", "CatchUp"),
+        concat!("save_", "pending"),
+        concat!("struct Index", "State"),
+        concat!("migrate_v", "4_state"),
+        concat!("migrate_v", "5_state"),
+        concat!("PUBLI", "CATIONS"),
+    ];
+    for (name, source) in modules {
+        for pattern in forbidden {
+            assert!(!source.contains(pattern), "{name} still has {pattern}");
+        }
+    }
+    // The legacy JSON files are named only where the migration reads and
+    // then removes them, and nothing there writes a file.
+    let legacy_json = [
+        concat!("index-state", ".json"),
+        concat!("index-catch-up", ".json"),
+    ];
+    for (name, source) in modules {
+        if name != "legacy.rs" {
+            for file in legacy_json {
+                assert!(!source.contains(file), "{name} names {file}");
+            }
+        }
+    }
+    let legacy = include_str!("../legacy.rs");
+    for write in ["fs::write", "atomic_write", "File::create", ".create(true)"] {
+        assert!(!legacy.contains(write), "legacy.rs writes through {write}");
+    }
 }

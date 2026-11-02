@@ -174,7 +174,7 @@ fn each_cleared_artifact_commits_alone() {
     // Chrome kills a host whose port closed; a panic stands in for that
     // here, right after the first artifact's clear committed.
     let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        index.regenerate_with(&index.load_current_state().unwrap().0, |step, _| {
+        index.regenerate_with(|step, _| {
             assert!(step != RegenStep::Cleared, "killed");
         })
     }));
@@ -200,7 +200,7 @@ fn a_crash_between_write_and_clear_leaves_it_dirty_and_the_rewrite_is_unchanged(
     let event = typed_activity(1, "A", "work.item");
     index.record_activity(&event, &[]).unwrap();
     let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        index.regenerate_with(&index.load_current_state().unwrap().0, |step, _| {
+        index.regenerate_with(|step, _| {
             assert!(step != RegenStep::Written, "killed");
         })
     }));
@@ -249,7 +249,7 @@ fn a_redirty_between_render_and_clear_survives() {
     later.title = Some("Renamed".into());
     later.occurred_at = "2026-10-15T13:00:00-07:00".into();
     let report = index
-        .regenerate_with(&index.load_current_state().unwrap().0, |step, _| {
+        .regenerate_with(|step, _| {
             if step == RegenStep::Written {
                 // Another delivery lands after the file was rendered and
                 // written, before its clear.
@@ -260,14 +260,6 @@ fn a_redirty_between_render_and_clear_survives() {
     assert_eq!(report.written, 1);
     let second = generation_of(&index, &event.artifact_id).expect("the new mark survives");
     assert!(second > first);
-    assert!(
-        read_state(&index.state_path())
-            .unwrap()
-            .unwrap()
-            .dirty
-            .contains(&event.artifact_id),
-        "the JSON cache keeps the mark too"
-    );
     assert!(!only_file_text(root.path()).contains("Renamed"));
     let report = index.regenerate_dirty().unwrap();
     assert_eq!((report.written, report.unchanged), (1, 0));
@@ -292,7 +284,7 @@ fn regeneration_holds_the_regen_lock() {
     let lock = cache.path().join("index-regen.lock");
     let mut held = false;
     index
-        .regenerate_with(&index.load_current_state().unwrap().0, |step, _| {
+        .regenerate_with(|step, _| {
             if step == RegenStep::Written {
                 let other = File::options().read(true).write(true).open(&lock).unwrap();
                 held = matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock));
@@ -404,7 +396,7 @@ fn an_unowned_file_at_the_artifact_path_is_never_adopted() {
         "2026-10-15T12:00:00Z",
     );
     index.record_activity(&event, &[]).unwrap();
-    let derived = derive(&index.load_or_rebuild().unwrap(), None);
+    let derived = stored_derive(&index);
     let artifact = derived.artifacts.get(&event.artifact_id).unwrap();
     let occupied = root.path().join(artifact_path("artifacts", artifact));
     fs::create_dir_all(occupied.parent().unwrap()).unwrap();
@@ -473,7 +465,7 @@ fn one_failing_artifact_path_does_not_block_the_others() {
     open.url = "https://other.example/items/BBB".into();
     open.modes[0].url = open.url.clone();
     index.record_activities([&blocked, &open], &[]).unwrap();
-    let derived = derive(&index.load_or_rebuild().unwrap(), None);
+    let derived = stored_derive(&index);
     let relative = artifact_path("artifacts", &derived.artifacts[&blocked.artifact_id]);
     let site = root.path().join(relative.parent().unwrap());
     fs::create_dir_all(&site).unwrap();
@@ -490,7 +482,7 @@ fn one_failing_artifact_path_does_not_block_the_others() {
         report.failed_paths
     );
     assert_eq!(
-        read_state(&index.state_path()).unwrap().unwrap().dirty,
+        dirty_set(&index),
         BTreeSet::from([blocked.artifact_id.clone()])
     );
     assert_eq!(artifact_files(root.path()).len(), 1);

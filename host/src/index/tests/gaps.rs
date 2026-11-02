@@ -57,12 +57,6 @@ fn worklog_gaps_intersect_local_dates_without_prorating_or_summing_overlap() {
     index.reindex().unwrap();
     assert_eq!(report("2026-10-19", "2026-10-25"), expected);
     assert_eq!(fs::read_to_string(path).unwrap(), bytes);
-    // V7 checkpointed this same log while ignoring overflow entirely.
-    let mut old: serde_json::Value =
-        serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
-    old["version"] = 7.into();
-    old.as_object_mut().unwrap().remove("gaps");
-    fs::write(index.state_path(), serde_json::to_vec(&old).unwrap()).unwrap();
     assert_eq!(report("2026-10-19", "2026-10-25"), expected);
     LOG_BYTES_READ.with(|value| value.set(0));
     assert_eq!(report("2026-10-19", "2026-10-25"), expected);

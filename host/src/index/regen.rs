@@ -143,95 +143,13 @@ fn newest_offset(tx: &Transaction<'_>) -> Result<Option<UtcOffset>> {
     Ok(newest.map(OffsetDateTime::offset))
 }
 
-/// The JSON cache's container bookkeeping (plan T15 removes it): every
-/// container the store derives, by `within` edge or declared type, with its
-/// file, plus any earlier container still marked dirty and, while it has no
-/// record, its file.
-fn container_bookkeeping(
-    tx: &Transaction<'_>,
-    adapters: Option<&Document>,
-    artifacts_dir: &str,
-    previous: &IndexState,
-    dirty: &BTreeSet<String>,
-) -> Result<(BTreeSet<String>, BTreeMap<String, PathBuf>)> {
-    let mut containers = BTreeSet::new();
-    let mut files = BTreeMap::new();
-    let types = Containers::new(adapters).types;
-    // A `within` edge exists only while some adapter declares a container.
-    if !types.is_empty() {
-        let mut found = tx
-            .prepare_cached(
-                "SELECT e.target_artifact_id, a.artifact_type, a.site FROM edges e
-                   LEFT JOIN artifacts a ON a.artifact_id = e.target_artifact_id
-                 WHERE e.kind = 'within'",
-            )?
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for artifact_type in &types {
-            let typed = tx
-                .prepare_cached("SELECT artifact_id, site FROM artifacts WHERE artifact_type = ?1")?
-                .query_map([artifact_type], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        Some((*artifact_type).to_owned()),
-                        row.get::<_, Option<String>>(1)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            found.extend(typed);
-        }
-        for (id, artifact_type, site) in found {
-            if let (Some(artifact_type), Some(site)) = (artifact_type, site) {
-                let path = artifact_file(artifacts_dir, &id, &artifact_type, &site);
-                files.insert(id.clone(), path);
-            }
-            containers.insert(id);
-        }
-    }
-    for id in previous.containers.intersection(dirty) {
-        containers.insert(id.clone());
-    }
-    for (id, path) in &previous.container_files {
-        if dirty.contains(id) && !files.contains_key(id) {
-            let derives: bool = tx
-                .prepare_cached("SELECT EXISTS (SELECT 1 FROM artifacts WHERE artifact_id = ?1)")?
-                .query_row([id], |row| row.get(0))?;
-            if !derives {
-                files.insert(id.clone(), path.clone());
-            }
-        }
-    }
-    Ok((containers, files))
-}
-
 impl ArtifactIndex {
-    /// Publish `state` first when it differs from the published cache, then
-    /// run a regeneration pass over `dirty_artifacts`.
-    pub(super) fn regenerate_state(
-        &self,
-        state: IndexState,
-        publish: bool,
-    ) -> Result<RegenerationReport> {
-        if publish {
-            self.publish_state_and_database(&state)?;
-        }
-        self.regenerate_with(&state, |_, _| {})
-    }
-
-    /// One regeneration pass under `index-regen.lock`. `state` is the
-    /// published JSON cache, whose `container_files` still locate a
-    /// container file adopted by a rebuild until plan T10/T15 move that to
-    /// `brauser_group_state.file_path`. `after` (a test seam) sees each
-    /// artifact's steps.
+    /// One regeneration pass under `index-regen.lock`. A container file to
+    /// remove is located by `brauser_group_state.file_path`, which a
+    /// rebuild also adopts vanished container files into. `after` (a test
+    /// seam) sees each artifact's steps.
     pub(super) fn regenerate_with(
         &self,
-        state: &IndexState,
         mut after: impl FnMut(RegenStep, &str),
     ) -> Result<RegenerationReport> {
         let (root, _) =
@@ -241,7 +159,7 @@ impl ArtifactIndex {
         let adapters = self.adapters.as_deref();
         // An empty history has nothing to regenerate, and a pass never
         // creates `index.db` (it is opened only to commit ingested data).
-        let mut conn = if self.nothing_to_commit(state)? {
+        let mut conn = if self.nothing_to_commit()? {
             db::empty()?
         } else {
             store::open(&self.cache_dir)?
@@ -265,11 +183,7 @@ impl ArtifactIndex {
                 // no longer make: its file would keep totals the index no
                 // longer has, so it is removed (only if still Brauser's).
                 None => {
-                    let path = mark
-                        .file_path
-                        .as_deref()
-                        .map(PathBuf::from)
-                        .or_else(|| state.container_files.get(id).cloned());
+                    let path = mark.file_path.as_deref().map(PathBuf::from);
                     if let Some(path) = path
                         && let Err(error) = remove_artifact(&root, &path, id)
                     {
@@ -333,40 +247,7 @@ impl ArtifactIndex {
             after(RegenStep::Cleared, id);
         }
         self.record_pass(&mut conn);
-        self.publish_dirty(&mut conn)?;
         Ok(report)
-    }
-
-    /// Bring the JSON cache's dirty set (and its container bookkeeping)
-    /// level with `dirty_artifacts` after a pass, so the next delivery's
-    /// `store::sync_dirty` does not restore the clears. The cache is read
-    /// again, not taken from before the pass, so a delivery made during the
-    /// pass keeps its events and marks. Plan T15 removes this.
-    fn publish_dirty(&self, conn: &mut rusqlite::Connection) -> Result<()> {
-        let Some((mut current, _)) = self.read_current_state() else {
-            return Ok(());
-        };
-        let adapters = self.adapters.as_deref();
-        let artifacts_dir = self.storage.artifacts_dir.as_str();
-        let (dirty, containers, container_files) = db::read_txn(conn, |tx| {
-            let dirty = tx
-                .prepare_cached("SELECT artifact_id FROM dirty_artifacts")?
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<BTreeSet<_>>>()?;
-            let (containers, files) =
-                container_bookkeeping(tx, adapters, artifacts_dir, &current, &dirty)?;
-            Ok((dirty, containers, files))
-        })?;
-        if current.dirty == dirty
-            && current.containers == containers
-            && current.container_files == container_files
-        {
-            return Ok(());
-        }
-        current.dirty = dirty;
-        current.containers = containers;
-        current.container_files = container_files;
-        self.write_state(&current)
     }
 
     /// Remember the local day this pass completed (`daily_pass_due`), in
@@ -520,23 +401,6 @@ pub(super) fn rollup_artifact_id(head: &[u8]) -> Option<String> {
     }
     let id = id?;
     (rollups == 1 && owned_artifact(text.as_bytes(), &id)).then_some(id)
-}
-
-/// Add each of `known`'s container files whose record `derived` no longer
-/// has to `state`, dirty, so the next regeneration pass removes it (only if
-/// it is still Brauser's file for that ID).
-pub(super) fn adopt_vanished_container_files(
-    state: &mut IndexState,
-    derived: &Derived,
-    known: BTreeMap<String, PathBuf>,
-) {
-    for (id, path) in known {
-        if derived.artifacts.contains_key(&id) {
-            continue;
-        }
-        state.dirty.insert(id.clone());
-        state.container_files.entry(id).or_insert(path);
-    }
 }
 
 pub(super) fn sweep_temporaries_in(dir: &Dir, prefix: &str) -> Result<usize> {

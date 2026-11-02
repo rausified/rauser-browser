@@ -52,34 +52,14 @@ fn checkpoints_skip_unchanged_logs_and_recover_completed_trailing_markers() {
         LOG_BYTES_READ.with(|count| count.get()),
         fs::metadata(&path).unwrap().len()
     );
-    assert!(
-        read_state(&index.state_path())
-            .unwrap()
-            .unwrap()
-            .dirty
-            .contains(&second.artifact_id)
-    );
+    assert!(dirty_set(&index).contains(&second.artifact_id));
     LOG_BYTES_READ.with(|count| count.set(0));
     assert_eq!(
         index.artifact(&second.artifact_id).unwrap().unwrap().opens,
         1
     );
     assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
-    // The old format has no ingestion checkpoints. Treat it as a cache
-    // miss and rebuild every event, even if its old events map is valid.
-    // Reads answer from index.db, so the next write reads the JSON cache.
-    let mut old: serde_json::Value =
-        serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
-    old["version"] = 1.into();
-    old["events"].as_object_mut().unwrap().clear();
-    old.as_object_mut().unwrap().remove("logs");
-    fs::write(index.state_path(), serde_json::to_vec(&old).unwrap()).unwrap();
-    index.reconcile_from_logs().unwrap();
-    assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 2);
-    assert_eq!(
-        read_state(&index.state_path()).unwrap().unwrap().version,
-        STATE_VERSION
-    );
+    assert_no_json_cache(cache.path());
 }
 
 /// The derived tables and the dirty set as stored. A bounded pass commits
@@ -111,7 +91,6 @@ fn catch_up_bounds_aggregate_reads_without_publishing_partial_history() {
             &[],
         )
         .unwrap();
-    let old_state = fs::read(index.state_path()).unwrap();
     let old_db = published(&index);
     fs::create_dir(root.path().join("log")).unwrap();
     for day in 1..=3 {
@@ -127,13 +106,12 @@ fn catch_up_bounds_aggregate_reads_without_publishing_partial_history() {
         "{error}"
     );
     assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 48 * 1024 * 1024);
-    assert_eq!(fs::read(index.state_path()).unwrap(), old_state);
     assert_eq!(published(&index), old_db);
     // The next pass resumes after the logs already read.
     LOG_BYTES_READ.with(|count| count.set(0));
     assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 1);
     assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 24 * 1024 * 1024);
-    assert!(!index.pending_path().exists());
+    assert_no_json_cache(cache.path());
 }
 
 /// Run `pass` until it succeeds. Every pass must stay within the
@@ -184,21 +162,30 @@ fn full_rebuilds_finish_in_bounded_passes_once_history_exceeds_one_pass() {
         assert_eq!((recent.0.len(), passes), (day, 1));
     }
 
-    // A deleted cache rebuilds in bounded passes and never publishes a
-    // partial checkpoint on the way. Reads answer from index.db, so the
-    // JSON cache is rebuilt by the writes (here, reconciling).
-    fs::remove_file(index.state_path()).unwrap();
-    let old_db = published(&index);
+    // A deleted cache rebuilds in bounded passes, staged, and never
+    // publishes a partial history on the way.
+    remove_database(&index);
+    let count = |table: &str| {
+        sql::sql_rows(
+            &index.database_path(),
+            &format!("SELECT count(*) FROM {table}"),
+        )
+    };
     let mut partial = Vec::new();
     let ((), passes) = bounded_passes(limit, || {
         let result = index.reconcile_from_logs();
         if result.is_err() {
-            partial.push((index.state_path().exists(), published(&index) == old_db));
+            partial.push((count("artifacts"), count("dirty_artifacts")));
         }
         result
     });
     assert_eq!(passes, 3);
-    assert_eq!(partial, [(false, true); 2]);
+    let none = vec![vec![sql::Value::Integer(0)]];
+    assert_eq!(
+        partial,
+        [(none.clone(), none.clone()), (none.clone(), none)]
+    );
+    assert_no_json_cache(cache.path());
     LOG_BYTES_READ.with(|count| count.set(0));
     assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 6);
     assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
@@ -303,7 +290,7 @@ fn a_rebuild_split_over_passes_keeps_the_earliest_logged_body() {
         .title;
     // The same logs rebuilt in one pass without a cache.
     SCAN_LIMIT.with(|value| value.set(MAX_SCAN_BYTES));
-    fs::remove_file(index.state_path()).unwrap();
+    remove_database(&index);
     let single = index
         .artifact(&original.artifact_id)
         .unwrap()
@@ -482,7 +469,7 @@ fn reconciling_a_duplicate_keeps_the_dirty_set_and_external_edits() {
         .unwrap();
     index.reconcile_from_logs().unwrap();
     assert_eq!(
-        read_state(&index.state_path()).unwrap().unwrap().dirty,
+        dirty_set(&index),
         BTreeSet::from([events[2].artifact_id.clone()])
     );
     assert_eq!(index.regenerate_dirty().unwrap().written, 1);
@@ -516,19 +503,16 @@ fn a_valid_stale_cache_catches_up_events_appended_by_another_path() {
     );
     let path = write_log(root.path(), "2026-10-15.md", &[&a]);
     index.record_activity(&a, &[]).unwrap();
-    let stale = fs::read(index.state_path()).unwrap();
     StdOpenOptions::new()
         .append(true)
         .open(&path)
         .unwrap()
         .write_all(activity_marker(&b).as_bytes())
         .unwrap();
-    fs::write(index.state_path(), &stale).unwrap();
     write_log(root.path(), "2026-10-16.md", &[&c]);
     index.record_activity(&c, &[]).unwrap();
     assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 3);
-    // A restored stale cache on a later query (a restart) also catches up.
-    fs::write(index.state_path(), &stale).unwrap();
+    // A later query by another host (a restart) sees it too.
     let restarted = ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap();
     assert!(restarted.artifact(&b.artifact_id).unwrap().is_some());
 }

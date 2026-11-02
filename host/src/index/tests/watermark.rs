@@ -629,7 +629,7 @@ fn reconcile_reads_only_changed_logs_and_marks_only_new_events_dirty() {
     assert!(LOG_BYTES_READ.with(|count| count.get()) <= len(&grown));
     assert!(len(&kept) > 0);
     assert_eq!(
-        read_state(&index.state_path()).unwrap().unwrap().dirty,
+        dirty_set(&index),
         BTreeSet::from([added.artifact_id.clone()])
     );
 }
@@ -712,11 +712,16 @@ fn a_delivery_reads_only_the_appended_tail() {
         "read {read} of {} for {appended} appended bytes",
         len(&path)
     );
-    // The JSON cache took the tail too: the event, its gap and checkpoint.
-    let state = read_state(&index.state_path()).unwrap().unwrap();
-    assert!(state.events.contains_key(&added.event_id));
-    assert!(state.gaps.contains_key(&sha256_hex(b"late gap")));
-    assert_eq!(state.logs[Path::new("2026-10-15.md")].bytes, len(&path));
+    // The event, its gap and the checkpoint committed together.
+    assert!(stored_events(&index).contains_key(&added.event_id));
+    assert_eq!(
+        gap_ids(&cache)[0][0],
+        sql::Value::Text(sha256_hex(b"late gap"))
+    );
+    assert_eq!(
+        logs_rows(&cache)[0][2],
+        sql::Value::Integer(len(&path) as i64)
+    );
     assert!(index.artifact(&added.artifact_id).unwrap().is_some());
     assert_eq!(gap_ids(&cache).len(), 1);
     // Nothing changed since: a read stats the logs and reads no byte.
@@ -726,7 +731,7 @@ fn a_delivery_reads_only_the_appended_tail() {
 }
 
 #[test]
-fn reconcile_writes_the_watermark_also_for_a_cache_without_one() {
+fn reconcile_writes_the_watermark_also_for_a_store_without_one() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
     let index = index(&root, &cache);
@@ -739,8 +744,8 @@ fn reconcile_writes_the_watermark_also_for_a_cache_without_one() {
     index.reconcile_from_logs().unwrap();
     assert_eq!(logs_rows(&cache).len(), 1);
     assert_eq!(gap_ids(&cache).len(), 1);
-    // A store written before the watermark (an upgraded install): the JSON
-    // cache is current, so nothing is republished, yet reconcile fills it.
+    // A store that lost its watermark: reconcile rereads the logs and
+    // fills it again, ingesting nothing twice.
     let mut conn = connection(&cache);
     db::write_txn(&mut conn, |tx| {
         tx.execute("DELETE FROM brauser_logs", [])?;

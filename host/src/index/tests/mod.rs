@@ -77,6 +77,58 @@ fn sqlite_check(path: &Path, query: &str) -> String {
     text
 }
 
+/// The artifacts `dirty_artifacts` marks.
+fn dirty_set(index: &ArtifactIndex) -> BTreeSet<String> {
+    sql::sql_rows(
+        &index.database_path(),
+        "SELECT artifact_id FROM dirty_artifacts",
+    )
+    .into_iter()
+    .map(|row| sql::display(&row[0]))
+    .collect()
+}
+
+/// Lose the cache: remove `index.db` and any sidecar SQLite left.
+fn remove_database(index: &ArtifactIndex) {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let path = PathBuf::from(format!("{}{suffix}", index.database_path().display()));
+        match fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                panic!("removing {}: {error}", path.display())
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Neither JSON file of the format 8 cache is ever written.
+fn assert_no_json_cache(cache: &Path) {
+    for name in ["index-state.json", "index-catch-up.json"] {
+        assert!(!cache.join(name).exists(), "{name} was written");
+    }
+}
+
+/// The store's events, by ID.
+fn stored_events(index: &ArtifactIndex) -> BTreeMap<String, CachedEvent> {
+    let mut conn = db::open(&index.cache_dir, db::Mode::IfExists)
+        .unwrap()
+        .unwrap();
+    let events = db::read_txn(&mut conn, crate::index::store::all_events).unwrap();
+    events
+        .into_iter()
+        .map(|stored| (event_identity(&stored.event).0, stored.event))
+        .collect()
+}
+
+/// A full derive of the store's events, as the oracle computes it.
+fn stored_derive(index: &ArtifactIndex) -> Derived {
+    let mut conn = db::open(&index.cache_dir, db::Mode::IfExists)
+        .unwrap()
+        .unwrap();
+    let events = db::read_txn(&mut conn, crate::index::store::all_events).unwrap();
+    crate::index::store::fold_events(index.adapters.as_deref(), &events)
+}
+
 fn activity_marker(event: &ActivityEvent) -> String {
     format!(
         "{MARKER_PREFIX}{} url={} at={} kind=activity data={} -->\n",
