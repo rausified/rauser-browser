@@ -510,7 +510,7 @@ impl CaptureStore {
         // `record_entry` adds the normalized `url` and the derived
         // `artifact_id`, and checks `record_key` and `artifact_type` against
         // them.
-        let marker = serde_json::json!({
+        let mut marker = serde_json::json!({
             "event_id": event_id,
             "title": summary.title,
             "occurred_at": summary.occurred_at,
@@ -522,6 +522,9 @@ impl CaptureStore {
             "artifact_type": summary.artifact_type,
             "harness": summary.harness,
         });
+        if let Some(overview) = &summary.overview {
+            marker["overview"] = serde_json::Value::String(overview.clone());
+        }
         let mut written = None;
         let outcome = self.record_entry_with_payload(
             policy,
@@ -4813,6 +4816,7 @@ mod tests {
 
     fn page_summary(url: &str) -> crate::summary::PageSummary {
         crate::summary::PageSummary {
+            overview: None,
             event_id: Uuid::new_v4().to_string(),
             url: url.into(),
             title: "A good discussion".into(),

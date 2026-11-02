@@ -31,6 +31,35 @@ const opensSummary = (request) => request.type === "open_summary"
   ? { type: "summary_opened", relative_path: SUMMARY.summary_path }
   : null;
 
+test("page and Recent show the overview and type as literal text", async () => {
+  const overview = '<img src="https://remote.example/pixel"> A decision on the launch.';
+  const summary = { ...SUMMARY, overview };
+  for (const recognizedPage of [false, true]) {
+    const page = await install({
+      tab: { id: 1, url: ARTICLE_URL, title: "Article" },
+      intercept: (request) => {
+        if (request.type === "get_artifact") return {
+          ...(recognizedPage ? recognized(artifact("doc:a", "Article")) : { type: "artifact_result", recognized: false, artifact: null }),
+          summary,
+        };
+        if (request.type === "list_artifacts") return {
+          type: "artifact_list_result", artifact_types: ["web.page"], truncated: false,
+          items: [{ local_date: "2026-10-27", artifact_id: "doc:a", artifact_type: "web.page", title: "Article",
+            url: ARTICLE_URL, focused_seconds: 0, background_seconds: 0, opens: 0, why: null, summary }],
+        };
+        return opensSummary(request);
+      },
+    });
+    await until(() => !page.el("page-summary").hidden, "the overview");
+    assert.equal(page.el("page-summary-text").textContent, `${overview} · specification`);
+    page.el("tab-recent").click();
+    await until(() => page.el("recent-list").textContent.includes("Summarized"), "the Recent overview");
+    assert.ok(page.el("recent-list").textContent.includes(`Summarized · ${overview} · specification`));
+    assert.ok(descendants(page.el("recent-list")).every((node) => node.tagName !== "IMG"));
+    assert.equal(page.el("page-summary-text").children.length, 0);
+  }
+});
+
 test("an unrecognized page with a summary shows its line and opens it", async () => {
   let fail = false;
   const page = await install({

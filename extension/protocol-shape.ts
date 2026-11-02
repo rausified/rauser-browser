@@ -163,11 +163,17 @@ function isSiteDraftAnswer(value: unknown): boolean {
 
 const IMPORTANCE_LEVELS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 
-/** Exactly the v6 `RunAnswer` keys; the host bounds the strings. */
+function isOverview(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0 && Array.from(value).length <= 300;
+}
+
+/** Overview is optional for results retained from before SUMMARY.md v2. */
 function isRunAnswer(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const answer = value as Record<string, unknown>;
-  return Object.keys(answer).length === 4 &&
+  const hasOverview = Object.hasOwn(answer, "overview");
+  return Object.keys(answer).length === (hasOverview ? 5 : 4) &&
+    (!hasOverview || isOverview(answer.overview)) &&
     typeof answer.document_type === "string" && typeof answer.category === "string" &&
     typeof answer.importance === "string" && IMPORTANCE_LEVELS.has(answer.importance) &&
     typeof answer.importance_reason === "string";
@@ -251,7 +257,7 @@ function isArtifact(value: unknown): boolean {
     artifact.incoming_trails.every(isIncomingTrail);
 }
 
-/** Exactly the v6 `SummaryView` keys; the host bounds the strings. */
+/** The required summary keys; older events carry no overview. */
 const SUMMARY_VIEW_KEYS: readonly string[] = [
   "summarized_at", "document_type", "category", "importance", "summary_path", "harness",
 ];
@@ -259,7 +265,9 @@ const SUMMARY_VIEW_KEYS: readonly string[] = [
 export function isSummaryView(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const summary = value as Record<string, unknown>;
-  return hasExactKeys(summary, SUMMARY_VIEW_KEYS) &&
+  const hasOverview = Object.hasOwn(summary, "overview");
+  return hasExactKeys(summary, hasOverview ? [...SUMMARY_VIEW_KEYS, "overview"] : SUMMARY_VIEW_KEYS) &&
+    (!hasOverview || isOverview(summary.overview)) &&
     typeof summary.summarized_at === "string" && typeof summary.document_type === "string" &&
     typeof summary.category === "string" &&
     typeof summary.importance === "string" && IMPORTANCE_LEVELS.has(summary.importance) &&

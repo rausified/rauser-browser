@@ -265,7 +265,8 @@ and `finished_at`, `error` and `error_kind` (`harness_failed`, `timed_out`,
 `can_retry_save`, and `answer`. Once the agent's answer has passed
 validation, `answer` is a `RunAnswer` (`document_type`, `category`,
 `importance` as an `ImportanceLevel` of `high`, `medium`, or `low`, and
-`importance_reason`); before that, or when validation failed, it is null.
+`importance_reason`, plus optional `overview`); before that, or when
+validation failed, it is null.
 `summary_path` is the home-relative path of the summary file a save
 wrote (`summaries/<note stem>.summary.md`): set when a save succeeds, and
 also when a `save_failed` save wrote the file before failing (the daily log
@@ -415,13 +416,15 @@ same wording as `open_path`. These messages and `summary_path` were added in ver
 requested it, at most 32 characters), `document_type` and `category` (1 to 64
 characters), `importance` (an `ImportanceLevel`), `summary_path` (relative to
 the home folder, `/` separators, at most 1,024 bytes), and `harness` (a
-`HarnessId`). It is read from the daily log's `summary` events, which are not
+`HarnessId`), plus optional `overview` (1 to 300 Unicode characters). It is
+read from the daily log's `summary` events, which are not
 protocol messages but use the same owned-marker scheme as `activity` and
 `why`: the marker is `kind=summary data=<hex JSON>`, and the JSON has
 `event_id` (the run ID), `url` (normalized by the host), `title`,
 `occurred_at`, `document_type`, `category`, `importance`, `summary_path`,
 `record_key` (a `RecordKey`), `artifact_type`, `harness`, and the
-host-derived `artifact_id`, with no other field. A `url` record key is the
+host-derived `artifact_id`, plus optional `overview`, with no other field.
+A `url` record key is the
 page's own `web.page` artifact (`web:<host>/<url_id>`, and the key must be
 that URL's hash); an `artifact` key names the adapter artifact itself, never
 a `web:` ID, with a type other than `web.page`. Any other combination is
@@ -609,3 +612,16 @@ A version 8 host built before these additions answers `invalid_request`
 ("invalid or unsupported request JSON") for a `list_runs` carrying `kind` or
 `before`, and the page then asks for a host rebuild. The host and the
 extension deploy together.
+
+### Summary overview (additive within version 8)
+
+`SummaryView` and `RunAnswer` carry the validated answer's one-sentence
+`overview` when present. The host also keeps it in the summary log event and
+cache. Older events and run results omit it and keep their previous UI text;
+it is never sent as null or an empty string. The event validator bounds it
+to 300 Unicode characters and refuses control characters. Cache format 8
+remains readable without a rebuild. Deploy host and extension together:
+older extensions reject the new reply field. Downgrading the host after
+recording new summaries is unsupported: older hosts reject summary events
+with the new field and can omit them on rebuild. Re-upgrade and run
+`brauser reindex` to recover those summaries from the unchanged logs.
