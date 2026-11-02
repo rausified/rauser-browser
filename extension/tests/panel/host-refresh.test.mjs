@@ -10,7 +10,7 @@ import {
 
 // Assigned panel refresh regressions (brwr-09c, brwr-b50, brwr-mm0).
 for (const hasAdapters of [false, true]) {
-  test(`enabled-capture wording describes adapter sites (${hasAdapters ? "with" : "without"} adapters)`, async () => {
+  test(`enabled capture shows no status line (${hasAdapters ? "with" : "without"} adapters)`, async () => {
     const adapters = hasAdapters
       ? [starterOffersFor("https://acme.atlassian.net")[0].adapter]
       : [];
@@ -20,8 +20,8 @@ for (const hasAdapters of [false, true]) {
     });
     await noteLoaded(page);
     await settle();
-    assert.doesNotMatch(page.el("status").textContent, /listed sites/i);
-    assert.match(page.el("status").textContent, /sites with adapters/i);
+    // Enabled capture is the normal state; the panel shows no status line for it.
+    assert.equal(page.el("status").textContent, "");
     assert.equal(page.el("artifact-status").textContent, "○ Not an artifact",
       "a readable unrecognized page still has an artifact verdict");
   });

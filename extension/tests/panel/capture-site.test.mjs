@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CONFIG, GITHUB_URL, JIRA_URL, captureReview, hostReply, install,
-  recoveryBody, recoveryRows, saveCapture, settle, until, updates,
+  noteLoaded, recoveryBody, recoveryRows, saveCapture, settle, until, updates,
 } from "./harness.mjs";
 
 test("Capture Site waits for the host's history check before promising a save", async () => {
@@ -272,9 +272,17 @@ test("configured sites, missing folders, and invalid policies cannot use Capture
     { config: { ...CONFIG, storage: null } },
     { adapterIssue: "Future policy format" },
     { configIssue: "Folder moved" },
-    { config: { ...CONFIG, adapters: { format: 1, artifacts: starterOffers("https://acme.atlassian.net", []).map((offer) => offer.adapter) } } },
+    { configured: true, config: { ...CONFIG, adapters: { format: 1, artifacts: starterOffers("https://acme.atlassian.net", []).map((offer) => offer.adapter) } } },
   ]) {
-    const page = await install({ tab: { id: 1, url: JIRA_URL }, ...options });
+    const { configured, ...installOptions } = options;
+    const page = await install({ tab: { id: 1, url: JIRA_URL }, ...installOptions });
+    if (configured) {
+      // A configured site gets no Capture Site entry; its rules live in settings.
+      await noteLoaded(page);
+      await settle();
+      assert.equal(page.el("capture-site-area").hidden, true);
+      continue;
+    }
     await until(() => !page.el("capture-site-area").hidden, "capture area to settle");
     assert.ok(page.el("capture-site").disabled || page.el("capture-site").hidden);
     page.el("capture-site").click();

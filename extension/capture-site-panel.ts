@@ -282,7 +282,8 @@ export class CaptureSitePanel {
 
   /** Which Capture Site entry the page gets: the Capture Site button on a
    * starter or unknown site, the recurring-pages hint on a configured site
-   * whose sampled pages recur unrecognized, or the settings pointer. */
+   * whose sampled pages recur unrecognized. A configured site otherwise gets
+   * no entry; its rules are managed in settings. */
   private updateOffer(): void {
     const page = this.page;
     const busy = this.busy;
@@ -290,9 +291,7 @@ export class CaptureSitePanel {
     const mode = page ? captureMode(config, page.url) : "unsupported";
     const configured = mode === "configured";
     const recurring = configured && this.recurring(page!);
-    // A configured starter site still says where its rules are managed.
-    const offered = this.target !== null || mode === "starter" || mode === "draft" ||
-      (configured && (captureOrigin(page!.url) !== null || recurring));
+    const offered = this.target !== null || mode === "starter" || mode === "draft" || recurring;
     this.area.hidden = !offered;
     this.recurringStart.hidden = !offered || !recurring || this.target !== null;
     if (!offered) return;
@@ -301,7 +300,7 @@ export class CaptureSitePanel {
     this.start.hidden = configured || this.target !== null;
     this.start.disabled = configured || blocked;
     this.recurringStart.disabled = !recurring || blocked;
-    this.hint.textContent = configured && !recurring ? "This site has capture rules. Manage them in settings."
+    this.hint.textContent = configured && !recurring ? ""
       : !config?.storage ? "Choose a home folder in settings, then capture this site here."
       : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings before adding a site."
       : recurring ? `Looks like you have recurring pages on ${new URL(page!.url).host}.`
