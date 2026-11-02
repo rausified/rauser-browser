@@ -34,16 +34,65 @@ Invariants to keep while changing these components:
 - Task bar: Roll back the service only with no task queued or running. An older build cannot read a task's `status.json` (`deny_unknown_fields`), so its recovery skips that record and cannot kill the task's process group, and old task records stay unreadable to it until they are pruned. Deploy the host and the extension together: an older extension rejects a `runs_listed` that holds a task view, and an older host answers `start_task` with `invalid_request`.
 - Platforms: M1 still needs interactive Chrome checks on macOS, the primary platform. Windows support was reinstated on 2026-10-16 (DESIGN.md §13, §14): Windows code must keep compiling and passing CI, and its interactive checks are separate [human] work.
 
-## Standalone product
+## Brauser is separate from AMOS
 
-DESIGN.md's principle 9 (standalone product) governs this repo: no file, build
-step, test, or default here may assume AMOS/ENDURANCE, Backstaff, or Astrolabe
-exist, even though development happens inside the ENDURANCE vault. No AMOS
-inventory entry or feature briefing exists yet for Brauser (checked via
-`grep -ril "brauser\|rauserBrowser" AMOS/inventory AMOS_docs` from the ENDURANCE
-root); creating one is a separate follow-up, not covered here. Use
-[DESIGN.md](DESIGN.md) for intended behavior and update it when implementation
-changes a contract.
+Brauser is its own product and its own project. Its repository sits inside the
+ENDURANCE vault (`work/rauserBrowser`), but Brauser is not part of AMOS.
+
+- **Standalone product.** DESIGN.md's principle 9 governs this repo: no file,
+  build step, test, or default here may assume AMOS/ENDURANCE, Backstaff, or
+  Astrolabe exist. Use [DESIGN.md](DESIGN.md) for intended behavior and update
+  it when implementation changes a contract.
+- **Work to John's standards, keep Brauser's things here.** Agents working on
+  Brauser follow John's AMOS working standards (the ENDURANCE root `AGENTS.md`
+  and its companions: validation, commit and deploy through the supported path,
+  honest reporting, closeout, logging significant work in the weekly actions).
+  This file adds the Brauser rules on top. Where the two disagree about a
+  Brauser matter, such as where a Brauser artifact goes, this file wins.
+- **Brauser artifacts live in this repo.** Its instructions, design,
+  decisions, plans, backlog and improvement suggestions are files here. Do not
+  write Brauser project content into AMOS artifacts (`AMOS_docs`,
+  `AMOS/inventory`, the AMOS Improvement Feed, topics), and do not make a
+  Brauser file point into the vault. `PENDING_AMOS_DOC_UPDATES.md` collects
+  notes that an AMOS-side owner may choose to pick up; agents write it here and
+  never push it into AMOS themselves.
+
+### Brauser Improvement Feed
+
+[BRAUSER_IMPROVEMENT_FEED.md](BRAUSER_IMPROVEMENT_FEED.md) is the single place
+for improvement suggestions about Brauser: the app, this repo, and how agents
+build it. For Brauser work it replaces the AMOS Improvement Feed.
+
+- Every substantive Brauser task produces one actionable suggestion: say it in
+  chat and append it to the feed. Skip this only when John asked for exact
+  output or no side effects.
+- A suggestion about AMOS itself, not Brauser, still goes to the AMOS feed.
+- Append at the end; never rewrite or reorder earlier entries. Each entry
+  starts with its own `## YYYY-MM-DD — Title` heading, then says what to change,
+  why (the evidence from the task), and where (files or commands).
+- To reinforce an existing entry instead of repeating it, append a
+  `- +1 YYYY-MM-DD: <new evidence>` line under that entry. When an entry is done,
+  append `- Done YYYY-MM-DD: <PR, commit or bead>` under it.
+- The feed is a root Markdown file, so a feed-only PR is docs-only in CI.
+
+### Instruction files
+
+Brauser has two kinds of instruction files. Keep them apart.
+
+| Kind | Audience | Files |
+|---|---|---|
+| Project instructions | Contributors and the agents building Brauser | `AGENTS.md` (this file), `README.md`, `DESIGN.md`, `TESTING.md`, `adapter-templates.md`, `BOSUN_FEATURE_BACKLOG.md` (generated from `.beads/`), plans and specs under `docs/` |
+| App instructions | The agents Brauser itself runs for the user | `SUMMARY.md` (the page-summary agent's instructions, compiled into the host) |
+
+- App instruction files are product code. They ship inside Brauser, are
+  checked by tests, and run on any user's machine, so the standalone rule
+  applies in full: nothing about John, AMOS, or the vault.
+- Each app instruction file is the single source of truth for its agent's
+  task. Change what that agent is told in the file, never in code.
+- A new app instruction file goes at the repository root with an upper-case
+  name, is compiled into the host, gets tests that fail on a malformed file,
+  and is added to `BUILT_ROOT_MARKDOWN` in `scripts/ci-changes.mjs` so CI
+  treats it as code.
 
 ## Repository map
 
