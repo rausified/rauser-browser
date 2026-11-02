@@ -10,6 +10,7 @@ const {
   parseGitHubOrganizations,
   starterKind,
   starterOffers,
+  starterRuleAddition,
   starterRuleUpdate,
   withContainerLinks,
   containerLinks,
@@ -316,4 +317,53 @@ test("an update stays within 16 rules", () => {
   const update = starterRuleUpdate(full);
   assert.equal(update.adapter.match.length, 16);
   assert.deepEqual(update.adapter.match.slice(2, 15), filler);
+});
+
+// A hand-narrowed SharePoint adapter: the sites rule only.
+const narrowed = () => ({ ...staleOneDrive(), origin: "https://acme.sharepoint.com", match: [staleOneDrive().match[0]] });
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+
+test("starterRuleAddition appends one current starter rule and changes nothing else", () => {
+  const saved = { ...narrowed(), title: "{title}.docx" };
+  const addition = starterRuleAddition(saved, { query: { sourcedoc: "{doc:uuid}" }, path: PERSONAL_RULE.path });
+  assert.ok(addition);
+  assert.deepEqual(addition.added, [PERSONAL_RULE]);
+  assert.deepEqual(addition.removed, []);
+  assert.deepEqual(addition.adapter, { ...saved, match: [...saved.match, PERSONAL_RULE] });
+  assert.equal(saved.match.length, 1, "the saved adapter is not mutated");
+  // Not gated by STARTER_HISTORY: starterRuleUpdate refuses the narrowed one.
+  assert.equal(starterRuleUpdate(saved), null);
+  const doc = compileDocument({ format: 1, artifacts: [addition.adapter] });
+  assert.equal(doc.ok, true);
+  const url = "https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B8BAF1543-CDBF-4003-A48F-D4A939774FC0%7D";
+  assert.equal(evaluate(doc.doc, url).match, true);
+});
+
+test("starterRuleAddition refuses a rule outside the catalog, a duplicate, a 17th rule, and a non-starter", () => {
+  assert.equal(starterRuleAddition(narrowed(), { path: "/anything/{*}" }), null, "not in the current starter");
+  assert.equal(starterRuleAddition(narrowed(), OLD_SHARE_RULE), null, "a retired rule is not current");
+  assert.equal(starterRuleAddition(narrowed(), narrowed().match[0]), null, "already present");
+  const filler = Array.from({ length: 15 }, (_, at) =>
+    ({ path: `/extra${at}/_layouts/15/Doc.aspx`, query: { sourcedoc: "{doc:uuid}" } }));
+  const full = { ...narrowed(), match: [...narrowed().match, ...filler] };
+  assert.equal(full.match.length, 16);
+  assert.equal(starterRuleAddition(full, PERSONAL_RULE), null, "the 17th rule");
+  assert.equal(starterRuleAddition({ ...narrowed(), type: "sharepoint.page" }, PERSONAL_RULE), null);
+  assert.equal(starterRuleAddition({ ...narrowed(), match: "nonsense" }, PERSONAL_RULE), null);
+});
+
+test("starterRuleAddition adds only the modes the new rule's mode capture needs", () => {
+  const [pr] = starterOffers("https://github.com", ["acme-corp"]);
+  const handWritten = {
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+    modes: { files: "view" },
+    id: "github.pr:{host}/{owner}/{repo}/{number}",
+  };
+  const addition = starterRuleAddition(handWritten, pr.adapter.match[0]);
+  assert.ok(addition);
+  assert.deepEqual(addition.adapter.modes, { files: "view", commits: "view", checks: "view" },
+    "the user's own files mode stays; only the missing modes are added");
+  assert.deepEqual(addition.adapter.scope, handWritten.scope);
+  assert.equal(Object.hasOwn(addition.adapter, "within"), false);
 });
