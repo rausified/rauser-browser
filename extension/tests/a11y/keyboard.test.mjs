@@ -22,7 +22,7 @@ test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop
   await page.locator("#copy-worklog:enabled").waitFor();
   await audit(t, page, "panel/recent");
   await activate(page, "#copy-worklog", "Space");
-  assert.ok(await page.evaluate(() => fixture.actions.includes("copy")));
+  await page.waitForFunction(() => fixture.actions.includes("copy"));
   await activate(page, "#open-settings");
   assert.ok(await page.evaluate(() => fixture.actions.includes("settings")));
 });
@@ -100,7 +100,7 @@ test("settings primary actions and adapter editor work from the keyboard", async
   await activate(page, "#save-vocabulary");
   await page.waitForFunction((before) => fixture.requests.filter((request) => request.type === "update_config").length > before, saved);
   await activate(page, "#copy-diagnostics");
-  assert.ok(await page.evaluate(() => fixture.actions.includes("copy")));
+  await page.waitForFunction(() => fixture.actions.includes("copy"));
 });
 
 test("task list selection follows arrows/Home/End and detail actions survive refresh and dismissal", async (t) => {
@@ -116,7 +116,7 @@ test("task list selection follows arrows/Home/End and detail actions survive ref
   }
   await page.locator("#tasks-detail .task-detail-report").waitFor();
   await activate(page, page.getByRole("button", { name: "Copy report", exact: true }));
-  assert.ok(await page.evaluate(() => fixture.actions.includes("copy")));
+  await page.waitForFunction(() => fixture.actions.includes("copy"));
   await activate(page, page.getByRole("button", { name: "Reuse", exact: true }));
   assert.ok(await page.evaluate(() => fixture.actions.includes("side-panel")));
   await activate(page, page.getByRole("button", { name: "Open page", exact: true }));
