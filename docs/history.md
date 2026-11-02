@@ -102,6 +102,43 @@ The older M2 design follows.
 
 ## §5.7 Side panel layout — history
 
+**Tasks listbox gate recovery (2026-11-02, `brwr-e7b0`).** The external
+cycle-3 gate rejected the recovered accessibility work for critical
+`aria-required-children` violations: day labels exposed headings inside the
+Tasks listbox. Labels now have presentation roles while remaining the
+groups' accessible names through `aria-labelledby`. Empty search results hide
+the listbox and display a message beside it, preserving the selected detail.
+Review of axe's child-role check caught that presentational empty text would
+still leave a listbox without required options. Two controller tests fail
+against the recovered build and pass with the fix. A new browser test checks three named
+groups, a measured populated-listbox role pass, and empty/restored search
+audits. The suite now has 36 browser cases plus two local fixture checks.
+Required external validation is still pending; the assignment stays open.
+
+**Accessibility regression work (2026-11-02, `brwr-e7b0`, browser acceptance
+pending).** Added real-browser tests against the built panel, settings and
+Tasks pages: 24 state/theme axe cases, eight keyboard flows and a seeded
+serious violation. The fixture fulfills local assets and mocks the Chrome
+and native boundaries, with a separate wire-shape check. The npm command
+requires browser execution in macOS CI and the external Cookie commit gate;
+local sandbox skips remain explicit. Incomplete axe results list their
+selectors and help as manual-review items. The implementation also adds tab
+roles/navigation, review Escape/focus return, theme colors and action focus
+retention. Two run-action regressions and the panel-tab regression run
+without a browser. The assignment stays in progress until the external
+required browser run passes; no WCAG or screen-reader certification is claimed.
+
+**Accessibility gate recovery (2026-11-02, `brwr-e7b0`).** The external
+cycle-2 gate rejected the implementation for serious dark-theme contrast
+violations on the Tasks disconnected/error warning. Recovered the
+quarantined work and explicitly painted the shared document with the
+browser's Canvas/CanvasText colors: axe otherwise falls back to white when
+blending translucent backgrounds over the implicit canvas. Two added
+browser regressions change the theme in place and require the warning to
+appear among measured contrast passes. Failed assertions now include axe's
+node failure summaries. Browser acceptance remains pending the required
+external rerun; sandbox skips are still explicit and never count as passes.
+
 **Run-kind restore windows (2026-11-01, `brwr-rl2`, `brwr-67i`).** Task history had already added per-kind service listing and summary restore had adopted it. Replaced the obsolete test documenting crowding with a regression matrix: more than 20 newer tasks, summaries or site drafts cannot hide the other kind in a filtered query. A built panel test restores an older finished summary after newer task and site-draft bursts. The assigned compatibility criterion adds a single legacy summary-list retry for an explicit unsupported-field refusal; it uses the older host's shared window and filters other kinds locally. Task history still requires the filtered/paged protocol and retains its rebuild notice.
 
 **Capture exclusions (built 2026-10-28, `brwr-vny`).** The rule this record introduced is now stated in DESIGN.md §5.7, “Capture exclusions”.

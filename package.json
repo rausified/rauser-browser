@@ -16,7 +16,8 @@
     "probe:m15a": "node scripts/probe-m15a.mjs",
     "test:queue": "python3 -m unittest discover -s scripts/tests && python3 scripts/check_queue_consistency.py",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0"
+    "lint": "eslint . --max-warnings 0",
+    "test:a11y": "node --test --test-isolation=none extension/tests/a11y/fixture.test.mjs extension/tests/a11y/pages.test.mjs extension/tests/a11y/keyboard.test.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

@@ -47,6 +47,7 @@ const layout = element<HTMLDivElement>("tasks-layout");
 const list = element<HTMLDivElement>("tasks-list");
 const detailArea = element<HTMLElement>("tasks-detail");
 const empty = element<HTMLParagraphElement>("tasks-empty");
+const noMatches = element<HTMLParagraphElement>("tasks-none");
 
 const session = new ConfigSession(() => undefined);
 const storage = chrome.storage.local;
@@ -226,6 +227,8 @@ function renderList(): void {
     empty.hidden = false;
     layout.hidden = true;
     list.replaceChildren();
+    list.hidden = true;
+    noMatches.hidden = true;
     return;
   }
   empty.hidden = true;
@@ -235,6 +238,9 @@ function renderList(): void {
     const block = make("div", "task-group-block");
     block.setAttribute("role", "group");
     const label = make("h3", "task-group");
+    // A listbox owns groups/options, not headings. The visible label names
+    // its group through aria-labelledby without adding a heading child.
+    label.setAttribute("role", "presentation");
     label.id = `task-group-${index}`;
     label.textContent = group.label;
     block.setAttribute("aria-labelledby", label.id);
@@ -244,17 +250,16 @@ function renderList(): void {
     block.append(label, items);
     return block;
   });
-  if (blocks.length === 0) {
-    const none = make("p", "tasks-none");
-    none.textContent = "No tasks match.";
-    list.replaceChildren(none);
-  } else {
-    list.replaceChildren(...blocks);
-  }
+  // An empty result is prose beside the widget, not a listbox with no
+  // options. Keep the selected detail available while the user filters.
+  noMatches.hidden = blocks.length !== 0;
+  list.hidden = blocks.length === 0;
+  list.replaceChildren(...blocks);
   markSelected();
   if (hadFocus) {
     const target = (selectedId !== null ? rows.get(selectedId) : undefined) ?? rows.get(order[0] ?? "");
-    target?.row.focus();
+    if (target) target.row.focus();
+    else searchInput.focus();
   }
 }
 
@@ -395,13 +400,17 @@ function taskChanged(run: RunView): void {
 }
 
 function taskDismissed(runId: string): void {
+  const hadDetailFocus = detailArea.contains(document.activeElement);
   dismissed.add(runId);
   const at = order.indexOf(runId);
   renderList();
   if (selectedId !== runId || order.includes(runId)) return;
   const next = order[at] ?? order[at - 1];
-  if (next !== undefined) select(next);
-  else clearDetail();
+  if (next !== undefined) select(next, hadDetailFocus);
+  else {
+    clearDetail();
+    if (hadDetailFocus) searchInput.focus();
+  }
 }
 
 function schedulePoll(): void {
@@ -528,14 +537,15 @@ statusFilter.addEventListener("change", () => renderList());
 showDismissed.addEventListener("change", () => renderList());
 
 list.addEventListener("keydown", (event: KeyboardEvent) => {
-  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+  if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
     event.preventDefault();
     if (order.length === 0) return;
     const at = selectedId === null ? -1 : order.indexOf(selectedId);
     const step = event.key === "ArrowDown" ? 1 : -1;
-    const next = at === -1 ? order[0]! : order[Math.min(order.length - 1, Math.max(0, at + step))]!;
+    const next = event.key === "Home" ? order[0]! : event.key === "End" ? order.at(-1)!
+      : at === -1 ? order[0]! : order[Math.min(order.length - 1, Math.max(0, at + step))]!;
     select(next, true);
-  } else if (event.key === "Enter") {
+  } else if (event.key === "Enter" || event.key === " ") {
     const runId = (event.target as HTMLElement | null)?.dataset?.runId;
     if (runId === undefined) return;
     event.preventDefault();

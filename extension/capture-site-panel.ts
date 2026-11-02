@@ -234,10 +234,16 @@ export class CaptureSitePanel {
   constructor(private readonly session: ConfigSession, private readonly actions: CaptureActions) {
     this.start.addEventListener("click", () => this.open());
     this.recurringStart.addEventListener("click", () => this.openRecurring());
-    this.cancel.addEventListener("click", () => {
+    const cancel = (): void => {
       if (this.saving) return;
       this.close();
-      this.start.focus();
+      (this.start.hidden ? this.recurringStart : this.start).focus();
+    };
+    this.cancel.addEventListener("click", cancel);
+    this.review.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || event.isComposing || this.saving) return;
+      event.preventDefault();
+      cancel();
     });
     this.save.addEventListener("click", () => void this.commit());
     for (const input of [this.repos, this.prs, this.issues, this.orgs]) {
@@ -965,6 +971,7 @@ export class CaptureSitePanel {
     const input = this.draftInput;
     const plan: CapturePlan | DraftPlan | RestorePlan | null = target?.mode === "draft" ? drafted : target?.mode === "restore" ? this.restorePlan : this.plan;
     if (!target || !plan || (target.mode === "draft" && !input) || this.save.disabled || this.actions.isBusy()) return;
+    const hadFocus = this.review.contains(document.activeElement);
     this.saving = true;
     this.actions.changed();
     let committed = false;
@@ -1022,6 +1029,9 @@ export class CaptureSitePanel {
       } finally {
         this.saving = false;
         this.actions.changed();
+        if (committed && hadFocus && this.samePage(this.page, target) && document.activeElement === document.body) {
+          element<HTMLButtonElement>("tab-page").focus();
+        }
       }
     }
   }

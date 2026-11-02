@@ -978,3 +978,68 @@ the range and assert that the two definitions stay aligned. Regenerating
 the protocol leaves its Rust and TypeScript types unchanged because this
 change affects schema validation rather than field types; length bounds
 alone do not validate RFC 3339 syntax (`brwr-0at`).
+
+### 2026-11-02 — Gate keyboard access and accessibility (browser acceptance pending)
+
+Brauser now has a dedicated real-browser accessibility suite for its built
+panel, settings and Tasks pages. It checks setup, configured, disconnected
+and error states in both light and dark themes, reports incomplete axe
+checks for human review, and deliberately inserts an unnamed button to
+prove that the gate rejects a serious violation. The keyboard flows use
+real Tab and key events to open reviews, save capture rules and adapters,
+switch views, start tasks and summaries, and operate task history. Every
+browser resource is fulfilled locally and the Chrome/native boundaries are
+mocked, so these checks never run a real agent or touch user folders.
+
+The accompanying UI changes give This page/Recent proper tab semantics and
+arrow navigation, let Escape close idle reviews with focus returned to the
+entry control, preserve focus through run polls and task dismissal, and
+adjust muted/status/focus colors for light and dark mode. The npm command
+is required by macOS CI and the external commit gate. This is implementation
+progress on `brwr-e7b0`, not completed accessibility acceptance: this sandbox
+cannot start Chromium, so its 33 browser cases explicitly skip and the
+required-mode run fails rather than pretending they passed. The bead stays
+in progress for external browser validation, with manual checks still needed
+for incomplete axe results and screen-reader behavior.
+
+### 2026-11-02 — Recover the accessibility gate's dark-theme warnings
+
+The driver's real-browser run caught a serious contrast failure in the
+Tasks page's disconnected and error messages, so the previous cycle was
+quarantined. This repair recovers that implementation and explicitly paints
+the shared page background and text with the browser's Canvas/CanvasText
+colors. This gives the theme-aware warning text an explicit background;
+axe otherwise blends translucent warning surfaces over white when the
+document background is implicit, even in dark mode.
+
+Two added regressions switch those warning states from light to dark and
+back without reloading. They require opaque computed backgrounds and a
+measured contrast pass for the warning itself, rather than accepting an
+incomplete check. Failure reports now include axe's node explanations to
+help diagnose any further gate failures. The suite has 37 cases: two
+transport/assertion checks run locally, while 35 browser cases remain
+explicit sandbox skips. The strict required-browser command still fails
+inside this sandbox, and `brwr-e7b0` stays open for the external driver to
+validate the repair. This cycle adds no unrelated feature work.
+
+### 2026-11-02 — Repair Tasks listbox semantics after gate rejection
+
+The driver's next browser run found a critical listbox defect in the
+recovered accessibility work: the day labels were headings inside a widget
+that must own groups and options. The visible labels now remain the
+groups' accessible names through `aria-labelledby`, with presentation roles
+that remove the extra heading semantics. When no tasks match a search, a
+message beside the hidden listbox replaces the empty widget while keeping
+the selected task's detail visible. Review caught that presentation alone
+would still leave a listbox without required options, so the empty state
+uses ordinary prose outside the composite. Task grouping, selection and
+keyboard navigation stay available.
+
+Two controller regressions fail on the recovered build and pass
+with the repair. A new browser case verifies Running, Today and Yesterday
+as named groups, requires a measured listbox child-role pass, and audits
+searching to no matches and clearing the filter. The suite now has 38 cases:
+two local fixture checks and 36 browser cases. Browser execution remains
+blocked inside this sandbox, so the required external gate must validate
+the repair before `brwr-e7b0` closes. This red-start cycle recovers the
+quarantined work and repairs it without starting unrelated product work.

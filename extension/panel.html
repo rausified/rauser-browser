@@ -62,12 +62,12 @@
         <div id="task-run-area" class="run-area"></div>
       </section>
 
-      <nav class="panel-tabs" aria-label="Panel views">
-        <button id="tab-page" type="button" class="tab-button active" aria-selected="true">This page</button>
-        <button id="tab-recent" type="button" class="tab-button" aria-selected="false">Recent</button>
-      </nav>
+      <div class="panel-tabs" role="tablist" aria-label="Panel views">
+        <button id="tab-page" type="button" role="tab" aria-controls="page-view" tabindex="0" class="tab-button active" aria-selected="true">This page</button>
+        <button id="tab-recent" type="button" role="tab" aria-controls="recent-view" tabindex="-1" class="tab-button" aria-selected="false">Recent</button>
+      </div>
 
-      <div id="page-view">
+      <div id="page-view" role="tabpanel" aria-labelledby="tab-page">
       <details id="site-pattern-area" hidden>
         <summary>Page patterns</summary>
         <p>Review the page address and patterns from up to 500 links on this page. Only same-site links are included. This preview does not change capture.</p>
@@ -191,7 +191,7 @@
           <ul id="older-note-list" class="plain-list"></ul>
           <div id="older-note-view" hidden>
             <p id="older-note-view-title"></p>
-            <textarea id="older-note-view-body" rows="6" readonly></textarea>
+            <textarea id="older-note-view-body" aria-label="Older note (read only)" rows="6" readonly></textarea>
             <button id="copy-older-note-view" type="button" class="secondary compact">Copy</button>
             <button id="close-older-note-view" type="button" class="secondary compact">Close</button>
           </div>
@@ -211,7 +211,7 @@
       </section>
       </div>
 
-      <div id="recent-view" hidden>
+      <div id="recent-view" role="tabpanel" aria-labelledby="tab-recent" hidden>
         <section aria-labelledby="recent-heading">
           <h2 id="recent-heading">Recent artifacts</h2>
           <div class="preview-grid">
