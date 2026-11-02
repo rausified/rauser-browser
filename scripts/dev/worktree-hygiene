@@ -35,9 +35,14 @@ index.lock. A lock is removed (with --apply) only when it is older than
 --min-lock-age seconds, no process holds it open, and no git process is
 running in, or naming, the repository or any of its worktrees.
 
+--locks-only applies those lock rules and nothing else: no worktree is
+classified or removed, GitHub is not asked, and --base need not resolve.
+scripts/dev/deploy-live runs it before pulling the live install.
+
 Usage:
   scripts/dev/worktree-hygiene [--repo PATH] [--base REF] [--no-gh]
                                [--clear-locks] [--discard-ignored] [--apply]
+  scripts/dev/worktree-hygiene --locks-only [--repo PATH] [--min-lock-age S] [--apply]
 """
 
 from __future__ import annotations
@@ -552,6 +557,9 @@ def main(argv: Optional[list[str]] = None, probe=None, pr_lookup: Optional[PrLoo
     parser.add_argument("--base", default="origin/main", help="merge target (default: origin/main)")
     parser.add_argument("--no-gh", action="store_true", help="do not ask GitHub for PR state")
     parser.add_argument("--clear-locks", action="store_true", help="also check stale index.lock files")
+    parser.add_argument("--locks-only", action="store_true",
+                        help="only check (with --apply, clear) stale index.lock files; "
+                             "never classify or remove worktrees")
     parser.add_argument("--min-lock-age", type=float, default=60.0, help="seconds (default: 60)")
     parser.add_argument("--native-host-manifest", action="append", type=Path,
                         help="native-messaging manifest to honour (repeatable)")
@@ -565,6 +573,11 @@ def main(argv: Optional[list[str]] = None, probe=None, pr_lookup: Optional[PrLoo
     repo = Path(args.repo).resolve()
     probe = probe or SystemProbe()
     lookup = None if args.no_gh else pr_lookup
+    mode = "apply" if args.apply else "dry run (pass --apply to act)"
+    if args.locks_only:
+        repo = list_worktrees(repo)[0].path
+        print(f"worktree hygiene: {repo} index locks only, {mode}", file=out)
+        return 1 if clear_locks(repo, probe, args.min_lock_age, args.apply, out) else 0
     manifests = args.native_host_manifest or DEFAULT_MANIFESTS
     plists = args.launch_agent_plist or DEFAULT_PLISTS
     base_sha = git(repo, "rev-parse", "--verify", f"{args.base}^{{commit}}", check=False)
@@ -581,7 +594,6 @@ def main(argv: Optional[list[str]] = None, probe=None, pr_lookup: Optional[PrLoo
     # run removals and the later lock checks there.
     repo = list_worktrees(repo)[0].path
 
-    mode = "apply" if args.apply else "dry run (pass --apply to act)"
     print(f"worktree hygiene: {repo} against {args.base} {base_sha.stdout.strip()[:10]}, {mode}", file=out)
     failed = False
     for v in verdicts:
@@ -600,23 +612,30 @@ def main(argv: Optional[list[str]] = None, probe=None, pr_lookup: Optional[PrLoo
                 failed = True
                 print(f"  failed  {v.tree.path} [{label}]: {res.stderr.strip()}", file=out)
 
-    if args.clear_locks:
-        verdicts = check_locks(repo, probe, args.min_lock_age)
-        if not verdicts:
-            print("  no index.lock files", file=out)
-        for lv in verdicts:
-            if lv.keep:
-                print(f"  keep    {lv.path}: " + "; ".join(lv.keep), file=out)
-            elif not args.apply:
-                print(f"  clear   {lv.path}: stale (dry run)", file=out)
-            else:
-                try:
-                    lv.path.unlink()
-                    print(f"  cleared {lv.path}", file=out)
-                except OSError as exc:
-                    failed = True
-                    print(f"  failed  {lv.path}: {exc}", file=out)
+    if args.clear_locks and clear_locks(repo, probe, args.min_lock_age, args.apply, out):
+        failed = True
     return 1 if failed else 0
+
+
+def clear_locks(repo: Path, probe, min_age: float, apply: bool, out) -> bool:
+    """Report (and with apply, remove) stale locks; True when a removal failed."""
+    failed = False
+    verdicts = check_locks(repo, probe, min_age)
+    if not verdicts:
+        print("  no index.lock files", file=out)
+    for lv in verdicts:
+        if lv.keep:
+            print(f"  keep    {lv.path}: " + "; ".join(lv.keep), file=out)
+        elif not apply:
+            print(f"  clear   {lv.path}: stale (dry run)", file=out)
+        else:
+            try:
+                lv.path.unlink()
+                print(f"  cleared {lv.path}", file=out)
+            except OSError as exc:
+                failed = True
+                print(f"  failed  {lv.path}: {exc}", file=out)
+    return failed
 
 
 if __name__ == "__main__":

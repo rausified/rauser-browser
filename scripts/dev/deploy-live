@@ -1,0 +1,560 @@
+#!/usr/bin/env python3
+"""Deploy Brauser's live install from its main checkout.
+
+The live install is the main worktree of this repository: Chrome loads its
+extension/dist, the native host manifest points at its target/debug/brauser,
+and the LaunchAgent com.rauser.brauser.service runs that binary. This tool
+replaces the ad hoc deploy, in order, stopping with a non-zero exit at the
+first failure:
+
+  a. check the repo is the main worktree, on main, with no tracked changes
+     (untracked files such as EXPLORER/ are fine);
+  b. refuse while any Brauser run is queued or running (the service restart
+     in step j ends running runs; AGENTS.md), unless --allow-active-runs;
+  c. clear stale index.lock files with `worktree-hygiene --locks-only --apply`
+     (the same minimum-age, no-holder, no-running-git rules as --clear-locks);
+  d. git pull --ff-only;
+  e. cargo build --locked -p brauser --target-dir <repo>/target/deploy-staging,
+     so the live target/debug/brauser is not replaced yet (opening the panel
+     starts the live binary, and a new host restarts the service);
+  f. npm ci --ignore-scripts, when package-lock.json's sha256 differs from the
+     one recorded after the last successful npm ci (in
+     <git dir>/deploy-live-state.json, never committed) or node_modules is
+     missing;
+  g. npm run build:extension (replacing extension/dist restarts nothing);
+  h. check runs again (b): one queued or started during the builds refuses
+     here, with the live binary untouched;
+  i. publish the staged binary: copy it to a temporary file in target/debug,
+     check runs once more, then os.replace it onto target/debug/brauser;
+  j. node scripts/register-dev-host.mjs <extension id> <repo>/target/debug/brauser
+     (the ID comes from the existing native host manifest's single
+     allowed_origins entry unless --extension-id is given);
+  k. send the new binary a framed native-messaging hello and check its
+     protocol_version and that host_version ends with +<new HEAD, 12 chars>;
+  l. print a summary, including "Reload Brauser at chrome://extensions" when
+     extension/dist changed.
+
+Only macOS: the live install is a LaunchAgent and the macOS Chrome
+native-messaging manifest; on any other platform it refuses before acting.
+
+--dry-run runs only the read-only checks (a, b, the extension ID, the npm ci
+decision, and the lock step without --apply) and prints the rest. Every child runs with
+GIT_OPTIONAL_LOCKS=0, so this tool's own `git status` calls (and those of the
+build scripts it starts) never take the index lock.
+
+Usage:
+  scripts/dev/deploy-live [--repo PATH] [--extension-id ID] [--allow-active-runs]
+                          [--support-dir PATH] [--native-host-manifest PATH] [--dry-run]
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+import struct
+import subprocess
+import sys
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+HOST_NAME = "com.rauser.brauser"
+EXTENSION_ID = re.compile(r"^[a-p]{32}$")
+ORIGIN = re.compile(r"^chrome-extension://([a-p]{32})/$")
+COMMIT_LENGTH = 12  # host/src/build_id.rs
+ACTIVE_STATES = ("queued", "running")
+HYGIENE = Path(__file__).resolve().parent / "worktree-hygiene"
+CHILD_ENV = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+HELLO_TIMEOUT = 30.0
+STAGING = Path("target") / "deploy-staging"  # cargo --target-dir, relative to the repo
+STATE_FILE = "deploy-live-state.json"  # in the git dir, so never committed or dirty
+
+
+class DeployError(RuntimeError):
+    """A step failed; the message says which and why."""
+
+
+@dataclass
+class Result:
+    returncode: int
+    stdout: bytes = b""
+    stderr: bytes = b""
+
+    @property
+    def text(self) -> str:
+        return self.stdout.decode("utf-8", "replace")
+
+    @property
+    def err(self) -> str:
+        return self.stderr.decode("utf-8", "replace").strip()
+
+
+# runner(argv, *, cwd, input=None, stream=False, timeout=None) -> Result.
+# stream=True lets a long build print straight to the terminal.
+Runner = Callable[..., Result]
+
+
+def system_runner(argv, *, cwd, input=None, stream=False, timeout=None) -> Result:
+    try:
+        if stream:
+            proc = subprocess.run(argv, cwd=cwd, env=CHILD_ENV, timeout=timeout)
+            return Result(proc.returncode)
+        proc = subprocess.run(argv, cwd=cwd, env=CHILD_ENV, input=input, capture_output=True,
+                              timeout=timeout)
+        return Result(proc.returncode, proc.stdout, proc.stderr)
+    except FileNotFoundError as exc:
+        return Result(127, b"", str(exc).encode())
+    except subprocess.TimeoutExpired:
+        return Result(124, b"", f"timed out after {timeout}s".encode())
+
+
+# --------------------------------------------------------------------------
+# defaults
+
+
+def default_support_dir(home: Path) -> Path:
+    return home / "Library/Application Support/Brauser"
+
+
+def default_manifest(home: Path) -> Path:
+    return home / f"Library/Application Support/Google/Chrome/NativeMessagingHosts/{HOST_NAME}.json"
+
+
+def default_repo(runner: Runner, script_dir: Path) -> Path:
+    """The main worktree of the repository holding this script."""
+    res = runner(["git", "-C", str(script_dir), "worktree", "list", "--porcelain"], cwd=script_dir)
+    if res.returncode != 0:
+        raise DeployError(f"cannot find the main worktree from {script_dir}: {res.err}")
+    for line in res.text.splitlines():
+        if line.startswith("worktree "):
+            return Path(line.removeprefix("worktree "))
+    raise DeployError(f"git worktree list printed no worktree for {script_dir}")
+
+
+# --------------------------------------------------------------------------
+# checks
+
+
+def git(runner: Runner, repo: Path, *args: str) -> Result:
+    return runner(["git", "-C", str(repo), *args], cwd=repo)
+
+
+def git_text(runner: Runner, repo: Path, *args: str) -> str:
+    res = git(runner, repo, *args)
+    if res.returncode != 0:
+        raise DeployError(f"git {' '.join(args)} failed in {repo}: {res.err}")
+    return res.text.strip()
+
+
+def same_path(a: str, b: Path) -> bool:
+    return os.path.realpath(a) == os.path.realpath(str(b))
+
+
+def check_checkout(runner: Runner, repo: Path) -> Path:
+    """Refuse anything but the main worktree on a clean main; return its git dir."""
+    lines = git_text(runner, repo, "rev-parse", "--path-format=absolute", "--show-toplevel",
+                     "--git-dir", "--git-common-dir").splitlines()
+    if len(lines) != 3:
+        raise DeployError(f"unexpected git rev-parse output in {repo}: {lines}")
+    toplevel, git_dir, common_dir = lines
+    if not same_path(toplevel, repo):
+        raise DeployError(f"{repo} is not the top of its checkout ({toplevel} is)")
+    if os.path.realpath(git_dir) != os.path.realpath(common_dir):
+        raise DeployError(f"{repo} is a linked worktree; deploy from the main worktree "
+                          f"(the live install), not {git_dir}")
+    branch = git(runner, repo, "symbolic-ref", "--short", "-q", "HEAD")
+    name = branch.text.strip() if branch.returncode == 0 else ""
+    if not name:
+        raise DeployError(f"{repo} is not on a branch (detached HEAD); check out main")
+    if name != "main":
+        raise DeployError(f"{repo} is on branch {name}, not main")
+    status = git_text(runner, repo, "status", "--porcelain", "--untracked-files=no")
+    if status:
+        n = len(status.splitlines())
+        raise DeployError(f"{repo} has {n} tracked changes; commit, stash or revert them first:\n"
+                          + status)
+    return Path(common_dir)
+
+
+def active_runs(support: Path) -> list[str]:
+    """Runs queued or running, plus runs whose status.json cannot be read."""
+    runs = support / "runs"
+    if not runs.is_dir():
+        return []
+    found = []
+    for d in sorted(runs.iterdir()):
+        status = d / "status.json"
+        if not d.is_dir() or not status.exists():
+            continue
+        try:
+            state = json.loads(status.read_text(encoding="utf-8")).get("state")
+        except (OSError, ValueError, AttributeError) as exc:
+            found.append(f"{d.name} (unreadable status.json: {exc})")
+            continue
+        if state in ACTIVE_STATES:
+            found.append(f"{d.name} ({state})")
+    return found
+
+
+LATE_REFUSAL = ("The live binary is untouched (the new build is staged in {staging}); "
+                "extension/dist is already rebuilt, so do not reload Brauser at "
+                "chrome://extensions yet. Wait for the runs to finish, then rerun "
+                "scripts/dev/deploy-live (the staged build makes it quick).")
+
+
+def check_runs(d: "Deploy", support: Path, allow: bool, late: str = "") -> list[str]:
+    """Refuse (unless allowed) while runs are queued or running; report them.
+    late is added to the refusal once the builds have run."""
+    active = active_runs(support)
+    if active and not allow:
+        raise DeployError("Brauser runs are queued or running; the service restart would end "
+                          "them. Wait for them, or pass --allow-active-runs: "
+                          + ", ".join(active) + (f"\n{late}" if late else ""))
+    d.say("    " + ("deploying anyway (--allow-active-runs): " + ", ".join(active)
+                    if active else "none queued or running"))
+    return active
+
+
+def extension_id_from_manifest(path: Path) -> str:
+    if not path.exists():
+        raise DeployError(f"no native host manifest at {path}; pass --extension-id "
+                          "(the ID shown at chrome://extensions)")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        origins = data["allowed_origins"]
+        if not isinstance(origins, list):
+            raise ValueError("allowed_origins is not a list")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise DeployError(f"cannot read the extension ID from {path}: {exc}; "
+                          "pass --extension-id") from exc
+    if len(origins) != 1:
+        raise DeployError(f"{path} has {len(origins)} allowed_origins entries, not one; "
+                          "pass --extension-id")
+    match = ORIGIN.match(str(origins[0]))
+    if not match:
+        raise DeployError(f"{path}: {origins[0]!r} is not a Chrome extension origin; "
+                          "pass --extension-id")
+    return match.group(1)
+
+
+def protocol_version(repo: Path) -> int:
+    path = repo / "protocol" / "src" / "generated.rs"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise DeployError(f"cannot read {path}: {exc}") from exc
+    match = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", text)
+    if not match:
+        raise DeployError(f"no PROTOCOL_VERSION in {path}")
+    return int(match.group(1))
+
+
+# --------------------------------------------------------------------------
+# native messaging hello
+
+
+def hello_frame(version: int, request_id: str) -> bytes:
+    body = json.dumps({"type": "hello", "protocol_version": version,
+                       "request_id": request_id}).encode()
+    return struct.pack("<I", len(body)) + body
+
+
+def parse_frame(data: bytes) -> dict:
+    if len(data) < 4:
+        raise DeployError(f"the host answered {len(data)} bytes, not a frame")
+    (length,) = struct.unpack("<I", data[:4])
+    body = data[4:4 + length]
+    if len(body) != length:
+        raise DeployError(f"the host's frame is truncated ({len(body)} of {length} bytes)")
+    try:
+        value = json.loads(body)
+    except ValueError as exc:
+        raise DeployError(f"the host's frame is not JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise DeployError("the host's frame is not a JSON object")
+    return value
+
+
+def verify_hello(reply: dict, version: int, head: str) -> str:
+    if reply.get("type") != "hello_result":
+        raise DeployError(f"the host answered {reply.get('type')!r}, not hello_result: "
+                          + json.dumps(reply)[:300])
+    if reply.get("protocol_version") != version:
+        raise DeployError(f"the host speaks protocol_version {reply.get('protocol_version')}, "
+                          f"but protocol/src/generated.rs says {version}")
+    host_version = str(reply.get("host_version", ""))
+    want = "+" + head[:COMMIT_LENGTH]
+    if not host_version.endswith(want):
+        raise DeployError(f"host_version {host_version!r} does not end with {want} "
+                          "(an old or -dirty build answered)")
+    return host_version
+
+
+# --------------------------------------------------------------------------
+# helpers
+
+
+def lockfile_sha256(repo: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256((repo / "package-lock.json").read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def read_state(git_dir: Path) -> dict:
+    try:
+        value = json.loads((git_dir / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def write_state(git_dir: Path, state: dict) -> None:
+    path = git_dir / STATE_FILE
+    tmp = path.with_name(f".{STATE_FILE}.{uuid.uuid4().hex[:8]}")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def npm_ci_reason(repo: Path, git_dir: Path) -> Optional[str]:
+    if not (repo / "node_modules").is_dir():
+        return "node_modules is missing"
+    recorded = read_state(git_dir).get("package_lock_sha256")
+    if not recorded:
+        return f"no npm ci recorded yet in {git_dir / STATE_FILE}"
+    if lockfile_sha256(repo) != recorded:
+        return "package-lock.json differs from the last npm ci"
+    return None
+
+
+def stage_copy(staged: Path, live: Path) -> Path:
+    """Copy the staged binary next to the live one (same directory, so the
+    later os.replace is an atomic rename); return the temporary file."""
+    if not staged.is_file():
+        raise DeployError(f"cargo build left no binary at {staged}")
+    live.parent.mkdir(parents=True, exist_ok=True)
+    tmp = live.with_name(f".{live.name}.deploy-{uuid.uuid4().hex[:8]}")
+    try:
+        shutil.copy2(staged, tmp)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise DeployError(f"cannot copy {staged} to {tmp}: {exc}") from exc
+    return tmp
+
+
+def dist_digest(repo: Path) -> Optional[str]:
+    dist = repo / "extension" / "dist"
+    if not dist.is_dir():
+        return None
+    h = hashlib.sha256()
+    for path in sorted(p for p in dist.rglob("*") if p.is_file()):
+        h.update(str(path.relative_to(dist)).encode() + b"\0")
+        try:
+            h.update(path.read_bytes())
+        except OSError:
+            h.update(b"<unreadable>")
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+class Deploy:
+    def __init__(self, runner: Runner, repo: Path, out, dry_run: bool):
+        self.runner, self.repo, self.out, self.dry_run = runner, repo, out, dry_run
+
+    def say(self, text: str) -> None:
+        print(text, file=self.out, flush=True)
+
+    def step(self, label: str) -> None:
+        self.say(f"==> {label}")
+
+    def act(self, argv: list[str], what: str) -> None:
+        """Run an acting command (or print it in a dry run); raise on failure."""
+        if self.dry_run:
+            self.say(f"    would run: {shlex.join(argv)}")
+            return
+        self.say(f"    $ {shlex.join(argv)}")
+        res = self.runner(argv, cwd=self.repo, stream=True)
+        if res.returncode != 0:
+            raise DeployError(f"{what} failed (exit {res.returncode})"
+                              + (f": {res.err}" if res.err else ""))
+
+
+# --------------------------------------------------------------------------
+# CLI
+
+
+def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=sys.stdout,
+         home: Optional[Path] = None, platform: Optional[str] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--repo", type=Path,
+                        help="main checkout to deploy (default: the main worktree of this "
+                             "script's repository)")
+    parser.add_argument("--extension-id", help="Chrome extension ID (default: from the native "
+                                               "host manifest's allowed_origins)")
+    parser.add_argument("--allow-active-runs", action="store_true",
+                        help="deploy even with runs queued or running (the restart ends them)")
+    parser.add_argument("--support-dir", type=Path,
+                        help="Brauser support dir (default: ~/Library/Application Support/Brauser)")
+    parser.add_argument("--native-host-manifest", type=Path,
+                        help="native host manifest to read the extension ID from")
+    parser.add_argument("--dry-run", action="store_true", help="print the steps; change nothing")
+    args = parser.parse_args(argv)
+
+    platform = sys.platform if platform is None else platform
+    if platform != "darwin":
+        print(f"deploy-live: error: deploy-live only runs on macOS (the live install is a "
+              f"LaunchAgent and the macOS Chrome native-messaging manifest); this is {platform}",
+              file=out)
+        return 2
+    runner = runner or system_runner
+    home = home or Path.home()
+    support = args.support_dir or default_support_dir(home)
+    manifest = args.native_host_manifest or default_manifest(home)
+    try:
+        repo = (args.repo or default_repo(runner, Path(__file__).resolve().parent)).resolve()
+        d = Deploy(runner, repo, out, args.dry_run)
+        d.say(f"deploy-live: {repo}" + (" (dry run: nothing changes)" if args.dry_run else ""))
+
+        d.step("checkout: main worktree, branch main, no tracked changes")
+        git_dir = check_checkout(runner, repo)
+        d.say("    ok")
+
+        d.step(f"runs in {support / 'runs'}")
+        active = check_runs(d, support, args.allow_active_runs)
+
+        if args.extension_id is not None:
+            if not EXTENSION_ID.match(args.extension_id):
+                raise DeployError(f"{args.extension_id!r} is not a Chrome extension ID "
+                                  "(32 letters a-p)")
+            ext_id = args.extension_id
+        else:
+            ext_id = extension_id_from_manifest(manifest)
+        binary = repo / "target" / "debug" / "brauser"
+        staging = repo / STAGING
+        staged = staging / "debug" / "brauser"
+
+        d.step("stale index.lock files (worktree-hygiene --locks-only)")
+        hygiene = [sys.executable, str(HYGIENE), "--repo", str(repo), "--locks-only"]
+        if not args.dry_run:
+            hygiene.append("--apply")
+        res = runner(hygiene, cwd=repo)
+        for line in res.text.splitlines():
+            d.say("    " + line)
+        if res.returncode != 0:
+            raise DeployError(f"worktree-hygiene --locks-only failed (exit {res.returncode})"
+                              + (f": {res.err}" if res.err else ""))
+        lock_lines = [ln.strip() for ln in res.text.splitlines()
+                      if ln.strip().startswith(("cleared", "keep", "clear ", "failed"))]
+
+        old = git_text(runner, repo, "rev-parse", "HEAD")
+        dist_before = dist_digest(repo)
+
+        d.step("git pull --ff-only")
+        if args.dry_run:
+            d.act(["git", "-C", str(repo), "pull", "--ff-only"], "git pull")
+            new = old
+        else:
+            res = git(runner, repo, "pull", "--ff-only")
+            if res.returncode != 0:
+                raise DeployError("git pull --ff-only failed: " + (res.err or res.text.strip())
+                                  + "\n(an index.lock kept above blocks the pull; see "
+                                    "scripts/dev/index-lock-watch to find who leaves it)")
+            new = git_text(runner, repo, "rev-parse", "HEAD")
+            d.say(f"    {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}" if new != old
+                  else f"    already up to date at {old[:COMMIT_LENGTH]}")
+
+        d.step(f"cargo build --locked -p brauser (into {STAGING}; the live binary waits)")
+        d.act(["cargo", "build", "--locked", "-p", "brauser", "--target-dir", str(staging)],
+              "cargo build --locked -p brauser")
+
+        d.step("npm ci")
+        npm_reason = npm_ci_reason(repo, git_dir)
+        if args.dry_run and not npm_reason:
+            d.say("    would run npm ci --ignore-scripts if the pull changes package-lock.json")
+            npm_note = "npm ci: decided after the pull"
+        elif npm_reason:
+            d.say(f"    {npm_reason}")
+            d.act(["npm", "ci", "--ignore-scripts"], "npm ci")
+            if not args.dry_run:
+                write_state(git_dir, {**read_state(git_dir),
+                                      "package_lock_sha256": lockfile_sha256(repo)})
+            npm_note = f"npm ci: {'would run' if args.dry_run else 'ran'} ({npm_reason})"
+        else:
+            npm_note = "npm ci: skipped (package-lock.json matches the last npm ci)"
+            d.say("    " + npm_note)
+
+        d.step("npm run build:extension")
+        d.act(["npm", "run", "build:extension"], "npm run build:extension")
+
+        # The builds above can take minutes; a run queued or started meanwhile
+        # would be ended by the service restart below, so check again before
+        # the live binary changes.
+        late = LATE_REFUSAL.format(staging=staging)
+        d.step(f"runs in {support / 'runs'} (again, before the binary is published)")
+        for run in check_runs(d, support, args.allow_active_runs, late):
+            if run not in active:
+                active.append(run)
+
+        d.step(f"publish {staged} to {binary}")
+        if args.dry_run:
+            d.say(f"    would copy {staged} to a temporary file in {binary.parent}, check runs "
+                  f"once more, then os.replace it onto {binary}")
+        else:
+            tmp = stage_copy(staged, binary)
+            try:
+                for run in check_runs(d, support, args.allow_active_runs, late):
+                    if run not in active:
+                        active.append(run)
+                os.replace(tmp, binary)
+            finally:
+                tmp.unlink(missing_ok=True)
+            d.say(f"    replaced {binary}")
+
+        d.step("register the native host and service")
+        d.act(["node", "scripts/register-dev-host.mjs", ext_id, str(binary)],
+              "node scripts/register-dev-host.mjs")
+
+        d.step("hello to the new host")
+        origin = f"chrome-extension://{ext_id}/"
+        if args.dry_run:
+            d.say(f"    would send a framed hello to {binary} {origin} and check protocol_version "
+                  f"and host_version +<new HEAD {COMMIT_LENGTH} chars>")
+            host_version = "(dry run)"
+        else:
+            version = protocol_version(repo)
+            res = runner([str(binary), origin], cwd=repo,
+                         input=hello_frame(version, f"deploy-live-{uuid.uuid4().hex[:8]}"),
+                         timeout=HELLO_TIMEOUT)
+            if res.returncode != 0 and not res.stdout:
+                raise DeployError(f"hello to {binary} failed (exit {res.returncode})"
+                                  + (f": {res.err}" if res.err else ""))
+            host_version = verify_hello(parse_frame(res.stdout), version, new)
+            d.say(f"    host_version {host_version}, protocol_version {version}")
+
+        extension_changed = (not args.dry_run) and dist_digest(repo) != dist_before
+        d.say("")
+        d.say("summary" + (" (dry run)" if args.dry_run else ""))
+        d.say(f"  commits:   {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}" if new != old
+              else f"  commits:   already up to date at {old[:COMMIT_LENGTH]}")
+        d.say("  locks:     " + ("; ".join(lock_lines) if lock_lines else "none"))
+        d.say(f"  {npm_note}")
+        d.say(f"  host:      {host_version} ({binary})")
+        d.say(f"  extension: {ext_id}" + (", changed" if extension_changed else ", unchanged"))
+        if extension_changed:
+            d.say("  Reload Brauser at chrome://extensions to load the new extension build.")
+        if active:
+            d.say("  runs that were active: " + ", ".join(active))
+        return 0
+    except DeployError as exc:
+        print(f"deploy-live: error: {exc}", file=out)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
