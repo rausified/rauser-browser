@@ -4,6 +4,35 @@ Parent: `brwr-6x2`. This brings forward only the re-keying part of DESIGN.md
 §12.2 step 7.2. The parent stays in progress until the panel can review and
 commit a replacement policy while preserving activity, notes and summaries.
 
+## Open decisions
+
+- Resolved by John's 2026-11-01 approval (parent bead): continue the
+  append-only re-key direction; ordinary config saves retain the ID freeze.
+- Resolved by Cookie for the assigned review corrections (2026-11-02): an
+  owned daily log with a recognizable but invalid visit marker refuses review.
+  Unowned Markdown still cannot supply history; ordinary indexing retains its
+  tolerant parsing and frozen recovery behavior.
+- Resolved by Cookie: keys evidenced on another origin are occupied, including
+  containers without direct visits. A shared source or occupied destination
+  requires explicit conflict resolution; this stage supplies none and refuses
+  approval. Other origins never become proposed migration rows.
+
+## Design challenge
+
+2026-11-02, before the assigned `brwr-eo7`/`brwr-r62` corrections: the
+`/root/design_challenge` reviewer challenged a second marker grammar and
+foreign-origin migration rows. Adopt its simpler alternatives: wrap the existing
+event/overflow parsers with strict rejection of recognizable invalid owned
+markers, retaining legacy preceding-line context; build foreign-key occupancy
+separately from the reviewed site's mappings. Check occupied sources as well
+as destinations, include owned files and verified implicit containers, and
+bind every contract used for occupancy into the report revision. Do not parse
+removed parameter values or choose a file winner. Damaged/missing ownership
+headers remain outside owned log ingestion, as in ordinary indexing.
+
+The earlier alias/journal stages remain as built below. Durable apply still
+needs its own migration design challenge before implementation.
+
 ## Ordered delivery
 
 1. **Alias rehearsal (`brwr-sq9`, complete 2026-10-28).** Added deterministic replay and
@@ -123,6 +152,14 @@ That choice also protects URL-keyed summaries.
 Container mappings are derived from a recorded contract whose primary ID
 matches the known source, including containers with no direct open.
 
+The occupancy check includes other origins' log and owned note/summary keys,
+plus implicit containers verified through all recorded contracts. Only the
+reviewed origin supplies migration rows. A source also evidenced on another
+origin receives `other_origin_source`; a foreign-occupied target receives
+`other_origin_destination` and `merged`. Both refuse approval. This includes
+HTTP/HTTPS rules sharing `{host}` and keys shared before the proposed edit.
+The contract revision binds all origins' contracts used for this check.
+
 A proposed target that is also an old source moving elsewhere (or one with
 unresolved evidence) produces `simultaneous_key_reuse`. Thus A→B/B→A and
 A→B/B→C are not flattened into a sequential alias component. Missing proposed
@@ -149,6 +186,13 @@ incomplete history and conflicting event IDs refuse the review instead of
 presenting a partial plan. Coordination lock files may be created. Config,
 adopted state, cache, logs, notes, summaries and browser-local recovery are
 unchanged. There is no apply flag or native/worker migration message.
+
+In an owned daily log, a recognizable `<!-- brauser:visit` marker that the
+existing event/overflow parsers cannot validate refuses review with the log
+path and line number. Truncated and joined markers cannot become an empty,
+approvable report. Valid legacy visits retain preceding-line context, and both
+overflow forms remain valid. Ordinary indexing still skips damaged markers
+so frozen capture recovery can complete them later.
 
 Next: the journal below records reviewed decisions; `brwr-dbp` implements file/index
 integration, then panel review follows. Keep `brwr-6x2` in progress and
@@ -238,3 +282,26 @@ outcomes (53 IPC skips), all 15 extension files, both Clippy builds, two script
 files and 10,696 inert Markdown renderings. Fresh review fixed parent-directory
 syncing when retrying an already-created journal directory. This completes
 brwr-wvi only; brwr-dbp and panel review remain before parent acceptance.
+
+
+## Review prerequisite corrections — 2026-11-02
+
+Completed assigned brwr-eo7 and brwr-r62 before brwr-dbp can rely on reviewed
+approvals. Seven regressions cover damaged markers through planning/recording,
+real CLI refusal, valid legacy/overflow compatibility, foreign log/note/summary
+and implicit-container occupancy, shared sources and unrelated-origin scope.
+The damaged-marker and collision tests reproduced the old defects before the
+fix. Full required/README checks pass with 1,314 Rust-reported outcomes (92
+explicit IPC skips), 40 extension files, both Clippy configurations, eight
+script files, 221 Python tests (92 platform skips) and 10,696 inert Markdown
+renderings. The accessibility run passes two fixture checks and explicitly
+skips 36 browser cases blocked by this sandbox. Fresh complete-diff review and
+one local Codex reviewer pass report no findings. The driver still owns its
+independent review, external test gate and publication.
+
+Next: brwr-dbp's separate migration design challenge and implementation,
+then panel review. Recompute all inputs at apply even for an old journal
+approval; exact journal retries only acknowledge historical decisions. The
+parent stays in progress and ordinary config saves retain the ID freeze.
+Plain-language conflict evidence is proposed as brwr-pgxz; it is unassigned
+and must not displace the remaining assigned work.
