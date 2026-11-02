@@ -2,10 +2,10 @@
 // the fake DOM elements and shared helpers are in ./harness.mjs. Each test
 // loads a fresh copy of the page against a scripted native host.
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import {
   ARTICLE_URL, FakeElement, NOT_SET_UP, PROTOCOL_VERSION, READY, RUN_VIEW, SET_UP, TASKS_HTML, buttonIn,
-  descendants, hostReply, install, pageElements, settle, storageArea, storageKey, teardown, until,
+  descendants, hostReply, install, pageElements, storageArea, storageKey, teardown,
 } from "./harness.mjs";
 
 const { serviceSetupText } = await import("../../dist/agent.js");
@@ -16,6 +16,34 @@ const DISMISSED_KEY = storageKey("dismissed_runs_v1");
 const SELECT_KEY = storageKey("tasks_select_v1");
 const MINUTE = 60_000;
 const BASE = Date.now();
+const LIST_REFRESH_MS = 2000;
+
+// Advance only when a test asks for a poll. Draining zero-delay transport
+// replies keeps the real page controller in use without wall-clock waits.
+async function settle(ms = 0) {
+  mock.timers.tick(ms);
+  for (let turn = 0; turn < 20; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    mock.timers.tick(0);
+  }
+}
+
+async function until(condition, what) {
+  for (let turn = 0; turn < 100; turn += 1) {
+    if (condition()) return;
+    await settle();
+  }
+  assert.fail(`Timed out waiting for ${what}`);
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test.beforeEach(() => mock.timers.enable({ apis: ["setTimeout"] }));
+test.afterEach(() => mock.timers.reset());
 
 function runId(n) {
   return `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -57,7 +85,7 @@ async function openTasks({
   elements.get("tasks-filter").value = "all";
   const state = {
     runs: structuredClone(runs), requests: [], created: [], counts: new Map(), local,
-    session, hidden: false, sidePanelOpens: [],
+    session, hidden: false, sidePanelOpens: [], pageSize,
     // What get_config reports; a test may change it, as setting up a harness does.
     agentStatus,
   };
@@ -105,8 +133,8 @@ async function openTasks({
       const start = request.before
         ? sorted.findIndex((run) => run.run_id === request.before.run_id) + 1
         : 0;
-      const page = sorted.slice(start, start + pageSize).map((run) => ({ ...run, task_report: null }));
-      return { type: "runs_listed", runs: page, more: start + pageSize < sorted.length };
+      const page = sorted.slice(start, start + state.pageSize).map((run) => ({ ...run, task_report: null }));
+      return { type: "runs_listed", runs: page, more: start + state.pageSize < sorted.length };
     }
     if (request.type === "get_run") {
       const run = state.runs.find((candidate) => candidate.run_id === request.run_id);
@@ -195,6 +223,10 @@ async function openTasks({
       location.hash = next;
       for (const listener of windowListeners.get("hashchange") ?? []) listener({ type: "hashchange" });
     },
+    close() {
+      state.hidden = true;
+      for (const listener of windowListeners.get("pagehide") ?? []) listener({ type: "pagehide" });
+    },
     // A select signal (task-handoff.ts) another Tasks tab wrote for this
     // one, the way `openTasksPage` sends Tasks ↗ to an already-open tab.
     selectSignal(runId) {
@@ -204,22 +236,19 @@ async function openTasks({
     },
   };
   // A loaded page keeps polling; hiding it at the end of each test stops it.
-  teardown.push(() => {
-    state.hidden = true;
-    for (const listener of windowListeners.get("pagehide") ?? []) listener({ type: "pagehide" });
-  });
+  teardown.push(() => page.close());
   return page;
 }
 
 const listed = (page) => until(() => page.rows().length > 0, "the task list");
 
-// `until` gives up after 2 s, about one poll; this waits through the next.
+// Polling is driven independently of zero-delay host replies.
 async function afterPoll(condition, what) {
-  const deadline = Date.now() + 5_000;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
-    await settle(5);
+  for (let poll = 0; poll < 5; poll += 1) {
+    await settle(LIST_REFRESH_MS);
+    if (condition()) return;
   }
+  assert.fail(`Timed out waiting for ${what}`);
 }
 
 test("the page lists every page of tasks and selects the newest", async () => {
@@ -320,6 +349,96 @@ test("an unknown #run= selects the newest task", async () => {
   }
 });
 
+for (const firstFails of [false, true]) {
+  test(`a hashchange during a held ${firstFails ? "failed" : "successful"} refresh finds a just-started run`, async () => {
+    const held = deferred();
+    let lists = 0;
+    const page = await openTasks({
+      runs: [task(1), task(2)],
+      intercept: (request) => request.type === "list_runs" && ++lists === 2 ? held.promise : null,
+    });
+    await listed(page);
+    page.setHidden(true);
+    page.setHidden(false);
+    await until(() => lists === 2, "the held refresh");
+    page.state.runs.unshift(task(0));
+    page.hashChanged(`#run=${runId(0)}`);
+    // Multiple refresh requests during a read need only one follow-up.
+    page.setHidden(true);
+    page.setHidden(false);
+    await settle();
+    assert.equal(lists, 2, "no overlapping list request");
+    held.resolve(firstFails
+      ? { type: "error", code: "internal", message: "disk full" }
+      : { type: "runs_listed", runs: [task(1), task(2)], more: false });
+    await until(() => page.detailId() === runId(0), "the newly started task");
+    assert.deepEqual(page.selected(), [runId(0)]);
+    assert.equal(page.location.hash, `#run=${runId(0)}`);
+    assert.equal(lists, 3, "exactly one follow-up");
+    assert.equal(page.el("tasks-status-box").hidden, true);
+  });
+}
+
+test("a held refresh follows the latest hash instead of an earlier handler's target", async () => {
+  const held = deferred();
+  let lists = 0;
+  const page = await openTasks({
+    runs: [task(1), task(2)],
+    intercept: (request) => request.type === "list_runs" && ++lists === 2 ? held.promise : null,
+  });
+  await listed(page);
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => lists === 2, "the held refresh");
+  page.state.runs.unshift(task(0));
+  page.hashChanged(`#run=${runId(0)}`);
+  page.hashChanged(`#run=${runId(2)}`);
+  held.resolve({ type: "runs_listed", runs: [task(0), task(1), task(2)], more: false });
+  await until(() => lists === 3, "the follow-up");
+  await settle();
+  assert.deepEqual(page.selected(), [runId(2)]);
+  assert.equal(page.location.hash, `#run=${runId(2)}`);
+});
+
+test("an initially empty history preserves the requested hash through an intermediate list", async () => {
+  const held = deferred();
+  let lists = 0;
+  const page = await openTasks({
+    runs: [],
+    intercept: (request) => request.type === "list_runs" && ++lists === 2 ? held.promise : null,
+  });
+  await until(() => page.el("tasks-empty").hidden === false, "the empty history");
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => lists === 2, "the held refresh");
+  page.state.runs = [task(0), task(1)];
+  page.hashChanged(`#run=${runId(0)}`);
+  held.resolve({ type: "runs_listed", runs: [task(1)], more: false });
+  await until(() => lists === 3, "the follow-up");
+  await settle();
+  assert.deepEqual(page.selected(), [runId(0)]);
+  assert.equal(page.location.hash, `#run=${runId(0)}`);
+});
+
+test("pagehide stops a pending refresh and its queued follow-up", async () => {
+  const held = deferred();
+  let lists = 0;
+  const page = await openTasks({
+    runs: [task(1)],
+    intercept: (request) => request.type === "list_runs" && ++lists === 2 ? held.promise : null,
+  });
+  await listed(page);
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => lists === 2, "the held refresh");
+  page.hashChanged(`#run=${runId(0)}`);
+  page.close();
+  held.resolve({ type: "runs_listed", runs: [task(0), task(1)], more: false });
+  await settle(LIST_REFRESH_MS * 2);
+  assert.equal(lists, 2);
+  assert.deepEqual(page.rows().map((row) => row.dataset.runId), [runId(1)]);
+});
+
 test("the page does not list runs without a harness or a run record", async () => {
   const page = await openTasks({ agentStatus: NOT_SET_UP });
   await until(() => page.el("tasks-status").textContent !== "" && page.sent("get_config").length > 0, "the status");
@@ -416,7 +535,7 @@ test("an active row missing from the first page is fetched once and shows its fi
   assert.equal(fetches[0].since_offset, 17);
   // Nothing is active now, so the page stops polling.
   const lists = page.sent("list_runs").length;
-  await settle(2_300);
+  await settle(LIST_REFRESH_MS * 2);
   assert.equal(page.sent("list_runs").length, lists, "no list refresh once nothing is active");
 });
 
@@ -427,6 +546,52 @@ test("an active row the service no longer holds is dropped from the list", async
   page.state.runs.splice(2, 1);
   await afterPoll(() => page.rows().length === 2, "the pruned task to go");
   assert.equal(page.sent("get_run").filter((request) => request.run_id === runId(3)).length, 1);
+});
+
+test("off-page fetches start together and preserve partial successes", async () => {
+  const held = deferred();
+  let fetching = false;
+  const page = await openTasks({
+    runs: [task(1), ...[2, 3, 4].map((n) => task(n, { state: "running" }))],
+    intercept: (request) => {
+      if (!fetching || request.type !== "get_run") return null;
+      if (request.run_id === runId(2)) return held.promise;
+      if (request.run_id === runId(3)) return { type: "error", code: "internal", message: "disk full" };
+      return null;
+    },
+  });
+  await until(() => page.rows().length === 4, "all four tasks");
+  await until(() => page.detailId() === runId(1), "the terminal detail");
+  fetching = true;
+  page.state.pageSize = 1;
+  page.state.runs = [task(1), task(2), task(3, { state: "running" })];
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => page.sent("get_run").some((request) => request.run_id === runId(4)), "all fetches to start before releasing task 2");
+  held.resolve({ type: "run_fetched", run: task(2), stream_text: "", next_offset: 0, more: false });
+  await until(() => page.rows().length === 3 && page.pill(runId(2)).textContent.startsWith("Done"), "the successful finish and pruned row");
+  assert.match(page.pill(runId(3)).textContent, /^Running/);
+  fetching = false;
+  page.state.runs[2] = task(3);
+  await afterPoll(() => page.pill(runId(3)).textContent.startsWith("Done"), "the failed fetch retried");
+});
+
+test("off-page replies after pagehide do not update the list", async () => {
+  const held = deferred();
+  let fetching = false;
+  const page = await openTasks({
+    runs: [task(1), task(2, { state: "running" })], pageSize: 1,
+    intercept: (request) => fetching && request.type === "get_run" && request.run_id === runId(2) ? held.promise : null,
+  });
+  await until(() => page.rows().length === 2, "both tasks");
+  fetching = true;
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => page.sent("get_run").some((request) => request.run_id === runId(2)), "the off-page fetch");
+  page.close();
+  held.resolve({ type: "run_fetched", run: task(2), stream_text: "", next_offset: 0, more: false });
+  await settle(LIST_REFRESH_MS * 2);
+  assert.match(page.pill(runId(2)).textContent, /^Running/);
 });
 
 test("an older host gets the rebuild text", async () => {
@@ -505,7 +670,7 @@ test("the page stops polling while hidden and refreshes on show", async () => {
   page.setHidden(true);
   await settle(20);
   const before = page.sent("list_runs").length;
-  await settle(2_300);
+  await settle(LIST_REFRESH_MS * 2);
   assert.equal(page.sent("list_runs").length, before, "no list refresh while hidden");
   page.state.runs.unshift(task(0));
   page.setHidden(false);
@@ -521,7 +686,7 @@ test("a task finishing updates its row pill", async () => {
   assert.match(page.pill(runId(1)).className, /\brunning\b/);
   assert.match(page.pill(runId(1)).textContent, /^Running/);
   page.state.runs[0] = task(1, { state: "failed", error: "boom" });
-  await until(() => /\bfailed\b/.test(page.pill(runId(1)).className), "the failed pill");
+  await afterPoll(() => /\bfailed\b/.test(page.pill(runId(1)).className), "the failed pill");
   assert.equal(page.pill(runId(1)).textContent, "Failed");
   // A finished task moves from Running to its day.
   const groups = descendants(page.el("tasks-list")).filter((node) => node.tagName === "H3");
@@ -621,14 +786,22 @@ test("a list error clears once a refresh works", async () => {
 });
 
 test("Reuse still hands off the instruction, to any window, when opening the side panel fails", async () => {
-  const page = await openTasks({ sidePanelFails: true });
+  const session = new Map();
+  const page = await openTasks({ sidePanelFails: true, windowId: 9, session });
   await listed(page);
   await until(() => buttonIn(page.el("tasks-detail"), "Reuse"), "the Reuse button");
   buttonIn(page.el("tasks-detail"), "Reuse").click();
   await until(() => page.el("tasks-status").textContent === "Instruction sent to the task bar.", "the Reuse text");
   const handed = page.state.session.get(storageKey("task_reuse_v1"));
+  assert.deepEqual(page.state.sidePanelOpens, [{ windowId: 9 }], "Reuse first attempts to open this page's own window");
   assert.equal(handed.instruction, "Task 1");
   assert.equal(handed.window_id, null);
+  teardown.splice(0).forEach((listener) => listener());
+  const panel = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY, config: SET_UP, session, windowId: 4,
+  });
+  await until(() => panel.el("task-input").value === "Task 1", "a different window's task bar filled from Reuse");
+  assert.equal(session.has(storageKey("task_reuse_v1")), false, "the other panel consumed the handoff");
 });
 
 test("Reuse opens the side panel and fills its task bar, end to end", async () => {

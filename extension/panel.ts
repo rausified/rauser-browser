@@ -1252,9 +1252,12 @@ function announceTask(run: RunView): void {
 function startTracker(): TaskTracker {
   tracker ??= new TaskTracker({
     host: session.host,
-    now: () => Date.now(),
     visible: () => document.visibilityState !== "hidden",
     changed: ({ running, newestId }) => {
+      // Automatic polls recover too; a later summary restore must not
+      // bring back an error from a task list that has since succeeded.
+      if (trackerError !== null) clearNotice(taskRunArea);
+      trackerError = null;
       tasksRunning = running;
       newestTaskId = newestId;
       const label = running > 0 ? `Tasks · ${running} running ↗` : "Tasks ↗";
@@ -1308,10 +1311,13 @@ async function checkReuse(): Promise<void> {
  * when the tracker's latest list found any task (even only finished ones,
  * so an empty summary restore cannot clear history the Tasks page still
  * has), or when the task list failed and nothing is known. */
-function restoreCards(): Promise<void> {
-  return restoreRunCards([runCards], taskRunArea, {
+async function restoreCards(): Promise<void> {
+  await restoreRunCards([runCards], taskRunArea, {
     host: session.host, now: () => Date.now(), storage: chrome.storage.local, openSettings,
   }, { keepRecord: tasksRunning > 0 || newestTaskId !== null || trackerError !== null });
+  // Summary restoration clears the shared list notice. The task list's
+  // last failure still stands, including restores triggered by the worker.
+  if (trackerError !== null && !closed) showListFailure(taskRunArea, trackerError, openSettings);
 }
 
 /** Shows a notice from the worker's shortcut or context-menu summary when it
@@ -1912,9 +1918,6 @@ void (async () => {
     // list failure notice from either stays under the bar.
     await refreshTasks();
     await restoreCards();
-    // A summary list that works clears the notice; the task list's failure
-    // still stands.
-    if (trackerError !== null && !closed) showListFailure(taskRunArea, trackerError, openSettings);
   }
   // A panel closed meanwhile leaves a stored notice for the next one.
   if (closed) return;

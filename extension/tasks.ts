@@ -67,7 +67,8 @@ let listed = false;
 // The open (first full listing) in flight, so a show or a select signal
 // that retries it after a failure or the setup text runs it only once.
 let opening: Promise<void> | null = null;
-let refreshing = false;
+let refreshing: Promise<void> | null = null;
+let refreshAgain = false;
 // Whether the status line shows a list error, the only line a refresh that
 // works may clear (a Reuse or Open page line stays).
 let listErrorShown = false;
@@ -403,7 +404,7 @@ function taskDismissed(runId: string): void {
 }
 
 function schedulePoll(): void {
-  if (closed || !listed || pollTimer !== null || !visible() || !runs.some((run) => !isTerminal(run))) return;
+  if (closed || !listed || refreshing !== null || pollTimer !== null || !visible() || !runs.some((run) => !isTerminal(run))) return;
   pollTimer = setTimeout(() => {
     pollTimer = null;
     void refresh();
@@ -420,34 +421,50 @@ function stopPolling(): void {
  * left out gets one get_run, as the panel's TaskTracker does, so it still
  * shows its finish (and polling stops); one the service no longer holds
  * leaves the list. */
-async function refresh(): Promise<void> {
-  if (closed || !listed || refreshing) return;
-  refreshing = true;
+function refresh(): Promise<void> {
+  if (closed || !listed) return Promise.resolve();
+  if (refreshing !== null) {
+    refreshAgain = true;
+    return refreshing;
+  }
+  stopPolling();
+  const run = (async () => {
+    do {
+      refreshAgain = false;
+      await refreshOnce();
+    } while (refreshAgain && !closed);
+  })();
+  refreshing = run.finally(() => {
+    refreshing = null;
+    schedulePoll();
+  });
+  return refreshing;
+}
+
+async function refreshOnce(): Promise<void> {
   try {
     const page = await listTaskPage(session.host, null);
     if (closed) return;
     const fresh = tasksOnly(page.runs);
     const onPage = new Set(fresh.map((run) => run.run_id));
     const gone = new Set<string>();
-    for (const run of runs.filter((candidate) => !isTerminal(candidate) && !onPage.has(candidate.run_id))) {
-      try {
-        const fetched = await fetchOffPageRun(session.host, run);
-        if (fetched === null) gone.add(run.run_id);
-        else fresh.push(fetched);
-      } catch {
-        // Tried again on the next refresh.
-      }
-      if (closed) return;
+    const missing = runs.filter((candidate) => !isTerminal(candidate) && !onPage.has(candidate.run_id));
+    const results = await Promise.allSettled(missing.map((run) => fetchOffPageRun(session.host, run)));
+    if (closed) return;
+    for (const [index, result] of results.entries()) {
+      // A failed fetch leaves its row to be tried again on the next refresh.
+      if (result.status === "rejected") continue;
+      if (result.value === null) gone.add(missing[index]!.run_id);
+      else fresh.push(result.value);
     }
     runs = mergeRuns(runs.filter((run) => !gone.has(run.run_id)), fresh);
     if (listErrorShown) showStatus(null);
     renderList();
-    syncSelectionToHash();
+    // An intermediate list may lack the requested run. With no selection
+    // yet, falling back would rewrite its hash before the queued read.
+    if (!refreshAgain) syncSelectionToHash();
   } catch (error) {
     if (!closed) showListError(error);
-  } finally {
-    refreshing = false;
-    schedulePoll();
   }
 }
 
@@ -549,9 +566,9 @@ window.addEventListener("hashchange", () => {
     return;
   }
   // A run started since the list was read: read the first page, then look.
-  void refresh().then(() => {
-    if (runs.some((run) => run.run_id === wanted)) select(wanted);
-  });
+  // refresh coalesces this request even if an older list is in flight;
+  // syncSelectionToHash follows the latest hash when the lists finish.
+  void refresh();
 });
 
 // `openTasksPage` (task-handoff.ts) signals an already-open Tasks tab this

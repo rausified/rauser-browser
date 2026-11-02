@@ -794,3 +794,187 @@ renderings. Nine extension cases were added overall. Queue and
 current-state checks pass. The full diff was reviewed locally; the driver
 owns independent review and publication. Logs: `target/cookie-health/`.
 No live API, deployed service or real harness was used.
+
+## 2026-11-01 — Reserve tracked issue IDs before creating beads
+
+Brauser now has a repository command, `scripts/dev/create-bead`, that loads
+the committed issue history into the local beads database before creating
+a new issue. This prevents a stale database from treating an already-shipped
+issue ID as available. The helper first validates the JSONL, then uses the
+existing importer's timestamp guard and proceeds only after import succeeds.
+It retains local-only work and newer local scalar fields rather than
+rebuilding the database; labels, comments and dependencies may still merge
+under the importer's rules.
+
+The helper forwards issue text as literal process arguments and sends import
+progress to stderr so `--json` creation output remains usable. It refuses
+linked worktrees, redirected databases and routing overrides; worktrees keep
+the documented scratch-database workflow and copy back only new rows. Eight
+mocked-command regressions cover ordering and refusal behavior, and a ninth
+regression proves the existing queue checker rejects a closed/open ID
+collision even when the backlog itself is current. Contributor instructions
+and the beads quick start now point to this workflow.
+
+The final review caught a missing `--repo` routing refusal. Both argument
+forms were reproduced in the regression before the fix; the helper now
+rejects them before hydration as well. Importer storage semantics remain
+covered by beads itself; this repository tests the command boundary.
+
+Validation after the review fix passed every required and README check:
+1,207 reported Rust passes, all 38 extension test files, 85 Python tests
+(+9), six Node script files, both Clippy configurations and 10,696 inert
+Markdown renderings. Logs are in `target/overnight-checks/review-fix-*.log`.
+
+
+## 2026-11-01 — Finish adapter comparisons promptly in restricted sandboxes
+
+Assigned follow-up `brwr-wg5` traced the optional adapter differential check's
+stall to the Rust engine's synchronous child-process call with piped input
+and output. The case generator completed normally; a bounded probe killed
+that call after three seconds, while the existing Node child-pipe probe
+reported EPERM. The comparison command now runs that shared probe before
+starting either engine. A confirmed sandbox permission denial prints an
+explicit skip with “no cases compared”; required CI mode fails instead, and
+other probe failures remain errors. This makes an unattended check finish
+with an honest result instead of waiting indefinitely.
+
+The probe itself now has a three-second timeout, and each engine batch has
+a 60-second timeout with a forceful kill. Failed batches identify the
+command, seed and case range. Result-count checks also refuse incomplete
+engine output. The engines, generator, comparisons and usefulness checks
+retain their existing behavior. Fifteen new regression cases cover the
+runner and probe, including required-mode denial, both engines' failures,
+multiple batches, mismatches, escaping and incomplete output. A supplemental
+regular-file transport run compared 5,000 real Rust and TypeScript cases
+(seed 7) without differences; the normal piped CLI correctly skips in this
+sandbox and remains a required CI check where child pipes are permitted.
+
+Final required and README gates passed: 1,207 reported Rust passes (sandbox
+IPC guards apply), all 38 extension test files, both Clippy configurations,
+85 Python tests, seven Node script files and 10,696 inert Markdown renderings.
+Logs are in `target/cookie-wg5-final/`; independent review and publication
+remain with the driver.
+
+
+### 2026-11-01 — Announce each watched task completion once (brwr-jlz)
+
+The panel remembers which task run IDs it has announced. A delayed start reply
+or stale running view can no longer make the same finished task announce again.
+Different tasks still receive separate announcements even when their instructions
+are identical; the memory lasts for the current panel instance.
+
+### 2026-11-01 — Preserve refreshes queued during a failed task list (brwr-2p0)
+
+A request to refresh while another list is pending now receives its promised
+follow-up even if the pending list fails. Overlapping requests still merge into
+one follow-up, and all callers receive the final attempt's outcome. Tests hold
+and reject host replies to verify both recovery and a second failure, plus
+disposal while a refresh is pending.
+
+### 2026-11-01 — Pause task tracking after repeated host failures (brwr-7u4)
+
+The panel keeps checking active tasks every two seconds while the host works.
+Consecutive failed passes now retry after two, four, eight and sixteen seconds
+and pause after the fifth failure, including failures fetching tasks absent
+from the first history page. Showing the panel again or explicitly refreshing
+restarts the budget, and a successful pass restores the normal interval.
+Mocked timers verify the delay boundaries, pause, and recovery without waiting
+for those delays in real time.
+
+### 2026-11-01 — Keep task-list failures visible across summary restores (brwr-4r1)
+
+A summary started through the shortcut or context menu can restore its card
+without making an outstanding task-list error disappear. Error restoration now
+lives in the shared summary-card restore function, so startup, live worker
+notifications and stored notifications use the same rule. Tests cover live
+delivery and a stored notice consumed when the panel follows its tab.
+
+### 2026-11-01 — Remove the tracker's unused clock dependency (brwr-ug2)
+
+TaskTracker no longer asks callers for a clock it never reads. Its only timing
+mechanism is the polling timer; the panel and direct tests now construct it
+without an unused timestamp callback. Type checking verifies the updated API.
+
+
+### 2026-11-01 — Keep supervisor tests independent of disk flush speed (brwr-pnti)
+
+The opening health check failed six supervisor tests. Focused runs reproduced
+the task-capacity and long-report failures with their runs still progressing.
+A local probe measured 5.6 seconds for a single file flush, enough for a few durable
+status writes to exhaust a ten-second state wait. Supervisor and retention
+unit fixtures now explicitly choose temporary record stores that omit those
+flush waits while retaining actual filesystem writes, atomic replacement,
+private permissions and write failures. Their existing timeouts and state
+assertions remain intact. Normal stores, the record storage tests, and
+all production and scripted-dialogs builds retain file and directory syncing;
+the temporary-store switch exists only in unit-test builds. An added storage
+regression protects the temporary path's permissions, refusal to overwrite
+an existing result directory, cleanup and preservation of existing content.
+
+The full run also exposed a separate race in a resumed-run test that combined
+a one-second timeout with capturing the prompt through a shell. Those checks
+are now independent: the recorded limit still has to time out after one
+second, while the existing in-process recording runner checks the complete
+prompt built from the recorded vocabulary. This preserves both expectations
+without making prompt verification depend on subprocess startup speed.
+
+### 2026-11-01 — Keep Tasks navigation current during refreshes
+
+A newly started task could be missed when its Tasks-page hash arrived while
+an older list was still loading. The page now remembers overlapping refresh
+requests and runs one follow-up after the current read, even if that read
+fails. Selection follows the latest URL hash, so a delayed callback cannot
+undo a newer navigation. Closing the tab stops queued work and ignores
+pending replies. Deferred-response tests cover success, failure, repeated
+refresh requests and tab closure (`brwr-um4`).
+
+### 2026-11-01 — Test Tasks polling without wall-clock waits
+
+The Tasks-page tests now advance a mocked polling clock and drain host
+replies separately. Hidden tabs and completed histories are checked across
+multiple polling intervals without sleeping for 2.3 seconds. New held-reply
+cases verify that overlapping requests produce one follow-up and keep the
+latest selection, making the actual race reproducible (`brwr-jzs`).
+
+### 2026-11-01 — Preserve dismissals from different Brauser views
+
+Dismissing a summary in the panel and a task in the Tasks tab at the same
+time now serializes the shared storage update with a Chrome Web Lock.
+Each document retains its own queue as a fallback, and a failed lock or
+write no longer prevents later attempts. The existing 1,000-item cap and
+deduplication stay in place. Tests load independent copies of the module
+against shared storage and locks to exercise the original lost-update race
+(`brwr-90b`).
+
+### 2026-11-01 — Check unknown run kinds against the schema
+
+The protocol regression for an unsupported list_runs kind now checks the
+JSON schema directly, alongside the existing Rust deserializer rejection.
+This ensures a future schema change cannot silently accept a kind that the
+wire contract excludes (`brwr-3wh`).
+
+### 2026-11-01 — Verify Reuse's fallback across windows
+
+The Reuse fallback test now begins in a known, nondefault Tasks window and
+asserts that Brauser attempts to open that window's panel. When that open
+fails, the saved instruction is untargeted and a panel in a different
+window actually consumes it and fills its task bar. This catches the older
+behavior that simply handed off without trying to open the panel (`brwr-3pv`).
+
+### 2026-11-01 — Refresh off-page task states concurrently
+
+A task that finishes outside the newest history page still needs get_run
+to update its row. Those lookups now start together, so one slow read does
+not prevent the others from starting. Results merge in candidate order;
+a failed read leaves its row for retry while a successful finish or prune
+still takes effect. Tests hold one reply, fail another, prune a third and
+verify both recovery and teardown (`brwr-sm8`).
+
+### 2026-11-01 — Align history cursor timestamp lengths
+
+History cursors now use the same 20–64 character timestamp bounds as run
+views, replacing the one-character minimum. Wire tests cover both ends of
+the range and assert that the two definitions stay aligned. Regenerating
+the protocol leaves its Rust and TypeScript types unchanged because this
+change affects schema validation rather than field types; length bounds
+alone do not validate RFC 3339 syntax (`brwr-0at`).

@@ -145,11 +145,6 @@ strip_params note-identity follow-up has shipped (see Shipped).
 ### Cookie's own proposals (only after the plan work above)
 
 <!-- BEGIN GENERATED section=proposals: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-wg5` **Bound adapter comparisons when sandbox child pipes are denied.**
-  The optional 5,000-case differential check stalled; a one-case probe timed
-  out after 30 seconds, and the child-pipe guard reports EPERM. Establish the
-  exact wait and reuse explicit sandbox diagnostics with a bounded runner;
-  required CI mode must still fail on denial. No engine changed this cycle.
 - [ ] `brwr-7lq` **Restore overlapping recorded container groups with explicit identity review.**
   The removed-site flow refuses overlapping repository/PR history because it
   cannot establish one note identity. Extend the host's impact/alias planning
@@ -184,32 +179,20 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
+- [ ] `brwr-e7b0` **Stop accessibility regressions across Brauser's UI.** Run axe-core against built `panel.html`, `options.html` and `tasks.html` in a small state matrix covering setup, configured, disconnected and error states. Add keyboard assertions for reaching and activating each primary action, changing panel tabs, operating the task listbox… _(P1; blocked; labels: assigned, scout-proposal)_
 - [ ] `brwr-5yn` **[human] M1.5a step 6.8: certify the three starter adapters.** Check the Jira, SharePoint/OneDrive and GitHub drafts against each live tool and record the date in docs/adapters/. Needs John on macOS with real accounts; Cookie must not change the 'development draft' label or mark 6.8 done. _(P2; labels: human)_
 - [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2)_
 - [ ] `brwr-mff` **[human] Add rusqlite (bundled) to the workspace and warm the VM cargo cache.** Cookie's codex sandbox cannot fetch crates, so step 6.6 hand-wrote a SQLite file writer instead of using a library. Outside the sandbox: add rusqlite with the bundled feature to host/Cargo.toml, update Cargo.lock, pass cargo deny check --all-features --locked (license… _(P2; labels: human)_
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
-- [ ] `brwr-f85` **bd: hydrate local DB from issues.jsonl before create to prevent ID collisions with closed rows.** The local bd DB must be hydrated from .beads/issues.jsonl before `bd create` (`bd import` with the updated_at guard), so new IDs can't collide with closed rows. scripts/check_queue_consistency.py should fail on duplicate IDs. Seen during PR #189, where `bd create` reused closed… _(P2; labels: assigned, beads, dev-tools)_
 - [ ] `brwr-0t1` **Near-miss detection: offer a rule when an enabled-site page looks like an artifact.** When a page on a site with capture rules carries an adapter's identifying parameter (e.g. OneDrive Doc.aspx with a sourcedoc GUID) but no rule matches, the panel says so and offers a one-click rule addition through the Update-to-current-rules editor flow. URL-only and local.… _(P2)_
 - [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
 - [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
 - [ ] `brwr-ppn` **Curate a worklog before copying it.** Recent and the native worklog make captured work visible, but copying a day or week currently includes every recorded artifact. Let a person prepare a concise update by selecting the artifact-day rows they want to share and previewing the result, without altering measured… _(P3)_
-- [ ] `brwr-jlz` **TaskTracker: guard against double-announcing a finish.** TaskTracker: a stale track() after an announce can announce a finish twice. Guard it with a Set of run ids already reported. _(P3; labels: assigned, task-tracker, tasks-page)_
-- [ ] `brwr-2p0` **TaskTracker: a failed refresh drops a merged "again" request.** TaskTracker: a failed refresh drops a merged `again` request. _(P3; labels: assigned, task-tracker, tasks-page)_
-- [ ] `brwr-7u4` **TaskTracker: add backoff after consecutive poll failures.** TaskTracker: no backoff. It polls every 2 s indefinitely against a failing host while a run is watched; stop after N consecutive failures. _(P3; labels: assigned, task-tracker, tasks-page)_
-- [ ] `brwr-4r1` **Panel: re-show trackerError after a worker-notice restore.** Panel: a worker-notice restore (showNotice -> restoreCards) can clear the tracker's failure notice; re-show trackerError after it. _(P3; labels: assigned, panel, tasks-page)_
-- [ ] `brwr-ug2` **TaskTracker: remove the unused now dependency.** TaskTracker: the `now` dependency is unused. _(P3; labels: assigned, task-tracker, tasks-page)_
-- [ ] `brwr-um4` **Tasks page: a hashchange during an in-flight refresh can miss a just-started run.** Tasks page: a hashchange during an in-flight refresh can miss a just-started run. The select signal mostly covers this. _(P3; labels: assigned, tasks-page)_
 - [ ] `brwr-64i` **Tasks page (Windows): hide .tasks-controls when search/filter/dismissed controls should be hidden.** Tasks page on Windows: the search, filter and Show dismissed controls are still visible; hide .tasks-controls. _(P3; labels: needs-windows, tasks-page, windows)_
-- [ ] `brwr-jzs` **tasks-page tests: avoid the 2.3s real-time wait and add an overlapping-refresh test.** tasks-page tests: the hidden-polling test waits 2.3 s of real time, and there is no overlapping-refresh test. _(P3; labels: assigned, tasks-page, tests)_
-- [ ] `brwr-90b` **Panel/page: dismissWrites queue can lose an id on simultaneous dismissals.** Panel/page: the dismissWrites queue covers one document only, so simultaneous dismissals from the panel and the Tasks page can lose one id. _(P3; labels: assigned, panel, tasks-page)_
-- [ ] `brwr-3wh` **Protocol test: use schema_subset::valid for the unknown_kind check.** Protocol test: the unknown_kind check uses serde instead of schema_subset::valid. _(P3; labels: assigned, protocol, tests)_
-- [ ] `brwr-3pv` **task-bar test: strengthen the sidePanel.open-fails fallback test.** task-bar test: the fallback test (sidePanel.open fails, so window_id is null) would pass on pre-Task-7 code alone; strengthen it. _(P3; labels: assigned, task-bar, tests)_
-- [ ] `brwr-sm8` **Tasks page: run off-page get_run fetches in refresh() in parallel.** Tasks page: off-page get_run fetches in refresh() run sequentially; consider running them in parallel. _(P3; labels: assigned, performance, tasks-page)_
-- [ ] `brwr-0at` **Protocol: tighten the RunCursor.created_at bound to match the RFC 3339 fields.** Protocol: the RunCursor.created_at bound (1..64) is looser than the RFC 3339 fields. _(P3; labels: assigned, protocol)_
 - [ ] `brwr-dfd` **Container roll-up follow-ups (from PR #126 final review).** Deferred minors from the GitHub repo containers work (PR #126): (1) a rolled-up visit never advances a container row's latest_at (index.rs roll_up), a trap for future consumers; (2) a repos-only setup (no linked PR/issue rule) shows the latest sub-page title instead of… _(P3)_
 <!-- END GENERATED section=new -->
 
@@ -251,6 +234,36 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Align history cursor timestamp lengths (2026-11-01).** RunCursor.created_at now shares RunView timestamp length bounds of 20–64 characters. Boundary checks guard both definitions; regeneration leaves the Rust and TypeScript field types unchanged, and no timestamp syntax validation is claimed. **Metrics:** 13 protocol run cases (+1), covering lengths 19, 20, 64 and 65; full gate green.
+
+- **Category:** Performance & Resource Bounds. **Fetch off-page task states concurrently (2026-11-01).** Starts missing active-row reads together and merges settled results in candidate order. Successful finishes and pruning survive a sibling failure, failed rows retry, and late replies after closure are ignored. **Metrics:** Two new concurrency/teardown cases among 35 passing Tasks-page cases.
+
+- **Category:** Testing & Verification. **Verify Reuse fallback across windows (2026-11-01).** The regression asserts the source-window panel-open attempt before failure, then proves a panel in a different window consumes the untargeted instruction and fills its task bar. **Metrics:** Strengthened end-to-end case among 35 passing Tasks-page cases.
+
+- **Category:** Testing & Verification. **Check unknown run kinds against the schema (2026-11-01).** Asserts JSON schema rejection for unsupported list_runs kinds alongside the existing Rust deserializer check, keeping the test aligned with its stated contract. **Metrics:** 13 protocol run cases; full gate green.
+
+- **Category:** Bug Fix. **Preserve dismissals across panels and Tasks tabs (2026-11-01).** Serializes the shared dismissal read/write with an origin-wide Web Lock, retaining the document queue fallback. Lock or storage rejection cannot poison later writes; independent module instances reproduce simultaneous cross-document dismissals. **Metrics:** 45 run-card cases (+2); existing cap and duplicate handling remain covered.
+
+- **Category:** Testing & Verification. **Drive Tasks polling tests with a mocked clock (2026-11-01).** Replaces real-time polling sleeps with explicit mocked intervals and drained host replies. Held-response tests reproduce overlapping refreshes, failure recovery and latest-hash selection. **Metrics:** 35 Tasks-page cases; local direct runtime about 0.3 seconds versus about 17 seconds at baseline.
+
+- **Category:** Bug Fix. **Keep Tasks navigation current during refreshes (2026-11-01).** Coalesces overlapping page refreshes, including after failure, and follows the latest requested run only after the final pass. An initially empty history preserves the hash through intermediate replies; page closure suppresses rendering and queued work. **Metrics:** 35 Tasks-page cases, including five new navigation/teardown regressions; full gate green.
+
+- **Category:** Testing & Verification. **Separate supervisor waits from disk flush latency (2026-11-01).** Supervisor and retention fixtures explicitly choose unit-test-only temporary stores while keeping private writes, atomic replacements and filesystem errors. Production and normal storage tests still sync. Resumed-run limit and vocabulary checks are independent, retaining the one-second timeout and checking the full recorded-vocabulary prompt without racing a shell. **Metrics:** 1,209 Rust tests (+2), 87 supervisor cases, 38 extension test files and 85 Python tests; full required gate green, with sandbox IPC guards self-skipping.
+
+- **Category:** Maintenance. **Remove the task tracker unused clock dependency (2026-11-01).** Simplify the tracker dependency contract and update the panel and direct test constructors without a clock callback. **Metrics:** Typecheck and lint passed; 15 tracker tests passed.
+
+- **Category:** Bug Fix. **Announce each watched task completion once (2026-11-01).** Remember announced run IDs for the panel lifetime so stale start or running views cannot replay a finish, while distinct tasks still announce independently. **Metrics:** 15 direct tracker tests; 38 extension files passed.
+
+- **Category:** Reliability. **Back off task tracking after repeated host failures (2026-11-01).** Retry failed list and off-page reads after 2/4/8/16 seconds, pause at five consecutive failed passes, and reset on success or explicit refresh. Mocked timers cover pause and recovery. **Metrics:** 15 tracker tests (+8); full gate green with 1,207 Rust reported passes (sandbox IPC guards apply).
+
+- **Category:** Bug Fix. **Keep task-list errors visible through worker summary restores (2026-11-01).** Restore the task tracker error in the shared summary-card restore wrapper, covering live worker messages and stored notices consumed after following their tab. **Metrics:** 2 new panel regressions; 38 extension files passed.
+
+- **Category:** Bug Fix. **Preserve refreshes queued behind failed task lists (2026-11-01).** Drain merged refresh requests after an in-flight failure and return the final attempt outcome to every caller. Disposal suppresses follow-ups. **Metrics:** 15 direct tracker tests; 38 extension files passed.
+
+- **Category:** Testing & Verification. **Finish adapter comparisons in restricted sandboxes (2026-11-01).** Reproduced the stall inside the Rust engine child call and added the shared child-pipe probe before either engine starts. Confirmed permission denial explicitly skips outside required mode and fails in CI; probe and engine timeouts diagnose hangs, and incomplete output fails. Neither production engine changed. **Metrics:** 15 new regression cases (one guarded child-pipe case skipped here), 5,000 real cases matched through supplemental regular-file transport; 1,207 reported Rust passes, 38 extension files, 85 Python tests, seven Node script files and all required/README gates green.
+
+- **Category:** Documentation & Process. **Hydrate tracked bead history before issue creation (2026-11-01).** The new create-bead command validates and imports the committed queue before creating, reserving closed IDs with the existing timestamp guard and retaining local-only work. Failed imports stop creation, JSON output stays clean, and linked worktrees and routing overrides use the documented isolated workflow. The queue checker now has a direct closed/open ID collision regression. **Metrics:** 9 new regressions; 85 Python tests; 38 extension test files; 1,207 reported Rust passes; full required and README gates green.
+
 - **Category:** Testing & Verification. **Remove the Tasks focus test polling race (2026-11-01).** The focus regression now triggers the existing visibility refresh and waits for a rendered status change or added row before asserting retained-node and rebuilt-list focus. It no longer races the two-second poll or relies on a fixed settle delay. **Metrics:** 10/10 isolated local repeats; 38 extension test files; full required and README gates green.
 
 - **Category:** Testing & Verification. **Pin task tracker refresh and completion behavior (2026-11-01).** Seven direct tests use deferred replies and mocked timers to cover coalesced refreshes, one poll timer, one completion callback for tracked runs, off-page completion, visibility and disposal. The file is included in the normal extension suite. **Metrics:** 7 new tracker tests; 38 extension test files; full required and README gates green.
@@ -387,6 +400,31 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-11-01 repair-only health cycle.** The opening gate failed six
+  supervisor tests; focused reruns reproduced task-capacity and long-report
+  failures, and a local file fsync took 5.6 seconds. `brwr-pnti` keeps the real
+  writer and existing timing assertions while making supervisor/retention
+  fixtures explicitly temporary; normal record storage tests remain durable.
+  Keep asynchronous lifecycle verification separate from disk flush latency.
+  A full-run follow-up also split the resumed-run one-second timeout check
+  from vocabulary prompt capture, using the existing in-process runner for
+  the latter instead of racing a shell against the watchdog.
+  `brwr-e7b0` remains blocked on provisioning offline Chrome/Chromium and
+  pinned axe-core tooling; no accessibility acceptance is claimed. The assigned
+  Tasks page refresh race (`brwr-um4`) and timing tests (`brwr-jzs`) remain
+  untouched for the next green cycle. Existing `brwr-ppn` (worklog curation)
+  and `brwr-ued` (named cross-tool focus sessions) remain useful user-facing
+  directions after assignments clear; avoid duplicate proposals.
+
+- **2026-11-01 assigned queue hydration.** `brwr-f85` adds the guarded
+  `scripts/dev/create-bead` workflow; linked worktrees still use isolated
+  scratch databases and copy only new rows. Import reserves tracked closed
+  IDs and preserves local-only work; it cannot identify stale unmerged
+  claims automatically. Continue the remaining assigned P3 work before
+  self-directed ideas. Existing `brwr-ppn` (worklog curation) and `brwr-ued`
+  (named cross-tool focus sessions) remain useful product directions after
+  assignments clear; no duplicate proposal is needed.
 
 - **2026-11-01 assigned dev-tool batch.** Completed the PR hygiene body-edit
   and removable-control-worktree fixes together. The next ready P2 is
@@ -1527,3 +1565,115 @@ new tracker regressions in the direct test file as the P3 tracker fixes
 arrive. Product ideation is deferred while assignments remain; the existing
 named focus-session proposal is still a useful future direction once the
 assigned queue is clear. No additional speculative quality items were added.
+
+
+### Cycle observations (2026-11-01 — bounded adapter comparisons)
+
+Completed assigned `brwr-wg5`. Instrumentation located the previous stall
+inside the Rust engine's piped synchronous child call after case generation
+had finished. Reusing the existing child-pipe probe is enough to avoid that
+wait in this sandbox; a three-second probe bound and 60-second engine-batch
+bound also diagnose other hangs. Only confirmed permission denial may skip
+outside required mode; engine failures and incomplete output fail. No
+production engine or evaluation-time bound changed.
+
+Health began green with no quarantine file and a clean worktree. Required
+and README gates passed: 1,207 reported Rust passes (documented sandbox IPC
+guards apply), all 38 extension files, both Clippy configurations, 85 Python
+tests, seven Node script files and 10,696 inert Markdown renderings. Fifteen
+new regression cases cover the runner/probe; one real-pipe case skips here.
+An additional regular-file transport validation matched 5,000 real Rust and
+TypeScript cases (seed 7). This supplements engine coverage; the normal CLI
+correctly reports no cases compared on denial, and required CI mode fails.
+Logs: `target/cookie-wg5-final/`, `target/cookie-diff-reproduction.log` and
+`target/cookie-diff-validation/`. Full diff reviewed locally; independent
+review and publication remain with the driver.
+
+`brwr-7lq` is blocked on `brwr-hq8`: its acceptance requires the host-derived
+identity impact plan whose direction the coordinator explicitly human-gated
+with parent `brwr-6x2`. The current overlapping-container test demonstrates
+why removing the refusal would lose the identity guarantee. The dependency
+is now explicit and the bead records the existing decision needed from John;
+no human label or gate was changed. Wardroom is not active in this workspace
+(no outbox directory), so there was no relay post. Twelve assigned items
+remain ready and one is blocked. Next is `brwr-jlz`; keep the existing tracker
+fixes together with their direct regressions when practical. Product ideation
+remains deferred while assignments are actionable. The recurring lesson is
+to distinguish blocked transport from engine behavior before changing a
+parser or adding another production mechanism.
+
+
+### Cycle observations (2026-11-01 — assigned tracker follow-ups)
+
+Completed assigned `brwr-jlz`, `brwr-2p0`, `brwr-7u4`, `brwr-4r1` and
+`brwr-ug2`. The four tracker items share one direct test seam: stale views
+no longer replay completion, merged refreshes survive a failed attempt,
+and both list and off-page failures use bounded retries. Retry policy was
+resolved by Cookie as this isolated cycle's coordinator within the assigned
+stop-after-N request: delays of 2/4/8/16 seconds, pause on failure five, reset
+on a fully successful pass or an explicit refresh. The shared summary-card
+restore now preserves the tracker error for startup and worker notices.
+
+Health started green with a clean worktree and no quarantine file. The final
+required gate and README checks passed: 1,207 reported Rust passes (sandbox
+IPC guards apply), all 38 extension files, both Clippy configurations, 85
+Python tests, seven Node script files and 10,696 inert Markdown renderings.
+Ten new regressions cover the behavior: eight tracker cases (15 total) and
+two panel notice cases. The new races use deferred replies and mocked
+tracker timers. Logs: `target/cookie-tracker-checks/`. Full diff reviewed
+locally; no live API or external Codex review was invoked under this run's
+offline guardrail. Independent review, publication and platform acceptance
+remain with the driver.
+
+Seven actionable assignments remain, starting with `brwr-um4` (Tasks page
+hashchange during refresh), then `brwr-jzs` (timer/overlap tests). Consider
+those together next, using the direct tracker tests as a pattern rather
+than adding more real-time waits. `brwr-7lq` remains blocked on the existing
+human-gated identity plan; no platform/human labels were changed. Product
+ideation stays deferred until assignments are cleared; the existing curated
+worklog and page-free task proposals remain useful later product directions.
+Beads' default actor here is lowercase `cookie`; when the assignee is
+`Cookie`, use `bd --actor Cookie close` so the ownership check matches.
+
+### Cycle observations (2026-11-01 — assigned Tasks-page follow-ups)
+
+Built the seven ready PR #188 assignments together: `brwr-um4`, `brwr-jzs`,
+`brwr-90b`, `brwr-3wh`, `brwr-3pv`, `brwr-sm8` and `brwr-0at`. The small
+shared-promise/pending-flag controller preserves refresh demand; selection
+waits for the final pass so an initially empty history cannot replace a
+new run's hash with an intermediate fallback. Missing task reads start
+concurrently and retain partial successes. Cross-document dismissals use
+the existing Web Locks pattern around storage, keeping local queues and
+best-effort failure recovery.
+
+The design challenge and one read-only Codex review used a local reviewer
+session under this run's offline restriction. Review found the initially
+empty-history case; a failing test reproduced it before the two-line fix.
+No new test seam or broader redesign was needed. Focused checks pass with
+35 Tasks-page, 45 run-card and 13 protocol run cases, including ten new
+regressions overall. Mocked timer intervals cut the Tasks-page file from
+about 17 seconds to about 0.3 seconds in the local direct runs. The protocol
+generator was run; a schema length change does not alter the emitted types.
+
+No self-directed proposal was added while assigned work remained. Future
+product work can revisit the existing page-free task and curated-worklog
+proposals once the queue permits it. For async UI reviews, include a page
+with no initial selection as well as one already showing a run: fallback
+selection can mutate the very navigation state the next pass needs.
+
+The remaining assigned roots still need external input: `brwr-e7b0` needs
+an offline browser plus pinned axe-core/browser test tooling to prove its
+acceptance; `brwr-7lq` needs the existing human-gated Re-learn identity-plan
+decision (`brwr-hq8` / `brwr-6x2`). No labels or gates were relaxed, and no
+browser, accessibility or platform certification is claimed here.
+
+Health started green with a clean worktree and no quarantine report. The
+full required gate passed again after the review fix: 1,210 reported Rust
+passes (92 sandbox IPC guard returns), all 38 extension files, both clippy
+configurations and generated/build/fmt/type/lint checks. README supplemental
+checks passed: 85 Python tests, seven Node script files and 10,696 inert
+Markdown renderings. Queue consistency passes after export and regeneration.
+Logs are in `target/cookie-tasks-final-after-review/` and
+`target/cookie-tasks-final/`. Independent driver review and publication are
+next. A Wardroom summary carries the two existing gate requirements; no
+assigned item was closed without completing its local acceptance.
