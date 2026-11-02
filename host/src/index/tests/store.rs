@@ -585,25 +585,11 @@ fn random_replays_match_a_full_derive() {
         let mut rng = Rng(seed);
         let cache = TempDir::new().unwrap();
         let mut conn = connection(&cache);
-        let mut model = IndexState {
-            version: STATE_VERSION,
-            root: String::new(),
-            root_identity: String::new(),
-            log_dir: String::new(),
-            artifacts_dir: String::new(),
-            events: BTreeMap::new(),
-            gaps: BTreeMap::new(),
-            gap_logs: BTreeMap::new(),
-            positions: BTreeMap::new(),
-            sequence: BTreeMap::new(),
-            next_sequence: 0,
-            adapters: String::new(),
-            conflicts: BTreeMap::new(),
-            dirty: BTreeSet::new(),
-            logs: BTreeMap::new(),
-            containers: BTreeSet::new(),
-            container_files: BTreeMap::new(),
-        };
+        // The conflict rules, independently: the first-indexed body wins,
+        // takes the next arrival sequence, and moves to an earlier position
+        // of the same body.
+        let mut model = BTreeMap::<String, store::oracle::ModelEvent>::new();
+        let mut next_sequence = 0;
         // Arrivals in shuffled order: new IDs, redeliveries of the same body
         // (some with an earlier log position), and conflicting bodies, in
         // batches of one transaction each.
@@ -634,13 +620,27 @@ fn random_replays_match_a_full_derive() {
             })
             .unwrap_or_else(|error| panic!("seed {seed}: {error:#}"));
             for (event, position) in batch {
-                model.ingest(event, position, false);
+                let (id, _) = event_identity(&event);
+                match model.get_mut(&id) {
+                    None => {
+                        model.insert(id, (event, position, Some(next_sequence)));
+                        next_sequence += 1;
+                    }
+                    Some((indexed, _, _)) if indexed.data != event.data => {}
+                    Some((_, indexed, _)) => {
+                        if let Some(position) = position
+                            && indexed.as_ref().is_none_or(|indexed| &position < indexed)
+                        {
+                            *indexed = Some(position);
+                        }
+                    }
+                }
             }
         }
         let stored = db::read_txn(&mut conn, store::oracle::dump).unwrap();
         assert_eq!(
             stored,
-            store::oracle::state_rows(&model, Some(&document)),
+            store::oracle::model_rows(&model, Some(&document)),
             "seed {seed}: the store differs from a full derive of the same arrivals"
         );
         drop(conn);

@@ -22,41 +22,9 @@ pub(super) fn event_time(event: &CachedEvent) -> OffsetDateTime {
     parsed_timestamp(at).unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
 
-/// Events by instant, then durable log position, never by (random) event
-/// ID, so the latest title, mode, and context do not depend on UUID order.
-pub(super) fn ordered_events(state: &IndexState) -> Vec<&CachedEvent> {
-    let mut ordered = state
-        .events
-        .iter()
-        .map(|(id, event)| {
-            let position = state.positions.get(id);
-            let sequence = state.sequence.get(id).copied().unwrap_or(u64::MAX);
-            (
-                (
-                    event_time(event),
-                    position.is_none(),
-                    position,
-                    sequence,
-                    id,
-                ),
-                event,
-            )
-        })
-        .collect::<Vec<_>>();
-    ordered.sort_by(|left, right| left.0.cmp(&right.0));
-    ordered.into_iter().map(|(_, event)| event).collect()
-}
-
-pub(super) fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
-    let mut fold = Fold::new(adapters);
-    for event in ordered_events(state) {
-        fold.apply(event);
-    }
-    fold.finish()
-}
-
-/// The aggregation of events, in `ordered_events` order, into artifact,
-/// visit and edge rows: the one place their semantics live. A full
+/// The aggregation of events, in `order_key` order (`ord.rs`: by instant,
+/// then durable log position, then arrival, never by random event ID),
+/// into artifact, visit and edge rows: the one place their semantics live. A full
 /// rebuild folds every event from `new`; the append fast path folds only
 /// events that sort after everything a group already holds, from
 /// `seeded` with that group's stored rows, which is the same computation
@@ -129,7 +97,7 @@ impl<'a> Fold<'a> {
         fold
     }
 
-    /// Fold in one event. Events must arrive in `ordered_events` order.
+    /// Fold in one event. Events must arrive in `order_key` order.
     pub(super) fn apply(&mut self, event: &CachedEvent) {
         let adapters = self.adapters;
         let Self {
@@ -435,7 +403,7 @@ impl<'a> Fold<'a> {
             ..
         } = self;
         let mut why_at = BTreeMap::new();
-        // Visits and summaries were pushed in `ordered_events` order (instant,
+        // Visits and summaries were pushed in `order_key` order (instant,
         // then durable log position), and a stable sort by time keeps that
         // order for equal times: two summaries of a record in the same second
         // (stamps have whole-second resolution) keep their append order, which
@@ -907,41 +875,31 @@ mod tests {
     }
 
     /// A history whose events have random positions (or none, with an
-    /// arrival sequence), in the cache's ordered replay order.
+    /// arrival sequence), in replay (`order_key`) order.
     fn history(rng: &mut Rng) -> Vec<CachedEvent> {
-        let mut state = IndexState {
-            version: STATE_VERSION,
-            root: String::new(),
-            root_identity: String::new(),
-            log_dir: String::new(),
-            artifacts_dir: String::new(),
-            events: BTreeMap::new(),
-            gaps: BTreeMap::new(),
-            gap_logs: BTreeMap::new(),
-            positions: BTreeMap::new(),
-            sequence: BTreeMap::new(),
-            next_sequence: 0,
-            adapters: String::new(),
-            conflicts: BTreeMap::new(),
-            dirty: BTreeSet::new(),
-            logs: BTreeMap::new(),
-            containers: BTreeSet::new(),
-            container_files: BTreeMap::new(),
-        };
+        let mut events = BTreeMap::new();
         for n in 0..rng.below(40) {
             let event = event(rng, n);
             let (id, _) = event_identity(&event);
-            if rng.chance(80) {
+            let (position, sequence) = if rng.chance(80) {
                 let log = ["2024-10-01.md", "2024-10-02.md"][rng.below(2) as usize];
-                state
-                    .positions
-                    .insert(id.clone(), (PathBuf::from(log), rng.below(50)));
+                (Some((PathBuf::from(log), rng.below(50))), None)
             } else {
-                state.sequence.insert(id.clone(), n);
-            }
-            state.events.insert(id, event);
+                (None, Some(n))
+            };
+            let key = ord::order_key(
+                event_time(&event),
+                position
+                    .as_ref()
+                    .map(|(path, line)| (path.as_path(), *line)),
+                sequence,
+                &id,
+            );
+            events.insert(id, (key, event));
         }
-        ordered_events(&state).into_iter().cloned().collect()
+        let mut ordered = events.into_values().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| left.0.cmp(&right.0));
+        ordered.into_iter().map(|(_, event)| event).collect()
     }
 
     fn replay<'a>(mut fold: Fold<'a>, events: &[CachedEvent]) -> Derived {

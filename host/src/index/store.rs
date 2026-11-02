@@ -20,11 +20,6 @@
 //! children); a `mentions` edge to its source; every trail edge to its
 //! target. Each is complete in its owner's fold.
 //!
-//! Until the JSON cache is removed (plan T15), [`sync_to_state`] keeps this
-//! store a mirror of `index-state.json` after paths that still change that
-//! cache directly (catch-up, rebuilds, regeneration). It touches only the
-//! groups whose events differ.
-//!
 //! Under `cfg(test)` every [`write`] transaction ends with the oracle:
 //! the derived tables must equal the same writer's rows for a full derive of
 //! `brauser_events`.
@@ -342,7 +337,7 @@ fn stored_event(
     Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
 }
 
-/// A group's events in `ordered_events` order: the artifact's own, and the
+/// A group's events in `order_key` order: the artifact's own, and the
 /// children that roll up into it.
 pub(super) fn group_events(tx: &Transaction<'_>, group: &str) -> Result<Vec<StoredEvent>> {
     let mut statement = tx.prepare_cached(
@@ -370,9 +365,9 @@ pub(super) fn group_events(tx: &Transaction<'_>, group: &str) -> Result<Vec<Stor
         .collect()
 }
 
-/// Every stored event in `ordered_events` order.
+/// Every stored event in `order_key` order.
 #[cfg(test)]
-fn all_events(tx: &Transaction<'_>) -> Result<Vec<StoredEvent>> {
+pub(super) fn all_events(tx: &Transaction<'_>) -> Result<Vec<StoredEvent>> {
     let mut statement = tx.prepare_cached(
         "SELECT artifact_id, container_id, order_key, body FROM brauser_events ORDER BY order_key",
     )?;
@@ -1101,116 +1096,6 @@ pub(super) fn mark_dirty<'a>(
     Ok(())
 }
 
-/// Make `dirty_artifacts` hold exactly `dirty`: marks not in it are cleared,
-/// and a missing mark, or one in `remarked`, gets a fresh generation.
-pub(super) fn sync_dirty(
-    tx: &Transaction<'_>,
-    dirty: &BTreeSet<String>,
-    remarked: &BTreeSet<String>,
-) -> Result<()> {
-    let marked = tx
-        .prepare_cached("SELECT artifact_id FROM dirty_artifacts")?
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<BTreeSet<_>>>()?;
-    for id in marked.difference(dirty) {
-        tx.prepare_cached("DELETE FROM dirty_artifacts WHERE artifact_id = ?1")?
-            .execute([id])?;
-    }
-    mark_dirty(
-        tx,
-        dirty
-            .iter()
-            .filter(|id| !marked.contains(*id) || remarked.contains(*id)),
-    )
-}
-
-/// Whether the store already holds `state`'s events: the cheap check a
-/// delivery makes when the JSON cache needed no republishing.
-pub(super) fn mirrors(tx: &Transaction<'_>, state: &IndexState, fingerprint: &str) -> Result<bool> {
-    let count: i64 = tx.query_row("SELECT count(*) FROM brauser_events", [], |row| row.get(0))?;
-    Ok(meta(tx, "adapters")?.as_deref() == Some(fingerprint)
-        && meta_u64(tx, "next_sequence")? == state.next_sequence
-        && usize::try_from(count).ok() == Some(state.events.len()))
-}
-
-/// Make `brauser_events` hold exactly `state`'s events, positions and
-/// sequences, and re-derive the groups whose events changed (every group
-/// after an adapter change, since containers and mentions follow the
-/// document). Returns the re-derived groups.
-pub(super) fn sync_to_state(
-    tx: &Transaction<'_>,
-    adapters: Option<&Document>,
-    fingerprint: &str,
-    state: &IndexState,
-) -> Result<BTreeSet<String>> {
-    let mut containers = Containers::new(adapters);
-    let mut groups = BTreeSet::new();
-    let readapt = meta(tx, "adapters")?.as_deref() != Some(fingerprint);
-    let mut stored = tx
-        .prepare_cached(
-            "SELECT event_id, artifact_id, container_id, order_key, body_sha256
-             FROM brauser_events",
-        )?
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                (
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
-                    row.get::<_, Vec<u8>>(4)?,
-                ),
-            ))
-        })?
-        .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
-    for (id, event) in &state.events {
-        let position = state.positions.get(id);
-        let sequence = state.sequence.get(id).copied();
-        let current = stored.remove(id);
-        if let Some((artifact_id, container_id, order_key, sha)) = &current {
-            if !readapt
-                && *order_key == key_of(event, id, position, sequence)
-                && *sha == sha256(body_of(event)?.as_bytes())
-            {
-                continue;
-            }
-            groups.extend(groups_of(artifact_id, container_id.as_deref()));
-        }
-        let inserted = insert_event(tx, &mut containers, event, position, sequence)?;
-        groups.extend(groups_of(
-            &inserted.artifact_id,
-            inserted.container_id.as_deref(),
-        ));
-    }
-    for (id, (artifact_id, container_id, _, _)) in stored {
-        tx.prepare_cached("DELETE FROM brauser_events WHERE event_id = ?1")?
-            .execute([&id])?;
-        groups.extend(groups_of(&artifact_id, container_id.as_deref()));
-    }
-    if readapt {
-        // Mentions resolve through the document too, and a container that
-        // no longer derives must lose its rows: re-derive every group with
-        // rows, as well as every group with events.
-        let owners = tx
-            .prepare_cached(
-                "SELECT artifact_id FROM artifacts
-                 UNION SELECT artifact_id FROM brauser_group_state
-                 UNION SELECT source_artifact_id FROM edges WHERE kind = 'mentions'
-                 UNION SELECT target_artifact_id FROM edges WHERE kind != 'mentions'
-                 UNION SELECT artifact_id FROM visits
-                 UNION SELECT artifact_id FROM url_provenance
-                 UNION SELECT artifact_id FROM brauser_artifact_days",
-            )?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        groups.extend(owners);
-        set_meta(tx, "adapters", fingerprint)?;
-    }
-    set_meta(tx, "next_sequence", &state.next_sequence.to_string())?;
-    rederive_groups(tx, adapters, &groups)?;
-    Ok(groups)
-}
-
 #[cfg(test)]
 pub(super) mod oracle {
     //! The permanent full-derive oracle (plan graft 2).
@@ -1348,26 +1233,42 @@ pub(super) mod oracle {
         Ok(rows)
     }
 
-    /// What the same writer gives for `derive` of an in-memory cache, which
-    /// orders its events by `ordered_events` rather than by `order_key`.
-    pub(in crate::index) fn state_rows(state: &IndexState, adapters: Option<&Document>) -> Rows {
+    /// One event of a test's in-memory model of the store: its body, log
+    /// position and arrival sequence, by event ID.
+    pub(in crate::index) type ModelEvent = (CachedEvent, Option<(PathBuf, u64)>, Option<u64>);
+
+    /// What the same writer gives for a full derive of a test's model,
+    /// replayed in the replay tuple order (instant, positioned first, log
+    /// position, arrival sequence, ID) rather than by `order_key`, so the
+    /// key's encoding is checked too.
+    pub(in crate::index) fn model_rows(
+        events: &BTreeMap<String, ModelEvent>,
+        adapters: Option<&Document>,
+    ) -> Rows {
+        let mut ordered = events.iter().collect::<Vec<_>>();
+        ordered.sort_by(|(left_id, left), (right_id, right)| {
+            let tuple = |id, (event, position, sequence): &'_ ModelEvent| {
+                (
+                    event_time(event),
+                    position.is_none(),
+                    position.clone(),
+                    sequence.unwrap_or(u64::MAX),
+                    id,
+                )
+            };
+            tuple(*left_id, left).cmp(&tuple(*right_id, right))
+        });
         let mut containers = Containers::new(adapters);
-        let events = state
-            .events
-            .iter()
-            .map(|(id, event)| StoredEvent {
+        let stored = ordered
+            .into_iter()
+            .map(|(id, (event, position, sequence))| StoredEvent {
                 artifact_id: event.artifact_id().to_owned(),
                 container_id: container_of(&mut containers, event),
-                order_key: key_of(
-                    event,
-                    id,
-                    state.positions.get(id),
-                    state.sequence.get(id).copied(),
-                ),
+                order_key: key_of(event, id, position.as_ref(), *sequence),
                 event: event.clone(),
             })
             .collect::<Vec<_>>();
-        let mut rows = rows_of(&derive(state, adapters), &events, |_| true);
+        let mut rows = rows_of(&fold_events(adapters, &stored), &stored, |_| true);
         rows.sort();
         rows
     }

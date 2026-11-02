@@ -7693,17 +7693,13 @@ id = "work:{host}/{id}"
                 deliver(&mut config, 1);
                 let cache = config.cache_dir().unwrap();
                 let db = cache.join("index.db");
-                let state_path = cache.join("index-state.json");
-                let old_state = std::fs::read(&state_path).unwrap();
                 let old_watermark = sql_rows(&db, "select * from brauser_logs");
                 deliver(&mut config, 2);
                 drop(config);
                 // The append is durable, but its index update never
                 // committed (an interruption between append and index
                 // update): take delivery 2's rows back out of index.db and
-                // put the log watermark back where delivery 1 left it. The
-                // JSON cache (until plan T15) is restored to match.
-                std::fs::write(&state_path, &old_state).unwrap();
+                // put the log watermark back where delivery 1 left it.
                 {
                     let conn = rusqlite::Connection::open(&db).unwrap();
                     let lost = "work:work.example/2";
@@ -7844,7 +7840,6 @@ id = "work:{host}/{id}"
                 VisitOutcome::Persisted
             );
             let cache = config.cache_dir().unwrap();
-            let old_state = std::fs::read(cache.join("index-state.json")).unwrap();
             let fault = if oversized_log {
                 let fault = root.join("logs/oversized.md");
                 let file = std::fs::File::create(&fault).unwrap();
@@ -7873,10 +7868,8 @@ id = "work:{host}/{id}"
             assert_eq!(captured.outcome, VisitOutcome::Persisted);
             let log_path = root.join(captured.relative_path.unwrap());
             let durable_bytes = std::fs::read(&log_path).unwrap();
-            assert_eq!(
-                std::fs::read(cache.join("index-state.json")).unwrap(),
-                old_state
-            );
+            // No JSON cache stands in for the unavailable index.
+            assert!(!cache.join("index-state.json").exists());
             let replies = [
                 list_artifacts(
                     brauser_protocol::ListArtifactsRequest {

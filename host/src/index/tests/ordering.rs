@@ -70,7 +70,7 @@ fn passive_activity_does_not_invent_an_open_or_erase_the_last_mode() {
     carried.modes.clear();
     index.record_activities([&opened, &carried], &[]).unwrap();
 
-    let derived = derive(&index.load_or_rebuild().unwrap(), None);
+    let derived = stored_derive(&index);
     let row = derived.artifacts.get(&opened.artifact_id).unwrap();
     assert_eq!(row.days.len(), 1);
     assert_eq!(row.last_mode.as_deref(), Some("view"));
@@ -153,16 +153,8 @@ fn old_unknown_trail_transitions_preserve_activity_but_never_become_edges() {
     let log_path = logs.join("2026-10-15.md");
     fs::write(&log_path, &log).unwrap();
 
-    // Simulate an ingestion cache from before transition validation.
-    let mut state = index.empty_state();
-    for event in [&source, &target] {
-        state.events.insert(
-            event.event_id.clone(),
-            EventData::Activity(event.clone()).into(),
-        );
-        state.dirty.insert(event.artifact_id.clone());
-    }
-    index.publish_state_and_database(&state).unwrap();
+    // Logged before transition validation; catch-up indexes them as logged.
+    index.reconcile_from_logs().unwrap();
     let check = || {
         let artifact = index.artifact(&target.artifact_id).unwrap().unwrap();
         assert_eq!(artifact.opens, 1);
@@ -182,8 +174,7 @@ fn old_unknown_trail_transitions_preserve_activity_but_never_become_edges() {
         // Do not rewrite historical payloads: their exact content detects
         // conflicting reuse of an event ID during replay and rebuilding.
         assert!(
-            index.load_or_rebuild().unwrap().events[&target.event_id]
-                == EventData::Activity(target.clone()).into()
+            stored_events(&index)[&target.event_id] == EventData::Activity(target.clone()).into()
         );
     };
     check();
@@ -325,7 +316,7 @@ fn equal_instants_across_logs_order_by_log_position_not_discovery() {
     )
     .unwrap();
     let incremental = index.latest_why(&late.artifact_id).unwrap();
-    fs::remove_file(index.state_path()).unwrap();
+    remove_database(&index);
     let rebuilt = index.latest_why(&late.artifact_id).unwrap();
     assert_eq!(incremental, rebuilt);
     assert_eq!(rebuilt.as_deref(), Some("late path"));

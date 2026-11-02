@@ -113,13 +113,13 @@ fn capture_ids_survive_reindex(kind: &str) {
                 index.record_activity(&event, &[]).unwrap();
             }
         }
-        let state = index.load_current_state().unwrap().0;
+        let events = stored_events(&index);
         assert_eq!(
-            state.events.len(),
+            events.len(),
             expected_count,
             "live updates must reuse the logged ID"
         );
-        assert!(state.events.contains_key(canonical));
+        assert!(events.contains_key(canonical));
         index.reindex().unwrap();
         assert_eq!(
             index.artifact(&event.artifact_id).unwrap().unwrap(),
@@ -220,9 +220,9 @@ fn historical_noncanonical_uuid_markers_survive_reindex() {
                 assert_eq!(rebuilt.opens, event.opens);
                 index.record_activity(&event, &[]).unwrap();
             }
-            let state = index.load_current_state().unwrap().0;
-            assert!(state.events.contains_key(canonical));
-            assert_eq!(state.events.len(), if why { 2 } else { 1 });
+            let events = stored_events(&index);
+            assert!(events.contains_key(canonical));
+            assert_eq!(events.len(), if why { 2 } else { 1 });
             index.reindex().unwrap();
             assert_eq!(
                 index.artifact(&event.artifact_id).unwrap().unwrap(),

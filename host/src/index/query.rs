@@ -74,7 +74,7 @@ fn event_body(body: &str) -> Result<CachedEvent> {
     serde_json::from_str(body).context("artifact history is unavailable: unreadable indexed event")
 }
 
-/// An artifact's own summary events in `ordered_events` order, stably
+/// An artifact's own summary events in `order_key` order, stably
 /// sorted by instant, as a derived row keeps them: the newest is last, and
 /// two in the same second keep their log order. `date` limits them to one
 /// local day.

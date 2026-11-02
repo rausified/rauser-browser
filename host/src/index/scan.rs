@@ -4,7 +4,7 @@
 use super::*;
 
 /// The events, positions, gaps and conflicts one pass over the daily logs
-/// finds, with no persistence: `IndexState` without the cache. Relearn uses
+/// finds, with no persistence and no cache. Relearn uses
 /// it for authoritative evidence that no cache can influence.
 pub(super) struct LogScan {
     /// One body per event ID: the copy at the earliest log position.

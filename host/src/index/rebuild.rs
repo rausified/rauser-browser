@@ -1,7 +1,7 @@
 //! The staged in-place rebuild and the adapter change (plan T10).
 //!
-//! One mechanism serves `brauser reindex`, a shrunk or removed log, a lost
-//! or unusable JSON cache and migration (`legacy.rs`). No database file is
+//! One mechanism serves `brauser reindex`, a shrunk or removed log, a new
+//! or foreign store (another folder or layout) and migration (`legacy.rs`). No database file is
 //! renamed or deleted on this path, so it is safe on Windows:
 //!
 //! 1. [`begin`] sets `brauser_meta.rebuild = 'staging'` and a fresh
@@ -99,6 +99,16 @@ pub(super) struct Location<'a> {
 /// The SHA-256 of an artifact's rendered file, as `render_sha256` stores it.
 pub(super) fn render_digest(artifacts_dir: &str, row: &ArtifactRow) -> Vec<u8> {
     store::sha256(render_artifact(artifacts_dir, row).as_bytes())
+}
+
+/// Count a re-derive of every group of a nonempty history (`FULL_DERIVES`).
+fn count_full_derive(groups: &BTreeSet<String>) {
+    #[cfg(test)]
+    if !groups.is_empty() {
+        FULL_DERIVES.with(|count| count.set(count.get() + 1));
+    }
+    #[cfg(not(test))]
+    let _ = groups;
 }
 
 fn stage_exists(tx: &Transaction<'_>) -> Result<bool> {
@@ -390,6 +400,7 @@ pub(super) fn finalize(
     // Re-derive every group, one at a time.
     clear_derived(tx)?;
     let mut groups = event_groups(tx)?;
+    count_full_derive(&groups);
     groups.extend(ids(tx, "SELECT artifact_id FROM brauser_group_state")?);
     for group in &groups {
         let row = store::rederive_group(tx, adapters, group)?;
@@ -511,6 +522,7 @@ pub(super) fn adapter_change(
     // 2 and 3. Every group, including those that lose their rows.
     clear_derived(tx)?;
     let mut groups = event_groups(tx)?;
+    count_full_derive(&groups);
     groups.extend(before.keys().cloned());
     let mut dirty = BTreeSet::new();
     for group in &groups {
@@ -614,84 +626,12 @@ impl ArtifactIndex {
 
     /// Whether `index.db` has a staged rebuild in progress. Never creates
     /// the file; an unusable one counts as no rebuild.
+    #[cfg(test)]
     pub(super) fn store_rebuilding(&self) -> bool {
         let Ok(Some(mut conn)) = db::open(&self.cache_dir, db::Mode::IfExists) else {
             return false;
         };
         db::read_txn(&mut conn, catchup::rebuilding).unwrap_or(false)
-    }
-
-    /// Run the adapter change on an existing format 9 store. `None` when
-    /// there is none, so the caller decides without one.
-    pub(super) fn store_adapter_change(&self) -> Result<Option<BTreeSet<String>>> {
-        if !matches!(db::open(&self.cache_dir, db::Mode::IfExists), Ok(Some(_))) {
-            return Ok(None);
-        }
-        let adapters = self.adapters.as_deref();
-        let fingerprint = self.adapters_fingerprint();
-        let mut conn = store::open(&self.cache_dir)?;
-        store::write(&mut conn, adapters, |tx| {
-            adapter_change(tx, adapters, &fingerprint, &self.storage.artifacts_dir)
-        })
-        .map(Some)
-    }
-
-    /// The JSON cache as the store holds it, which a finished staged rebuild
-    /// hands back to the JSON half until plan T15 removes it.
-    pub(super) fn store_state(&self) -> Result<IndexState> {
-        let mut conn = store::open(&self.cache_dir)?;
-        db::read_txn(&mut conn, |tx| {
-            let mut state = self.empty_state();
-            let mut statement = tx.prepare(
-                "SELECT event_id, body, log_path, log_line, sequence FROM brauser_events",
-            )?;
-            let mut rows = statement.query([])?;
-            while let Some(row) = rows.next()? {
-                let id: String = row.get(0)?;
-                let event = store::parse_body(&row.get::<_, String>(1)?)?;
-                if let (Some(path), Some(line)) = (
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                ) {
-                    let line = u64::try_from(line).context("negative log line in index.db")?;
-                    state
-                        .positions
-                        .insert(id.clone(), (path.split('/').collect(), line));
-                }
-                if let Some(sequence) = row.get::<_, Option<i64>>(4)? {
-                    let sequence =
-                        u64::try_from(sequence).context("negative sequence in index.db")?;
-                    state.sequence.insert(id.clone(), sequence);
-                }
-                state.events.insert(id, event);
-            }
-            state.next_sequence = store::meta_u64(tx, "next_sequence")?;
-            state.logs = catchup::checkpoints(tx)?;
-            state.gap_logs = state.logs.clone();
-            state.gaps = catchup::gaps(tx)?;
-            if let Some(adapters) = store::meta(tx, "adapters")? {
-                state.adapters = adapters;
-            }
-            state.dirty = ids(tx, "SELECT artifact_id FROM dirty_artifacts")?;
-            state.containers = ids(
-                tx,
-                "SELECT artifact_id FROM brauser_group_state
-                 WHERE rolled_up = 1 AND artifact_id IN (SELECT artifact_id FROM artifacts)",
-            )?;
-            let mut files = tx.prepare(
-                "SELECT artifact_id, file_path FROM brauser_group_state
-                 WHERE file_path IS NOT NULL",
-            )?;
-            state.container_files = files
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?.split('/').collect::<PathBuf>(),
-                    ))
-                })?
-                .collect::<rusqlite::Result<_>>()?;
-            Ok(state)
-        })
     }
 
     /// Truncate the write-ahead log after an O(history) rewrite (reindex).

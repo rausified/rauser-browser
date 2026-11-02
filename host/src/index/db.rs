@@ -30,8 +30,8 @@ use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavio
 pub(crate) const DB_FILE: &str = "index.db";
 /// `PRAGMA application_id`: 'brwr'.
 pub(crate) const APPLICATION_ID: u32 = 0x6272_7772;
-/// `PRAGMA user_version`: cache format 9.
-pub(crate) const SCHEMA_VERSION: i64 = 9;
+/// `PRAGMA user_version`: the cache format, 9.
+pub(crate) const SCHEMA_VERSION: i64 = super::STATE_VERSION as i64;
 /// How long one statement waits for another connection's lock.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(10_000);
 /// Retries of `BEGIN IMMEDIATE` after the busy timeout has expired.
@@ -513,6 +513,8 @@ pub(crate) fn write_txn<T>(
     let tx = begin_immediate(conn)?;
     let value = f(&tx).map_err(map_busy)?;
     tx.commit().map_err(sqlite)?;
+    #[cfg(test)]
+    super::TRANSACTIONS.with(|count| count.set(count.get() + 1));
     Ok(value)
 }
 

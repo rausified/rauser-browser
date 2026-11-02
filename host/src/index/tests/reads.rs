@@ -64,18 +64,19 @@ fn reads_answer_from_index_db_without_a_full_derive() {
 }
 
 #[test]
-fn a_current_read_reads_no_log_and_never_touches_the_json_cache() {
+fn a_current_read_reads_no_log_and_commits_nothing() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
     let (index, event) = recorded(&root, &cache);
     // The logs are checkpointed in brauser_logs, so the stat-only check
-    // finds nothing to catch up: no log byte is read and the JSON cache
-    // (which a catch-up would rebuild) is neither read nor rewritten.
-    fs::remove_file(index.state_path()).unwrap();
+    // finds nothing to catch up: no log byte is read and no write
+    // transaction runs.
     LOG_BYTES_READ.with(|count| count.set(0));
+    TRANSACTIONS.with(|count| count.set(0));
     every_read(&index, &event.artifact_id);
     assert_eq!(LOG_BYTES_READ.with(std::cell::Cell::get), 0);
-    assert!(!index.state_path().exists());
+    assert_eq!(TRANSACTIONS.with(std::cell::Cell::get), 0);
+    assert_no_json_cache(cache.path());
 }
 
 #[test]
@@ -182,35 +183,4 @@ fn an_adapter_change_is_caught_up_before_a_read() {
     let adapted = index.with_adapters(Some(&github_document(true)));
     let repo = adapted.artifact(GITHUB_REPO_ID).unwrap().unwrap();
     assert_eq!(repo.contained.len(), 1);
-}
-
-#[test]
-fn a_watermark_ahead_of_the_stored_events_is_caught_up_before_a_read() {
-    let root = TempDir::new().unwrap();
-    let cache = TempDir::new().unwrap();
-    let (index, event) = recorded(&root, &cache);
-    let later = activity(
-        "00000000-0000-4000-8000-0000000000c5",
-        "B",
-        "Later",
-        "2026-10-15T11:00:00Z",
-    );
-    write_log(root.path(), "2026-10-15.md", &[&event, &later]);
-    // A host that died after committing a catch-up pass's watermark but
-    // before publishing its events: the logs look current, the rows do not.
-    let mut state = index.load_or_rebuild().unwrap();
-    write_log(
-        root.path(),
-        "2026-10-16.md",
-        &[&activity(
-            "00000000-0000-4000-8000-0000000000c6",
-            "C",
-            "Newest",
-            "2026-10-16T09:00:00Z",
-        )],
-    );
-    assert!(index.catch_up_logs(&mut state, false).unwrap().complete);
-    let newest = index.artifact("work:example.com/C").unwrap().unwrap();
-    assert_eq!(newest.title, "Newest");
-    assert_eq!(index.recent(None, None, 10).unwrap().0.len(), 3);
 }
