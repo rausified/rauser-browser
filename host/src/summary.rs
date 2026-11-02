@@ -49,6 +49,7 @@ pub const MAX_SUMMARY_PATH_BYTES: usize = 1024;
 /// supply one.
 #[derive(Clone, Debug)]
 pub struct PageSummary {
+    pub overview: Option<String>,
     pub event_id: String,
     pub url: String,
     pub title: String,
@@ -65,11 +66,13 @@ pub struct PageSummary {
 /// The durable, indexed form of a `PageSummary`: the marker payload stored in
 /// the daily log and replayed by `ArtifactIndex`. `url` and `artifact_id`
 /// hold the normalized URL and the identity derived from it, not whatever a
-/// caller originally supplied. Every field is required: no caller wrote a
-/// summary event before `record_key` and `harness` existed.
+/// caller originally supplied. `overview` is absent on older events.
+/// No caller wrote a summary event before `record_key` and `harness` existed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SummaryEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
     pub event_id: String,
     pub artifact_id: String,
     pub artifact_type: String,
@@ -92,6 +95,13 @@ pub const MAX_ARTIFACT_TYPE_BYTES: usize = 64;
 pub const MAX_ARTIFACT_KEY_BYTES: usize = 512;
 
 pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'static str> {
+    if summary.overview.as_ref().is_some_and(|value| {
+        value.trim().is_empty()
+            || value.chars().count() > MAX_OVERVIEW_CHARS
+            || value.chars().any(char::is_control)
+    }) {
+        return Err("invalid_summary_overview");
+    }
     if summary.title.trim().is_empty() || summary.title.len() > MAX_TITLE_BYTES {
         return Err("invalid_summary_title");
     }
@@ -178,6 +188,7 @@ pub(crate) fn check_summary_path(path: &str) -> Result<(), &'static str> {
 /// own `url`.
 pub(crate) fn validate_summary_event(event: &SummaryEvent) -> bool {
     let as_summary = PageSummary {
+        overview: event.overview.clone(),
         event_id: event.event_id.clone(),
         url: event.url.clone(),
         title: event.title.clone(),
@@ -665,6 +676,7 @@ mod tests {
 
     fn summary() -> PageSummary {
         PageSummary {
+            overview: None,
             event_id: "11111111-1111-1111-1111-111111111111".into(),
             url: HN_URL.into(),
             title: "A good discussion".into(),
@@ -683,6 +695,7 @@ mod tests {
     fn event() -> SummaryEvent {
         let s = summary();
         SummaryEvent {
+            overview: None,
             event_id: s.event_id,
             artifact_id: web_page_artifact_id(HN_URL).unwrap(),
             artifact_type: s.artifact_type,
@@ -778,6 +791,38 @@ mod tests {
             validate_page_summary(&long),
             Err("invalid_summary_category")
         );
+    }
+
+    #[test]
+    fn overview_round_trips_and_old_events_still_validate() {
+        let mut event = event();
+        let old = serde_json::to_value(&event).unwrap();
+        assert!(old.get("overview").is_none());
+        assert!(validate_summary_event(
+            &serde_json::from_value(old).unwrap()
+        ));
+        event.overview = Some("A decision about the next release.".into());
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: SummaryEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, event);
+        assert!(validate_summary_event(&decoded));
+    }
+
+    #[test]
+    fn replay_rejects_invalid_overviews_but_accepts_the_unicode_bound() {
+        let mut event = event();
+        for value in [
+            "".into(),
+            "  ".into(),
+            "two\nlines".into(),
+            "a\0b".into(),
+            "x".repeat(MAX_OVERVIEW_CHARS + 1),
+        ] {
+            event.overview = Some(value);
+            assert!(!validate_summary_event(&event));
+        }
+        event.overview = Some("日".repeat(MAX_OVERVIEW_CHARS));
+        assert!(validate_summary_event(&event));
     }
 
     #[test]

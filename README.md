@@ -196,6 +196,13 @@ Tasks need the same setup as Summarize & log: the development service, a home fo
 
 Where your instruction is kept: in the agent's prompt; in the run's `status.json` in Brauser's support folder, kept for 30 days or the newest 200 runs; in the Codex thread's name ("Brauser: Task: " and its first 80 characters); in the run's `stream.txt` when the agent repeats it; and in the harness's own session history (Codex threads, Claude Code sessions), which Brauser does not prune. It never goes into the page file or onto a command line, and the diagnostics logs below never record the instruction or the report. Rebuild the host and the extension together for the task bar: an older host cannot start a task, and the panel then asks for a host rebuild.
 
+New summaries show their one-sentence overview and document type in the
+page's Summary line and Recent; the run card leads its result with that
+overview. Older summaries keep their existing labels. Update host and
+extension together for this additive protocol v8 field. After recording new
+summaries, host downgrade is unsupported because older builds cannot replay
+the new overview field.
+
 ### Diagnostics
 
 The native host, the service, and the `brauser` CLI keep local JSON-lines logs (`host.jsonl`, `service.jsonl`, `cli.jsonl`, each rotated at 5 MiB, three copies) in `~/Library/Logs/Brauser/` on macOS and `%LOCALAPPDATA%\Brauser\data\logs\` on Windows. They never hold page text, notes, prompts, answers, task instructions, task reports, or `agent.env` values, record URLs only as their origin, and never leave the computer (DESIGN.md §15). `BRAUSER_LOG=debug` logs more; `BRAUSER_LOG_DIR` moves the directory. Read them with:

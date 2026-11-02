@@ -510,7 +510,7 @@ impl CaptureStore {
         // `record_entry` adds the normalized `url` and the derived
         // `artifact_id`, and checks `record_key` and `artifact_type` against
         // them.
-        let marker = serde_json::json!({
+        let mut marker = serde_json::json!({
             "event_id": event_id,
             "title": summary.title,
             "occurred_at": summary.occurred_at,
@@ -522,6 +522,9 @@ impl CaptureStore {
             "artifact_type": summary.artifact_type,
             "harness": summary.harness,
         });
+        if let Some(overview) = &summary.overview {
+            marker["overview"] = serde_json::Value::String(overview.clone());
+        }
         let mut written = None;
         let outcome = self.record_entry_with_payload(
             policy,
@@ -531,6 +534,20 @@ impl CaptureStore {
             EntryGate::AnyHttpPage,
             &mut written,
         );
+        // A pre-overview build may have journaled this run's append before
+        // failing. Retry its old payload only when the current one disagrees
+        // with that intent. The normal replay still checks every other field
+        // and restores the frozen bytes, so return/index the old event too.
+        if summary.overview.is_some()
+            && matches!(&outcome, CaptureOutcome::Retryable { message }
+                if message == "queued visit changed after a partial write; manual repair is required")
+        {
+            let legacy = crate::summary::PageSummary {
+                overview: None,
+                ..summary.clone()
+            };
+            return self.record_summary(policy, &legacy);
+        }
         if !matches!(outcome, CaptureOutcome::Persisted { .. }) {
             return (outcome, None);
         }
@@ -4813,6 +4830,7 @@ mod tests {
 
     fn page_summary(url: &str) -> crate::summary::PageSummary {
         crate::summary::PageSummary {
+            overview: None,
             event_id: Uuid::new_v4().to_string(),
             url: url.into(),
             title: "A good discussion".into(),
@@ -5035,6 +5053,87 @@ mod tests {
             }
         );
         assert!(event.is_none());
+    }
+
+    #[test]
+    fn summary_retry_after_upgrade_preserves_the_pre_overview_entry() {
+        for tail in [0, 1, 2] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+            let (CaptureOutcome::Persisted { relative_path }, Some(original)) =
+                store.record_summary(open_policy(), &summary)
+            else {
+                panic!("expected legacy summary event");
+            };
+            let path = root.path().join(relative_path);
+            let bytes = fs::read(&path).unwrap();
+            let start = bytes.windows(3).rposition(|part| part == b"\n- ").unwrap();
+            let end = match tail {
+                0 => start,
+                1 => start + (bytes.len() - start) / 2,
+                _ => bytes.len(),
+            };
+            fs::write(&path, &bytes[..end]).unwrap();
+            drop(store);
+            let store =
+                CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+            summary.overview = Some("An overview already kept in the older run's answer.".into());
+
+            // Compatibility must not authorize other changes to the old entry.
+            let moved = crate::summary::PageSummary {
+                summary_path: "pages/elsewhere.summary.md".into(),
+                ..summary.clone()
+            };
+            assert!(matches!(
+                store.record_summary(open_policy(), &moved).0,
+                CaptureOutcome::Retryable { .. }
+            ));
+            assert_eq!(fs::read(&path).unwrap(), bytes[..end]);
+
+            let (outcome, event) = store.record_summary(open_policy(), &summary);
+            if tail == 2 {
+                assert_eq!(
+                    outcome,
+                    CaptureOutcome::Suppressed {
+                        reason: "duplicate_event".into()
+                    }
+                );
+                assert!(event.is_none());
+            } else {
+                assert!(
+                    matches!(outcome, CaptureOutcome::Persisted { .. }),
+                    "{outcome:?}"
+                );
+                assert_eq!(event, Some(original));
+            }
+            assert_eq!(fs::read(&path).unwrap(), bytes, "recover the frozen bytes");
+        }
+    }
+
+    #[test]
+    fn a_summary_retry_cannot_change_an_already_journaled_overview() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let mut summary = page_summary("https://news.ycombinator.com/item?id=50251344");
+        summary.overview = Some("The original overview.".into());
+        let (CaptureOutcome::Persisted { relative_path }, Some(event)) =
+            store.record_summary(open_policy(), &summary)
+        else {
+            panic!("expected summary event");
+        };
+        assert_eq!(event.overview, summary.overview);
+        let path = root.path().join(relative_path);
+        let bytes = fs::read(&path).unwrap();
+        summary.overview = Some("A different overview.".into());
+        let (outcome, event) = store.record_summary(open_policy(), &summary);
+        assert!(matches!(outcome, CaptureOutcome::Retryable { .. }));
+        assert!(event.is_none());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
     }
 
     /// Review finding: a summary whose marker is already complete counts as
