@@ -8,6 +8,21 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+fn configured_home() -> (tempfile::TempDir, std::path::PathBuf, Vault) {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let config_path = temp.path().join("config.toml");
+    let raw = json!({"root_picker_confirmed":true,"root_identity":folder_identity(&home),
+        "storage":{"root":home.to_str().unwrap(),"profile":"neutral","log_dir":"logs","pages_dir":"notes","later_dir":"later","artifacts_dir":"artifacts","summaries_dir":"summaries"},
+        "adapters":{"format":1},"artifacts":[{"type":"work.item","origin":"https://work.example","match":[{"path":"/items/{id:int}"}],"id":"old:{host}/{id}"}]});
+    fs::write(&config_path, toml::to_string(&raw).unwrap()).unwrap();
+    let mut storage_json = raw["storage"].clone();
+    storage_json["knowledge_base_dir"] = Value::Null;
+    let storage = serde_json::from_value(storage_json).unwrap();
+    (temp, config_path, Vault::open(&storage).unwrap())
+}
+
 fn folder_identity(home: &Path) -> String {
     #[cfg(unix)]
     {
@@ -54,19 +69,9 @@ fn success(config: &Path, name: &str, request: &Value) -> Value {
 
 #[test]
 fn separate_processes_plan_record_retry_and_inspect_without_changing_identity() {
-    let temp = tempfile::tempdir().unwrap();
+    let (temp, config_path, vault) = configured_home();
     let home = temp.path().join("home");
-    fs::create_dir(&home).unwrap();
-    let config_path = temp.path().join("config.toml");
-    let raw = json!({"root_picker_confirmed":true,"root_identity":folder_identity(&home),
-        "storage":{"root":home.to_str().unwrap(),"profile":"neutral","log_dir":"logs","pages_dir":"notes","later_dir":"later","artifacts_dir":"artifacts","summaries_dir":"summaries"},
-        "adapters":{"format":1},"artifacts":[{"type":"work.item","origin":"https://work.example","match":[{"path":"/items/{id:int}"}],"id":"old:{host}/{id}"}]});
     // A confirmed fixture uses the platform identity format of the picker.
-    fs::write(&config_path, toml::to_string(&raw).unwrap()).unwrap();
-    let mut storage_json = raw["storage"].clone();
-    storage_json["knowledge_base_dir"] = Value::Null;
-    let storage = serde_json::from_value(storage_json).unwrap();
-    let vault = Vault::open(&storage).unwrap();
     note::save_keyed_note_with_provenance(
         &vault,
         &StoredUrl {
@@ -107,6 +112,60 @@ fn separate_processes_plan_record_retry_and_inspect_without_changing_identity() 
     assert!(!temp.path().join("cache").exists());
     assert!(!temp.path().join("adopted-contracts.json").exists());
     assert_eq!(fs::read_dir(home.join("notes")).unwrap().count(), 1);
+}
+
+#[test]
+fn torn_why_marker_cannot_produce_or_approve_an_empty_plan() {
+    let (temp, config_path, _vault) = configured_home();
+    let config_before = fs::read(&config_path).unwrap();
+    let review = json!({"origin":"https://work.example",
+        "expected_revision":format!("sha256:{}", hex::encode(Sha256::digest(&config_before))),
+        "proposed":{"format":1,"artifacts":[{"type":"work.item","origin":"https://work.example","match":[{"path":"/items/{id:int}"}],"id":"new:{host}/{id}"}]}});
+    let empty = success(&config_path, "relearn-plan", &review);
+    assert_eq!(empty["identities"], json!([]));
+    let event = brauser_protocol::WhyEvent {
+        event_id: "00000000-0000-0000-0000-000000000001".into(),
+        artifact_id: "old:work.example/1".into(),
+        url: "https://work.example/items/1".into(),
+        text: "Keep this context".into(),
+        occurred_at: "2026-11-02T10:00:00Z".into(),
+        incognito: false,
+    };
+    let marker = format!(
+        "<!-- brauser:visit id={} url={} at={} kind=why data={} -->\n",
+        hex::encode(Sha256::digest(event.event_id.as_bytes())),
+        hex::encode(Sha256::digest(event.url.as_bytes())),
+        event.occurred_at,
+        hex::encode(serde_json::to_vec(&event).unwrap())
+    );
+    let logs = temp.path().join("home/logs");
+    fs::create_dir_all(&logs).unwrap();
+    let path = logs.join("2026-11-02.md");
+    fs::write(&path, format!("<!-- brauser:daily-log v1 -->\n{marker}")).unwrap();
+    assert_eq!(
+        success(&config_path, "relearn-plan", &review)["identities"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let damaged = format!(
+        "<!-- brauser:daily-log v1 -->\n{}",
+        &marker[..marker.len() - 40]
+    );
+    fs::write(&path, &damaged).unwrap();
+    let decision = json!({"operation_id":"00000000-0000-0000-0000-000000000002",
+        "decision":"approve","review":review,"expected_plan_revision":empty["plan_revision"]});
+    for (name, input) in [("relearn-plan", &review), ("relearn-record", &decision)] {
+        let output = command(&config_path, name, &[], input.to_string().as_bytes());
+        assert!(!output.status.success(), "{name} accepted damaged history");
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("damaged owned log marker"));
+    }
+    assert_eq!(fs::read(&config_path).unwrap(), config_before);
+    assert_eq!(fs::read_to_string(path).unwrap(), damaged);
+    assert!(!temp.path().join("cache").exists());
+    assert!(!temp.path().join("rekey").exists());
 }
 
 #[test]
