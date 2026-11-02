@@ -673,7 +673,7 @@ fn a_rebuild_that_finalizes_mid_pass_re_marks_an_already_dirty_artifact() {
     later.occurred_at = "2026-10-15T13:00:00-07:00".into();
     let today = write_log(root.path(), "2026-10-15.md", &[&later]);
     index.reconcile_from_logs().unwrap();
-    assert_eq!(dirty_ids(&index), [first.artifact_id.clone()]);
+    assert_eq!(dirty_ids(&index), [first.artifact_id.as_str()]);
     let report = index
         .regenerate_with(|step, _| {
             if step == RegenStep::Written {
@@ -689,7 +689,7 @@ fn a_rebuild_that_finalizes_mid_pass_re_marks_an_already_dirty_artifact() {
     assert!(only_file_text(root.path()).contains("Renamed"));
     assert_eq!(
         dirty_ids(&index),
-        [first.artifact_id.clone()],
+        [first.artifact_id.as_str()],
         "the stale file's mark was cleared"
     );
     index.regenerate_dirty().unwrap();
