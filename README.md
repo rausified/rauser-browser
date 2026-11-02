@@ -198,7 +198,10 @@ Where your instruction is kept: in the agent's prompt; in the run's `status.json
 
 New summaries show their one-sentence overview and document type in the
 page's Summary line and Recent; the run card leads its result with that
-overview. Older summaries keep their existing labels. Update host and
+overview. Summary run cards and Tasks detail also say how much the agent
+reports reading: the whole artifact, part of it, or only the browser page.
+Older answers without that information omit the reading label. Older summaries
+keep their existing labels. Update host and
 extension together for this additive protocol v8 field. After recording new
 summaries, host downgrade is unsupported because older builds cannot replay
 the new overview field.

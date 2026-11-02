@@ -10,7 +10,7 @@ import { APP_NAME, storageKey } from "./brand.js";
 import {
   HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId, type HostClient,
 } from "./native.js";
-import { notSavedText, summaryLine } from "./summary-text.js";
+import { notSavedText, readScopeText, summaryLine } from "./summary-text.js";
 
 export const POLL_MS = 1000;
 export const RESTORE_FINISHED_WITHIN_MS = 24 * 60 * 60 * 1000;
@@ -100,7 +100,8 @@ export function answerLine(answer: RunAnswer): string {
   if (wall !== null) return wall;
   const labels = `Type: ${answer.document_type} · Category: ${answer.category} · ` +
     `Importance: ${answer.importance} — ${answer.importance_reason}`;
-  return answer.overview ? `${answer.overview}\n${labels}` : labels;
+  return [answer.overview, readScopeText(answer.read_scope), labels]
+    .filter((line) => line).join("\n");
 }
 
 function shellQuote(value: string): string {

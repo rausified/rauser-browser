@@ -387,6 +387,30 @@ fn runs_listed_more_is_optional() {
 }
 
 #[test]
+fn run_answer_read_scope_is_optional_and_accepts_only_known_scopes() {
+    let mut message: Value = serde_json::from_str(&run_fetched(RUN_VIEW)).unwrap();
+    message["run"]["answer"] = json!({
+        "document_type": "report", "category": "news", "importance": "high",
+        "importance_reason": "New."
+    });
+    assert_response_round_trips("RunFetched", &message);
+    for scope in ["whole", "partial", "page_only"] {
+        message["run"]["answer"]["read_scope"] = json!(scope);
+        assert_response_round_trips("RunFetched", &message);
+    }
+    for scope in [json!("most"), json!("Whole"), json!(3)] {
+        message["run"]["answer"]["read_scope"] = scope;
+        assert!(!schema_subset::valid("RunFetched", &message), "{message}");
+        assert!(
+            serde_json::from_value::<Response>(message.clone()).is_err(),
+            "{message}"
+        );
+    }
+    message["run"]["answer"]["read_scope"] = Value::Null;
+    assert!(!schema_subset::valid("RunFetched", &message));
+}
+
+#[test]
 fn run_answer_access_is_optional() {
     // An older service's answer has no access; it reads as before.
     let base = r#""answer":{"document_type":"report","category":"news","importance":"high","importance_reason":"New."}"#;

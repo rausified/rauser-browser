@@ -320,3 +320,7 @@
   by local calendar day, so viewer-only summaries can retry while Chrome stays
   open. Same-day suppression, pending dwell and retry state remain intact;
   the host continues deciding which saved summaries block another run.
+
+
+- **Brauser — Honor capture pause when admitting automatic summaries (2026-11-02, brwr-q0i4).** The host rechecks capture_enabled under its refreshed configuration lock and skips paused automatic requests before service contact, including requests read under older settings. Manual summaries remain available; already admitted runs keep their lifecycle. An offline regression reproduces the old unwanted forwarding.
+- **Brauser — Show summary reading scope beside the overview (2026-11-02, brwr-rr93).** Run cards and Tasks summary detail disclose the agent's whole-artifact, partial-artifact or browser-page-only reading through one text-only formatter. Legacy results omit the label and access walls retain their explanation. The optional protocol projection changes no stored answer or retrieval authority; deploy host and extension together.
