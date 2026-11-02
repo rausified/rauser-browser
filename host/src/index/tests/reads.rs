@@ -202,7 +202,7 @@ fn a_read_behind_a_held_write_lock_serves_the_snapshot_within_one_timeout() {
     write_log(root.path(), "2026-10-15.md", &[&event, &later]);
     let holder = rusqlite::Connection::open(index.database_path()).unwrap();
     holder.execute("BEGIN IMMEDIATE", []).unwrap();
-    let timeout = Duration::from_millis(400);
+    let timeout = Duration::from_millis(1_000);
     let _short = BusyTimeout::set(timeout);
     let started = Instant::now();
     let (recent, _, _) = index.recent(None, None, 10).unwrap();
@@ -214,7 +214,9 @@ fn a_read_behind_a_held_write_lock_serves_the_snapshot_within_one_timeout() {
             .collect::<Vec<_>>(),
         ["Über Straße"]
     );
-    assert!(waited < timeout * 3, "{waited:?}");
+    // Below a tripled timeout with room for a slow CI runner (2.5x: a
+    // retry that multiplied the timeout would take at least 3x).
+    assert!(waited < timeout * 5 / 2, "{waited:?}");
     holder.execute("ROLLBACK", []).unwrap();
     drop(holder);
     assert_eq!(index.recent(None, None, 10).unwrap().0.len(), 2);

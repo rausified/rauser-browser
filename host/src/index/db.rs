@@ -1388,7 +1388,7 @@ mod tests {
     fn a_held_write_lock_surfaces_busy_within_about_one_busy_timeout() {
         let dir = TempDir::new().unwrap();
         let holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
-        let timeout = Duration::from_millis(400);
+        let timeout = Duration::from_millis(1_000);
         let _short = BusyTimeout::set(timeout);
         let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
         let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
@@ -1399,7 +1399,9 @@ mod tests {
         // Retries never multiply the busy timeout: a read's catch-up must
         // give up well inside the extension's 30 s request timeout.
         assert!(waited >= timeout, "{waited:?}");
-        assert!(waited < timeout * 3, "{waited:?}");
+        // Below a tripled timeout with room for a slow CI runner (2.5x: a
+        // retry that multiplied the timeout would take at least 3x).
+        assert!(waited < timeout * 5 / 2, "{waited:?}");
         tx.rollback().unwrap();
     }
 
