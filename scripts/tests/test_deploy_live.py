@@ -61,6 +61,8 @@ class FakeRunner:
         self.build_writes_dist = True
         self.on_cargo = None  # optional callable run during the cargo build
         self.lock_after_pull = None  # new package-lock.json text the pull brings
+        self.script_after_pull = None  # new scripts/dev/deploy-live text the pull brings
+        self.npm_hook = None  # optional callable(argv) -> Result or None for npm calls
 
     # Calls whose first words match one of these act on the system.
     ACTING = ("pull", "cargo", "npm", "node", "binary", "hygiene-apply", "publish")
@@ -106,6 +108,10 @@ class FakeRunner:
             self.head = self.after_pull
             if self.lock_after_pull is not None:
                 (self.repo / "package-lock.json").write_text(self.lock_after_pull)
+            if self.script_after_pull is not None:
+                script = self.repo / "scripts" / "dev" / "deploy-live"
+                script.parent.mkdir(parents=True, exist_ok=True)
+                script.write_text(self.script_after_pull)
             return dl.Result(0, b"Updating\n")
         if k == "diff":
             return dl.Result(0, self.changed_files.encode())
@@ -118,6 +124,10 @@ class FakeRunner:
                 self.on_cargo()
         if k in ("hygiene", "hygiene-apply"):
             return dl.Result(0, self.hygiene_out.encode())
+        if k == "npm" and self.npm_hook is not None:
+            hooked = self.npm_hook(argv)
+            if hooked is not None:
+                return hooked
         if k == "npm" and argv[1:3] == ["run", "build:extension"] and self.build_writes_dist:
             dist = self.repo / "extension" / "dist"
             dist.mkdir(parents=True, exist_ok=True)
@@ -186,6 +196,13 @@ class Fixture(unittest.TestCase):
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.runner = FakeRunner(self.repo)
+        # The script this deploy runs as, and the repo's copy at HEAD; they
+        # match unless a test's pull brings a new one.
+        self.running_script = self.tmp / "running-deploy-live"
+        self.running_script.write_text("deploy-live v1")
+        (self.repo / "scripts" / "dev").mkdir(parents=True)
+        (self.repo / "scripts" / "dev" / "deploy-live").write_text("deploy-live v1")
+        self.reexecs: list[list[str]] = []
         real_replace = os.replace
 
         def replace(src, dst):
@@ -220,7 +237,8 @@ class Fixture(unittest.TestCase):
         out = io.StringIO()
         code = dl.main(["--repo", str(self.repo), "--support-dir", str(self.support),
                         "--native-host-manifest", str(self.manifest), *argv],
-                       runner=self.runner, out=out, home=self.home)
+                       runner=self.runner, out=out, home=self.home,
+                       running_script=self.running_script, reexec=self.reexecs.append)
         return code, out.getvalue()
 
     def kinds(self):
@@ -295,6 +313,22 @@ class HappyPath(Fixture):
         code, out = self.deploy()
         self.assertEqual(code, 0, out)
         self.assertIn("Reload Brauser at chrome://extensions", out)
+
+    def test_a_refused_deploy_keeps_the_reload_hint_until_one_completes(self):
+        # The extension is rebuilt, then a late run refuses the deploy; the
+        # retry at the same commit rebuilds an identical dist (brwr-dl2).
+        self.runner.on_cargo = lambda: self.add_run("late-1", "running")
+        code, out = self.deploy()
+        self.assertEqual(code, 1, out)
+        shutil.rmtree(self.support / "runs" / "late-1")
+        self.runner.on_cargo = None
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertIn("already up to date", out)
+        self.assertIn("Reload Brauser at chrome://extensions", out)
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("Reload Brauser", out)
 
     def test_no_reload_hint_when_the_extension_is_unchanged(self):
         self.runner.after_pull = OLD  # already up to date; build writes the same dist
@@ -517,7 +551,75 @@ class NpmCi(Fixture):
         code, out = self.deploy()
         self.assertNotEqual(code, 0, out)
         self.assertNotIn("node", self.kinds())
+        # The receipt goes before npm ci starts, so a failed install is not
+        # mistaken for a finished one (brwr-dl1).
+        self.assertNotIn("package_lock_sha256", json.loads(self.state.read_text()))
+
+    def test_interrupted_npm_ci_is_rerun_even_when_node_modules_reappeared(self):
+        # node_modules is missing, the lockfile matches the receipt, and npm ci
+        # fails after partly recreating node_modules (brwr-dl1).
+        shutil.rmtree(self.repo / "node_modules")
+
+        def partial_install(argv):
+            if argv[:2] == ["npm", "ci"]:
+                (self.repo / "node_modules").mkdir(exist_ok=True)
+                return dl.Result(1, b"", b"npm ci interrupted")
+            return None
+        self.runner.npm_hook = partial_install
+        code, out = self.deploy()
+        self.assertEqual(code, 1, out)
+        self.assertTrue((self.repo / "node_modules").is_dir())
+        self.runner.npm_hook = None
+        self.runner.calls.clear()
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.npm_calls()[0], ["npm", "ci", "--ignore-scripts"])
         self.assertEqual(self.recorded_lock(), hashlib.sha256(b"lock-v1").hexdigest())
+
+
+class SelfUpdate(Fixture):
+    """A pull that changes deploy-live itself continues in the new copy."""
+
+    def test_a_pull_that_changes_deploy_live_reexecs_the_new_copy(self):
+        self.runner.script_after_pull = "deploy-live v2"
+        code, out = self.deploy("--allow-active-runs")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.reexecs), 1, out)
+        script = str(self.repo / "scripts" / "dev" / "deploy-live")
+        self.assertEqual(self.reexecs[0][:2], [sys.executable, script])
+        args = self.reexecs[0][2:]
+        self.assertIn("--allow-active-runs", args)
+        self.assertEqual(args[-2:], ["--resumed-from", OLD])
+        self.assertIn("deploy-live changed in this pull", out)
+        # Nothing after the pull ran in the old copy.
+        self.assertNotIn("cargo", self.kinds())
+        self.assertNotIn("npm", self.kinds())
+
+    def test_an_unchanged_deploy_live_carries_on(self):
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.reexecs, [])
+
+    def test_a_resumed_deploy_never_reexecs_and_reports_the_whole_range(self):
+        self.runner.head = NEW
+        self.runner.after_pull = NEW
+        (self.repo / "scripts" / "dev" / "deploy-live").write_text("deploy-live v3")
+        code, out = self.deploy("--resumed-from", OLD)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.reexecs, [])
+        self.assertIn(f"commits:   {OLD[:12]}..{NEW[:12]}", out)
+        self.assertIn("Reload Brauser", out)
+
+    def test_resumed_from_must_be_a_full_commit(self):
+        code, out = self.deploy("--resumed-from", "HEAD~1")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--resumed-from", out)
+
+    def test_a_dry_run_never_reexecs(self):
+        self.runner.script_after_pull = "deploy-live v2"
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.reexecs, [])
 
 
 class ExtensionId(Fixture):
