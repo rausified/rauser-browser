@@ -873,7 +873,13 @@ impl ArtifactIndex {
     /// committing its progress, within this one call; a rebuild already in
     /// progress (another call, or a host that stopped mid-pass) resumes.
     pub fn reindex(&self) -> Result<RegenerationReport> {
+        // A legacy cache's import still supplies the previous winners; the
+        // reindex then finishes its rebuild and its cleanup.
+        let migrating = self.legacy_step()? != Legacy::None;
         while !self.rebuild_pass(rebuild::Finish::All)? {}
+        if migrating {
+            self.finish_legacy()?;
+        }
         // Vanished container files were adopted from the store and from the
         // owned roll-up files on disk; a replaced file is not Brauser's.
         let state = self.store_state()?;
@@ -956,6 +962,8 @@ impl ArtifactIndex {
     /// partial pass first. A pass that reaches the read bound saves its
     /// progress and reports unavailable history.
     fn load_current_state(&self) -> Result<(IndexState, bool)> {
+        // A format 8 cache is migrated first, one rebuild pass per call.
+        self.migrate_legacy(false)?;
         let (mut state, mut rebuild, reconcile, republish) = match self.read_pending() {
             Some(pending) => (pending.state, pending.rebuild, pending.reconcile, true),
             None => match self.read_current_state() {

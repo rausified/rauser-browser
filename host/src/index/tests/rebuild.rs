@@ -7,7 +7,7 @@ use super::*;
 /// The public tables and `brauser_artifact_days`, each ordered by its key.
 /// Generations, sequences and order keys are not part of it, so a rebuilt
 /// store and one caught up incrementally compare equal.
-fn canonical(index: &ArtifactIndex) -> Vec<(&'static str, Vec<Vec<sql::Value>>)> {
+pub(super) fn canonical(index: &ArtifactIndex) -> Vec<(&'static str, Vec<Vec<sql::Value>>)> {
     [
         (
             "artifacts",

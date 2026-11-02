@@ -1,7 +1,7 @@
 //! The staged in-place rebuild and the adapter change (plan T10).
 //!
 //! One mechanism serves `brauser reindex`, a shrunk or removed log, a lost
-//! or unusable JSON cache and (plan T16) migration. No database file is
+//! or unusable JSON cache and migration (`legacy.rs`). No database file is
 //! renamed or deleted on this path, so it is safe on Windows:
 //!
 //! 1. [`begin`] sets `brauser_meta.rebuild = 'staging'` and a fresh
@@ -83,6 +83,10 @@ pub(super) enum Finish {
     /// what it was believed to hold, or that gained a logged body the store
     /// did not have, so unchanged files keep user edits.
     Changed,
+    /// A migration from a format 8 cache with nothing usable to import
+    /// (plan T16): only artifacts whose expected file is missing. Every
+    /// existing file, edited or stale, is kept until its next real change.
+    Missing,
 }
 
 /// Where the rebuilt rows came from, recorded in `brauser_meta`.
@@ -289,6 +293,16 @@ pub(super) fn finalize(
     known_files: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
     let artifacts_dir = &location.storage.artifacts_dir;
+    let root = match finish {
+        Finish::Missing => Some(
+            open_selected_root(
+                Path::new(&location.storage.root),
+                Some(location.root_identity),
+            )?
+            .0,
+        ),
+        Finish::All | Finish::Changed => None,
+    };
     // What each existing file is believed to hold, before the events change.
     let mut believed = BTreeMap::new();
     if finish == Finish::Changed {
@@ -385,6 +399,12 @@ pub(super) fn finalize(
                 let digest = row.as_ref().map(|row| render_digest(artifacts_dir, row));
                 believed.get(group).cloned().flatten() != digest
             }
+            Finish::Missing => row.as_ref().is_some_and(|row| {
+                root.as_ref().is_some_and(|root| {
+                    root.symlink_metadata(artifact_path(artifacts_dir, row))
+                        .is_err()
+                })
+            }),
         };
         if changed {
             dirty.insert(group.clone());
