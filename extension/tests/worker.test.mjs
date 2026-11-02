@@ -3159,6 +3159,36 @@ test("aSinglePageRouteWaitsForItsTitleOrSettle", async () => {
   await until(() => port.closed, "the route port to close");
 });
 
+test("aDwellStartedBeforeTheLoadStillCompletes", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease({ enabled: true, dwell_secs: 1 }));
+  const before = ports.length;
+  onWindowFocusChanged(1);
+  // Focus first, then the load: nothing else happens afterwards.
+  await openArtifact(216, "focused", { load: false });
+  onTabActivated({ tabId: 216, windowId: 1 });
+  await flush();
+  onTabUpdated(216, { status: "complete" }, tabs.get(216));
+  const { port, request } = await until(() => autoRequests(before)[0], "the dwell to complete");
+  assert.equal(request.url, `${AUTO_ORIGIN}/items/focused`);
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "already_summarized",
+  });
+  await until(() => port.closed, "the dwell port to close");
+});
+
+test("aTabThatMovedOnIsNotSubmittedForItsOldArtifact", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(217, "old");
+  // Before the drain reads it, the tab shows another page (no event yet).
+  tabs.set(217, { ...tabs.get(217), url: `${AUTO_ORIGIN}/items/new` });
+  readingAs(`${AUTO_ORIGIN}/items/new`);
+  await noAutoRequest(before);
+});
+
 test("dwellSurvivesWorkerRestart", async () => {
   resetAuto();
   values.set(storageKey("policy_v1"), autoLease({ enabled: true, dwell_secs: 1 }));

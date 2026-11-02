@@ -30,7 +30,7 @@ import { leaseFor, withConfigMutationLock } from "./settings.js";
 import { httpOrigin, inspectSitePatterns, prunePatternSamples, samplePattern } from "./site-patterns.js";
 import { pruneDraftHandoffs } from "./capture-site-handoff.js";
 import {
-  clearSkips, dueTabs, emptyAutoSummaryState, markSkipped, markSubmitted, nextDueInMs, noteArtifact,
+  clearSkips, dropCandidate, dueTabs, emptyAutoSummaryState, markSkipped, markSubmitted, nextDueInMs, noteArtifact,
   noteAttention, noteLoaded, type AutoSummaryState,
 } from "./auto-summary.js";
 import {
@@ -273,7 +273,7 @@ function scheduleAutoAlarm(state: AutoSummaryState, dwellMs: number, now: number
   if (due < 30_000) scheduleAutoDrain(due + 50);
 }
 
-type AutoAttempt = { tabId: number; artifactId: string };
+type AutoAttempt = { tabId: number; artifactId: string; url: string };
 
 /** The oldest due tab, after marking loaded the candidates whose tab has
  * finished loading (a single-page app's route change fires no load). */
@@ -295,14 +295,23 @@ async function takeDueAuto(): Promise<AutoAttempt | null> {
   }
   await writeAutoSummary(state);
   const [tabId] = dueTabs(state, now, on.dwellMs);
-  if (tabId === undefined) return null;
-  return { tabId, artifactId: state.candidates[String(tabId)]!.artifact_id };
+  if (tabId === undefined) {
+    // Nothing is due yet: come back for the next dwell rather than wait for
+    // unrelated activity.
+    scheduleAutoAlarm(state, on.dwellMs, now);
+    return null;
+  }
+  const candidate = state.candidates[String(tabId)]!;
+  return { tabId, artifactId: candidate.artifact_id, url: candidate.url };
 }
 
 /** Read the tab and ask the host; "deferred" when it could not be reached. */
 async function attemptAuto(attempt: AutoAttempt): Promise<string> {
   const tab = await chrome.tabs.get(attempt.tabId).catch(() => null);
   if (!tab?.url || tab.incognito !== false) return "gone";
+  // The tab may have moved on since its candidate became due; the new page
+  // gets its own candidate, load and dwell.
+  if (withoutHash(tab.url) !== withoutHash(attempt.url)) return "moved";
   const host = new HostClient();
   try {
     return await autoSummarizeTab(
@@ -334,6 +343,8 @@ async function settleAuto(attempt: AutoAttempt, outcome: string): Promise<void> 
       markSkipped(state, attempt.tabId, now + AUTO_STARTED_SKIP_MS);
     } else if (outcome === "deferred") {
       state.retry_after = now + AUTO_RETRY_MS;
+    } else if (outcome === "moved") {
+      dropCandidate(state, attempt.tabId);
     } else {
       markSkipped(state, attempt.tabId, now + AUTO_SKIP_MS);
     }
