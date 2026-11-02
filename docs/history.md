@@ -1140,3 +1140,26 @@ and task_prompt omits page context and reading permissions while retaining file
 protections. Tasks detail and Reuse preserve scope, with no Open page action.
 Tests use local fixtures and fake transport/harnesses; real browser acceptance
 remains with the external driver/platform gate. See the task's plan and TESTING.md.
+
+## 2026-11-02 — PR doctor for PRs that stall on conflicts
+
+A PR that conflicts with main runs no CI, so auto-merge on it waits forever
+with nothing failing. On 2026-11-02 four of five open PRs were in that state,
+three of them with auto-merge armed (#238, #249, #255, all Cookie's), and #246
+stalled for about four hours before a status check found it. The conflicts
+were almost all in bookkeeping and append-only files: since 2026-11-01 main's
+commits touched `.beads/issues.jsonl` 50 times, `BOSUN_FEATURE_BACKLOG.md` 47,
+`DESIGN.md` 42, `TESTING.md` 24 and `docs/history.md` 23, against at most 13
+for any code file. Two more findings shaped the fix. GitHub's mergeability
+check does not run the custom merge drivers (#253 merged cleanly here while
+GitHub reported it conflicting). And git takes merge attributes from the branch
+being merged into, so a branch older than a `.gitattributes` rule (the feed's
+`merge=union`, d0f77b4) never gets it. `scripts/pr-doctor.mjs`, run by
+`.github/workflows/pr-doctor.yml`, therefore merges with main's attributes and
+main's tools, and resolves only the driver files and Markdown hunks where both
+sides only inserted text. A dry run on the four PRs found two resolvable
+(#249, #255), one needing a person (#238: `AGENTS.md`) and one already clean
+(#253); the resolved merges lost no PR-side line and kept every main entry.
+Pushing needs the `PR_DOCTOR_TOKEN` secret, because pushes made with
+`GITHUB_TOKEN` start no CI. Main has no merge queue, so `gh pr merge --auto`
+needs `--merge`. AGENTS.md "PR doctor" holds the rule.
