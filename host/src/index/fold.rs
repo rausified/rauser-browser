@@ -94,16 +94,11 @@ impl<'a> Fold<'a> {
     ///   rows' own `days`.
     /// - `whys`: each artifact's latest why (instant, text). A row's `why`
     ///   is replaced from this map at `finish`, as in a full replay.
-    /// - `edges`: at least every stored edge the new events touch.
+    /// - `edges`: at least every stored edge the new events touch, or none,
+    ///   for a caller that adds the stored edges back itself (weights add,
+    ///   and `last_seen` is the latest day).
     ///
     /// No visit rows are seeded: `finish` returns only the new ones.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the append fast path (plan T14) is its first caller"
-        )
-    )]
     pub(super) fn seeded(
         adapters: Option<&'a Document>,
         rows: impl IntoIterator<Item = ArtifactRow>,

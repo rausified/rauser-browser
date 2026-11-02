@@ -663,9 +663,10 @@ impl ArtifactIndex {
     /// read the authoritative log, so a body that disagrees with an indexed
     /// event is skipped (and reported) without dropping the rest.
     ///
-    /// The events go into `brauser_events` in one transaction that re-derives
-    /// only the affected groups (each event's artifact and container) and
-    /// marks them dirty with fresh generations; no full derive runs. Until
+    /// The events go into `brauser_events` in one transaction that derives
+    /// only the affected groups (each event's artifact and container), by
+    /// the append fast path where it is exact, and marks them dirty with
+    /// fresh generations; no full derive runs. Until
     /// plan T15 the JSON cache takes the same events, and the store is first
     /// brought level with it when catch-up changed it. Catch-up (delivery
     /// step 2) is the `brauser_logs` watermark's tail parse
@@ -685,15 +686,13 @@ impl ArtifactIndex {
                 BTreeSet::new()
             };
             let mut containers = Containers::new(adapters);
-            let mut rederive = BTreeSet::new();
+            let mut changes = store::Changes::default();
             let mut conflicts = 0usize;
             for event in &events {
                 let (outcome, groups) = store::ingest(tx, &mut containers, event, None)?;
-                if !store::FAST_PATH && matches!(outcome, store::Ingest::Inserted) {
-                    rederive.extend(groups.iter().cloned());
-                }
-                remarked.extend(groups);
                 let (event_id, artifact_id) = event_identity(event);
+                changes.record(outcome, &event_id, groups.clone());
+                remarked.extend(groups);
                 match state.events.get(&event_id) {
                     Some(previous) if previous.data != event.data => conflicts += 1,
                     Some(_) => {
@@ -711,7 +710,7 @@ impl ArtifactIndex {
                         .is_some_and(|indexed| indexed.data != event.data)
                 );
             }
-            store::rederive_groups(tx, adapters, &rederive)?;
+            store::apply(tx, adapters, &changes)?;
             self.dirty_containers(&mut state);
             store::sync_dirty(tx, &state.dirty, &remarked)?;
             #[cfg(test)]
