@@ -892,6 +892,19 @@ fn start_auto_summary(
             reason,
         })
     };
+    // Eligibility and note identity must see the same current policy. Drop
+    // this lock before IPC: the service takes it to read its configuration.
+    let config_lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
     let _ = config.refresh();
     if !config.snapshot().auto_summary.enabled {
         return skipped(Skip::Disabled);
@@ -906,11 +919,13 @@ fn start_auto_summary(
         selection: None,
         requested_at: &value.requested_at,
     };
-    let key = match page_record_key(page, config) {
+    let key = match check_run_page(&page).and_then(|()| resolve_record_key(config, page.url)) {
         Ok(key) => key,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
-    if key.kind != RecordKeyKind::Artifact {
+    // Retired contracts preserve notes, but cannot authorize automatic runs.
+    // Evaluate the original URL before strip_params removes match inputs.
+    if key.kind != RecordKeyKind::Artifact || config.adapter_match(&value.url, None).is_err() {
         return skipped(Skip::NotAnArtifact);
     }
     match existing_summary(config, &key.value) {
@@ -954,6 +969,7 @@ fn start_auto_summary(
         kind: Some(brauser_protocol::RunKind::Summary),
         instruction: None,
     };
+    drop(config_lock);
     forward(&Request::StartRun(request), service)
 }
 
@@ -1049,10 +1065,23 @@ struct RunPage<'a> {
     requested_at: &'a str,
 }
 
-/// Check a run's page against the schema's bounds and its `requested_at`
-/// against the event window, then resolve the page's record key.
+/// Check a run's page and timestamp, then resolve its key under the config lock.
 #[cfg(unix)]
 fn page_record_key(page: RunPage<'_>, config: &mut ConfigStore) -> Result<RecordKey, Refusal> {
+    check_run_page(&page)?;
+    // Release before forwarding: the service also takes the config lock.
+    match config.lock_current() {
+        Ok(_config_lock) => resolve_record_key(config, page.url),
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
+            Err((ErrorCode::Internal, "configuration is unavailable".into()))
+        }
+    }
+}
+
+/// Bounds and event-window checks shared by manual and automatic runs.
+#[cfg(unix)]
+fn check_run_page(page: &RunPage<'_>) -> Result<(), Refusal> {
     crate::service::record::check_start_run(page.url, page.title, page.content, page.selection)
         .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
     if crate::capture::parse_event_time(page.requested_at)
@@ -1064,16 +1093,7 @@ fn page_record_key(page: RunPage<'_>, config: &mut ConfigStore) -> Result<Record
             "requested_at must be a current RFC 3339 timestamp".into(),
         ));
     }
-    // Resolve under the same lock as note loading so a config update cannot
-    // interleave; release it before forwarding, since the service takes it
-    // too when it reads the run's working directory.
-    match config.lock_current() {
-        Ok(_config_lock) => resolve_record_key(config, page.url),
-        Err(lock_error) => {
-            warn_cause(&lock_error, "config lock failed");
-            Err((ErrorCode::Internal, "configuration is unavailable".into()))
-        }
-    }
+    Ok(())
 }
 
 /// Send a run message to the service and return its answer as is.
@@ -10368,6 +10388,55 @@ id = "gdoc:{host}/{id}"
                 skipped(&response),
                 brauser_protocol::AutoSummarySkipReason::NotAnArtifact
             );
+        }
+
+        #[test]
+        fn auto_summary_requires_current_rules_while_retired_rules_keep_the_note() {
+            for replacement in [
+                String::new(),
+                GDOC_ADAPTER.replace("token(20,64)", "token(21,64)"),
+            ] {
+                let folder = tempfile::tempdir().unwrap();
+                let mut config = auto_store(folder.path(), true, "");
+                let note = note_load(&mut config, GDOC_URL);
+                assert_eq!(note.key.kind, RecordKeyKind::Artifact);
+                assert!(matches!(
+                    note_save(
+                        &mut config,
+                        GDOC_URL,
+                        "Keep my note",
+                        &note.revision,
+                        note.key.clone()
+                    ),
+                    Response::NoteSaved(_)
+                ));
+                let path = folder.path().join("config.toml");
+                let original = std::fs::read_to_string(&path).unwrap();
+                std::fs::write(&path, original.replace(GDOC_ADAPTER, &replacement)).unwrap();
+
+                let kept = note_load(&mut config, GDOC_URL);
+                assert_eq!(kept.key, note.key);
+                assert_eq!(kept.body, "Keep my note");
+                assert!(config.adapter_match(GDOC_URL, None).is_err());
+                let dir = fake::short_dir();
+                let response = call(
+                    &mut config,
+                    &unreachable_link(&dir),
+                    start_auto(GDOC_URL, "a"),
+                );
+                assert_eq!(
+                    skipped(&response),
+                    brauser_protocol::AutoSummarySkipReason::NotAnArtifact
+                );
+
+                // Explicit summaries still pass page/key validation and reach
+                // the forwarding boundary, even without a current adapter.
+                let Request::StartRun(request) = start_run(GDOC_URL, None, &now()) else {
+                    unreachable!()
+                };
+                let manual = crate::native::start_run(request, &mut config, None);
+                assert_eq!(refused(&manual).0, ErrorCode::ServiceUnavailable);
+            }
         }
 
         #[test]

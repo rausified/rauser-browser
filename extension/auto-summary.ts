@@ -3,6 +3,8 @@
 // state; the worker keeps it in chrome.storage.session and sends
 // start_auto_summary for due tabs, oldest first.
 
+import { localTimestamp } from "./model.js";
+
 /** A tab showing a recognized artifact that has not been submitted yet. */
 export interface AutoCandidate {
   artifact_id: string;
@@ -21,8 +23,10 @@ export interface AutoCandidate {
 export interface AutoSummaryState {
   version: 1;
   candidates: Record<string, AutoCandidate>;
-  /** Artifacts already submitted this browser session, oldest first. */
+  /** Artifacts already summarized on submitted_day, oldest first. */
   submitted: string[];
+  /** Local calendar day of the submitted cache; absent in older state. */
+  submitted_day?: string;
   /** No attempt before this time (ms), after the host could not be reached. */
   retry_after?: number;
   /** Artifacts not to try again before a time (ms): a refusal, an unreadable
@@ -39,6 +43,14 @@ export function emptyAutoSummaryState(): AutoSummaryState {
   return { version: 1, candidates: {}, submitted: [] };
 }
 
+/** The host may allow a viewer-only summary again on a new local day. */
+function rotateSubmittedDay(state: AutoSummaryState, now: number): void {
+  const day = localTimestamp(new Date(now)).slice(0, 10);
+  if (state.submitted_day === day) return;
+  state.submitted = [];
+  state.submitted_day = day;
+}
+
 /** The tab now shows `match` (null: no recognized artifact). The same
  * artifact keeps its candidate; another one replaces it; one already
  * submitted makes none. */
@@ -48,6 +60,7 @@ export function noteArtifact(
   match: { artifact_id: string; url: string; title: string | null } | null,
   now: number,
 ): void {
+  rotateSubmittedDay(state, now);
   const key = String(tabId);
   const current = state.candidates[key];
   if (match && current?.artifact_id === match.artifact_id) return;
@@ -114,9 +127,10 @@ export function nextDueInMs(state: AutoSummaryState, now: number, dwellMs: numbe
   return next;
 }
 
-/** The tab's artifact was submitted: no tab is a candidate for it again
- * this session. */
-export function markSubmitted(state: AutoSummaryState, tabId: number): void {
+/** The host says the artifact is summarized: suppress it for this local day.
+ * The host decides again on a later day, including for whole summaries. */
+export function markSubmitted(state: AutoSummaryState, tabId: number, now: number): void {
+  rotateSubmittedDay(state, now);
   const candidate = state.candidates[String(tabId)];
   if (!candidate) return;
   for (const [key, other] of Object.entries(state.candidates)) {

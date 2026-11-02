@@ -3025,8 +3025,15 @@ test("pausedCaptureOrDisabledAutoSummarySendsNothing", async () => {
   }
 });
 
-test("alreadySummarizedIsNotAskedAgainThisSession", async () => {
+test("alreadySummarizedIsAskedAgainNextLocalDayInTheSameBrowserSession", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 2, 23, 59).getTime() });
+  t.after(() => {
+    resetAuto();
+    values.set(storageKey("policy_v1"), autoLease({ enabled: false, dwell_secs: 0 }));
+  });
   resetAuto();
+  // Advancing a whole day should reconsider only this test's open tabs.
+  sessionValues.delete(storageKey("activity_session_v1"));
   values.set(storageKey("policy_v1"), autoLease());
   const before = ports.length;
   await openArtifact(204, "known");
@@ -3040,6 +3047,57 @@ test("alreadySummarizedIsNotAskedAgainThisSession", async () => {
   const again = ports.length;
   await openArtifact(205, "known");
   await noAutoRequest(again);
+  t.mock.timers.setTime(new Date(2026, 10, 3, 0, 1).getTime());
+  // Renew the lease, keeping its revision, then focus a tab that stayed open.
+  values.set(storageKey("policy_v1"), autoLease());
+  const nextDay = ports.length;
+  onTabActivated({ tabId: 205, windowId: 1 });
+  await until(() => sessionValues.get(AUTO_KEY)?.candidates["205"], "the next-day candidate");
+  // Let the unchanged, already-loaded tab pass the route-settle fallback.
+  t.mock.timers.setTime(new Date(2026, 10, 3, 0, 1, 4).getTime());
+  onAlarm({ name: AUTO_ALARM });
+  const second = await autoRequest(nextDay);
+  assert.equal(second.request.url, request.url);
+  second.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: second.request.request_id, reason: "already_summarized",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted_day === "2026-11-03" &&
+    sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/known"), "the next-day decision to settle");
+});
+
+test("yesterdaysAlreadySummarizedReplyDoesNotSuppressToday", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 2, 23, 59, 59).getTime() });
+  t.after(() => {
+    resetAuto();
+    values.set(storageKey("policy_v1"), autoLease({ enabled: false, dwell_secs: 0 }));
+  });
+  resetAuto();
+  sessionValues.delete(storageKey("activity_session_v1"));
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(220, "midnight-reply");
+  const first = await autoRequest(before);
+  assert.equal(first.request.requested_at.slice(0, 10), "2026-11-02");
+  t.mock.timers.setTime(new Date(2026, 10, 3, 0, 0, 1).getTime());
+  values.set(storageKey("policy_v1"), autoLease());
+  first.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: first.request.request_id, reason: "already_summarized",
+  });
+  await until(() => first.port.closed, "yesterday's reply to close");
+  await flush();
+  assert.deepEqual(sessionValues.get(AUTO_KEY).submitted, [], "yesterday's judgment cannot suppress today");
+  const again = ports.length;
+  await openArtifact(221, "midnight-reply");
+  const second = await autoRequest(again);
+  assert.equal(second.request.requested_at.slice(0, 10), "2026-11-03");
+  second.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: second.request.request_id, reason: "already_summarized",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/midnight-reply"),
+    "today's judgment to be remembered");
 });
 
 test("notSetUpLeavesTheArtifactEligible", async () => {
