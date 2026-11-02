@@ -897,6 +897,8 @@ pub struct StartRunRequest {
     pub url: String,
     pub title: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_truncated: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub selection: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
@@ -1112,6 +1114,8 @@ pub struct StartAutoSummaryRequest {
     pub url: String,
     pub title: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_truncated: Option<bool>,
     pub requested_at: String,
 }
 
@@ -1140,6 +1144,8 @@ pub struct StartTaskRequest {
     pub url: String,
     pub title: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_truncated: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub selection: Option<String>,
     pub instruction: String,

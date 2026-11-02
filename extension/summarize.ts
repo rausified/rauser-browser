@@ -158,7 +158,7 @@ const encodedBytes = (value: string | null): number => new TextEncoder().encode(
  * blank; readTab decides whether that page is unreadable. */
 function choosePage(
   results: readonly { frameId: number; result?: unknown }[],
-): { top: ExtractedPage; content: string; selection: string | null } | undefined {
+): { top: ExtractedPage; content: string; selection: string | null; truncated: boolean } | undefined {
   let top: ExtractedPage | undefined;
   const pages: ExtractedPage[] = [];
   for (const entry of results) {
@@ -186,14 +186,17 @@ function choosePage(
   // The chosen frame's own selection fits its content by construction; one
   // borrowed from another frame travels only if both still fit the cap.
   let selection = chosen.selection;
+  let truncated = chosen.truncated === true;
   if (selection === null) {
-    const borrowed = pages.find((page) => page.selection !== null)?.selection ?? null;
+    const borrowedPage = pages.find((page) => page.selection !== null);
+    const borrowed = borrowedPage?.selection ?? null;
     if (borrowed !== null
       && encodedBytes(chosen.content) + encodedBytes(borrowed) <= EXTRACT_LIMITS.maxRequestBytes) {
       selection = borrowed;
+      truncated ||= borrowedPage?.truncated === true;
     }
   }
-  return { top, content: chosen.content, selection };
+  return { top, content: chosen.content, selection, truncated };
 }
 
 /** The page a run sends: what readTab read from a tab. */
@@ -201,6 +204,7 @@ export interface TabPage {
   url: string;
   title: string;
   content: string;
+  truncated: boolean;
   selection: string | null;
 }
 
@@ -266,6 +270,7 @@ export async function readTab(
     url: wellFormed(tab.url),
     title: wellFormed(cutTitle(page.top.title || tab.title)),
     content: wellFormed(page.content),
+    truncated: page.truncated,
     selection: page.selection === null ? null : wellFormed(page.selection),
   };
 }
@@ -284,6 +289,7 @@ export async function summarizeTab(
     url: page.url,
     title: page.title,
     content: page.content,
+    ...(page.truncated ? { capture_truncated: true } : {}),
     selection: page.selection,
     harness: null,
     record_key: null,
@@ -320,6 +326,7 @@ export async function autoSummarizeTab(
     url: page.url,
     title: page.title,
     content: page.content,
+    ...(page.truncated ? { capture_truncated: true } : {}),
     requested_at: localTimestamp(deps.now()),
   }, ["run_started", "auto_summary_skipped"]);
   if (response.type === "auto_summary_skipped") return response.reason;

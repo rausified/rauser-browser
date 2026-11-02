@@ -1207,3 +1207,26 @@ IPC sandbox skips), all 41 extension test files, both Clippy configurations,
 regressions and one enhanced case cover the changed behavior. The browser
 accessibility command passes its two fixtures and explicitly skips 36 real
 browser checks in this sandbox; external driver/CI evidence is still needed.
+
+
+## 2026-11-02 — Tell agents when browser capture is only an excerpt
+
+Brauser now preserves the browser extractor's signal that page text or a
+highlight hit its size limit. Previously that information disappeared before
+the agent saw the page, allowing an excerpt to look like the complete artifact.
+Manual summaries, automatic summaries and tasks now carry the same optional
+flag. The service adds a short completeness notice to the page file and tells
+the summary agent to retrieve the full artifact or report a partial/viewer-only
+read. Task agents get an incomplete-context warning within the user's request.
+
+The notice also survives a queued-run restart. Its authority comes from stored
+run metadata, so a web page cannot activate it just by copying its words.
+Frame tests cover the chosen document iframe, discarded page chrome and borrowed
+highlights; Office, Miro and Incoming navigation keep their bounded sections.
+The existing combined flag is conservative about which text was cut, and it
+does not claim that a capture with no reported cut contains the full artifact.
+This restores the earlier isolated work and covers the automatic path it
+missed. Host and extension must deploy together; downgrade only while no run
+is queued/running, because older services cannot read the new true status flag.
+
+Validation: 1,374 Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension test files, both Clippy configurations, 2 accessibility fixture passes with 36 explicit browser sandbox skips. Twelve new regressions cover this change. The supplementary README checks and fresh full-diff review passed; real browser, IPC and platform acceptance remain external.

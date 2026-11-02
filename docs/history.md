@@ -1055,3 +1055,19 @@ A delayed already-summarized reply that crosses midnight does not mark the
 new day: the worker retains the local day of the actual request timestamp,
 and lets the next activity update ask the host for a current-day decision.
 A failing-first worker regression covers the delayed reply.
+
+
+## 2026-11-02 — Capped browser capture provenance (brwr-sm5)
+
+Recovered the isolated implementation in 2cf67c46 and task wording correction
+5fa32bac onto the current base, then extended it to automatic summaries and
+corrected both Office/Miro SUMMARY.md paragraphs. The chosen frame's existing
+combined truncation flag reaches all three request paths; status.json retains
+it for queued recovery. page.md discloses the cut before its untrusted content,
+and fixed prompt notices come from status, so forged page warnings do not
+activate them. Missing/false keeps the prior page file. The summary agent must
+retrieve the full artifact or report partial/page_only; the task notice adds no
+authority. DESIGN.md §4.5 and protocol/README.md record coordinated deployment
+and idle-only rollback; no event, summary, note or cache format changes.
+
+Validation: 1,374 Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension test files, both Clippy configurations, 2 accessibility fixture passes with 36 explicit browser sandbox skips. Twelve new regressions cover this change. The supplementary README checks and fresh full-diff review passed; real browser, IPC and platform acceptance remain external.

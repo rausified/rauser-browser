@@ -320,3 +320,10 @@
   by local calendar day, so viewer-only summaries can retry while Chrome stays
   open. Same-day suppression, pending dwell and retry state remain intact;
   the host continues deciding which saved summaries block another run.
+
+- 2026-11-02 — Brauser (`brwr-sm5`): summary and task agents now learn when
+  browser page text or selection was capped, including automatic summaries and
+  queued recovery. Summaries must retrieve the full artifact or report partial/
+  viewer-only reading; a page cannot forge the stored provenance. Host and
+  extension deploy together, and service rollback requires no queued/running
+  runs because older services reject the new true status flag.
