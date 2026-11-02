@@ -391,8 +391,9 @@ smoke step, real dialog or protocol changed for recovery.
 
 `npm run test:extension` builds on the extension build from the development
 checks. `extension/tests/capture-site.test.mjs` exercises the existing starter
-catalog through the new plan builder: real Jira, SharePoint/OneDrive and GitHub
-URL forms, independent PR/issue scopes, current-page misses, all 27 fixed
+catalog through the new plan builder: real Jira, Confluence, SharePoint/OneDrive
+and GitHub URL forms (Jira issues and Confluence pages chosen together or
+alone on one Atlassian origin), independent PR/issue scopes, current-page misses, all 27 fixed
 probes, invalid inputs, full-document limits and preservation of other sites.
 `extension/tests/panel/capture-site.test.mjs` loads the shipped panel markup and JavaScript
 with a scripted native client, worker and Chrome APIs. It covers review/save,

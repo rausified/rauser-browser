@@ -388,16 +388,22 @@ title  = "[{key:jira_key}] {title} - Jira"
 alias  = { from = "tab_title", capture = "key" }
 refs   = [{ type = "jira.issue", find = "jira_key" }]
 
-# Confluence Cloud: title slug after the ID; edit path; space name skipped in the title.
+# Confluence Cloud: title slug after the ID; edit path; version history and the
+# legacy viewpage.action link name the same page; space name skipped in the
+# title, with a prefix entry for the version-history view (§9.1). The shipped
+# starter, on the same origin as Jira. See docs/adapters/confluence.page.md.
 [[artifacts]]
 type   = "confluence.page"
 origin = "https://<your-site>.atlassian.net"
 match  = [
   { path = "/wiki/spaces/{_}/pages/{id:int}/{*}" },
   { path = "/wiki/spaces/{_}/pages/edit-v2/{id:int}", mode = "edit" },
+  { path = "/wiki/spaces/{_}/history/{id:int}/{*}", mode = "view" },
+  { path = "/wiki/pages/viewpage.action", query = { pageId = "{id:int}" } },
 ]
-id     = "confluence:{host}/{id}"
-title  = "{title} - {~} - Confluence"
+id     = "confluence.page:{host}/{id}"
+title  = ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"]
+refs   = [{ type = "jira.issue", find = "jira_key" }]
 
 # Google Docs: shared origin with no tenant in the URL; optional mode. No rest, so /copy and /export are not opens.
 [[artifacts]]
@@ -472,7 +478,7 @@ id     = "miro.board:{host}/{board}"
 title  = "{title} - Miro"
 ```
 
-Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; Google Docs cannot be scoped by URL; and a scope miss is terminal rather than falling through to a container, so a pull request outside `github.pr`'s scope but inside `github.repo`'s is dropped, not recorded as a repository visit.
+Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; a Confluence space name containing ` - ` leaves its first part in the extracted title, and the version-history entry also drops a `Version history - ` that begins a page's own title; Google Docs cannot be scoped by URL; and a scope miss is terminal rather than falling through to a container, so a pull request outside `github.pr`'s scope but inside `github.repo`'s is dropped, not recorded as a repository visit.
 
 ### 11.1 Adapter documentation
 
