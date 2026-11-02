@@ -22,7 +22,7 @@
 //!    missing (`rebuild::Finish::Missing`), so user edits are never
 //!    overwritten.
 //! 4. Once the rebuild has committed, `index-legacy-imported` records the
-//!    legacy JSON files as they are and `legacy_import` becomes `done`. A
+//!    legacy JSON files as step 2 read them and `legacy_import` becomes `done`. A
 //!    crash before that repeats only what has not committed.
 //!
 //! The legacy JSON files are left in place. A format 8 host still running
@@ -42,6 +42,9 @@ use super::*;
 
 /// The `brauser_meta` key recording the migration's progress.
 const LEGACY_KEY: &str = "legacy_import";
+/// The `brauser_meta` key holding the legacy JSON files' fingerprint as the
+/// import (or fallback) decision read them, which the marker records.
+const FINGERPRINT_KEY: &str = "legacy_fingerprint";
 /// The JSON cache format a format 8 host wrote.
 const LEGACY_VERSION: u8 = 8;
 /// The legacy JSON files a format 8 host writes. The migration reads them
@@ -113,6 +116,15 @@ fn store_is_empty(tx: &Transaction<'_>) -> Result<bool> {
         [],
         |row| row.get(0),
     )?)
+}
+
+/// Whether the store holds history a migration imported from a v8 cache,
+/// which that cache read from the logs, while its staged rebuild runs.
+pub(super) fn imported_history(tx: &Transaction<'_>) -> Result<bool> {
+    Ok(store::meta(tx, LEGACY_KEY)?.as_deref() == Some("imported")
+        && tx.query_row("SELECT EXISTS (SELECT 1 FROM brauser_events)", [], |row| {
+            row.get(0)
+        })?)
 }
 
 /// Import a usable v8 cache into an empty store (migration step 2).
@@ -353,6 +365,10 @@ impl ArtifactIndex {
                 store::set_meta(tx, LEGACY_KEY, "done")?;
                 return Ok(Legacy::None);
             }
+            // The files as this decision reads them, taken first: a format 8
+            // host that publishes after this point changes them, so the
+            // marker finish writes never claims files the import did not see.
+            store::set_meta(tx, FINGERPRINT_KEY, &self.legacy_fingerprint())?;
             let finish = match self.usable_legacy_state() {
                 Some(state) => {
                     import(
@@ -404,21 +420,24 @@ impl ArtifactIndex {
         Ok(step == Legacy::Rebuild(rebuild::Finish::Missing))
     }
 
-    /// Migration step 7: record the legacy JSON files as imported and the
-    /// migration as done, once, after the rebuild has committed. The files
-    /// stay: a format 8 host still running reads them (see the module docs).
+    /// Migration step 7: record the legacy JSON files, as the import (or
+    /// fallback) decision read them, as imported and the migration as done,
+    /// once, after the rebuild has committed. The files stay: a format 8
+    /// host still running reads them (see the module docs).
     pub(super) fn finish_legacy(&self) -> Result<()> {
         let mut conn = store::open(&self.cache_dir)?;
         db::write_txn(&mut conn, |tx| {
             if store::meta(tx, LEGACY_KEY)?.as_deref() == Some("done") {
                 return Ok(());
             }
+            let fingerprint = match store::meta(tx, FINGERPRINT_KEY)? {
+                Some(fingerprint) => fingerprint,
+                None => self.legacy_fingerprint(),
+            };
             // The only file this module writes; never a legacy JSON file.
-            atomic_write(
-                &self.legacy_file(IMPORTED_MARKER),
-                self.legacy_fingerprint().as_bytes(),
-            )
-            .with_context(|| format!("recording the imported legacy cache in {IMPORTED_MARKER}"))?;
+            atomic_write(&self.legacy_file(IMPORTED_MARKER), fingerprint.as_bytes()).with_context(
+                || format!("recording the imported legacy cache in {IMPORTED_MARKER}"),
+            )?;
             store::set_meta(tx, LEGACY_KEY, "done")
         })
     }

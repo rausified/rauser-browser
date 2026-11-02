@@ -523,3 +523,35 @@ fn a_new_home_or_artifacts_folder_gets_every_file_written() {
     assert_eq!(report.written + report.unchanged, 1, "{report:?}");
     assert_eq!(report.conflicts, 0, "{report:?}");
 }
+
+/// The previous winner survives a rebuild however many conflicting bodies
+/// for its event ID earlier-sorting logs hold: the staging cap drops new
+/// bodies only, never the one the store already accepted.
+#[test]
+fn the_previous_winner_outlives_the_staging_cap() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let id = "00000000-0000-4000-8000-000000000901";
+    let winner = activity(id, "W1", "Accepted title", "2026-10-20T12:00:00Z");
+    write_log(root.path(), "2026-10-20.md", &[&winner]);
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(
+        index.artifact(&winner.artifact_id).unwrap().unwrap().title,
+        "Accepted title"
+    );
+    for day in 1..=9 {
+        let conflict = activity(
+            id,
+            "W1",
+            &format!("Conflicting title {day}"),
+            "2026-10-20T12:00:00Z",
+        );
+        write_log(root.path(), &format!("2026-10-0{day}.md"), &[&conflict]);
+    }
+    index.reindex().unwrap();
+    assert_eq!(
+        index.artifact(&winner.artifact_id).unwrap().unwrap().title,
+        "Accepted title"
+    );
+}
