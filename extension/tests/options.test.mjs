@@ -120,6 +120,7 @@ function install({
     ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
     ["agent-env-names", "p"], ["reveal-agent-env", "button"],
     ["vocab-types", "textarea"], ["vocab-categories", "textarea"], ["save-vocabulary", "button"],
+    ["auto-summary-enabled", "input"], ["auto-summary-dwell", "input"], ["save-auto-summary", "button"],
     ["build-id", "span"], ["host-build", "span"],
     ["adopted-state", "div"], ["adopted-issue", "p"], ["adopted-warnings", "ul"],
     ["forget-adopted", "button"], ["forget-adopted-confirm", "div"],
@@ -1395,6 +1396,57 @@ test("vocabulary edits save through update_config", async () => {
     { ...configWith([]), summary_vocabulary: null }, "nothing else changes");
   assert.match(statusText(), /vocabulary saved/i);
   assert.equal(env.elements.get("vocab-types").value, "report\nmemo\nminutes");
+});
+
+test("autoSummarySettingsLoadFromConfig", async () => {
+  const state = install();
+  state.config = { ...state.config, auto_summary: { enabled: false, dwell_secs: 90 } };
+  await openSettings();
+  assert.equal(env.elements.get("auto-summary-enabled").checked, false);
+  assert.equal(env.elements.get("auto-summary-dwell").value, "90");
+});
+
+test("autoSummarySettingsSaveInUpdateConfig", async () => {
+  const state = install();
+  await openSettings();
+  assert.equal(env.elements.get("auto-summary-enabled").checked, true);
+  assert.equal(env.elements.get("auto-summary-dwell").value, "0");
+  env.elements.get("auto-summary-enabled").checked = false;
+  env.elements.get("auto-summary-enabled").dispatch("change");
+  env.elements.get("auto-summary-dwell").value = "90";
+  env.elements.get("auto-summary-dwell").dispatch("input");
+  const before = state.revision;
+  env.elements.get("save-auto-summary").click();
+  await until(() => state.revision > before && idle(), "the auto-summary save");
+  const update = lastUpdate();
+  assert.deepEqual(update.config.auto_summary, { enabled: false, dwell_secs: 90 });
+  assert.deepEqual({ ...update.config, auto_summary: null },
+    { ...configWith([]), auto_summary: null }, "nothing else changes");
+  assert.match(statusText(), /automatic summar.* saved/i);
+});
+
+test("an auto-summary wait outside 0 to 3600 whole seconds is not sent", async () => {
+  const state = install();
+  await openSettings();
+  for (const value of ["-1", "3601", "1.5", "soon", ""]) {
+    env.elements.get("auto-summary-dwell").value = value;
+    env.elements.get("auto-summary-dwell").dispatch("input");
+    const before = state.requests.length;
+    env.elements.get("save-auto-summary").click();
+    await until(() => idle(), "the refusal");
+    assert.equal(state.requests.slice(before).some((request) => request.type === "update_config"), false, value);
+    assert.match(statusText(), /0 to 3600/, value);
+  }
+});
+
+test("dwellInputDisabledWhenAutoSummaryOff", async () => {
+  const state = install();
+  state.config = { ...state.config, auto_summary: { enabled: false, dwell_secs: 0 } };
+  await openSettings();
+  assert.equal(env.elements.get("auto-summary-dwell").disabled, true);
+  env.elements.get("auto-summary-enabled").checked = true;
+  env.elements.get("auto-summary-enabled").dispatch("change");
+  assert.equal(env.elements.get("auto-summary-dwell").disabled, false);
 });
 
 test("an empty vocabulary list is not sent", async () => {
