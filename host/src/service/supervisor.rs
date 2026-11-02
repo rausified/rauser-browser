@@ -3827,6 +3827,7 @@ mod tests {
                 &store.page_path(id),
                 fixture.dir.path(),
                 &custom_vocabulary(),
+                false,
             )]
         );
     }
