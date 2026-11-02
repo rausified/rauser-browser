@@ -307,15 +307,27 @@ const detailDeps: TaskDetailDeps = {
   // Opens the side panel for this page's window before any await, as the
   // user gesture requires, then hands the instruction off to it: to its
   // window once the panel is known to be there, or to any window once
-  // opening it failed (an older Chrome, or no window to open it in).
-  reuse: (instruction) => {
+  // opening it failed (an older Chrome, or no window to open it in). It
+  // also reopens the run's own page (bounded to http(s) by the host, never
+  // agent text), active in this window, so the panel follows that tab and
+  // the reused instruction runs against the page it was first given on. A
+  // page that fails to open still leaves the instruction in the bar.
+  reuse: (instruction, url) => {
     const windowId = pageWindowId;
     const opened = chrome.sidePanel.open(windowId === null ? {} : { windowId });
+    const tab: Promise<string | null> = /^https?:\/\//i.test(url)
+      ? chrome.tabs.create(windowId === null ? { url, active: true } : { url, windowId, active: true })
+        .then(() => null, (error: unknown) => describe(error))
+      : Promise.resolve(null);
     void opened.then(
       () => sendReuse(chrome.storage.session, instruction, windowId),
       () => sendReuse(chrome.storage.session, instruction, null),
     ).then(
-      () => showStatus(REUSE_DONE_TEXT),
+      async () => {
+        const tabError = await tab;
+        if (tabError === null) showStatus(REUSE_DONE_TEXT);
+        else showStatus(`${REUSE_DONE_TEXT} Could not open the page: ${tabError}`, { problem: true });
+      },
       (error: unknown) => showStatus(`Could not send the instruction: ${describe(error)}`, { problem: true }),
     );
   },
