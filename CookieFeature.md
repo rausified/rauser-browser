@@ -763,3 +763,33 @@ Validation after the review fix passed every required and README check:
 1,207 reported Rust passes, all 38 extension test files, 85 Python tests
 (+9), six Node script files, both Clippy configurations and 10,696 inert
 Markdown renderings. Logs are in `target/overnight-checks/review-fix-*.log`.
+
+
+## 2026-11-01 — Finish adapter comparisons promptly in restricted sandboxes
+
+Assigned follow-up `brwr-wg5` traced the optional adapter differential check's
+stall to the Rust engine's synchronous child-process call with piped input
+and output. The case generator completed normally; a bounded probe killed
+that call after three seconds, while the existing Node child-pipe probe
+reported EPERM. The comparison command now runs that shared probe before
+starting either engine. A confirmed sandbox permission denial prints an
+explicit skip with “no cases compared”; required CI mode fails instead, and
+other probe failures remain errors. This makes an unattended check finish
+with an honest result instead of waiting indefinitely.
+
+The probe itself now has a three-second timeout, and each engine batch has
+a 60-second timeout with a forceful kill. Failed batches identify the
+command, seed and case range. Result-count checks also refuse incomplete
+engine output. The engines, generator, comparisons and usefulness checks
+retain their existing behavior. Fifteen new regression cases cover the
+runner and probe, including required-mode denial, both engines' failures,
+multiple batches, mismatches, escaping and incomplete output. A supplemental
+regular-file transport run compared 5,000 real Rust and TypeScript cases
+(seed 7) without differences; the normal piped CLI correctly skips in this
+sandbox and remains a required CI check where child pipes are permitted.
+
+Final required and README gates passed: 1,207 reported Rust passes (sandbox
+IPC guards apply), all 38 extension test files, both Clippy configurations,
+85 Python tests, seven Node script files and 10,696 inert Markdown renderings.
+Logs are in `target/cookie-wg5-final/`; independent review and publication
+remain with the driver.

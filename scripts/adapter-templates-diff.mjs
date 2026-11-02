@@ -24,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { BINARY_NAME } from "../extension/brand.ts";
+import { decide, probe, REQUIRE_IPC_TESTS_ENV } from "./tests/ipc-guard.mjs";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const EXE = process.platform === "win32" ? ".exe" : "";
@@ -33,6 +34,9 @@ const BUILD = `cargo build --locked -p ${BINARY_NAME} && npm run build:extension
 // Cases per engine process; keeps each run's stdin and stdout modest.
 const BATCH = 2000;
 const SHOWN_FAILURES = 5;
+// A stuck engine must fail even if it ignores SIGTERM. This bounds each
+// batch process, independently of the engines' own evaluation-time checks.
+const ENGINE_TIMEOUT_MS = 60_000;
 
 // ---- Seeded randomness ------------------------------------------------------
 
@@ -599,21 +603,29 @@ export function genCase(seed, index) {
 
 // ---- Runner ------------------------------------------------------------------
 
-function runEngine(command, args, lines) {
+export function runEngine(command, args, lines, spawn = spawnSync) {
   // Node's readline also ends a line at U+2028 and U+2029, which JSON.stringify
   // leaves raw, so they go escaped; in JSON they can only occur inside strings.
   const input = lines.map((line) => line.replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029"));
-  const result = spawnSync(command, args, {
+  const result = spawn(command, args, {
+    timeout: ENGINE_TIMEOUT_MS, killSignal: "SIGKILL",
     input: input.join("\n") + "\n", encoding: "utf8", maxBuffer: 1 << 30,
     // The TypeScript harness loads .js as an ES module; skip the warning.
     env: { ...process.env, NODE_NO_WARNINGS: "1" },
   });
   // An engine that stops early closes stdin, so EPIPE means "see stderr".
-  if (result.error && result.error.code !== "EPIPE") throw result.error;
+  if (result.error && result.error.code !== "EPIPE") {
+    const reason = result.error.code === "ETIMEDOUT"
+      ? `timed out after ${ENGINE_TIMEOUT_MS} ms`
+      : result.error.message;
+    throw new Error(`${path.basename(command)} ${args.join(" ")}: ${reason}`, { cause: result.error });
+  }
   if (result.status !== 0 || result.error) {
     throw new Error(`${path.basename(command)} ${args.join(" ")} failed:\n${result.stderr}`);
   }
-  return result.stdout.trimEnd().split("\n").map((line) => JSON.parse(line));
+  const rows = result.stdout.trimEnd().split("\n").map((line) => JSON.parse(line));
+  if (rows.length !== lines.length) throw new Error(`expected ${lines.length} engine results, got ${rows.length}`);
+  return rows;
 }
 
 function usage() {
@@ -639,15 +651,35 @@ async function main() {
     console.error(`Build both engines first:\n  ${BUILD}`);
     process.exit(2);
   }
-  const indexes = options.only === undefined ? Array.from({ length: count }, (_, i) => i) : [Number(options.only)];
+  return compare({ host: options.host, seed, count, only: options.only });
+}
+
+/** Probe before starting either engine: denied child pipes can leave the
+ * Rust engine's spawnSync waiting forever, rather than returning EPERM. */
+export async function compare({ host = DEFAULT_HOST, seed, count, only }, {
+  ipcProbe = probe, engine = runEngine, output = console,
+  requireIpc = process.env[REQUIRE_IPC_TESTS_ENV] === "1",
+} = {}) {
+  const decision = decide(await ipcProbe("child-pipe"), requireIpc);
+  if (decision.action !== "run") {
+    output.error(`adapter-template differential: ${decision.why}; no cases compared`);
+    return decision.action === "skip" ? 0 : 1;
+  }
+  const indexes = only === undefined ? Array.from({ length: count }, (_, i) => i) : [Number(only)];
   const stats = { cases: 0, invalid: 0, match: 0, titled: 0, reasons: {} };
   const failures = [];
   for (let start = 0; start < indexes.length; start += BATCH) {
     const batch = indexes.slice(start, start + BATCH);
     const requests = batch.map((i) => genCase(seed, i));
     const lines = requests.map((request) => JSON.stringify(request));
-    const rust = runEngine(options.host, ["adapters", "eval"], lines);
-    const ts = runEngine(process.execPath, [NODE_HARNESS], lines);
+    let rust, ts;
+    try {
+      rust = engine(host, ["adapters", "eval"], lines);
+      ts = engine(process.execPath, [NODE_HARNESS], lines);
+    } catch (error) {
+      output.error(`adapter-template differential: seed ${seed}, cases ${batch[0]}..${batch.at(-1)}: ${error.message}`);
+      return 1;
+    }
     batch.forEach((index, k) => {
       const [a, b] = [rust[k], ts[k]];
       stats.cases += 1;
@@ -656,27 +688,28 @@ async function main() {
         stats.match += 1;
         if (a.title !== undefined) stats.titled += 1;
       } else if (a) stats.reasons[a.reason] = (stats.reasons[a.reason] ?? 0) + 1;
-      if (options.only !== undefined) console.log(JSON.stringify({ request: requests[k], rust: a, ts: b }, null, 2));
+      if (only !== undefined) output.log(JSON.stringify({ request: requests[k], rust: a, ts: b }, null, 2));
       if (!isDeepStrictEqual(a, b)) failures.push({ index, request: lines[k], rust: a, ts: b });
     });
   }
-  console.log(`adapter-template differential: seed ${seed}, ${stats.cases} cases, ${stats.match} matched`
+  output.log(`adapter-template differential: seed ${seed}, ${stats.cases} cases, ${stats.match} matched`
     + ` (${stats.titled} with a title), ${stats.invalid} invalid documents, no match: ${JSON.stringify(stats.reasons)}`);
   for (const failure of failures.slice(0, SHOWN_FAILURES)) {
-    console.error(`\nseed ${seed} case ${failure.index} differs\n  request ${failure.request}`
+    output.error(`\nseed ${seed} case ${failure.index} differs\n  request ${failure.request}`
       + `\n  rust    ${JSON.stringify(failure.rust)}\n  ts      ${JSON.stringify(failure.ts)}`);
   }
   if (failures.length > 0) {
-    console.error(`\n${failures.length} of ${stats.cases} cases differ; reproduce one with --seed ${seed} --only <case>`);
-    process.exit(1);
+    output.error(`\n${failures.length} of ${stats.cases} cases differ; reproduce one with --seed ${seed} --only <case>`);
+    return 1;
   }
   // Guard the generator: a change that stopped producing matches or valid
   // documents would make every run pass while testing nothing.
-  if (options.only === undefined && stats.cases >= 500
+  if (only === undefined && stats.cases >= 500
     && (stats.match < stats.cases * 0.15 || stats.invalid > stats.cases * 0.4)) {
-    console.error("the generator produced too few matches or too many invalid documents to be a useful test");
-    process.exit(1);
+    output.error("the generator produced too few matches or too many invalid documents to be a useful test");
+    return 1;
   }
+  return 0;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = await main();

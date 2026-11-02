@@ -748,3 +748,18 @@ with mocked timers. `brwr-b2p`: the Tasks page keyboard-focus test now drives
 the existing visibility refresh and waits for rendered changes, removing
 its dependency on the real two-second poll. Production task behavior is
 unchanged. Browser CSS rendering and macOS CI remain separate validation.
+
+
+### 2026-11-01 — Bounded adapter differential runner
+
+`brwr-wg5`: the optional comparison stall was reproduced after seed-1/case-0
+generation, inside the Rust engine's piped `spawnSync` call. The runner now
+uses the existing child-pipe probe and decision policy before either engine:
+permission denial prints an explicit skip outside required mode and fails
+with `BRAUSER_REQUIRE_IPC_TESTS=1`. The shared probe times out after three
+seconds; engine batches time out after 60 seconds with SIGKILL and report
+the command, seed and batch indexes. Engine output must have one JSON
+result per input. Neither adapter engine nor its evaluation-time checks
+changed. `test:scripts` includes the runner regressions. Supplemental
+regular-file transport compared 5,000 real cases without differences;
+normal piped CI/platform checks remain separate evidence.
