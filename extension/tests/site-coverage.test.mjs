@@ -73,8 +73,16 @@ test("more than three accounts show the first three and a count", () => {
 
 test("accounts are named only when every adapter is scoped to the same accounts", () => {
   const [pr, issue, repo] = GITHUB;
-  const same = siteCoverage([pr, { ...issue, scope: { owner: ["ACME"] } }, repo], "https://github.com/");
-  assert.deepEqual(same.accounts, ["acme"], "case-insensitive");
+  const same = siteCoverage([pr, { ...issue, scope: { owner: ["acme"] } }, repo], "https://github.com/");
+  assert.deepEqual(same.accounts, ["acme"]);
+  // Saved values keep their case: a binding without a case modifier matches
+  // only `ACME`, so it is shown as saved, and `ACME` beside `acme` is two
+  // scopes, not one (the generic sentence, naming no account).
+  const upper = (adapter) => ({ ...adapter, scope: { owner: ["ACME"] } });
+  assert.deepEqual(siteCoverage([upper(pr), upper(issue), upper(repo)], "https://github.com/").accounts, ["ACME"]);
+  const cased = siteCoverage([pr, upper(issue), repo], "https://github.com/");
+  assert.deepEqual(cased.accounts, []);
+  assert.equal(coverageSentence(cased, "out_of_scope"), null);
   // Per-adapter scopes: naming the merged list would claim pull requests for
   // beta are captured when only issues are.
   const differing = siteCoverage([pr, { ...issue, scope: { owner: ["Beta", "ACME"] } }, repo], "https://github.com/");

@@ -67,15 +67,15 @@ function scopeTable(adapter: AdapterObject): Record<string, unknown> | null {
   return scope && typeof scope === "object" && !Array.isArray(scope) ? scope as Record<string, unknown> : null;
 }
 
-/** One scope table's string values, lowercased and deduplicated, in order. */
+/** One scope table's string values as saved, deduplicated, in order. They
+ * keep their case: a binding without a case modifier matches only that
+ * case, so `ACME` and `acme` are different scopes. */
 function scopeValues(scope: Record<string, unknown>): string[] {
   const values: string[] = [];
   for (const entry of Object.values(scope)) {
     if (!Array.isArray(entry)) continue;
     for (const value of entry) {
-      if (typeof value !== "string") continue;
-      const lower = value.toLowerCase();
-      if (!values.includes(lower)) values.push(lower);
+      if (typeof value === "string" && !values.includes(value)) values.push(value);
     }
   }
   return values;
