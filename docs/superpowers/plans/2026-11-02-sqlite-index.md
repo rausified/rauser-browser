@@ -100,7 +100,7 @@ It replaces B's write engine and grafts the judges' best ideas. Each change is l
 
 ## Open decisions (need John)
 
-Each has a default the plan proceeds with.
+Resolved 2026-11-02: John asked to proceed ("fan out and ultracode"); all four defaults below are adopted as decided. The live install's cache is format 8 (68 KiB), so item 3's deletion strands no known install.
 
 1. **Remove the config lock around index calls?** Default: **no**, filed as a follow-up bead. Today about 26 `lock_current` sites, the finisher (`service/finisher.rs:6-7, 123`) and `reindex` (`main.rs:103`) serialize index work across processes. 7vf makes the index correct without that lock (tested), but taking the lock away changes real panel latency and finisher behaviour and deserves its own revertible change.
 2. **Migration fallback when `index-state.json` is unusable.** Default: **mark dirty only artifacts whose file is missing** and store `render_sha256 = NULL`. Existing files and user edits are kept, and a stale file refreshes on its next real change. Today's missing-cache behaviour (everything dirty, so owned files are rewritten) is the alternative.
