@@ -1046,6 +1046,17 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-11-02: Branch `feat/sqlite-index` (`brwr-b2e`, `brwr-7vf`). The
+  index tests stopped shelling out to `python3`: a read-only rusqlite reader
+  checks rows and integrity, golden fixtures pinned every read before any
+  behaviour changed, and a permanent oracle compares every write with a full
+  derive. Concurrency is tested with real child processes of the test
+  binary, configured only through each child's `Command` environment, rather
+  than threads, because the hosts that share the index are separate
+  processes, and only real processes exercise the file locks, and a kill in
+  the middle of a pass, the way they happen. No browser or native dialog is
+  involved.
+
 - 2026-11-01: Branch `feat/conflict-free-bookkeeping-merges`. A merge
   driver sees one file at a time and git merges paths in an unspecified
   order, so the backlog driver cannot wait for the queue driver's result.
@@ -1217,7 +1228,10 @@ This standard is meant to improve with use. When you change it:
   missing one. Assertions cover Recent, worklog, and the actual SQLite rows.
   Separate faults replace index.db with a directory or add a sparse oversized
   log: capture stays acknowledged, all three history APIs return unavailable,
-  and clearing the fault restores history without duplicate log bytes. Index
+  and clearing the fault restores history without duplicate log bytes. From
+  cache format 9 there is no cache file to restore: the catch-up regression
+  deletes the last delivery's `brauser_events` and `brauser_logs` rows through
+  SQL instead, and the directory fault is planted before the first open. Index
   tests cover checkpoint migration, changed-file-only reads, a completed
   trailing marker, dirty tracking, and the aggregate read cap without partial
   publication. These are local filesystem fixtures; no macOS browser run is
@@ -1245,7 +1259,7 @@ This standard is meant to improve with use. When you change it:
   the smoke's answered-dialog counter must equal the `shown.jsonl` line count, with no hard-coded total.
 - 2026-10-27: Trail-transition validation uses a strict allowlist for new activity and the original bounded shape checks for historical markers. The regressions test terminal refusal through both native delivery paths, all browser values plus `forward_back`, and a pre-validation ingestion cache followed by reindexing an owned marker. They verify actual SQLite edge kinds, retained activity totals and exact payloads, unchanged source logs, and continued rejection of oversized or unpaired legacy trails. No browser or native dialog is involved.
 - 2026-10-27: Branch `fix/c2-index-full-rebuild-cap`. Two index regressions failed first on main: once the logs together passed the per-pass read bound, a deleted cache, `brauser reindex`, `reconcile_from_logs`, and a removed or truncated log each returned unavailable history on every call, and the reset after a removed log let a backdated duplicate in an earlier-dated log replace the conflict winner the cache had chosen. Review then found two more, also failing first: a bounded pass never checkpointed headerless Markdown, so non-log files that filled a pass were reread forever, and a restored winner kept the rejected body's log position, so a same-instant sibling event took over the latest title after any rebuild. A second review round found that an earlier-dated log arriving between the passes of a cacheless rebuild let the later-dated body win, unlike a one-pass rebuild; the regression compares both rebuilds of the same logs. The tests lower the bound with the test-only `SCAN_LIMIT` (sized from one fixture log, so two logs fit per pass) instead of writing 64 MiB of fixtures; `bounded_passes` checks every pass's `LOG_BYTES_READ` stays within the bound and reports unavailable history until the rebuild finishes, and that no partial cache is published meanwhile. No browser or native dialog is involved.
-- 2026-10-27: Branch `fix/lanec-index-robustness-2`. Index regressions failed first on main: a crafted log title over 2,048 bytes stopped every later `index.db` write, an ingestion cache already holding an oversize row did the same, a record payload between SQLite's local table-leaf limit (65,501 bytes at 64 KiB pages) and the old cell check was written inline and read back as "database disk image is malformed", and an M1 visit rendered `opens: 0` with an empty Timeline. The SQLite checks run Python's `sqlite3` `pragma integrity_check` on the written file rather than trusting the writer; size the fixture from the record header (a one-column text record of 65,497 bytes has a 4-byte header) so one row sits exactly at the limit and one just over. No browser or native dialog is involved.
+- 2026-10-27: Branch `fix/lanec-index-robustness-2`. Index regressions failed first on main: a crafted log title over 2,048 bytes stopped every later `index.db` write, an ingestion cache already holding an oversize row did the same, a record payload between SQLite's local table-leaf limit (65,501 bytes at 64 KiB pages) and the old cell check was written inline and read back as "database disk image is malformed", and an M1 visit rendered `opens: 0` with an empty Timeline. The SQLite checks ran Python's `sqlite3` `pragma integrity_check` on the written file rather than trusting the writer (from cache format 9 they run through the rusqlite reader, see "SQLite index (cache format 9)", and the page-size limit is gone with the hand-written writer); size the fixture from the record header (a one-column text record of 65,497 bytes has a 4-byte header) so one row sits exactly at the limit and one just over. No browser or native dialog is involved.
 - 2026-09-28: First version, branch `headless-smoke-seam`. The headless Chrome 154 end-to-end run passed twice with no windows or Dock presence. Found that the extension permission prompt can't be answered without UI; added the pre-grant techniques and the scripted-dialog seam pattern.
 - 2026-09-28: Branch `fix/whole-repo-review`. Chrome 154.0.8037.57, even headless, starts `Google Chrome Helper (Alerts)` (`com.google.Chrome.framework.AlertNotificationService`), an accessory-policy app with no windows, and the invisibility check counted it as visible, which stopped every run after `hello`. The check now counts only regular (Dock) apps plus on-screen windows, and names each process it counts.
 - 2026-09-28: Branch `m2-harness-setup`. Chrome passes the runner's environment to the native host, so AI harness setup would have seen the real `PATH` and credentials. The headless wrapper now clears the environment with `env -i` and pins `PATH` to fake harnesses; added the external-programs section. The headless run with fake harnesses passed with nine scripted dialogs.
@@ -1337,6 +1351,45 @@ and `node extension/tests/panel/note-editor.test.mjs` separately for detailed ca
 The macOS smoke's refused-save check reads the first recovery-card textarea;
 its steps and expected dialog count are unchanged.
 Actual Chrome layout and clipboard behavior still need macOS verification.
+
+## SQLite index (cache format 9)
+
+The index tests read `index.db` through rusqlite, never `python3`.
+`host/src/index/tests/sql.rs` opens each query on its own
+`SQLITE_OPEN_READ_ONLY` connection and drops it before returning:
+`sql_rows(db, query)` returns the rows, and `integrity_ok(db)` runs SQLite's
+`PRAGMA integrity_check` and `PRAGMA quick_check` on the written file instead
+of trusting the writer. Never keep a connection open across a tempdir
+cleanup; on Windows an open handle makes the cleanup fail.
+
+- **Goldens.** Each directory under `host/tests/fixtures/index/` is a frozen
+  log tree with the read calls to make and what the pre-SQLite index
+  answered: the relearn revision, every read API's output, and a canonical
+  dump of the five public tables (`host/src/index/tests/golden.rs`). Keep
+  them green without editing them. `bless_golden_fixtures` adds a new
+  fixture only with `--ignored` and `BRAUSER_BLESS_GOLDENS=1`; rewriting an
+  existing golden needs a stated reason in the commit.
+- **The full-derive oracle.** Under `cfg(test)`, every index write
+  transaction ends by checking that the derived tables equal a full derive
+  of `brauser_events` written through the same writer
+  (`host/src/index/store.rs`, `oracle`). It stays after the migration, so
+  every index test also checks the incremental paths.
+- **Bounds.** Counters such as `FULL_DERIVES`, `LOG_BYTES_READ` and the
+  transaction count prove that a delivery reads only the appended tail and
+  updates only the affected groups. The bounds are asserted on counters;
+  any wall-clock ceiling is loose and only catches gross regressions.
+- **Several processes.** `host/src/index/tests/mp_harness.rs` re-executes the
+  test binary with `--exact <mp_child> --nocapture --test-threads=1` and
+  passes each child its role, directory and seed through
+  `BRAUSER_INDEX_MP_CHILD` on that child's own `Command` environment; the
+  test process's environment is never changed, and `mp_child` is a no-op
+  without the variable. Children share one root and cache, start together
+  on a barrier file, never take `.config.lock`, and each writes one JSON
+  result (errors plus a regeneration trace) under `<dir>/results`. *The
+  harness is still `#[ignore]`d until the multi-process acceptance test
+  lands; until then run it with
+  `cargo test --locked -p brauser --lib mp_ -- --ignored`.* These use local
+  temporary folders only; no browser, dialog or service is involved.
 
 ## Worklog capture gaps
 
