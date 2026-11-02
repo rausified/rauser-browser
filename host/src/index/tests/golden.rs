@@ -31,6 +31,10 @@ pub(super) const FIXTURES: &[&str] = &[
     "year",
 ];
 
+/// Fixture directories that are not golden read fixtures: `v8` is a cache a
+/// format 8 build wrote, which the migration tests (`migration.rs`) load.
+pub(super) const MIGRATION_FIXTURES: &[&str] = &["v8"];
+
 /// An ID no fixture records, so every read's "not found" answer is pinned.
 const UNRECORDED: &str = "work:example.com/never-recorded";
 
@@ -115,7 +119,7 @@ pub(super) fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
-fn copy_tree(from: &Path, to: &Path) {
+pub(super) fn copy_tree(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
     for entry in fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();
@@ -377,6 +381,7 @@ fn every_fixture_directory_is_checked() {
     found.sort();
     let mut listed = FIXTURES
         .iter()
+        .chain(MIGRATION_FIXTURES)
         .map(|name| (*name).to_owned())
         .collect::<Vec<_>>();
     listed.sort();
