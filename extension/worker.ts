@@ -22,7 +22,7 @@ import {
   type WorkerRequest,
   type WorkerStatus,
 } from "./model.js";
-import { BINARY_NAME, storageKey } from "./brand.js";
+import { APP_NAME, BINARY_NAME, storageKey } from "./brand.js";
 import { diag, initDiag } from "./diag.js";
 import { evaluate, type EvaluateResult } from "./adapter-templates.js";
 import { withLatestHostState } from "./coordination.js";
@@ -1779,12 +1779,24 @@ function summarizeFromGesture(tab: ChromeTab | undefined): void {
     diag.warn("summary notice failed", { error }));
 }
 
+/** Focus only: page/selection text never becomes a task instruction. */
+function taskFromGesture(tab: ChromeTab | undefined): void {
+  if (tab?.id === undefined || tab.incognito) return;
+  // Chrome's gesture permission ends at the first await.
+  void chrome.sidePanel.open({ tabId: tab.id }).catch((error: unknown) =>
+    diag.warn("could not open the side panel", { error }));
+  void publishNotice({ kind: "focus_task", tab_id: tab.id, at: Date.now() }).catch((error: unknown) =>
+    diag.warn("task focus notice failed", { error }));
+}
+
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command === "summarize") summarizeFromGesture(tab);
+  if (command === "task") taskFromGesture(tab);
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === SUMMARIZE_MENU_ID) summarizeFromGesture(tab);
+  if (info.menuItemId === "brauser-task") taskFromGesture(tab);
 });
 
 function runMigration(): Promise<void> {
@@ -1803,6 +1815,13 @@ chrome.runtime.onInstalled.addListener((details) => {
       () => {
         const error = chrome.runtime.lastError;
         if (error) diag.warn("context menu setup failed", { error: error.message });
+      },
+    );
+    chrome.contextMenus.create(
+      { id: "brauser-task", title: `Ask ${APP_NAME}…`, contexts: ["page", "selection"] },
+      () => {
+        const error = chrome.runtime.lastError;
+        if (error) diag.warn("task context menu setup failed", { error: error.message });
       },
     );
   });
