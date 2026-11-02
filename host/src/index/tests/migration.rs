@@ -533,3 +533,59 @@ fn the_visit_that_triggers_a_fallback_migration_marks_its_existing_file() {
     index.regenerate_dirty().unwrap();
     assert_ne!(fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap(), before);
 }
+
+/// The same visit when the fallback rebuild needs several passes: the
+/// delivery reports unavailable history before it ingests anything, and a
+/// later read finishes the rebuild. Its finalize marks only missing files,
+/// and that read delivers nothing, so the visit's existing file must be
+/// marked because the delivery reached the index during the rebuild.
+#[test]
+fn a_visit_delivered_during_a_multi_pass_fallback_migration_marks_its_existing_file() {
+    let v8 = V8::load();
+    fs::write(v8.state_path(), b"{\"version\": 7}").unwrap();
+    let before = fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap();
+    let index = v8.index();
+    let state = TempDir::new().unwrap();
+    let capture =
+        crate::capture::CaptureStore::open_in(&index.storage, None, state.path()).unwrap();
+    let visit = activity(
+        "00000000-0000-4000-8000-000000000a02",
+        "A1",
+        "Alpha item",
+        &super::store::at_minute(0),
+    );
+    let policy = crate::capture::CapturePolicy {
+        enabled: true,
+        origins: &["https://example.com".to_owned()],
+        strip_params: &[],
+    };
+    SCAN_LIMIT.with(|limit| limit.set(1));
+    assert!(matches!(
+        capture.record_activity(policy, &visit),
+        crate::capture::CaptureOutcome::Persisted { .. }
+    ));
+    let delivered = index.record_activities([&visit], &[]).unwrap_err();
+    assert!(
+        format!("{delivered:#}").contains(INCOMPLETE_CATCH_UP),
+        "{delivered:#}"
+    );
+    let mut passes = 0;
+    while let Err(error) = index.reconcile_from_logs() {
+        passes += 1;
+        assert!(passes < 20, "the migration never finished");
+        assert!(
+            format!("{error:#}").contains(INCOMPLETE_CATCH_UP),
+            "{error:#}"
+        );
+    }
+    SCAN_LIMIT.with(|limit| limit.set(MAX_SCAN_BYTES));
+    assert!(passes >= 1, "{passes}");
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    assert!(
+        dirty(&v8).contains(&vec![text(V8_CLEAN)]),
+        "{:?}",
+        dirty(&v8)
+    );
+    index.regenerate_dirty().unwrap();
+    assert_ne!(fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap(), before);
+}

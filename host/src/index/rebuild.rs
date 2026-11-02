@@ -32,14 +32,19 @@ use super::*;
 const MAX_STAGED_BODIES: i64 = 8;
 
 /// The stage tables, created by [`begin`] and dropped by [`finalize`].
-const STAGE_TABLES: [&str; 4] = [
+const STAGE_TABLES: [&str; 5] = [
     "brauser_stage_events",
     "brauser_stage_logs",
     "brauser_stage_gaps",
     "brauser_stage_winners",
+    "brauser_stage_delivered",
 ];
 
-const STAGE_SCHEMA: [&str; 4] = [
+/// The stage table a restarted stage keeps: what deliveries reported
+/// unavailable while the rebuild ran, which no log pass can recover.
+const KEPT_ON_RESTAGE: &str = "brauser_stage_delivered";
+
+const STAGE_SCHEMA: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS brauser_stage_events(
        event_id TEXT NOT NULL, artifact_id TEXT NOT NULL,
        kind TEXT NOT NULL CHECK(kind IN ('activity','why','legacy','summary')),
@@ -60,6 +65,10 @@ const STAGE_SCHEMA: [&str; 4] = [
        start_date TEXT, end_date TEXT) WITHOUT ROWID",
     "CREATE TABLE IF NOT EXISTS brauser_stage_winners(
        event_id TEXT PRIMARY KEY, body_sha256 BLOB NOT NULL) WITHOUT ROWID",
+    // Event IDs a delivery brought while the rebuild was pending, so the
+    // delivery could not ingest them (see `note_delivered`).
+    "CREATE TABLE IF NOT EXISTS brauser_stage_delivered(
+       event_id TEXT PRIMARY KEY) WITHOUT ROWID",
 ];
 
 /// The derived tables a finalize or an adapter change clears before it
@@ -136,7 +145,7 @@ fn stage_exists(tx: &Transaction<'_>) -> Result<bool> {
     let count: i64 = tx.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN
            ('brauser_stage_events', 'brauser_stage_logs', 'brauser_stage_gaps',
-            'brauser_stage_winners')",
+            'brauser_stage_winners', 'brauser_stage_delivered')",
         [],
         |row| row.get(0),
     )?;
@@ -144,7 +153,8 @@ fn stage_exists(tx: &Transaction<'_>) -> Result<bool> {
 }
 
 /// Start a staged rebuild from nothing: set the flag and a fresh
-/// `rebuild_id`, and create (or empty) the stage tables.
+/// `rebuild_id`, and create (or empty) the stage tables. Deliveries noted
+/// during a stage that restarts are kept; a finalize drops the table.
 pub(super) fn begin(tx: &Transaction<'_>) -> Result<()> {
     catchup::request_rebuild(tx)?;
     store::set_meta(tx, "rebuild_id", &Uuid::new_v4().to_string())?;
@@ -152,7 +162,29 @@ pub(super) fn begin(tx: &Transaction<'_>) -> Result<()> {
         tx.execute(sql, [])?;
     }
     for table in STAGE_TABLES {
-        tx.execute(&format!("DELETE FROM {table}"), [])?;
+        if table != KEPT_ON_RESTAGE {
+            tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+    }
+    Ok(())
+}
+
+/// Note the IDs of events a delivery brought while a staged rebuild was
+/// pending, which it reported as unavailable history without ingesting.
+/// A rebuild that marks only missing files (`Finish::Missing`) marks their
+/// artifacts too: they are real new activity for files that already exist,
+/// and the call that finishes the rebuild may deliver nothing. With no
+/// rebuild in progress this does nothing.
+pub(super) fn note_delivered(
+    tx: &Transaction<'_>,
+    ids: impl IntoIterator<Item = String>,
+) -> Result<()> {
+    if !(catchup::rebuilding(tx)? && stage_exists(tx)?) {
+        return Ok(());
+    }
+    for id in ids {
+        tx.prepare_cached("INSERT OR IGNORE INTO brauser_stage_delivered(event_id) VALUES (?1)")?
+            .execute([&id])?;
     }
     Ok(())
 }
@@ -429,6 +461,18 @@ pub(super) fn finalize(
                 row.get::<_, Vec<u8>>(8)?,
             ])?;
         }
+    }
+    if finish == Finish::Missing {
+        // Activity delivered while the rebuild ran (`note_delivered`).
+        dirty.extend(ids(
+            tx,
+            "SELECT artifact_id FROM brauser_events
+             WHERE event_id IN (SELECT event_id FROM brauser_stage_delivered)
+             UNION
+             SELECT container_id FROM brauser_events
+             WHERE container_id IS NOT NULL
+               AND event_id IN (SELECT event_id FROM brauser_stage_delivered)",
+        )?);
     }
     tx.execute("DELETE FROM brauser_logs WHERE purpose = 'events'", [])?;
     tx.execute(

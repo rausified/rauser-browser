@@ -292,6 +292,10 @@ CREATE TABLE brauser_stage_events(  -- same columns as brauser_events, keyed (ev
   PRIMARY KEY(event_id, body_sha256)) WITHOUT ROWID;
 CREATE TABLE brauser_stage_logs(... same columns as brauser_logs ...) WITHOUT ROWID;
 CREATE TABLE brauser_stage_gaps(... same columns as brauser_gaps ...) WITHOUT ROWID;
+-- Added in final review: event IDs a delivery brought while the rebuild was
+-- pending (it reported INCOMPLETE without ingesting them); a Finish::Missing
+-- finalize marks their artifacts and containers. Kept when a stage restarts.
+CREATE TABLE brauser_stage_delivered(event_id TEXT PRIMARY KEY) WITHOUT ROWID;
 ```
 
 **Derivation of tables from the fold:**

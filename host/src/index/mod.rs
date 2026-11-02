@@ -520,6 +520,31 @@ impl ArtifactIndex {
     /// - A catch-up that reaches the per-pass read bound commits what it
     ///   read and reports unavailable history; the next call resumes.
     fn catch_up_store(&self, events: &[CachedEvent]) -> Result<usize> {
+        let result = self.catch_up_store_once(events);
+        if let Err(error) = &result
+            && !events.is_empty()
+            && format!("{error:#}").contains(INCOMPLETE_CATCH_UP)
+        {
+            // A pending rebuild kept these events out. The logs hold them,
+            // but a fallback finalize would not mark their existing files.
+            let noted = store::open(&self.cache_dir).and_then(|mut conn| {
+                db::write_txn(&mut conn, |tx| {
+                    rebuild::note_delivered(tx, events.iter().map(|event| event_identity(event).0))
+                })
+            });
+            if let Err(noted) = noted {
+                tracing::warn!(
+                    error = format!("{noted:#}"),
+                    "could not note a delivery made during an index rebuild"
+                );
+            }
+        }
+        result
+    }
+
+    /// [`Self::catch_up_store`] without noting a delivery a pending rebuild
+    /// kept out.
+    fn catch_up_store_once(&self, events: &[CachedEvent]) -> Result<usize> {
         // A fallback finalize marks only missing files, so the caller's
         // events it just read from the log still mark their groups below.
         let fallback_finished = self.migrate_legacy(false)?;
