@@ -14,15 +14,15 @@ running git whenever the lock exists, so the next stale one has a culprit.
              to .1 above 1 MiB): the time, the lock's size/mtime/inode, the
              processes holding it open (lsof), and every running git process
              whose cwd or arguments name the repo or one of its worktrees,
-             with its parent chain (up to 6 ancestors and their commands).
-             Writes nothing when there is no lock.
+             with its parent chain (up to 6 ancestors). Writes nothing when
+             there is no lock.
   install    Writes ~/Library/LaunchAgents/com.rauser.brauser.index-lock-watch.plist
              (WatchPaths <repo>/.git, ThrottleInterval 1, running this script's
              `record --repo <repo>`) and bootstraps it with launchctl.
              Install from a checkout that will stay (the main one): the agent
              runs this file from where it is.
   uninstall  Boots the agent out and removes its plist.
-  report     Summarises the log: the git commands and parent commands seen
+  report     Summarises the log: the git commands and parent programs seen
              most often, records where the lock existed with no git running
              and no holder, and stale candidates: a lock (same inode and
              mtime) still present on a later record, with who was running git
@@ -30,6 +30,15 @@ running git whenever the lock exists, so the next stale one has a culprit.
 
 install and uninstall print their commands without acting under --dry-run.
 
+What a record keeps (AGENTS.md diagnostics privacy): command lines can hold
+private prompts (`codex exec '<prompt>'`), file contents or credentials, so
+no command line is ever written. Each process is its pid, ppid, executable
+(the basename of argv[0]) and cwd; a git process adds its subcommand, the
+flags in GIT_FLAGS, and its -C path only when that is the repo or one of its
+worktrees. Everything else (values, messages, URLs, paths, -c settings) is
+dropped. Lock holders are their pid and lsof's process name.
+
+Only macOS: it watches with a LaunchAgent and probes with ps and lsof.
 Usage:
   scripts/dev/index-lock-watch record --repo PATH [--log PATH]
   scripts/dev/index-lock-watch install --repo PATH [--log PATH] [--dry-run]
@@ -58,6 +67,45 @@ MAX_LOG_BYTES = 1024 * 1024
 MAX_ANCESTORS = 6
 LAUNCHCTL = "/bin/launchctl"
 SCRIPT = Path(__file__).resolve()
+
+# git subcommands recorded by name; any other first operand is recorded as
+# None (it may be an alias, a typo or free text).
+GIT_SUBCOMMANDS = frozenset("""
+    add am apply archive bisect blame branch bundle cat-file check-attr check-ignore
+    check-ref-format checkout checkout-index cherry cherry-pick clean clone commit commit-graph
+    commit-tree config count-objects credential describe diff diff-files diff-index diff-tree
+    difftool fetch fetch-pack for-each-ref format-patch fsck fsmonitor--daemon gc grep
+    hash-object index-pack init log ls-files ls-remote ls-tree maintenance merge merge-base
+    merge-file merge-tree mergetool mv name-rev notes pack-objects pack-refs prune pull push
+    range-diff read-tree rebase receive-pack reflog remote repack replace rerere reset restore
+    rev-list rev-parse revert rm send-pack shortlog show show-branch show-ref sparse-checkout
+    stash status submodule switch symbolic-ref tag unpack-objects update-index update-ref
+    update-server-info upload-pack var verify-pack worktree write-tree lfs
+""".split())
+
+# Tokens recorded when they appear exactly: flags that carry no value, and the
+# verbs of subcommands such as `worktree list` or `stash pop`.
+GIT_FLAGS = frozenset("""
+    --porcelain --porcelain=v1 --porcelain=v2 -z --short -s -b --branch --long
+    --untracked-files=no --untracked-files=normal --untracked-files=all -uno -unormal -uall
+    --ignored --ignore-submodules --ahead-behind --no-ahead-behind --show-stash
+    --ff-only --ff --no-ff --rebase --no-rebase --autostash --no-autostash --prune --all
+    --tags --no-tags --quiet -q --verbose -v --force -f --dry-run -n --progress --no-progress
+    --cached --staged --name-only --name-status --stat --numstat --exit-code --no-index
+    --abbrev-ref --show-toplevel --git-dir --git-common-dir --absolute-git-dir --show-prefix
+    --show-cdup --is-inside-work-tree --is-bare-repository --verify --symbolic-full-name
+    --path-format=absolute --path-format=relative --short=12
+    --hard --soft --mixed --keep --amend --no-edit --no-verify --refresh --really-refresh
+    --list --get --local --global --system --null --heads --merged --no-merged --oneline
+    --no-optional-locks --no-pager -P --paginate --bare --literal-pathspecs
+    --no-replace-objects
+    list add remove prune lock unlock move repair push pop apply drop show save clear
+    update init sync foreach run start stop register unregister get-url set-url
+""".split())
+
+# git options taking a value, before the subcommand. -C is handled apart.
+GIT_VALUE_OPTIONS = frozenset(("-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+                               "--super-prefix", "--config-env", "--attr-source"))
 
 
 @dataclass
@@ -126,8 +174,31 @@ def parse_lsof(text: str) -> list[dict]:
     return found
 
 
+def split_command(command: str) -> tuple[str, list[str]]:
+    """argv[0] and the remaining words of a ps command line. ps joins argv
+    with spaces, so an absolute argv[0] containing spaces (an .app bundle) is
+    found as the longest space-delimited prefix naming an existing file."""
+    if not command:
+        return "", []
+    argv0 = command.split(" ", 1)[0]
+    if command.startswith("/"):
+        idx = command.find(" ")
+        while idx != -1:
+            if os.path.isfile(command[:idx]):
+                argv0 = command[:idx]
+            idx = command.find(" ", idx + 1)
+        if os.path.isfile(command):
+            argv0 = command
+    return argv0, command[len(argv0):].split()
+
+
+def exe_name(command: str) -> str:
+    """The basename of argv[0]: the only part of a command line recorded."""
+    return os.path.basename(split_command(command)[0])
+
+
 def is_git(command: str) -> bool:
-    argv0 = os.path.basename(command.split(" ", 1)[0]) if command else ""
+    argv0 = exe_name(command)
     return argv0 == "git" or argv0.startswith("git-")
 
 
@@ -202,7 +273,7 @@ def names(text: str, root: Path, prefix_ok: bool) -> bool:
     return False
 
 
-def ancestors(procs: dict[int, Proc], pid: int) -> list[dict]:
+def ancestor_procs(procs: dict[int, Proc], pid: int) -> list[Proc]:
     chain, seen = [], {pid}
     current = procs.get(pid)
     while current and len(chain) < MAX_ANCESTORS:
@@ -210,9 +281,46 @@ def ancestors(procs: dict[int, Proc], pid: int) -> list[dict]:
         if parent is None or parent.pid in seen:
             break
         seen.add(parent.pid)
-        chain.append({"pid": parent.pid, "command": parent.command})
+        chain.append(parent)
         current = parent
     return chain
+
+
+def proc_fields(p: Proc, cwds: dict[int, str]) -> dict:
+    return {"pid": p.pid, "ppid": p.ppid, "exe": exe_name(p.command), "cwd": cwds.get(p.pid, "")}
+
+
+def git_fields(words: list[str], roots: list[Path]) -> dict:
+    """The recordable part of a git command's words (argv[0] first): its
+    subcommand, -C only when it names the repo or a worktree, and the
+    allowlisted flags, in order. Never a value, message, URL or other path."""
+    fields: dict = {"subcommand": None}
+    flags: list[str] = []
+    if not words or os.path.basename(words[0]) != "git":
+        return {"subcommand": None, "flags": []}  # a git-* helper: its exe says what it is
+    i = 1
+    while i < len(words):
+        word = words[i]
+        if word == "-C" and i + 1 < len(words):
+            path = words[i + 1]
+            if any(names(path, r, True) for r in roots):
+                fields["dir"] = path
+            i += 2
+            continue
+        if word in GIT_VALUE_OPTIONS:
+            i += 2
+            continue
+        if word.startswith("-"):
+            if word in GIT_FLAGS:
+                flags.append(word)
+            i += 1
+            continue
+        if word in GIT_SUBCOMMANDS:
+            fields["subcommand"] = word
+            flags.extend(w for w in words[i + 1:] if w in GIT_FLAGS)
+        break
+    fields["flags"] = flags
+    return fields
 
 
 def iso(epoch: float) -> str:
@@ -237,7 +345,8 @@ def record(repo: Path, log: Path, probe: Probe, now: Optional[float] = None) -> 
     errors: list[str] = []
     holders: list[dict] = []
     try:
-        holders = probe.holders(lock)
+        holders = [{"pid": h["pid"], "exe": os.path.basename(h["command"])}
+                   for h in probe.holders(lock)]
     except RuntimeError as exc:
         errors.append(str(exc))
     git_procs: list[dict] = []
@@ -245,13 +354,19 @@ def record(repo: Path, log: Path, probe: Probe, now: Optional[float] = None) -> 
         procs = probe.processes()
         me = os.getpid()
         gits = [p for p in procs.values() if p.pid != me and is_git(p.command)]
-        cwds = probe.cwds([p.pid for p in gits]) if gits else {}
+        chains = {p.pid: ancestor_procs(procs, p.pid) for p in gits}
+        wanted = sorted({p.pid for p in gits} | {a.pid for c in chains.values() for a in c})
+        cwds = probe.cwds(wanted) if gits else {}
         roots = worktree_roots(repo)
         for p in gits:
+            # The full command line decides whether git touches this repo; it
+            # is never stored.
             cwd = cwds.get(p.pid, "")
             if any(names(cwd, r, True) or names(p.command, r, False) for r in roots):
-                git_procs.append({"pid": p.pid, "ppid": p.ppid, "command": p.command, "cwd": cwd,
-                                  "ancestors": ancestors(procs, p.pid)})
+                argv0, rest = split_command(p.command)
+                git_procs.append({**proc_fields(p, cwds),
+                                  "git": git_fields([argv0, *rest], roots),
+                                  "ancestors": [proc_fields(a, cwds) for a in chains[p.pid]]})
     except RuntimeError as exc:
         errors.append(str(exc))
     entry = {
@@ -369,6 +484,25 @@ def short(text: str, width: int = 120) -> str:
     return text if len(text) <= width else text[: width - 3] + "..."
 
 
+def git_summary(p: dict) -> str:
+    """A recorded git process as a command, from the sanitized fields only."""
+    exe = str(p.get("exe") or "?")
+    g = p.get("git") if isinstance(p.get("git"), dict) else {}
+    words = [exe]
+    if g.get("dir"):
+        words += ["-C", str(g["dir"])]
+    if g.get("subcommand"):
+        words.append(str(g["subcommand"]))
+    elif exe == "git":
+        words.append("(unknown subcommand)")
+    words += [str(f) for f in g.get("flags") or []]
+    return " ".join(words)
+
+
+def exe_of(p: dict) -> str:
+    return str(p.get("exe") or "(unknown)")
+
+
 def report(log: Path, out, top: int = 10) -> int:
     entries, bad = read_log(log)
     if bad:
@@ -391,16 +525,16 @@ def report(log: Path, out, top: int = 10) -> int:
     for e in entries:
         procs = e.get("git_processes") or []
         for p in procs:
-            commands[p.get("command", "")] += 1
+            commands[git_summary(p)] += 1
             anc = p.get("ancestors") or []
-            parents[anc[0]["command"] if anc else "(no parent)"] += 1
-        seen = {a.get("command", "") for p in procs for a in (p.get("ancestors") or [])}
+            parents[exe_of(anc[0]) if anc else "(no parent)"] += 1
+        seen = {exe_of(a) for p in procs for a in (p.get("ancestors") or [])}
         chains.update(seen)
         if not procs and not e.get("holders"):
             orphans.append(e)
-    table("parent commands of git (most often first)", parents)
+    table("parents of git (most often first)", parents)
     table("git commands", commands)
-    table("commands anywhere in git's ancestry (once per record)", chains)
+    table("programs anywhere in git's ancestry (once per record)", chains)
 
     print(f"\n{len(orphans)} record(s) with no git process and no holder "
           "(the lock was already left behind, or its writer is not git):", file=out)
@@ -425,11 +559,11 @@ def report(log: Path, out, top: int = 10) -> int:
         procs = first.get("git_processes") or []
         if not procs:
             print("    no git was running when first seen" +
-                  (", holders: " + ", ".join(f"{h['command']}[{h['pid']}]" for h in first["holders"])
+                  (", holders: " + ", ".join(f"{exe_of(h)}[{h.get('pid')}]" for h in first["holders"])
                    if first.get("holders") else ""), file=out)
         for p in procs:
-            chain = " <- ".join(short(a.get("command", ""), 60) for a in p.get("ancestors") or [])
-            print(f"    git[{p.get('pid')}] {short(p.get('command', ''), 80)} in {p.get('cwd')}"
+            chain = " <- ".join(f"{exe_of(a)}[{a.get('pid')}]" for a in p.get("ancestors") or [])
+            print(f"    git[{p.get('pid')}] {short(git_summary(p), 80)} in {p.get('cwd')}"
                   + (f" <- {chain}" if chain else ""), file=out)
     return 0
 
