@@ -573,7 +573,8 @@ def report(log: Path, out, top: int = 10) -> int:
 
 
 def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=sys.stdout,
-         home: Optional[Path] = None, uid: Optional[int] = None, now: Optional[float] = None) -> int:
+         home: Optional[Path] = None, uid: Optional[int] = None, now: Optional[float] = None,
+         platform: Optional[str] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="mode", required=True)
     p_record = sub.add_parser("record", help="log the lock's holders and git processes, if locked")
@@ -590,6 +591,11 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
     p_report.add_argument("--top", type=int, default=10)
     args = parser.parse_args(argv)
 
+    platform = sys.platform if platform is None else platform
+    if platform != "darwin":
+        print(f"index-lock-watch: error: index-lock-watch only runs on macOS (a LaunchAgent "
+              f"watching with ps and lsof); this is {platform}", file=out)
+        return 2
     runner = runner or system_runner
     home = home or Path.home()
     uid = os.getuid() if uid is None else uid

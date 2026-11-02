@@ -34,6 +34,9 @@ first failure:
   l. print a summary, including "Reload Brauser at chrome://extensions" when
      extension/dist changed.
 
+Only macOS: the live install is a LaunchAgent and the macOS Chrome
+native-messaging manifest; on any other platform it refuses before acting.
+
 --dry-run runs only the read-only checks (a, b, the extension ID, the npm ci
 decision, and the lock step without --apply) and prints the rest. Every child runs with
 GIT_OPTIONAL_LOCKS=0, so this tool's own `git status` calls (and those of the
@@ -387,7 +390,7 @@ class Deploy:
 
 
 def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=sys.stdout,
-         home: Optional[Path] = None) -> int:
+         home: Optional[Path] = None, platform: Optional[str] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repo", type=Path,
                         help="main checkout to deploy (default: the main worktree of this "
@@ -403,6 +406,12 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
     parser.add_argument("--dry-run", action="store_true", help="print the steps; change nothing")
     args = parser.parse_args(argv)
 
+    platform = sys.platform if platform is None else platform
+    if platform != "darwin":
+        print(f"deploy-live: error: deploy-live only runs on macOS (the live install is a "
+              f"LaunchAgent and the macOS Chrome native-messaging manifest); this is {platform}",
+              file=out)
+        return 2
     runner = runner or system_runner
     home = home or Path.home()
     support = args.support_dir or default_support_dir(home)

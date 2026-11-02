@@ -64,6 +64,29 @@ class FakeSystem:
         raise AssertionError(f"unexpected command {argv}")
 
 
+class Platform(unittest.TestCase):
+    """Runs everywhere: index-lock-watch refuses anything but macOS before acting."""
+
+    def test_refuses_other_platforms(self):
+        for platform in ("win32", "linux"):
+            for argv in (["record", "--repo", "/nowhere"], ["install", "--repo", "/nowhere"],
+                         ["uninstall"], ["report", "--log", "/nowhere/log.jsonl"]):
+                calls = []
+
+                def runner(a):
+                    calls.append(a)
+                    return ilw.Result(0)
+
+                out = io.StringIO()
+                code = ilw.main(argv, runner=runner, out=out, home=Path("/nowhere"), uid=501,
+                                platform=platform)
+                self.assertEqual(code, 2, (platform, argv, out.getvalue()))
+                self.assertIn("only runs on macOS", out.getvalue())
+                self.assertEqual(calls, [])
+
+
+@unittest.skipUnless(sys.platform == "darwin",
+                     "index-lock-watch is macOS-only (a LaunchAgent, ps and lsof, POSIX paths)")
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="index-lock-watch-")).resolve()

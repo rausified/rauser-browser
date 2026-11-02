@@ -133,6 +133,33 @@ class FakeRunner:
         return dl.Result(0)
 
 
+class Platform(unittest.TestCase):
+    """Runs everywhere: deploy-live refuses anything but macOS before acting."""
+
+    def test_refuses_other_platforms(self):
+        for platform in ("win32", "linux", "cygwin"):
+            calls = []
+
+            def runner(argv, **_kw):
+                calls.append(argv)
+                return dl.Result(0)
+
+            out = io.StringIO()
+            code = dl.main(["--dry-run", "--repo", "/nowhere"], runner=runner, out=out,
+                           home=Path("/nowhere"), platform=platform)
+            self.assertEqual(code, 2, out.getvalue())
+            self.assertIn("only runs on macOS", out.getvalue())
+            self.assertIn(platform, out.getvalue())
+            self.assertEqual(calls, [])
+
+
+DARWIN_ONLY = unittest.skipUnless(
+    sys.platform == "darwin",
+    "deploy-live is macOS-only (LaunchAgents, the macOS Chrome native-messaging manifest, "
+    "target/debug/brauser without .exe)")
+
+
+@DARWIN_ONLY
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="deploy-live-")).resolve()
