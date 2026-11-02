@@ -736,7 +736,7 @@ replay. Receipts always say `applied: false`. `brwr-dbp` owns config/file/index
 integration next; parent `brwr-6x2` still owns durable apply and panel Re-learn.
 The ID freeze remains enforced. (Moved here from Cookie's AGENTS.md as-built
 note when cycles 26–28 were integrated on 2026-11-01; John approved the
-Re-learn direction that day.)
+Re-learn direction that day, as relayed by the Brauser coordinator in PR #203.)
 
 ## Development tooling — history
 
