@@ -13719,6 +13719,22 @@
       "expect": {"error": {"code": "title_unbounded_capture", "adapter": 0, "rule": null, "entry": 0}}
     },
     {
+      "id": "validate.title.swallows_prefix_token_padding",
+      "kind": "validate",
+      "why": "§9.1: = is in the token title alphabet and cannot bound its longest run",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{board:token}= {title}"}]},
+      "expect": {"error": {"code": "title_capture_swallows", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.title.swallows_suffix_token_padding",
+      "kind": "validate",
+      "why": "§9.1: = is in the token title alphabet and cannot bound its longest run",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} ={board:token}"}]},
+      "expect": {"error": {"code": "title_capture_swallows", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
       "id": "validate.title.swallows_prefix_jira_hyphen",
       "kind": "validate",
       "why": "§9.1: the literal bounding a capture must not start (in P) or end (in Q) with a character of the capture's alphabet",
@@ -23078,6 +23094,246 @@
       "expect": {"match": false, "reason": "no_rule"},
       "doc": {"$fixture": "starters"},
       "url": "https://acme.atlassian.net/browse/ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp-99999999999999999999"
+    },
+    {
+      "id": "eval.token.title_prefix_pad_one",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}"}]},
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
+      "title": "[uXjVM0uuBLo=] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_pad_two",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}"}]},
+      "url": "https://miro.com/app/board/Ab-_9w==/",
+      "title": "[Ab-_9w==] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "Ab-_9w=="}, "artifact_id": "board:miro.com/Ab-_9w==", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_alias",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "[Ab-_9w==] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": "board:miro.com/Ab-_9w==", "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_different_without_alias",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}"}]},
+      "url": "https://miro.com/app/board/AbC=/",
+      "title": "[AbC==] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "AbC="}, "artifact_id": "board:miro.com/AbC=", "mode": null, "title": "[AbC==] Roadmap", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_bounds_include_padding",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token(4)}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}"}]},
+      "url": "https://miro.com/app/board/AbC=/",
+      "title": "[AbC=] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "AbC="}, "artifact_id": "board:miro.com/AbC=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_padding_over_bound",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token(4)}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/AbCd/",
+      "title": "[AbCd=] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "AbCd"}, "artifact_id": "board:miro.com/AbCd", "mode": null, "title": "[AbCd=] Roadmap", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_pad_only_one",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "[=] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "[=] Roadmap", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_pad_only_two",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "[==] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "[==] Roadmap", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_pad_three",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "[AbC===] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "[AbC===] Roadmap", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_pad_internal",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "[Ab=C] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "[Ab=C] Roadmap", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_pad_internal_and_trailing",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "[Ab=C=] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "[Ab=C=] Roadmap", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_prefix_pad_before_body",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "[==AbC] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "[==AbC] Roadmap", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_pad_one",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]"}]},
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
+      "title": "Roadmap [uXjVM0uuBLo=]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_pad_two",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]"}]},
+      "url": "https://miro.com/app/board/Ab-_9w==/",
+      "title": "Roadmap [Ab-_9w==]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "Ab-_9w=="}, "artifact_id": "board:miro.com/Ab-_9w==", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_alias",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "Roadmap [Ab-_9w==]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": "board:miro.com/Ab-_9w==", "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_different_without_alias",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]"}]},
+      "url": "https://miro.com/app/board/AbC=/",
+      "title": "Roadmap [AbC==]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "AbC="}, "artifact_id": "board:miro.com/AbC=", "mode": null, "title": "Roadmap [AbC==]", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_bounds_include_padding",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token(4)}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]"}]},
+      "url": "https://miro.com/app/board/AbC=/",
+      "title": "Roadmap [AbC=]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "AbC="}, "artifact_id": "board:miro.com/AbC=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_padding_over_bound",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token(4)}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/AbCd/",
+      "title": "Roadmap [AbCd=]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "AbCd"}, "artifact_id": "board:miro.com/AbCd", "mode": null, "title": "Roadmap [AbCd=]", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_pad_only_one",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "Roadmap [=]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap [=]", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_pad_only_two",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "Roadmap [==]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap [==]", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_pad_three",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "Roadmap [AbC===]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap [AbC===]", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_pad_internal",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "Roadmap [Ab=C]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap [Ab=C]", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_pad_internal_and_trailing",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "Roadmap [Ab=C=]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap [Ab=C=]", "title_entry": null, "alias_id": null, "refs": []}
+    },
+    {
+      "id": "eval.token.title_suffix_pad_before_body",
+      "kind": "evaluate",
+      "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]", "alias": {"from": "tab_title", "capture": "board"}}]},
+      "url": "https://miro.com/app/board/old=/",
+      "title": "Roadmap [==AbC]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap [==AbC]", "title_entry": null, "alias_id": null, "refs": []}
     },
     {"id": "eval.token.miro_board_padded", "kind": "evaluate", "why": "§7.1: a Miro board ID ends in base64 padding; the trailing slash is dropped (§5.1)", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/"},
     {"id": "eval.token.miro_board_padded_query", "kind": "evaluate", "why": "§7.1: an unconditioned query does not affect the match", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764600000000000"},
