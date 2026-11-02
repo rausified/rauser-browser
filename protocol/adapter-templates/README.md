@@ -362,7 +362,7 @@ The first failing check is reported.
 
 | Name | Contents |
 |---|---|
-| `starters` | 0 `jira.issue` and 1 `confluence.page` on `acme.atlassian.net` (§11), 2 `gdoc` (§11), 3 `github.pr` scoped to `acme-corp` (§11), 4 `github.issue` (synthetic, same scope, DESIGN 6.8), each `within` its `github.repo`, 5 the `github.repo` catch-all `/{owner}/{repo}/{*}` (same scope, no title, after the PR and issue adapters it contains, §8.3), 6 `sharepoint.doc` on `acme.sharepoint.com`, and 7 `sharepoint.doc` on `acme-my.sharepoint.com` (OneDrive for work, SQ-V2) |
+| `starters` | 0 `jira.issue` and 1 `confluence.page` on `acme.atlassian.net` (§11), 2 `gdoc` (§11), 3 `github.pr` scoped to `acme-corp` (§11), 4 `github.issue` (synthetic, same scope, DESIGN 6.8), each `within` its `github.repo`, 5 the `github.repo` catch-all `/{owner}/{repo}/{*}` (same scope, no title, after the PR and issue adapters it contains, §8.3), 6 `sharepoint.doc` on `acme.sharepoint.com`, 7 `sharepoint.doc` on `acme-my.sharepoint.com` (OneDrive for work, SQ-V2), and 8 `miro.board` on `miro.com` (12-character padded board IDs, docs/adapters/miro.board.md) |
 | `github_without_repo` | The `starters` PR and issue adapters (with `within`, without titles or refs) and no repository catch-all, for GitHub drafts that the catch-all would overlap (§10.4) |
 | `notion_starter` | The §11 Notion adapter verbatim, anchored by its fixed-shape `hex(32)` capture (§4.1). |
 | `mail` | A prefix title list: `["({~}) {title} - Mail", "{title} - Mail"]` |

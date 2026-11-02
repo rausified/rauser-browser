@@ -92,6 +92,15 @@
             {"path": "/personal/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}}
           ],
           "id": "sharepoint:{host}/{doc}"
+        },
+        {
+          "type": "miro.board",
+          "origin": "https://miro.com",
+          "match": [
+            {"path": "/app/board/{board:token(12)}"}
+          ],
+          "id": "miro.board:{host}/{board}",
+          "title": "{title} - Miro"
         }
       ]
     },
@@ -17963,6 +17972,17 @@
       "doc": {"$fixture": "starters"},
       "url": "https://acme.atlassian.net./browse/OPS-1"
     },
+    {"id": "eval.miro.board", "kind": "evaluate", "why": "§11: a Miro board, trailing slash dropped (§5.1), padded token ID (§7.1); docs/adapters/miro.board.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/"},
+    {"id": "eval.miro.board_share_link", "kind": "evaluate", "why": "§11: a board opened from a share link; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990"},
+    {"id": "eval.miro.board_move_to_widget", "kind": "evaluate", "why": "§11: a board opened at a widget; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764680052296737&cot=14"},
+    {"id": "eval.miro.board_legacy_id", "kind": "evaluate", "why": "§11: older o9J_ board IDs are the same 12-character shape", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "o9J_kpXb3Lw="}, "artifact_id": "miro.board:miro.com/o9J_kpXb3Lw=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/o9J_kpXb3Lw=/"},
+    {"id": "eval.miro.title", "kind": "evaluate", "why": "§9.1: the Miro title template drops the ' - Miro' suffix", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "SSE ZTA SWOT", "title_entry": 0, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/", "title": "SSE ZTA SWOT - Miro"},
+    {"id": "eval.miro.dashboard", "kind": "evaluate", "why": "§11: the board list is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/dashboard/"},
+    {"id": "eval.miro.team_dashboard", "kind": "evaluate", "why": "§11: a team's board list is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/dashboard/org/3074457346309553774/team/3074457345728012873/"},
+    {"id": "eval.miro.app_root", "kind": "evaluate", "why": "§11: the app root is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/"},
+    {"id": "eval.miro.login", "kind": "evaluate", "why": "§11: sign-in is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/login/?reason=sessionExpired&service=app"},
+    {"id": "eval.miro.board_wrong_length", "kind": "evaluate", "why": "§11: board IDs are 12 characters", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBL=/"},
+    {"id": "eval.miro.board_subpath", "kind": "evaluate", "why": "§11: no rest segment; a path below the board is not the board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/export"},
     {
       "id": "eval.jira.title",
       "kind": "evaluate",

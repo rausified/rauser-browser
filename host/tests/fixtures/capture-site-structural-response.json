@@ -423,6 +423,7 @@
     "github.pr",
     "github.repo",
     "jira.issue",
+    "miro.board",
     "sharepoint.doc",
     "tools.item"
   ],
