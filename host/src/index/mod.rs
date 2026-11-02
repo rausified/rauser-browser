@@ -94,6 +94,8 @@ thread_local! {
     static FULL_DERIVES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Committed `db::write_txn` transactions.
     static TRANSACTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Rows inserted, updated or deleted by committed `db::write_txn`s.
+    static ROWS_WRITTEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static SCAN_LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(MAX_SCAN_BYTES) };
 }
 

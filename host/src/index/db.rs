@@ -569,11 +569,17 @@ pub(crate) fn write_txn<T>(
     conn: &mut Connection,
     f: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
+    #[cfg(test)]
+    let changes = conn.total_changes();
     let tx = begin_immediate(conn)?;
     let value = f(&tx).map_err(map_busy)?;
     tx.commit().map_err(sqlite)?;
     #[cfg(test)]
-    super::TRANSACTIONS.with(|count| count.set(count.get() + 1));
+    {
+        super::TRANSACTIONS.with(|count| count.set(count.get() + 1));
+        let written = conn.total_changes() - changes;
+        super::ROWS_WRITTEN.with(|count| count.set(count.get() + written));
+    }
     Ok(value)
 }
 

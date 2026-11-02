@@ -1102,6 +1102,27 @@ pub(super) mod oracle {
 
     use super::*;
 
+    thread_local! {
+        static OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Keeps the oracle off on this thread while it lives.
+    pub(in crate::index) struct Off(());
+
+    impl Drop for Off {
+        fn drop(&mut self) {
+            OFF.with(|off| off.set(false));
+        }
+    }
+
+    /// Turn the oracle off on this thread until the guard drops: only for
+    /// the year-scale bounds test, whose deliveries a full derive after
+    /// every write would dominate.
+    pub(in crate::index) fn off() -> Off {
+        OFF.with(|off| off.set(true));
+        Off(())
+    }
+
     /// Every derived table, sorted, as stored.
     pub(in crate::index) fn dump(tx: &Transaction<'_>) -> Result<Rows> {
         let mut rows = Rows {
@@ -1274,6 +1295,9 @@ pub(super) mod oracle {
     }
 
     pub(in crate::index) fn check(tx: &Transaction<'_>, adapters: Option<&Document>) -> Result<()> {
+        if OFF.with(std::cell::Cell::get) {
+            return Ok(());
+        }
         let (actual, expected) = (dump(tx)?, expected(tx, adapters)?);
         assert_eq!(
             actual, expected,
