@@ -10,24 +10,32 @@ first failure:
   a. check the repo is the main worktree, on main, with no tracked changes
      (untracked files such as EXPLORER/ are fine);
   b. refuse while any Brauser run is queued or running (the service restart
-     in step h ends running runs; AGENTS.md), unless --allow-active-runs;
+     in step j ends running runs; AGENTS.md), unless --allow-active-runs;
   c. clear stale index.lock files with `worktree-hygiene --locks-only --apply`
      (the same minimum-age, no-holder, no-running-git rules as --clear-locks);
   d. git pull --ff-only;
-  e. cargo build --locked -p brauser;
-  f. npm ci --ignore-scripts, when the pull changed package-lock.json or
-     node_modules is missing;
-  g. npm run build:extension;
-  h. node scripts/register-dev-host.mjs <extension id> <repo>/target/debug/brauser
+  e. cargo build --locked -p brauser --target-dir <repo>/target/deploy-staging,
+     so the live target/debug/brauser is not replaced yet (opening the panel
+     starts the live binary, and a new host restarts the service);
+  f. npm ci --ignore-scripts, when package-lock.json's sha256 differs from the
+     one recorded after the last successful npm ci (in
+     <git dir>/deploy-live-state.json, never committed) or node_modules is
+     missing;
+  g. npm run build:extension (replacing extension/dist restarts nothing);
+  h. check runs again (b): one queued or started during the builds refuses
+     here, with the live binary untouched;
+  i. publish the staged binary: copy it to a temporary file in target/debug,
+     check runs once more, then os.replace it onto target/debug/brauser;
+  j. node scripts/register-dev-host.mjs <extension id> <repo>/target/debug/brauser
      (the ID comes from the existing native host manifest's single
      allowed_origins entry unless --extension-id is given);
-  i. send the new binary a framed native-messaging hello and check its
+  k. send the new binary a framed native-messaging hello and check its
      protocol_version and that host_version ends with +<new HEAD, 12 chars>;
-  j. print a summary, including "Reload Brauser at chrome://extensions" when
+  l. print a summary, including "Reload Brauser at chrome://extensions" when
      extension/dist changed.
 
---dry-run runs only the read-only checks (a, b, the extension ID, and the lock
-step without --apply) and prints the rest. Every child runs with
+--dry-run runs only the read-only checks (a, b, the extension ID, the npm ci
+decision, and the lock step without --apply) and prints the rest. Every child runs with
 GIT_OPTIONAL_LOCKS=0, so this tool's own `git status` calls (and those of the
 build scripts it starts) never take the index lock.
 
@@ -44,6 +52,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import struct
 import subprocess
 import sys
@@ -60,6 +69,8 @@ ACTIVE_STATES = ("queued", "running")
 HYGIENE = Path(__file__).resolve().parent / "worktree-hygiene"
 CHILD_ENV = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
 HELLO_TIMEOUT = 30.0
+STAGING = Path("target") / "deploy-staging"  # cargo --target-dir, relative to the repo
+STATE_FILE = "deploy-live-state.json"  # in the git dir, so never committed or dirty
 
 
 class DeployError(RuntimeError):
@@ -142,7 +153,8 @@ def same_path(a: str, b: Path) -> bool:
     return os.path.realpath(a) == os.path.realpath(str(b))
 
 
-def check_checkout(runner: Runner, repo: Path) -> None:
+def check_checkout(runner: Runner, repo: Path) -> Path:
+    """Refuse anything but the main worktree on a clean main; return its git dir."""
     lines = git_text(runner, repo, "rev-parse", "--path-format=absolute", "--show-toplevel",
                      "--git-dir", "--git-common-dir").splitlines()
     if len(lines) != 3:
@@ -164,6 +176,7 @@ def check_checkout(runner: Runner, repo: Path) -> None:
         n = len(status.splitlines())
         raise DeployError(f"{repo} has {n} tracked changes; commit, stash or revert them first:\n"
                           + status)
+    return Path(common_dir)
 
 
 def active_runs(support: Path) -> list[str]:
@@ -186,13 +199,20 @@ def active_runs(support: Path) -> list[str]:
     return found
 
 
-def check_runs(d: "Deploy", support: Path, allow: bool) -> list[str]:
-    """Refuse (unless allowed) while runs are queued or running; report them."""
+LATE_REFUSAL = ("The live binary is untouched (the new build is staged in {staging}); "
+                "extension/dist is already rebuilt, so do not reload Brauser at "
+                "chrome://extensions yet. Wait for the runs to finish, then rerun "
+                "scripts/dev/deploy-live (the staged build makes it quick).")
+
+
+def check_runs(d: "Deploy", support: Path, allow: bool, late: str = "") -> list[str]:
+    """Refuse (unless allowed) while runs are queued or running; report them.
+    late is added to the refusal once the builds have run."""
     active = active_runs(support)
     if active and not allow:
         raise DeployError("Brauser runs are queued or running; the service restart would end "
                           "them. Wait for them, or pass --allow-active-runs: "
-                          + ", ".join(active))
+                          + ", ".join(active) + (f"\n{late}" if late else ""))
     d.say("    " + ("deploying anyway (--allow-active-runs): " + ", ".join(active)
                     if active else "none queued or running"))
     return active
@@ -277,6 +297,54 @@ def verify_hello(reply: dict, version: int, head: str) -> str:
 # helpers
 
 
+def lockfile_sha256(repo: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256((repo / "package-lock.json").read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def read_state(git_dir: Path) -> dict:
+    try:
+        value = json.loads((git_dir / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def write_state(git_dir: Path, state: dict) -> None:
+    path = git_dir / STATE_FILE
+    tmp = path.with_name(f".{STATE_FILE}.{uuid.uuid4().hex[:8]}")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def npm_ci_reason(repo: Path, git_dir: Path) -> Optional[str]:
+    if not (repo / "node_modules").is_dir():
+        return "node_modules is missing"
+    recorded = read_state(git_dir).get("package_lock_sha256")
+    if not recorded:
+        return f"no npm ci recorded yet in {git_dir / STATE_FILE}"
+    if lockfile_sha256(repo) != recorded:
+        return "package-lock.json differs from the last npm ci"
+    return None
+
+
+def stage_copy(staged: Path, live: Path) -> Path:
+    """Copy the staged binary next to the live one (same directory, so the
+    later os.replace is an atomic rename); return the temporary file."""
+    if not staged.is_file():
+        raise DeployError(f"cargo build left no binary at {staged}")
+    live.parent.mkdir(parents=True, exist_ok=True)
+    tmp = live.with_name(f".{live.name}.deploy-{uuid.uuid4().hex[:8]}")
+    try:
+        shutil.copy2(staged, tmp)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise DeployError(f"cannot copy {staged} to {tmp}: {exc}") from exc
+    return tmp
+
+
 def dist_digest(repo: Path) -> Optional[str]:
     dist = repo / "extension" / "dist"
     if not dist.is_dir():
@@ -345,7 +413,7 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         d.say(f"deploy-live: {repo}" + (" (dry run: nothing changes)" if args.dry_run else ""))
 
         d.step("checkout: main worktree, branch main, no tracked changes")
-        check_checkout(runner, repo)
+        git_dir = check_checkout(runner, repo)
         d.say("    ok")
 
         d.step(f"runs in {support / 'runs'}")
@@ -359,6 +427,8 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         else:
             ext_id = extension_id_from_manifest(manifest)
         binary = repo / "target" / "debug" / "brauser"
+        staging = repo / STAGING
+        staged = staging / "debug" / "brauser"
 
         d.step("stale index.lock files (worktree-hygiene --locks-only)")
         hygiene = [sys.executable, str(HYGIENE), "--repo", str(repo), "--locks-only"]
@@ -390,38 +460,52 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
             d.say(f"    {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}" if new != old
                   else f"    already up to date at {old[:COMMIT_LENGTH]}")
 
-        d.step("cargo build --locked -p brauser")
-        d.act(["cargo", "build", "--locked", "-p", "brauser"], "cargo build --locked -p brauser")
+        d.step(f"cargo build --locked -p brauser (into {STAGING}; the live binary waits)")
+        d.act(["cargo", "build", "--locked", "-p", "brauser", "--target-dir", str(staging)],
+              "cargo build --locked -p brauser")
 
         d.step("npm ci")
-        npm_reason = None
-        if not (repo / "node_modules").is_dir():
-            npm_reason = "node_modules is missing"
-        elif new != old:
-            changed = git_text(runner, repo, "diff", "--name-only", old, new, "--",
-                               "package-lock.json")
-            if changed:
-                npm_reason = "package-lock.json changed"
+        npm_reason = npm_ci_reason(repo, git_dir)
         if args.dry_run and not npm_reason:
             d.say("    would run npm ci --ignore-scripts if the pull changes package-lock.json")
             npm_note = "npm ci: decided after the pull"
         elif npm_reason:
             d.say(f"    {npm_reason}")
             d.act(["npm", "ci", "--ignore-scripts"], "npm ci")
+            if not args.dry_run:
+                write_state(git_dir, {**read_state(git_dir),
+                                      "package_lock_sha256": lockfile_sha256(repo)})
             npm_note = f"npm ci: {'would run' if args.dry_run else 'ran'} ({npm_reason})"
         else:
-            npm_note = "npm ci: skipped (package-lock.json unchanged, node_modules present)"
+            npm_note = "npm ci: skipped (package-lock.json matches the last npm ci)"
             d.say("    " + npm_note)
 
         d.step("npm run build:extension")
         d.act(["npm", "run", "build:extension"], "npm run build:extension")
 
         # The builds above can take minutes; a run queued or started meanwhile
-        # would be ended by the service restart below, so check again.
-        d.step(f"runs in {support / 'runs'} (again, before the service restart)")
-        for run in check_runs(d, support, args.allow_active_runs):
+        # would be ended by the service restart below, so check again before
+        # the live binary changes.
+        late = LATE_REFUSAL.format(staging=staging)
+        d.step(f"runs in {support / 'runs'} (again, before the binary is published)")
+        for run in check_runs(d, support, args.allow_active_runs, late):
             if run not in active:
                 active.append(run)
+
+        d.step(f"publish {staged} to {binary}")
+        if args.dry_run:
+            d.say(f"    would copy {staged} to a temporary file in {binary.parent}, check runs "
+                  f"once more, then os.replace it onto {binary}")
+        else:
+            tmp = stage_copy(staged, binary)
+            try:
+                for run in check_runs(d, support, args.allow_active_runs, late):
+                    if run not in active:
+                        active.append(run)
+                os.replace(tmp, binary)
+            finally:
+                tmp.unlink(missing_ok=True)
+            d.say(f"    replaced {binary}")
 
         d.step("register the native host and service")
         d.act(["node", "scripts/register-dev-host.mjs", ext_id, str(binary)],

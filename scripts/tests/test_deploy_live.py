@@ -8,16 +8,19 @@ Run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 from __future__ import annotations
 
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import shutil
 import struct
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "dev" / "deploy-live"
 _loader = importlib.machinery.SourceFileLoader("deploy_live", str(SCRIPT))
@@ -57,11 +60,14 @@ class FakeRunner:
         self.hello_type = "hello_result"
         self.build_writes_dist = True
         self.on_cargo = None  # optional callable run during the cargo build
+        self.lock_after_pull = None  # new package-lock.json text the pull brings
 
     # Calls whose first words match one of these act on the system.
-    ACTING = ("pull", "cargo", "npm", "node", "binary", "hygiene-apply")
+    ACTING = ("pull", "cargo", "npm", "node", "binary", "hygiene-apply", "publish")
 
     def kind(self, argv):
+        if argv[0] == "os.replace":  # recorded by Fixture's os.replace wrapper
+            return "publish" if argv[2].endswith("target/debug/brauser") else "os.replace"
         if argv[0] == "git":
             return argv[3] if argv[1] == "-C" else argv[1]
         if argv[0] == sys.executable and argv[1].endswith("worktree-hygiene"):
@@ -98,11 +104,18 @@ class FakeRunner:
                                 f"worktree /elsewhere\nHEAD {OLD}\nbranch refs/heads/x\n\n".encode())
         if k == "pull":
             self.head = self.after_pull
+            if self.lock_after_pull is not None:
+                (self.repo / "package-lock.json").write_text(self.lock_after_pull)
             return dl.Result(0, b"Updating\n")
         if k == "diff":
             return dl.Result(0, self.changed_files.encode())
-        if k == "cargo" and self.on_cargo:
-            self.on_cargo()
+        if k == "cargo":
+            target = Path(argv[argv.index("--target-dir") + 1]) if "--target-dir" in argv \
+                else self.repo / "target"
+            (target / "debug").mkdir(parents=True, exist_ok=True)
+            (target / "debug" / "brauser").write_text(f"binary {self.head}")
+            if self.on_cargo:
+                self.on_cargo()
         if k in ("hygiene", "hygiene-apply"):
             return dl.Result(0, self.hygiene_out.encode())
         if k == "npm" and argv[1:3] == ["run", "build:extension"] and self.build_writes_dist:
@@ -129,6 +142,14 @@ class Fixture(unittest.TestCase):
         (self.repo / "protocol" / "src" / "generated.rs").write_text(
             "// generated\npub const PROTOCOL_VERSION: u32 = 8;\n")
         (self.repo / "node_modules").mkdir()
+        (self.repo / ".git").mkdir()
+        (self.repo / "package-lock.json").write_text("lock-v1")
+        self.state = self.repo / ".git" / "deploy-live-state.json"
+        self.record_lock("lock-v1")
+        self.live = self.repo / "target" / "debug" / "brauser"
+        self.staged = self.repo / "target" / "deploy-staging" / "debug" / "brauser"
+        self.live.parent.mkdir(parents=True)
+        self.live.write_text("old binary")
         (self.repo / "extension" / "dist").mkdir(parents=True)
         (self.repo / "extension" / "dist" / "build.txt").write_text(OLD)
         self.support = self.tmp / "support"
@@ -138,6 +159,23 @@ class Fixture(unittest.TestCase):
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.runner = FakeRunner(self.repo)
+        real_replace = os.replace
+
+        def replace(src, dst):
+            self.runner.calls.append({"argv": ["os.replace", str(src), str(dst)], "cwd": None,
+                                      "input": None, "stream": False})
+            real_replace(src, dst)
+
+        patcher = mock.patch.object(dl.os, "replace", side_effect=replace)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def record_lock(self, text):
+        self.state.write_text(json.dumps(
+            {"package_lock_sha256": hashlib.sha256(text.encode()).hexdigest()}))
+
+    def recorded_lock(self):
+        return json.loads(self.state.read_text())["package_lock_sha256"]
 
     def write_manifest(self, origins):
         self.manifest.write_text(json.dumps({
@@ -172,7 +210,8 @@ class HappyPath(Fixture):
         code, out = self.deploy()
         self.assertEqual(code, 0, out)
         acting = [self.runner.kind(c["argv"]) for c in self.runner.acting_calls()]
-        self.assertEqual(acting, ["hygiene-apply", "pull", "cargo", "npm", "node", "binary"], out)
+        self.assertEqual(acting, ["hygiene-apply", "pull", "cargo", "npm", "publish", "node",
+                                  "binary"], out)
         self.assertIn(f"{OLD[:12]}..{NEW[:12]}", out)
         self.assertIn(f"0.1.0+{NEW[:12]}", out)
 
@@ -196,13 +235,34 @@ class HappyPath(Fixture):
         self.assertEqual(code, 0, out)
         argvs = [c["argv"] for c in self.runner.calls]
         self.assertIn(["git", "-C", str(self.repo), "pull", "--ff-only"], argvs)
-        self.assertIn(["cargo", "build", "--locked", "-p", "brauser"], argvs)
+        self.assertIn(["cargo", "build", "--locked", "-p", "brauser", "--target-dir",
+                       str(self.repo / "target" / "deploy-staging")], argvs)
         self.assertIn(["npm", "run", "build:extension"], argvs)
         binary = str(self.repo / "target" / "debug" / "brauser")
         self.assertIn(["node", "scripts/register-dev-host.mjs", EXT_ID, binary], argvs)
         for c in self.runner.calls:
             if c["argv"][0] in ("cargo", "npm", "node"):
                 self.assertEqual(Path(c["cwd"]), self.repo)
+
+    def test_the_staged_binary_is_published_atomically(self):
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        (publish,) = [c["argv"] for c in self.runner.calls if self.runner.kind(c["argv"]) == "publish"]
+        _, src, dst = publish
+        self.assertEqual(Path(dst), self.live)
+        self.assertEqual(Path(src).parent, self.live.parent)  # same filesystem: rename is atomic
+        self.assertNotEqual(Path(src), self.live)
+        self.assertEqual(self.live.read_text(), f"binary {NEW}")
+        self.assertEqual(self.staged.read_text(), f"binary {NEW}")  # kept for the next build
+        self.assertEqual(sorted(p.name for p in self.live.parent.iterdir()), ["brauser"])
+
+    def test_publish_keeps_the_staged_mode(self):
+        def build():
+            self.staged.chmod(0o755)
+        self.runner.on_cargo = build
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertTrue(os.access(self.live, os.X_OK))
 
     def test_reload_hint_when_the_extension_changed(self):
         code, out = self.deploy()
@@ -294,10 +354,28 @@ class Refusals(Fixture):
         code, out = self.deploy()
         self.assertEqual(code, 1, out)
         self.assertIn("cargo", self.kinds())
+        self.assertNotIn("publish", self.kinds())
         self.assertNotIn("node", self.kinds())
         self.assertNotIn("binary", self.kinds())
         self.assertIn("late-1", out)
         self.assertIn("--allow-active-runs", out)
+        # The build went to the staging dir; the live binary is untouched.
+        self.assertEqual(self.live.read_text(), "old binary")
+        self.assertEqual(self.staged.read_text(), f"binary {NEW}")
+        self.assertIn("untouched", out)
+        self.assertIn("rerun", out)
+
+    def test_run_started_just_before_the_publish_stops_it(self):
+        answers = iter([[], [], ["late-9 (running)"]])
+        with mock.patch.object(dl, "active_runs", side_effect=lambda _s: next(answers)):
+            code, out = self.deploy()
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("publish", self.kinds())
+        self.assertNotIn("node", self.kinds())
+        self.assertEqual(self.live.read_text(), "old binary")
+        self.assertEqual(sorted(p.name for p in self.live.parent.iterdir()), ["brauser"])
+        self.assertIn("late-9", out)
+        self.assertIn("untouched", out)
 
     def test_run_queued_during_the_build_stops_before_register(self):
         self.runner.on_cargo = lambda: self.add_run("late-2", "queued")
@@ -335,6 +413,7 @@ class Refusals(Fixture):
         code, out = self.deploy()
         self.assertNotEqual(code, 0, out)
         self.assertIn("cargo build", out)
+        self.assertEqual(self.live.read_text(), "old binary")
         self.assertNotIn("npm", self.kinds())
         self.assertNotIn("node", self.kinds())
 
@@ -356,13 +435,20 @@ class NpmCi(Fixture):
         self.assertIn("npm ci: skipped", out)
 
     def test_runs_when_the_pull_changed_package_lock(self):
-        self.runner.changed_files = "package-lock.json\n"
+        self.runner.lock_after_pull = "lock-v2"
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.npm_calls()[0], ["npm", "ci", "--ignore-scripts"])
+        self.assertIn("package-lock.json differs from the last npm ci", out)
+        self.assertEqual(self.recorded_lock(), hashlib.sha256(b"lock-v2").hexdigest())
+
+    def test_runs_when_nothing_is_recorded(self):
+        self.state.unlink()
         code, out = self.deploy()
         self.assertEqual(code, 0, out)
         self.assertEqual(self.npm_calls()[0][:2], ["npm", "ci"])
-        diff = self.call("diff")["argv"]
-        self.assertEqual(diff[-4:], [OLD, NEW, "--", "package-lock.json"])
-        self.assertIn("package-lock.json changed", out)
+        self.assertIn("no npm ci recorded yet", out)
+        self.assertEqual(self.recorded_lock(), hashlib.sha256(b"lock-v1").hexdigest())
 
     def test_runs_when_node_modules_is_missing(self):
         shutil.rmtree(self.repo / "node_modules")
@@ -371,18 +457,40 @@ class NpmCi(Fixture):
         self.assertEqual(self.npm_calls()[0][:2], ["npm", "ci"])
         self.assertIn("node_modules is missing", out)
 
-    def test_not_asked_about_the_lockfile_when_nothing_was_pulled(self):
-        self.runner.after_pull = OLD
+    def test_retry_after_a_failed_deploy_still_runs_npm_ci(self):
+        # The first deploy pulls a new lockfile, then the build fails before npm ci.
+        self.runner.lock_after_pull = "lock-v2"
+        self.runner.fail.add("cargo")
+        code, out = self.deploy()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.npm_calls(), [])
+        # The retry pulls nothing (HEAD is unchanged) but node_modules is stale.
+        self.runner.fail.clear()
+        self.runner.lock_after_pull = None
+        self.runner.calls.clear()
         code, out = self.deploy()
         self.assertEqual(code, 0, out)
+        self.assertIn("already up to date", out)
+        self.assertEqual(self.npm_calls()[0], ["npm", "ci", "--ignore-scripts"])
+        self.assertEqual(self.recorded_lock(), hashlib.sha256(b"lock-v2").hexdigest())
+        # And the next deploy skips it.
+        self.runner.calls.clear()
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.npm_calls(), [["npm", "run", "build:extension"]])
+
+    def test_never_diffs_the_pull(self):
+        self.runner.lock_after_pull = "lock-v2"
+        self.deploy()
         self.assertNotIn("diff", self.kinds())
 
     def test_npm_ci_failure_stops(self):
-        shutil.rmtree(self.repo / "node_modules")
+        self.runner.lock_after_pull = "lock-v2"
         self.runner.fail.add("npm")
         code, out = self.deploy()
         self.assertNotEqual(code, 0, out)
         self.assertNotIn("node", self.kinds())
+        self.assertEqual(self.recorded_lock(), hashlib.sha256(b"lock-v1").hexdigest())
 
 
 class ExtensionId(Fixture):
@@ -498,9 +606,15 @@ class Hello(Fixture):
 class DryRun(Fixture):
     def test_prints_steps_and_acts_on_nothing(self):
         before = (self.repo / "extension" / "dist" / "build.txt").read_text()
+        state = self.state.read_text()
         code, out = self.deploy("--dry-run")
         self.assertEqual(code, 0, out)
         self.assertEqual(self.runner.acting_calls(), [], out)
+        self.assertNotIn("os.replace", self.kinds())
+        self.assertEqual(self.state.read_text(), state)
+        self.assertEqual(self.live.read_text(), "old binary")
+        self.assertFalse(self.staged.exists())
+        self.assertIn("target/deploy-staging", out)
         for text in ("git -C", "pull --ff-only", "cargo build --locked -p brauser",
                      "npm run build:extension", "register-dev-host.mjs", EXT_ID, "hello"):
             self.assertIn(text, out)
@@ -513,6 +627,12 @@ class DryRun(Fixture):
         self.assertEqual(code, 0, out)
         self.assertIn("npm ci: would run (node_modules is missing)", out)
         self.assertNotIn("npm ci: ran", out)
+
+    def test_dry_run_says_npm_ci_would_run_for_a_changed_lockfile(self):
+        (self.repo / "package-lock.json").write_text("lock-v2")
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("npm ci: would run (package-lock.json differs from the last npm ci)", out)
 
     def test_reports_locks_without_clearing_them(self):
         self.runner.hygiene_out = "  clear   /r/.git/index.lock: stale (dry run)\n"
