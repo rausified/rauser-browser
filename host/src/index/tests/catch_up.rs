@@ -80,6 +80,19 @@ fn checkpoints_skip_unchanged_logs_and_recover_completed_trailing_markers() {
     );
 }
 
+/// The derived tables and the dirty set as stored. A bounded pass commits
+/// its log watermark (so the next pass resumes after it), never these.
+fn published(index: &ArtifactIndex) -> (crate::index::store::Rows, Vec<Vec<sql::Value>>) {
+    let mut conn = crate::index::store::open(&index.cache_dir).unwrap();
+    let rows = db::read_txn(&mut conn, crate::index::store::oracle::dump).unwrap();
+    drop(conn);
+    let dirty = sql::sql_rows(
+        &index.database_path(),
+        "SELECT artifact_id, generation FROM dirty_artifacts ORDER BY artifact_id",
+    );
+    (rows, dirty)
+}
+
 #[test]
 fn catch_up_bounds_aggregate_reads_without_publishing_partial_history() {
     let root = TempDir::new().unwrap();
@@ -97,7 +110,7 @@ fn catch_up_bounds_aggregate_reads_without_publishing_partial_history() {
         )
         .unwrap();
     let old_state = fs::read(index.state_path()).unwrap();
-    let old_db = fs::read(index.database_path()).unwrap();
+    let old_db = published(&index);
     fs::create_dir(root.path().join("log")).unwrap();
     for day in 1..=3 {
         let mut file = File::create(root.path().join(format!("log/{day}.md"))).unwrap();
@@ -113,7 +126,7 @@ fn catch_up_bounds_aggregate_reads_without_publishing_partial_history() {
     );
     assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 48 * 1024 * 1024);
     assert_eq!(fs::read(index.state_path()).unwrap(), old_state);
-    assert_eq!(fs::read(index.database_path()).unwrap(), old_db);
+    assert_eq!(published(&index), old_db);
     // The next pass resumes after the logs already read.
     LOG_BYTES_READ.with(|count| count.set(0));
     assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 1);
@@ -172,15 +185,12 @@ fn full_rebuilds_finish_in_bounded_passes_once_history_exceeds_one_pass() {
     // A deleted cache rebuilds in bounded passes and never publishes a
     // partial checkpoint on the way.
     fs::remove_file(index.state_path()).unwrap();
-    let old_db = fs::read(index.database_path()).unwrap();
+    let old_db = published(&index);
     let mut partial = Vec::new();
     let (recent, passes) = bounded_passes(limit, || {
         let result = index.recent(None, None, 32);
         if result.is_err() {
-            partial.push((
-                index.state_path().exists(),
-                fs::read(index.database_path()).unwrap() == old_db,
-            ));
+            partial.push((index.state_path().exists(), published(&index) == old_db));
         }
         result
     });

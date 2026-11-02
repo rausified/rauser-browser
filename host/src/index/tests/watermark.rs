@@ -633,3 +633,160 @@ fn reconcile_reads_only_changed_logs_and_marks_only_new_events_dirty() {
         BTreeSet::from([added.artifact_id.clone()])
     );
 }
+
+fn gap_line(id: &str) -> String {
+    let gap = OverflowMarker {
+        count: 3,
+        first_occurred_at: "2026-10-15T08:00:00-07:00".into(),
+        last_occurred_at: "2026-10-15T09:00:00-07:00".into(),
+    };
+    format!(
+        "{MARKER_PREFIX}{} url={} at={} kind=overflow data={} -->\n",
+        sha256_hex(id.as_bytes()),
+        sha256_hex(b""),
+        gap.last_occurred_at,
+        hex::encode(serde_json::to_vec(&gap).unwrap())
+    )
+}
+
+fn gap_ids(cache: &TempDir) -> Vec<Vec<sql::Value>> {
+    sql::sql_rows(
+        &db::db_path(cache.path()),
+        "SELECT gap_id, log_path FROM brauser_gaps ORDER BY gap_id",
+    )
+}
+
+fn current(index: &ArtifactIndex, cache: &TempDir) -> catchup::Freshness {
+    let mut conn = connection(cache);
+    let fresh = freshness(index, &mut conn).0;
+    drop(conn);
+    fresh
+}
+
+#[test]
+fn a_delivery_writes_the_watermark_and_the_gaps() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let first = numbered(1, "2026-10-15T12:00:00Z");
+    let path = write_log(root.path(), "2026-10-15.md", &[&first]);
+    append(&path, &gap_line("gap"));
+    index.record_activity(&first, &[]).unwrap();
+    let size = sql::Value::Integer(len(&path) as i64);
+    assert_eq!(
+        logs_rows(&cache),
+        [vec![
+            sql::Value::Text("2026-10-15.md".into()),
+            sql::Value::Text("events".into()),
+            size.clone(),
+            size,
+        ]]
+    );
+    assert_eq!(
+        gap_ids(&cache),
+        [vec![
+            sql::Value::Text(sha256_hex(b"gap")),
+            sql::Value::Text("2026-10-15.md".into()),
+        ]]
+    );
+    assert_eq!(current(&index, &cache), catchup::Freshness::Current);
+}
+
+#[test]
+fn a_delivery_reads_only_the_appended_tail() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let (path, events) = long_log(&root, "2026-10-15.md", 40);
+    index.record_activity(&events[0], &[]).unwrap();
+    let added = numbered(41, "2026-10-15T13:00:00Z");
+    let marker = activity_marker(&added);
+    append(&path, &marker);
+    append(&path, &gap_line("late gap"));
+    LOG_BYTES_READ.with(|count| count.set(0));
+    index.record_activity(&added, &[]).unwrap();
+    let read = LOG_BYTES_READ.with(|count| count.get());
+    let appended = (marker.len() + gap_line("late gap").len()) as u64;
+    assert!(
+        read <= appended + catchup::TAIL_WINDOW,
+        "read {read} of {} for {appended} appended bytes",
+        len(&path)
+    );
+    // The JSON cache took the tail too: the event, its gap and checkpoint.
+    let state = read_state(&index.state_path()).unwrap().unwrap();
+    assert!(state.events.contains_key(&added.event_id));
+    assert!(state.gaps.contains_key(&sha256_hex(b"late gap")));
+    assert_eq!(state.logs[Path::new("2026-10-15.md")].bytes, len(&path));
+    assert!(index.artifact(&added.artifact_id).unwrap().is_some());
+    assert_eq!(gap_ids(&cache).len(), 1);
+    // Nothing changed since: a read stats the logs and reads no byte.
+    LOG_BYTES_READ.with(|count| count.set(0));
+    index.recent(None, None, 8).unwrap();
+    assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
+}
+
+#[test]
+fn reconcile_writes_the_watermark_also_for_a_cache_without_one() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let path = write_log(
+        root.path(),
+        "2026-10-15.md",
+        &[&numbered(1, "2026-10-15T12:00:00Z")],
+    );
+    append(&path, &gap_line("gap"));
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(logs_rows(&cache).len(), 1);
+    assert_eq!(gap_ids(&cache).len(), 1);
+    // A store written before the watermark (an upgraded install): the JSON
+    // cache is current, so nothing is republished, yet reconcile fills it.
+    let mut conn = connection(&cache);
+    db::write_txn(&mut conn, |tx| {
+        tx.execute("DELETE FROM brauser_logs", [])?;
+        tx.execute("DELETE FROM brauser_gaps", [])?;
+        Ok(())
+    })
+    .unwrap();
+    drop(conn);
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(logs_rows(&cache).len(), 1);
+    assert_eq!(gap_ids(&cache).len(), 1);
+    assert_eq!(current(&index, &cache), catchup::Freshness::Current);
+}
+
+#[test]
+fn a_shrunk_log_resets_the_watermark_until_the_staged_rebuild() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let first = numbered(1, "2026-10-15T12:00:00Z");
+    let path = write_log(root.path(), "2026-10-15.md", &[&first]);
+    append(&path, &gap_line("gap"));
+    write_log(
+        root.path(),
+        "2026-10-16.md",
+        &[&numbered(2, "2026-10-16T12:00:00Z")],
+    );
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(gap_ids(&cache).len(), 1);
+    // The log loses its overflow marker.
+    write_log(root.path(), "2026-10-15.md", &[&first]);
+    index.reconcile_from_logs().unwrap();
+    assert!(gap_ids(&cache).is_empty());
+    assert_ne!(
+        meta(&cache, "rebuild"),
+        [vec![sql::Value::Text("staging".into())]]
+    );
+    assert_eq!(current(&index, &cache), catchup::Freshness::Current);
+    let rows = logs_rows(&cache);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0][2], sql::Value::Integer(len(&path) as i64));
+    let (_, _, gaps, _) = index
+        .worklog_report(
+            parse_date("2026-10-15").unwrap(),
+            parse_date("2026-10-15").unwrap(),
+        )
+        .unwrap();
+    assert!(gaps.is_empty());
+}

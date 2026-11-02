@@ -24,8 +24,10 @@
 //! hashed window is not noticed; the logs are append-only, and
 //! `brauser reindex` is the documented recovery.
 
-// Wired into delivery, reconcile and reads with the SQL store (T8, T10, T11).
-#![cfg_attr(not(test), allow(dead_code))]
+// Until the JSON cache goes (plan T15), `ArtifactIndex::catch_up_logs`
+// reads the logs for that cache through this pass, and the store's write
+// transactions level a watermark that lags the cache
+// (`ArtifactIndex::level_watermark`).
 
 use std::io::{Seek, SeekFrom};
 use std::path::Component;
@@ -57,7 +59,9 @@ pub(super) enum CatchUp {
     Caught { logs_read: usize, complete: bool },
 }
 
-/// The stat-only comparison of the logs with the watermark.
+/// The stat-only comparison of the logs with the watermark, for the reads'
+/// freshness check (plan T11).
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Freshness {
     /// Every log is checkpointed at its current size and modification time.
@@ -174,6 +178,7 @@ pub(super) fn catch_up(
 /// Compare the logs with the watermark by their metadata alone; no log
 /// byte is read. Runs in a `read_txn` before a read decides whether a
 /// catch-up must run first.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn freshness(
     tx: &Transaction<'_>,
     storage: &StorageConfig,
@@ -220,6 +225,64 @@ pub(super) fn request_rebuild(tx: &Transaction<'_>) -> Result<()> {
         [],
     )?;
     Ok(())
+}
+
+/// Forget the watermark and the gaps, and clear a pending rebuild request,
+/// so the next pass reads every log again. Until the staged rebuild (T10),
+/// this answers a shrunk or removed log: the JSON cache has already rebuilt
+/// its events from the remaining logs, and the store mirrors those.
+pub(super) fn reset(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute("DELETE FROM brauser_logs WHERE purpose = ?1", [EVENTS])?;
+    tx.execute("DELETE FROM brauser_gaps", [])?;
+    tx.execute(
+        "INSERT INTO brauser_meta(key, value) VALUES ('rebuild', 'none')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [],
+    )?;
+    Ok(())
+}
+
+/// The watermark as the JSON cache's log checkpoints: each log's size and
+/// modification time when last read, keyed by its log-dir-relative path.
+pub(super) fn checkpoints(tx: &Transaction<'_>) -> Result<BTreeMap<PathBuf, LogCheckpoint>> {
+    let mut checkpoints = BTreeMap::new();
+    for (path, mark) in watermarks(tx)? {
+        let modified = to_u64(mark.modified_ns)?;
+        checkpoints.insert(
+            path.split('/').collect::<PathBuf>(),
+            LogCheckpoint {
+                bytes: mark.bytes,
+                modified: (modified / 1_000_000_000, (modified % 1_000_000_000) as u32),
+            },
+        );
+    }
+    Ok(checkpoints)
+}
+
+/// `brauser_gaps` as the JSON cache keeps its gaps.
+pub(super) fn gaps(tx: &Transaction<'_>) -> Result<BTreeMap<String, CachedGap>> {
+    let mut statement =
+        tx.prepare("SELECT gap_id, marker, log_path, log_line FROM brauser_gaps")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
+    let mut gaps = BTreeMap::new();
+    for row in rows {
+        let (id, marker, path, line) = row?;
+        gaps.insert(
+            id,
+            CachedGap {
+                marker: serde_json::from_str(&marker)?,
+                position: (path.split('/').collect(), to_u64(line)?),
+            },
+        );
+    }
+    Ok(gaps)
 }
 
 /// A log-dir-relative path with `/` separators, as `brauser_logs.path` and

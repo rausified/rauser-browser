@@ -192,7 +192,7 @@ struct IndexState {
     container_files: BTreeMap<String, PathBuf>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CachedGap {
     marker: OverflowMarker,
@@ -652,7 +652,10 @@ impl ArtifactIndex {
     /// only the affected groups (each event's artifact and container) and
     /// marks them dirty with fresh generations; no full derive runs. Until
     /// plan T15 the JSON cache takes the same events, and the store is first
-    /// brought level with it when catch-up changed it.
+    /// brought level with it when catch-up changed it. Catch-up (delivery
+    /// step 2) is the `brauser_logs` watermark's tail parse
+    /// ([`Self::catch_up_logs`]), and this transaction first levels a
+    /// watermark that lags the cache ([`Self::level_watermark`]).
     fn record_events(&self, events: impl IntoIterator<Item = CachedEvent>) -> Result<()> {
         let (mut state, publish) = self.load_current_state()?;
         let events = events.into_iter().collect::<Vec<_>>();
@@ -660,6 +663,7 @@ impl ArtifactIndex {
         let fingerprint = self.adapters_fingerprint();
         let mut conn = store::open(&self.cache_dir)?;
         let conflicts = store::write(&mut conn, adapters, |tx| {
+            self.level_watermark(tx, &state)?;
             let mut remarked = if publish || !store::mirrors(tx, &state, &fingerprint)? {
                 store::sync_to_state(tx, adapters, &fingerprint, &state)?
             } else {
@@ -720,7 +724,60 @@ impl ArtifactIndex {
     /// reaches the per-pass read bound reports unavailable history until a
     /// later call finishes it.
     pub fn reconcile_from_logs(&self) -> Result<()> {
-        self.load_or_rebuild().map(drop)
+        let (state, publish) = self.load_current_state()?;
+        if publish {
+            self.publish_state_and_database(&state)
+        } else {
+            // Nothing to republish, but a store whose watermark lags the
+            // JSON cache (one written before the watermark existed) is
+            // levelled here rather than on the next change.
+            self.sync_store(&state, false)
+        }
+    }
+
+    /// Bring the `brauser_logs` watermark and `brauser_gaps` level with
+    /// `state`'s log checkpoints when they are not: a store written before
+    /// the watermark, or a pass the JSON cache made itself (its first build,
+    /// a resumed or reset pass). The events come from `state` through
+    /// `store::sync_to_state`, so this pass only advances the watermark.
+    /// A shrunk or removed log resets the watermark and reads every log
+    /// again, until the staged rebuild (plan T10) takes that over.
+    fn level_watermark(&self, tx: &rusqlite::Transaction<'_>, state: &IndexState) -> Result<()> {
+        if catchup::checkpoints(tx)? != state.logs {
+            let mut ignore =
+                |_: &rusqlite::Transaction<'_>, _: CachedEvent, _: (PathBuf, u64)| Ok(());
+            let pass = catchup::catch_up(tx, &self.storage, &self.root_identity, &mut ignore)?;
+            if pass == catchup::CatchUp::Rebuilding {
+                catchup::reset(tx)?;
+                catchup::catch_up(tx, &self.storage, &self.root_identity, &mut ignore)?;
+            }
+        }
+        // Once level, the watermark's gaps are exactly the cache's.
+        #[cfg(test)]
+        if catchup::checkpoints(tx)? == state.logs {
+            assert!(
+                catchup::gaps(tx)? == state.gaps,
+                "brauser_gaps differs from the JSON cache's gaps"
+            );
+        }
+        Ok(())
+    }
+
+    /// Level the watermark, then make the store mirror `state` (always with
+    /// `force`, else only when its events visibly differ) and its dirty set.
+    fn sync_store(&self, state: &IndexState, force: bool) -> Result<()> {
+        let adapters = self.adapters.as_deref();
+        let fingerprint = self.adapters_fingerprint();
+        let mut conn = store::open(&self.cache_dir)?;
+        store::write(&mut conn, adapters, |tx| {
+            self.level_watermark(tx, state)?;
+            let changed = if force || !store::mirrors(tx, state, &fingerprint)? {
+                store::sync_to_state(tx, adapters, &fingerprint, state)?
+            } else {
+                BTreeSet::new()
+            };
+            store::sync_dirty(tx, &state.dirty, &changed)
+        })
     }
 
     /// Artifacts whose generated file depends on the adapter document: a
@@ -1123,7 +1180,7 @@ impl ArtifactIndex {
         rebuild: &mut bool,
         reconcile: bool,
     ) -> Result<CatchUp> {
-        let pass = self.catch_up_logs(state, *rebuild, false)?;
+        let pass = self.catch_up_logs(state, *rebuild)?;
         *rebuild |= pass.reset;
         if !pass.complete {
             self.save_pending(state, *rebuild, reconcile)?;
@@ -1319,25 +1376,18 @@ impl ArtifactIndex {
     /// in sorted order, so a rebuild split over several passes ingests the
     /// logs in the same order as one pass; `state` then checkpoints only the
     /// logs it read. Callers never publish an incomplete pass.
-    fn catch_up_logs(
-        &self,
-        state: &mut IndexState,
-        rebuild: bool,
-        strict: bool,
-    ) -> Result<LogPass> {
+    ///
+    /// The logs are read through the `brauser_logs` watermark
+    /// (`catchup::catch_up`), whose tail parse reads only what was appended
+    /// to a log. Its rows and gaps commit with each pass, and `state` takes
+    /// the events it found, its checkpoints and its gaps. A watermark that
+    /// does not describe `state` (a reset or rebuilt cache, a store written
+    /// before the watermark, a crash between the commit and the cache's
+    /// publication) is reset first, so that pass reads every log in full.
+    fn catch_up_logs(&self, state: &mut IndexState, rebuild: bool) -> Result<LogPass> {
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
         let log_dir = checked_relative_dir(&self.storage.log_dir)?;
-        // Ordinary indexing skips linked history. An impact review cannot
-        // present that omission as a complete inventory, including when the
-        // entire logs directory is linked within the selected home folder.
-        if strict
-            && root
-                .symlink_metadata(&log_dir)
-                .is_ok_and(|metadata| metadata.file_type().is_symlink())
-        {
-            bail!("re-learning review cannot inspect symlinked log history");
-        }
         let logs = match root.open_dir(&log_dir) {
             Ok(logs) => logs,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && state.logs.is_empty() => {
@@ -1352,11 +1402,14 @@ impl ArtifactIndex {
             }
         };
         let mut files = Vec::new();
-        collect_markdown(&logs, Path::new(""), 0, &mut files, strict)?;
-        files.sort();
+        collect_markdown(&logs, Path::new(""), 0, &mut files, false)?;
         let shown = |relative: &Path| log_dir.join(relative).display().to_string();
         let mut checkpoints = BTreeMap::new();
         for relative in files {
+            // The watermark never indexes such a log (it warns once per pass).
+            if catchup::portable_path(&relative).is_none() {
+                continue;
+            }
             let metadata = logs
                 .symlink_metadata(&relative)
                 .with_context(|| format!("checking artifact log file {}", shown(&relative)))?;
@@ -1379,78 +1432,49 @@ impl ArtifactIndex {
             *state = self.empty_state();
         }
         let changed = reset || state.logs != checkpoints || state.gap_logs != checkpoints;
-        let limit = scan_byte_limit();
-        let mut scanned = 0;
-        let mut complete = true;
-        for (relative, checkpoint) in &checkpoints {
-            if state.logs.get(relative) == Some(checkpoint)
-                && state.gap_logs.get(relative) == Some(checkpoint)
-            {
-                continue;
+        if !changed {
+            return Ok(LogPass {
+                changed,
+                reset,
+                complete: true,
+            });
+        }
+        let mut found = Vec::new();
+        let mut conn = store::open(&self.cache_dir)?;
+        let (complete, watermark, gaps) = db::write_txn(&mut conn, |tx| {
+            if reset || state.gap_logs != state.logs || catchup::checkpoints(tx)? != state.logs {
+                catchup::reset(tx)?;
             }
-            if checkpoint.bytes > MAX_LOG_BYTES {
-                bail!(
-                    "artifact history is unavailable: log exceeds its 32 MiB limit: {}",
-                    shown(relative)
-                );
+            let mut sink = |_: &rusqlite::Transaction<'_>, event, position| {
+                found.push((event, position));
+                Ok(())
+            };
+            match catchup::catch_up(tx, &self.storage, &self.root_identity, &mut sink)? {
+                catchup::CatchUp::Caught { complete, .. } => {
+                    Ok((complete, catchup::checkpoints(tx)?, catchup::gaps(tx)?))
+                }
+                // A log shrank since it was stat'ed above; rolled back.
+                catchup::CatchUp::Rebuilding => {
+                    bail!("artifact history is unavailable: a log changed during catch-up")
+                }
             }
-            // One log always fits (the per-file bound is below the pass
-            // bound), so every pass makes progress.
-            if scanned > 0 && scanned + checkpoint.bytes > limit {
-                complete = false;
-                break;
-            }
-            scanned += checkpoint.bytes;
-            let mut file = logs
-                .open(relative)
-                .with_context(|| format!("opening artifact log file {}", shown(relative)))?;
-            let mut bytes = Vec::new();
-            Read::by_ref(&mut file)
-                .take(checkpoint.bytes + 1)
-                .read_to_end(&mut bytes)
-                .with_context(|| format!("reading artifact log file {}", shown(relative)))?;
-            if bytes.len() as u64 != checkpoint.bytes
-                || LogCheckpoint::read(&file.metadata()?)? != *checkpoint
-            {
-                bail!(
-                    "artifact history is unavailable: {} changed during catch-up",
-                    shown(relative)
-                );
-            }
-            #[cfg(test)]
-            LOG_BYTES_READ.with(|count| count.set(count.get() + bytes.len() as u64));
-            // Markers are ASCII. A torn multibyte prose line (capture
-            // tolerates one and keeps appending) must not drop the whole day.
-            // Checkpoint every file read, a skipped non-log one included, so
-            // the next pass resumes after it.
-            state.logs.insert(relative.clone(), checkpoint.clone());
-            state.gap_logs.insert(relative.clone(), checkpoint.clone());
-            let text = String::from_utf8_lossy(&bytes);
-            if !text.starts_with(LOG_HEADER) {
-                continue;
-            }
-            for (line, event) in parse_log_lines(&text) {
-                state.ingest(event, Some((relative.clone(), line)), rebuild || reset);
-            }
-            for (number, line) in text.lines().enumerate() {
-                if let Some((id, marker)) = parse_overflow_marker(line) {
-                    let position = (relative.clone(), number as u64);
-                    // Retries reuse the marker ID. Conflicting copies always
-                    // keep the earliest log position, including after reindex.
-                    let gap = state.gaps.entry(id).or_insert_with(|| CachedGap {
-                        marker: marker.clone(),
-                        position: position.clone(),
-                    });
-                    if position < gap.position {
-                        *gap = CachedGap { marker, position };
-                    }
+        })?;
+        drop(conn);
+        for (event, position) in found {
+            state.ingest(event, Some(position), rebuild || reset);
+        }
+        // Retries reuse the marker ID. Conflicting copies always keep the
+        // earliest log position, including after reindex.
+        for (id, found) in gaps {
+            match state.gaps.get(&id) {
+                Some(gap) if gap.position <= found.position => {}
+                _ => {
+                    state.gaps.insert(id, found);
                 }
             }
         }
-        if complete {
-            state.gap_logs = checkpoints.clone();
-            state.logs = checkpoints;
-        }
+        state.gap_logs = watermark.clone();
+        state.logs = watermark;
         Ok(LogPass {
             changed,
             reset,
@@ -1464,14 +1488,7 @@ impl ArtifactIndex {
     fn publish_state_and_database(&self, state: &IndexState) -> Result<()> {
         #[cfg(test)]
         PUBLICATIONS.with(|count| count.set(count.get() + 1));
-        let adapters = self.adapters.as_deref();
-        let fingerprint = self.adapters_fingerprint();
-        let mut conn = store::open(&self.cache_dir)?;
-        store::write(&mut conn, adapters, |tx| {
-            let changed = store::sync_to_state(tx, adapters, &fingerprint, state)?;
-            store::sync_dirty(tx, &state.dirty, &changed)
-        })?;
-        drop(conn);
+        self.sync_store(state, true)?;
         self.write_state(state)
     }
 
