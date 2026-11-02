@@ -522,6 +522,34 @@ in its run directory; and that the same Save writes the draft. This proves
 the real Chrome, host and service path with a fake agent; it does not judge
 a real agent's drafts.
 
+## Auto-summary
+
+- Pure candidate logic: `extension/tests/auto-summary.test.mjs` (dwell 0 and
+  dwell counting only focused time, replacement on another artifact, one
+  submission per artifact across tabs, the 500-entry submitted cap, FIFO
+  order, the next-due time).
+- Worker wiring: `extension/tests/worker.test.mjs` "Auto-summary" tests drive
+  the fake Chrome: one `start_auto_summary` per recognized open, none for an
+  unrecognized page, a paused capture, a disabled setting or a lease without
+  the field, no second ask after `already_summarized`, a dropped candidate
+  after `not_set_up` (no re-ask on tab switches until the lease revision
+  changes), a refusal that skips only its artifact, a started artifact asked
+  again once its short skip ends, a route change that waits for its title, a
+  kept candidate and a retry alarm after `service_unavailable`, and focus kept
+  in session storage with a dwell alarm. Each test answers every request it causes: the worker runs one
+  drain at a time, so an unanswered request stalls the next test's drain.
+- Host: `native::tests::run_proxy` (each skip reason before connecting, the
+  forwarded summary `start_run`, manual Summarize ignoring an existing summary,
+  `summary_blocks_auto` dates and read scopes), `service::queue`
+  (`auto_runs_queue_in_arrival_order`), `service::finisher`
+  (`a_sign_in_answer_writes_nothing`), `config` (defaults, round trip, the
+  3600 s bound), and `protocol/tests/wire_auto_summary.rs`.
+- Headless smoke: `step("Automatic summaries turn off from settings")` before
+  harness setup keeps every later summary step's counts exact (a new install
+  defaults to on), and `step("An automatic summary runs once for a recognized
+  artifact with none")` turns it on, opens `/allowed/auto`, waits for exactly
+  one `smoke.page` summary event, checks a reopen adds none, and turns it off.
+
 ## Agent tasks, task bar
 
 A task is a third run kind, `task` (DESIGN.md §4.5, §5.7). Each risk the plan

@@ -18,9 +18,10 @@ use brauser_protocol::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::answer::SummaryAnswer;
+use crate::answer::{Access, SummaryAnswer};
 use crate::presentation::plain_line;
 use crate::service::section::PageSection;
+use brauser_protocol::AnswerAccess;
 
 /// The largest `stream.txt`; text past it is dropped.
 pub const STREAM_CAP: usize = 4 * 1024 * 1024;
@@ -265,6 +266,14 @@ impl RunStatusFile {
                     .and_then(|value| SummaryAnswer::deserialize(value).ok())
                     .map(|answer| RunAnswer {
                         overview: (!answer.overview.is_empty()).then_some(answer.overview),
+                        // Only a wall is shown, so an ordinary run's view is
+                        // what an older extension already reads.
+                        access: match answer.access {
+                            Access::Ok => None,
+                            Access::SignIn => Some(AnswerAccess::SignIn),
+                            Access::Denied => Some(AnswerAccess::Denied),
+                            Access::NotFound => Some(AnswerAccess::NotFound),
+                        },
                         document_type: answer.document_type,
                         category: answer.category,
                         importance: answer.importance.level,
@@ -885,6 +894,7 @@ mod tests {
             metadata: crate::answer::Metadata::default(),
             references: Vec::new(),
             read_scope: None,
+            access: crate::answer::Access::Ok,
             document_type: wide(crate::answer::MAX_LABEL_CHARS),
             category: wide(crate::answer::MAX_LABEL_CHARS),
             entities: crate::answer::Entities {
@@ -1155,6 +1165,26 @@ mod tests {
     }
 
     #[test]
+    fn run_view_answer_carries_access_only_for_a_wall() {
+        let mut status = sample(Uuid::new_v4());
+        status.state = RunState::Succeeded;
+        let mut answer: serde_json::Value =
+            serde_json::from_str(crate::answer::TEST_ANSWER).unwrap();
+        assert_eq!(status.view(0, Some(&answer)).answer.unwrap().access, None);
+        for (wire, access) in [
+            ("sign_in", brauser_protocol::AnswerAccess::SignIn),
+            ("denied", brauser_protocol::AnswerAccess::Denied),
+            ("not_found", brauser_protocol::AnswerAccess::NotFound),
+        ] {
+            answer["access"] = serde_json::json!(wire);
+            assert_eq!(
+                status.view(0, Some(&answer)).answer.unwrap().access,
+                Some(access)
+            );
+        }
+    }
+
+    #[test]
     fn run_view_answer_comes_from_a_summary_answer_result() {
         let mut status = sample(Uuid::new_v4());
         status.state = RunState::Succeeded;
@@ -1179,6 +1209,7 @@ mod tests {
                 category: "news".into(),
                 importance: brauser_protocol::ImportanceLevel::Low,
                 importance_reason: "r".into(),
+                access: None,
             })
         );
         answer["overview"] = "A decision about the release.".into();

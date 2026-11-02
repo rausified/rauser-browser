@@ -344,6 +344,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::DiscoverHarnesses(_) => "discover_harnesses",
         Request::SetUpHarness(_) => "set_up_harness",
         Request::StartRun(_) => "start_run",
+        Request::StartAutoSummary(_) => "start_auto_summary",
         Request::GetRun(_) => "get_run",
         Request::ListRuns(_) => "list_runs",
         Request::CancelRun(_) => "cancel_run",
@@ -774,6 +775,8 @@ fn dispatch(
         Request::StartRun(value) => start_run(value, config, context.service),
         #[cfg(unix)]
         Request::StartTask(value) => start_task(value, config, context.service),
+        #[cfg(unix)]
+        Request::StartAutoSummary(value) => start_auto_summary(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup
         // detects and probes on the service's PATH and environment, and
         // agent.env and run threads live in the service's directory.
@@ -786,6 +789,16 @@ fn dispatch(
         | Request::SetUpHarness(_)
         | Request::OpenPath(_)
         | Request::GetAgentEnv(_)) => forward(&request, context.service),
+        // There is no service off Unix, so nothing is ever summarized on its
+        // own; a skip (not an error) keeps the extension from retrying.
+        #[cfg(not(unix))]
+        Request::StartAutoSummary(value) => {
+            Response::AutoSummarySkipped(brauser_protocol::AutoSummarySkippedResponse {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                reason: brauser_protocol::AutoSummarySkipReason::NotSetUp,
+            })
+        }
         #[cfg(not(unix))]
         Request::StartRun(_)
         | Request::StartSiteDraft(_)
@@ -857,6 +870,132 @@ fn start_run(
         Err((code, message)) => return error(&value.request_id, code, &message),
     }
     forward(&Request::StartRun(value), service)
+}
+
+/// Start the automatic summary of a recognized artifact, unless auto-summary
+/// is off, no harness is ready, the page is not an artifact, or the artifact
+/// already has a summary. Every skip answers before connecting to the
+/// service; otherwise the host forwards an ordinary summary `start_run` with
+/// the key it resolved, which joins a queued or running run for that key.
+#[cfg(unix)]
+fn start_auto_summary(
+    value: brauser_protocol::StartAutoSummaryRequest,
+    config: &mut ConfigStore,
+    service: Option<&ServiceLink>,
+) -> Response {
+    use brauser_protocol::AutoSummarySkipReason as Skip;
+    let skipped = |reason: Skip| {
+        tracing::info!(reason = ?reason, "auto summary skipped");
+        Response::AutoSummarySkipped(brauser_protocol::AutoSummarySkippedResponse {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id.clone(),
+            reason,
+        })
+    };
+    let _ = config.refresh();
+    if !config.snapshot().auto_summary.enabled {
+        return skipped(Skip::Disabled);
+    }
+    if config.agent_status().state != brauser_protocol::AgentState::Ready {
+        return skipped(Skip::NotSetUp);
+    }
+    let page = RunPage {
+        url: &value.url,
+        title: &value.title,
+        content: &value.content,
+        selection: None,
+        requested_at: &value.requested_at,
+    };
+    let key = match page_record_key(page, config) {
+        Ok(key) => key,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    if key.kind != RecordKeyKind::Artifact {
+        return skipped(Skip::NotAnArtifact);
+    }
+    match existing_summary(config, &key.value) {
+        Ok(Some(view)) => {
+            let home = config
+                .snapshot()
+                .storage
+                .as_ref()
+                .map(|storage| std::path::PathBuf::from(&storage.root));
+            let today = crate::capture::parse_event_time(&value.requested_at)
+                .ok()
+                .map(time::OffsetDateTime::date);
+            let blocks = match (home, today) {
+                (Some(home), Some(today)) => summary_blocks_auto(&view, &home, &key, today),
+                _ => true,
+            };
+            if blocks {
+                return skipped(Skip::AlreadySummarized);
+            }
+        }
+        Ok(None) => {}
+        Err(cause) => {
+            warn_cause(&cause, "auto summary: history unavailable");
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "history is unavailable",
+            );
+        }
+    }
+    let request = brauser_protocol::StartRunRequest {
+        protocol_version: value.protocol_version,
+        request_id: value.request_id.clone(),
+        url: value.url,
+        title: value.title,
+        content: value.content,
+        selection: None,
+        harness: None,
+        record_key: Some(key),
+        requested_at: value.requested_at,
+        kind: Some(brauser_protocol::RunKind::Summary),
+        instruction: None,
+    };
+    forward(&Request::StartRun(request), service)
+}
+
+/// Whether an artifact's latest summary stops an automatic one. Only a
+/// summary whose file records `read_scope: page_only` and that was made on an
+/// earlier local day (in its own offset) does not, so a viewer-only summary
+/// is retried at most once a day. A file that is missing, unreadable or not
+/// this record's, or a timestamp that does not parse, blocks.
+#[cfg(unix)]
+fn summary_blocks_auto(
+    view: &brauser_protocol::SummaryView,
+    home: &std::path::Path,
+    key: &RecordKey,
+    today: time::Date,
+) -> bool {
+    let Ok(summarized) = time::OffsetDateTime::parse(
+        &view.summarized_at,
+        &time::format_description::well_known::Rfc3339,
+    ) else {
+        return true;
+    };
+    let Ok(file) = std::fs::read(home.join(&view.summary_path)) else {
+        return true;
+    };
+    let page_only =
+        crate::summary::recorded_read_scope(&file, key) == Some(crate::answer::ReadScope::PageOnly);
+    !(page_only && summarized.date() < today)
+}
+
+/// The artifact's latest summary in the index, if it has one.
+#[cfg(unix)]
+fn existing_summary(
+    config: &ConfigStore,
+    artifact_id: &str,
+) -> Result<Option<brauser_protocol::SummaryView>> {
+    let storage = config
+        .snapshot()
+        .storage
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no home folder"))?;
+    let cache_dir = config.cache_dir()?;
+    open_index(config, storage, &cache_dir)?.summary_for(artifact_id)
 }
 
 /// Build a task-bar run: the user's instruction, bounded as the service
@@ -3101,6 +3240,7 @@ id = "work:{host}/{id}"
                     strip_params: Vec::new(),
                     agent: None,
                     summary_vocabulary: crate::config::default_summary_vocabulary(),
+                    auto_summary: crate::config::default_auto_summary(),
                     adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
@@ -3361,6 +3501,7 @@ id = "work:{host}/{id}"
                 strip_params: Vec::new(),
                 agent: None,
                 summary_vocabulary: crate::config::default_summary_vocabulary(),
+                auto_summary: crate::config::default_auto_summary(),
                 adapters: crate::config::empty_config().adapters,
             };
             let update = dispatch(
@@ -10116,6 +10257,318 @@ title = "{title} - Jira"
             for sentinel in [INSTRUCTION, TITLE, CONTENT, PATH] {
                 assert!(!text.contains(sentinel), "{sentinel} was logged: {text}");
             }
+        }
+
+        const GDOC_ADAPTER: &str = r#"[[artifacts]]
+type = "gdoc"
+origin = "https://docs.google.com"
+unscoped = "acknowledged"
+match = [{ path = "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}" }]
+modes = { edit = "edit", view = "view", preview = "view" }
+id = "gdoc:{host}/{id}"
+"#;
+        const GDOC_URL: &str = "https://docs.google.com/document/d/abcdefghijklmnopqrst/edit";
+
+        /// A home folder with the gdoc adapter, a set-up harness unless
+        /// `harness` is false, and `auto` as the `[auto_summary]` table.
+        fn auto_store(folder: &std::path::Path, harness: bool, auto: &str) -> ConfigStore {
+            let root = folder.join("notes");
+            std::fs::create_dir_all(&root).unwrap();
+            let path = folder.join("config.toml");
+            let agent = if harness {
+                config::fixtures::agent_table(std::path::Path::new(
+                    &config::fixtures::absent_binary("claude"),
+                ))
+            } else {
+                String::new()
+            };
+            config::fixtures::write(
+                &path,
+                &root,
+                "artifacts_dir = \"artifacts\"",
+                "capture_enabled = true",
+                &format!("{auto}\n{agent}\n[adapters]\nformat = 1\n\n{GDOC_ADAPTER}"),
+            );
+            let mut store = ConfigStore::for_test(path);
+            store.refresh().unwrap();
+            store
+        }
+
+        fn start_auto(url: &str, request_id: &str) -> Request {
+            Request::StartAutoSummary(brauser_protocol::StartAutoSummaryRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.into(),
+                url: url.into(),
+                title: "A doc".into(),
+                content: "Some text".into(),
+                requested_at: now(),
+            })
+        }
+
+        fn skipped(response: &Response) -> brauser_protocol::AutoSummarySkipReason {
+            match response {
+                Response::AutoSummarySkipped(value) => value.reason,
+                other => panic!("expected auto_summary_skipped, got {other:?}"),
+            }
+        }
+
+        /// A link whose socket has no listener: a skip must never connect.
+        fn unreachable_link(dir: &tempfile::TempDir) -> ServiceLink {
+            link(fake::socket_in(dir), never)
+        }
+
+        #[test]
+        fn auto_summary_skips_when_disabled() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(
+                folder.path(),
+                true,
+                "[auto_summary]\nenabled = false\ndwell_secs = 0\n",
+            );
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                start_auto(GDOC_URL, "a"),
+            );
+            assert_eq!(
+                skipped(&response),
+                brauser_protocol::AutoSummarySkipReason::Disabled
+            );
+            assert_eq!(response.request_id(), "a");
+        }
+
+        #[test]
+        fn auto_summary_skips_when_no_harness() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), false, "");
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                start_auto(GDOC_URL, "a"),
+            );
+            assert_eq!(
+                skipped(&response),
+                brauser_protocol::AutoSummarySkipReason::NotSetUp
+            );
+        }
+
+        #[test]
+        fn auto_summary_skips_for_a_url_keyed_page() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                start_auto("https://example.com/plain", "a"),
+            );
+            assert_eq!(
+                skipped(&response),
+                brauser_protocol::AutoSummarySkipReason::NotAnArtifact
+            );
+        }
+
+        #[test]
+        fn auto_summary_skips_when_the_artifact_has_a_summary() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let key = resolve_record_key(&mut config, GDOC_URL).unwrap();
+            record_page_summary(&config, GDOC_URL, key, "gdoc");
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                start_auto(GDOC_URL, "a"),
+            );
+            assert_eq!(
+                skipped(&response),
+                brauser_protocol::AutoSummarySkipReason::AlreadySummarized
+            );
+        }
+
+        #[test]
+        fn auto_summary_refuses_a_stale_requested_at_like_start_run() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let dir = fake::short_dir();
+            let Request::StartAutoSummary(mut request) = start_auto(GDOC_URL, "a") else {
+                unreachable!()
+            };
+            request.requested_at = "2001-01-01T00:00:00Z".into();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                Request::StartAutoSummary(request),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::InvalidRequest);
+        }
+
+        #[test]
+        fn auto_summary_forwards_a_summary_run_for_a_new_artifact() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let expected = resolve_record_key(&mut config, GDOC_URL).unwrap();
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let response = call(&mut config, &link(socket, never), start_auto(GDOC_URL, "a"));
+            match response {
+                Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
+                other => panic!("expected run_started, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert_eq!(requests.len(), 2, "{requests:?}");
+            let Request::StartRun(forwarded) = &requests[1] else {
+                panic!("{requests:?}")
+            };
+            assert_eq!(forwarded.kind, Some(RunKind::Summary));
+            assert_eq!(forwarded.record_key, Some(expected));
+            assert_eq!(forwarded.harness, None);
+            assert_eq!(forwarded.selection, None);
+            assert_eq!(forwarded.instruction, None);
+            assert_eq!(forwarded.url, GDOC_URL);
+        }
+
+        fn page_only_view(summarized_at: &str) -> brauser_protocol::SummaryView {
+            brauser_protocol::SummaryView {
+                summarized_at: summarized_at.into(),
+                overview: None,
+                document_type: "report".into(),
+                category: "news".into(),
+                importance: brauser_protocol::ImportanceLevel::Low,
+                summary_path: "summaries/a.summary.md".into(),
+                harness: brauser_protocol::HarnessId::Claude,
+            }
+        }
+
+        /// A minimal summary file of `key` recording `scope`.
+        fn write_summary_file(home: &std::path::Path, key: &RecordKey, scope: &str) {
+            let id = match key.kind {
+                RecordKeyKind::Url => "url_id",
+                RecordKeyKind::Artifact => "artifact_id",
+            };
+            let dir = home.join("summaries");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("a.summary.md"),
+                format!(
+                    "---\nbrauser:\n  kind: summary\n  canonical_url: \"{GDOC_URL}\"\n  {id}: \"{}\"\nread_scope: {scope}\n---\nBody\n",
+                    key.value
+                ),
+            )
+            .unwrap();
+        }
+
+        fn gdoc_key() -> RecordKey {
+            RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "gdoc:docs.google.com/abcdefghijklmnopqrst".into(),
+            }
+        }
+
+        fn today() -> time::Date {
+            time::Date::from_calendar_date(2026, time::Month::November, 2).unwrap()
+        }
+
+        #[test]
+        fn a_page_only_summary_from_yesterday_does_not_block() {
+            let home = tempfile::tempdir().unwrap();
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            let view = page_only_view("2026-11-01T23:30:00-07:00");
+            assert!(!summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        #[test]
+        fn a_page_only_summary_from_today_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            // Its own offset's date is today, though UTC's is tomorrow.
+            let view = page_only_view("2026-11-02T20:00:00-07:00");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        #[test]
+        fn a_whole_summary_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            for scope in ["whole", "partial"] {
+                write_summary_file(home.path(), &gdoc_key(), scope);
+                let view = page_only_view("2026-10-01T09:00:00Z");
+                assert!(
+                    summary_blocks_auto(&view, home.path(), &gdoc_key(), today()),
+                    "{scope}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_missing_summary_file_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            let view = page_only_view("2026-10-01T09:00:00Z");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+            // So does another record's file, or an unreadable timestamp.
+            write_summary_file(home.path(), &url_record_key_for_test(), "page_only");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            assert!(summary_blocks_auto(
+                &page_only_view("yesterday"),
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        fn url_record_key_for_test() -> RecordKey {
+            RecordKey {
+                kind: RecordKeyKind::Url,
+                value: "https://example.com/".into(),
+            }
+        }
+
+        /// Only an automatic summary checks for an existing one: Summarize &
+        /// log always runs.
+        #[test]
+        fn manual_start_run_ignores_an_existing_summary() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let key = resolve_record_key(&mut config, GDOC_URL).unwrap();
+            record_page_summary(&config, GDOC_URL, key, "gdoc");
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let _service = echoing_service(&socket);
+            let response = call(
+                &mut config,
+                &link(socket, never),
+                start_run(GDOC_URL, None, &now()),
+            );
+            assert!(matches!(response, Response::RunStarted(_)), "{response:?}");
         }
 
         #[test]

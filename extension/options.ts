@@ -108,6 +108,9 @@ const revealAgentEnvButton = element<HTMLButtonElement>("reveal-agent-env");
 const vocabularyTypes = element<HTMLTextAreaElement>("vocab-types");
 const vocabularyCategories = element<HTMLTextAreaElement>("vocab-categories");
 const saveVocabularyButton = element<HTMLButtonElement>("save-vocabulary");
+const autoSummaryEnabled = element<HTMLInputElement>("auto-summary-enabled");
+const autoSummaryDwell = element<HTMLInputElement>("auto-summary-dwell");
+const saveAutoSummaryButton = element<HTMLButtonElement>("save-auto-summary");
 
 let picker: { path: string; token: string } | null = null;
 let busy = false;
@@ -119,6 +122,7 @@ let selectedHarnessId: HarnessId | null = null;
 // Fields the user has typed in keep their text across config renders.
 let timeoutEdited = false;
 let vocabularyEdited = false;
+let autoSummaryEdited = false;
 // Setup instructions while the last service request found no service.
 let serviceProblem: string | null = null;
 type AdapterEdit =
@@ -256,6 +260,8 @@ function updateControls(): void {
   removeHarnessButton.disabled = !idle || !session.config?.agent;
   revealAgentEnvButton.disabled = !idle;
   saveVocabularyButton.disabled = !idle || session.configIssue !== null;
+  saveAutoSummaryButton.disabled = !idle || session.configIssue !== null;
+  autoSummaryDwell.disabled = !autoSummaryEnabled.checked;
   // The knowledge base is stored with the home folder, so it needs one.
   const folderReady = idle && !repairing && !!session.config?.storage;
   chooseKnowledgeBaseButton.disabled = !folderReady;
@@ -307,6 +313,11 @@ function renderAgent(): void {
   harnessState.textContent = serviceProblem ?? state.join(" ");
   harnessState.classList.toggle("warning", serviceProblem !== null);
   if (!timeoutEdited) timeoutInput.value = String(agent ? Math.max(1, Math.round(agent.timeout_secs / 60)) : 10);
+  if (!autoSummaryEdited && config) {
+    autoSummaryEnabled.checked = config.auto_summary.enabled;
+    autoSummaryDwell.value = String(config.auto_summary.dwell_secs);
+    autoSummaryDwell.disabled = !config.auto_summary.enabled;
+  }
   if (!vocabularyEdited && config) {
     vocabularyTypes.value = config.summary_vocabulary.document_types.join("\n");
     vocabularyCategories.value = config.summary_vocabulary.categories.join("\n");
@@ -1517,6 +1528,32 @@ async function saveVocabulary(): Promise<void> {
   }
 }
 
+async function saveAutoSummary(): Promise<void> {
+  if (busy || !session.config || session.configIssue) return;
+  const text = autoSummaryDwell.value.trim();
+  const dwell = /^\d+$/.test(text) ? Number(text) : NaN;
+  if (!Number.isInteger(dwell) || dwell > 3600) {
+    show("Enter a wait of 0 to 3600 whole seconds.", true);
+    return;
+  }
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(() => session.saveConfig({
+      ...session.config!,
+      auto_summary: { enabled: autoSummaryEnabled.checked, dwell_secs: dwell },
+    }, null));
+    autoSummaryEdited = false;
+    show("Automatic summaries saved.");
+  } catch (error) {
+    show(`Could not save automatic summaries: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
 async function removeHarness(): Promise<void> {
   if (busy || !session.config?.agent) return;
   busy = true;
@@ -1551,6 +1588,12 @@ testButton.addEventListener("click", () => void testHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
 revealAgentEnvButton.addEventListener("click", () => void revealAgentEnv());
 saveVocabularyButton.addEventListener("click", () => void saveVocabulary());
+saveAutoSummaryButton.addEventListener("click", () => void saveAutoSummary());
+autoSummaryEnabled.addEventListener("change", () => {
+  autoSummaryEdited = true;
+  autoSummaryDwell.disabled = !autoSummaryEnabled.checked;
+});
+autoSummaryDwell.addEventListener("input", () => { autoSummaryEdited = true; });
 timeoutInput.addEventListener("input", () => { timeoutEdited = true; });
 vocabularyTypes.addEventListener("input", () => { vocabularyEdited = true; });
 vocabularyCategories.addEventListener("input", () => { vocabularyEdited = true; });

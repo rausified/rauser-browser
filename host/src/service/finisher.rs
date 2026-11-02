@@ -45,6 +45,7 @@ use time::{OffsetDateTime, UtcOffset};
 
 use super::record::{MAX_TASK_REPORT_BYTES, RunStatusFile, cap_bytes};
 use super::supervisor::{RunFinisher, SaveFailure, SavedRun, accept_summary_answer, timestamp};
+use crate::answer::Access;
 use crate::answer::SummaryAnswer;
 use crate::brand::APP_NAME;
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, canonical_url_with_provenance};
@@ -119,6 +120,16 @@ impl RunFinisher for SummaryFinisher {
     ) -> Result<SavedRun, SaveFailure> {
         let answer = SummaryAnswer::deserialize(result)
             .map_err(|_| SaveFailure::final_reason(INVALID_ANSWER, None))?;
+        // The agent saw a sign-in, no-access or not-found wall instead of the
+        // artifact: a summary of that is never useful, and writing nothing
+        // keeps the artifact unsummarized, so auto-summary tries it again.
+        if answer.access != Access::Ok {
+            tracing::info!(access = ?answer.access, "summary not saved: the agent met a wall");
+            return Ok(SavedRun {
+                written_key: run.start_key.clone(),
+                summary_path: None,
+            });
+        }
         let mut config = ConfigStore::load_from(self.config_path.clone());
         let _config_lock = config.lock_current().map_err(|error| {
             tracing::warn!(error = format!("{error:#}"), "locking the configuration");
@@ -1082,6 +1093,28 @@ mod tests {
         assert_eq!(summary.importance, ImportanceLevel::High);
         assert_eq!(summary.overview, event.overview);
         assert_eq!(summary.summary_path, slash(&relative));
+    }
+
+    /// A sign-in, no-access or not-found wall is never saved: no summary
+    /// file, no log event, no index row, so the page stays unsummarized.
+    #[test]
+    fn a_sign_in_answer_writes_nothing() {
+        for access in ["sign_in", "denied", "not_found"] {
+            let world = World::new();
+            let run = run(&world, PAGE, HarnessId::Codex);
+            let mut wall = answer();
+            wall["access"] = serde_json::json!(access);
+            let saved = world.finisher().save(&run, &wall).unwrap();
+            assert_eq!(saved.summary_path, None, "{access}");
+            assert_eq!(saved.written_key, run.start_key, "{access}");
+            assert!(
+                !world.root.join(world.summary_path(PAGE)).exists(),
+                "{access}"
+            );
+            assert!(world.summary_events().is_empty(), "{access}");
+            let id = web_page_artifact_id(PAGE).unwrap();
+            assert_eq!(world.index().summary_for(&id).unwrap(), None, "{access}");
+        }
     }
 
     #[test]
