@@ -778,6 +778,9 @@ impl ArtifactIndex {
     /// Level the watermark, then make the store mirror `state` (always with
     /// `force`, else only when its events visibly differ) and its dirty set.
     fn sync_store(&self, state: &IndexState, force: bool) -> Result<()> {
+        if self.nothing_to_commit(state)? {
+            return Ok(());
+        }
         let adapters = self.adapters.as_deref();
         let fingerprint = self.adapters_fingerprint();
         let mut conn = store::open(&self.cache_dir)?;
@@ -791,6 +794,29 @@ impl ArtifactIndex {
             store::sync_dirty(tx, &state.dirty, &changed)?;
             self.mark_mirror(tx, state)
         })
+    }
+
+    /// `index.db` is opened (and so created) only to commit ingested data.
+    /// With no database yet and nothing in `state` to store (no events,
+    /// gaps, dirty marks or container files), a read, a pass or a
+    /// reconciliation leaves the cache without one. Anything else at the
+    /// path (a directory, a damaged or foreign file) is left to
+    /// [`db::open`], which reports history unavailable without touching it.
+    fn nothing_to_commit(&self, state: &IndexState) -> Result<bool> {
+        if !(state.events.is_empty()
+            && state.gaps.is_empty()
+            && state.dirty.is_empty()
+            && state.container_files.is_empty())
+        {
+            return Ok(false);
+        }
+        let path = db::db_path(&self.cache_dir);
+        match db::detect_legacy(&path) {
+            Ok(db::FileState::Missing) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error) => Err(error)
+                .with_context(|| format!("artifact history is unavailable: {}", path.display())),
+        }
     }
 
     /// Artifacts whose generated file depends on the adapter document: a
