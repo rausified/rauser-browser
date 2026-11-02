@@ -237,7 +237,6 @@ queue".
   action is to record current Windows and macOS green CI against a named
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
-- [ ] `brwr-e7b0` **Gate built UI accessibility and keyboard behavior.** Recovered the quarantined axe matrix, keyboard flows and focus/theme fixes. Tasks group labels remain named but presentational; no-match search hides the empty listbox and shows a separate message while keeping the selected detail visible. Added group/filter/restore browser audits and failing-first controller checks. Keep in progress until the required external browser gate passes; sandbox skips and incomplete axe checks are not acceptance.
 <!-- END GENERATED section=in-progress -->
 
 
