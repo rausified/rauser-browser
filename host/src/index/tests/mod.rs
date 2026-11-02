@@ -12,6 +12,7 @@ mod gaps;
 mod golden;
 mod identity;
 mod migration;
+pub(super) mod mp_harness;
 mod ordering;
 mod presentation;
 mod regeneration;
