@@ -3,10 +3,13 @@
 //! under the configuration current at finish, not the one the run started
 //! with. A key, adapter, or home folder changed mid-run is followed.
 //!
-//! `save` holds the config lock from its refresh to the end, because the
-//! artifact index has no lock of its own (`brwr-7vf`). Every failure is a
-//! user-facing reason that ends in what to do: Retry save when a retry can
-//! work; a retry re-reads the kept answer, so the agent never runs again.
+//! `save` holds the config lock from its refresh to the end, so the log
+//! append and the index update see the config it refreshed. The artifact
+//! index is self-locking (`brwr-7vf`) and needs no outer lock to stay
+//! correct; dropping the config lock around index calls is a separate
+//! change. Every failure is a user-facing reason that ends in what to do:
+//! Retry save when a retry can work; a retry re-reads the kept answer, so
+//! the agent never runs again.
 //! A retry is idempotent: the event time is the run's `answered_at` stamp,
 //! not the clock, so every save builds the same entry and file (the file is
 //! dated by `first_answered_at` when a retry re-stamped the answer); the run ID
