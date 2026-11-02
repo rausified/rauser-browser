@@ -11,6 +11,7 @@ import {
   isPolicyLease,
   isQueuedVisit,
   leaseActive,
+  localTimestamp,
   PANEL_NOTICE_KEY,
   SITE_ACCESS_ORIGINS,
   type PanelNotice,
@@ -273,7 +274,7 @@ function scheduleAutoAlarm(state: AutoSummaryState, dwellMs: number, now: number
   if (due < 30_000) scheduleAutoDrain(due + 50);
 }
 
-type AutoAttempt = { tabId: number; artifactId: string; url: string };
+type AutoAttempt = { tabId: number; artifactId: string; url: string; requestedDay?: string };
 
 /** The oldest due tab, after marking loaded the candidates whose tab has
  * finished loading (a single-page app's route change fires no load). */
@@ -316,7 +317,14 @@ async function attemptAuto(attempt: AutoAttempt): Promise<string> {
   try {
     return await autoSummarizeTab(
       { id: attempt.tabId, url: tab.url, title: tab.title ?? "" },
-      { scripting: chrome.scripting, host, storage: chrome.storage.local, now: () => new Date() },
+      {
+        scripting: chrome.scripting, host, storage: chrome.storage.local,
+        now: () => {
+          const date = new Date();
+          attempt.requestedDay = localTimestamp(date).slice(0, 10);
+          return date;
+        },
+      },
     );
   } catch (error) {
     // Only an unreachable host or service is worth retrying soon; any other
@@ -338,7 +346,13 @@ async function settleAuto(attempt: AutoAttempt, outcome: string): Promise<void> 
   if (current?.artifact_id === attempt.artifactId) {
     const now = Date.now();
     if (outcome === "already_summarized") {
-      markSubmitted(state, attempt.tabId);
+      // The host judged requested_at's day. A reply that crosses midnight
+      // cannot suppress a viewer-only summary on its newly eligible day.
+      if (attempt.requestedDay === localTimestamp(new Date(now)).slice(0, 10)) {
+        markSubmitted(state, attempt.tabId, now);
+      } else {
+        dropCandidate(state, attempt.tabId);
+      }
     } else if (outcome === "started") {
       markSkipped(state, attempt.tabId, now + AUTO_STARTED_SKIP_MS);
     } else if (outcome === "deferred") {

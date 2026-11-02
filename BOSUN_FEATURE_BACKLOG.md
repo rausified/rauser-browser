@@ -125,6 +125,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 ### Focused quality follow-up
 
 <!-- BEGIN GENERATED section=quality: edit the beads, then run python3 scripts/render_backlog.py -->
+- [ ] `brwr-q0i4` **Honor capture pause when an automatic summary reaches the host.** While fixing brwr-sm7, start_auto_summary checks auto_summary.enabled and current adapter identity but never snapshot.capture_enabled. The worker normally removes candidates while capture is paused, yet a pause during readTab leaves an in-flight request that can start a new… _(P2)_
 - [ ] `brwr-ys8y` **Generate padded token values in adapter differential tests.** Discovered while fixing brwr-tp1: scripts/adapter-templates-diff.mjs genValue only emits the token body alphabet, so random URL/title/alias cases never exercise the supported base64 padding grammar. Shared fixed vectors caught title-run drift, but the property generator still… _(P3)_
 <!-- END GENERATED section=quality -->
 
@@ -150,6 +151,7 @@ strip_params note-identity follow-up has shipped (see Shipped).
   primary key from a canonical address.
 - [ ] `brwr-pgxz` **Explain blocked Re-learn reviews with actionable local evidence.** The brwr-eo7/brwr-r62 fixes refuse damaged owned markers and foreign-occupied record keys, but the report currently exposes issue codes for cross-origin conflicts and a CLI path/line for marker damage. Before the panel consumes these plans, show why approval is blocked and how… _(P3)_
 - [ ] `brwr-khqi` **Find saved summaries by their overview in Tasks history.** Summary overviews now reach RunAnswer and the Tasks detail view, but history search still matches only the page title and task instruction. Someone who remembers the decision or topic in a summary should be able to find the corresponding run without opening every detail. _(P3)_
+- [ ] `brwr-rr93` **Show summary read scope in the run card.** Summary overviews can look complete even when the validated answer and saved summary record read_scope partial or page_only. Next-day auto-summary retry (brwr-sm9) relies on that distinction, but extension summary-text.ts and run-card.ts do not show it. Expose the validated… _(P3)_
 <!-- END GENERATED section=proposals -->
 
 ### Task bar follow-ups
@@ -183,8 +185,6 @@ queue".
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2)_
 - [ ] `brwr-sm5` **Tell the summary agent when Brauser's page capture was truncated.** Codex review of PR #236 (P2, SUMMARY.md read_scope): when content exceeds the extraction limits, extension `extractReadablePage` sets `truncated`, but `choosePage` and `readTab` (extension/summarize.ts) drop it, so page.md looks the same for a complete and a capped capture. An… _(P2)_
 - [ ] `brwr-cf2` **[human] Live-certify the confluence.page starter.** The Confluence pages starter (brwr-cf1) ships as a development draft. Check it against a real Atlassian Cloud site on macOS with real Chrome, following the 'Live check still needed' list in docs/adapters/confluence.page.md: both Atlassian checkboxes in Capture Site, the settings… _(P2; labels: human, starters)_
-- [ ] `brwr-sm7` **start_auto_summary: require a current adapter match, not a retired note contract.** Codex review of PR #245 (P2, host/src/native.rs start_auto_summary): if an adapter is removed or narrowed while the extension is reading the page, page_record_key can still return an artifact key through resolve_key_parts' retired note-contract fallback, so the host forwards an… _(P2)_
-- [ ] `brwr-sm9` **Auto-summary: let a page-only summary retry the next local day within one browser session.** Codex review of PR #245 (P2, extension/worker.ts settleAuto): already_summarized calls markSubmitted, which suppresses the artifact for the whole browser session, so a summary recorded read_scope page_only today is never retried tomorrow while Chrome stays open, defeating… _(P2)_
 - [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
@@ -230,6 +230,10 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Retry viewer-only summaries on a new local day (2026-11-02).** Browser suppression expires by local calendar day without restarting Chrome, while retaining dwell and retry state. A late reply carries the request day and cannot suppress the newly eligible day. Older undated caches expire once; the host still decides whether another summary is needed. **Metrics:** 14 pure-state tests pass in UTC and Pacific time; 102 worker cases pass, including same-session rollover and delayed midnight replies; full gate green with explicit sandbox skips.
+
+- **Category:** Bug Fix. **Keep automatic summaries on current capture rules (2026-11-02).** The native host checks the original URL against its current adapter under the same configuration lock as settings and note identity. Removed or narrowed rules skip automatic runs while preserving the saved note and explicit summaries. **Metrics:** 1,365 Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension files; one new native regression covers removal and narrowing; 2 accessibility fixtures pass and 36 browser cases skip in sandbox.
+
 - **Category:** Bug Fix. **Recognize padded token IDs in tab titles (2026-11-02).** Both engines clean prefix/suffix titles and retain tab-title alias suggestions when IDs carry one or two trailing base64 padding characters. Strict validation still rejects malformed padding and length overflow; = cannot bound token title captures. **Metrics:** 26 new shared vectors (10 failures reproduced per engine), 1,265 adapter JavaScript tests, 2,024 file-based differential cases; full local gate passes with 1,337 Rust-reported outcomes, 40 extension files and explicit sandbox skips. Standard differential child-pipe execution and uncached fuzz compilation remain external checks.
 
 - **Category:** Summaries. **Auto-summary of recognized artifacts (2026-11-02).** Brauser summarizes each recognized artifact with no summary once its page loads, after an optional focus dwell (default 0), one at a time through the service's FIFO queue; the host skips one that is off, not set up, not an artifact or already summarized (a page-only summary is retried daily), and an answer that met a sign-in, no-access or not-found wall saves nothing. Settings has an on/off switch and the wait. **Metrics:** 4 protocol wire tests, 9 host auto-summary tests, 9 candidate tests, 7 worker tests, 4 settings tests, 2 smoke steps.
@@ -1881,3 +1885,28 @@ focused future test improvement discovered from brwr-tp1. The recent category
 mix suggests returning to user-visible capabilities as soon as the actionable
 higher-priority defects are cleared, rather than accumulating more parser
 hardening proposals. Driver owns independent review, commit and publication.
+
+
+### Cycle observations (2026-11-02 — automatic summary eligibility)
+
+The assigned Re-learn chain remains blocked on held PR #238; no assigned
+state changed. The next-day suppression fix and current-rule check were
+reproduced before implementation. Keep viewer-only retry eligibility in the
+worker distinct from the host decision about whether another summary is
+needed: complete summaries still block. Existing open tabs re-enter through
+normal activity synchronization and load/dwell rules; there is no midnight
+run timer.
+
+Queue audit: the persistent database still called brwr-sm5 complete from
+archived commits 2cf67c46/5fa32bac, while this checkout at b516810c contains
+neither commit nor capture_truncated. Reopened it and removed shipped
+metadata before exporting. Recover/integrate that archived work through the
+driver/coordinator rather than claiming it is already on this base. Retained
+the local read-scope proposal brwr-rr93, with wording that applies to this
+base. brwr-sm2 still needs its recorded product-scope decisions; brwr-kpg
+still needs macOS load evidence, so neither was claimed.
+
+A further concrete review finding is queued as brwr-q0i4: capture pause must
+be rechecked by the native automatic-start path after page extraction. For
+product value after the P2 work, expose read scope in summary cards
+(brwr-rr93), so people can tell a viewer-only overview from a complete read.
