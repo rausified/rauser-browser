@@ -40,6 +40,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+use super::capture_quality;
 use super::finisher::save_reason_code;
 use super::harness_api::{
     HarnessEvent, HarnessRegistry, OutputSchema, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
@@ -625,9 +626,18 @@ impl Supervisor {
             }
             let now = now_timestamp();
             // From the page's address only, and only for a page run; the
-            // document identity goes to `page.md`, never to a log line.
+            // document identity goes to `page.md` (and to a suspect
+            // capture's warning), not to the routine `run queued` line.
             let office = match req.kind {
                 RunKind::Summary | RunKind::Task => office::office_document(&req.url),
+                RunKind::SiteDraft => None,
+            };
+            // Measured now, before a site draft's content moves into its page.
+            let suspect = match req.kind {
+                RunKind::Summary | RunKind::Task => {
+                    capture_quality::assess(&req.content, office.as_ref().map(|doc| doc.kind))
+                        .map(|found| (found, capture_quality::excerpt(&req.content)))
+                }
                 RunKind::SiteDraft => None,
             };
             let (cwd, page) = match req.kind {
@@ -703,6 +713,26 @@ impl Supervisor {
                 running = scheduler.running_len(),
                 "run queued"
             );
+            // A page run whose capture looks broken is logged for review,
+            // with the page and an excerpt (privacy is not a constraint,
+            // DESIGN.md §14 2026-11-01); the run goes ahead unchanged.
+            if let Some((found, excerpt)) = suspect {
+                tracing::warn!(
+                    run_id = %id,
+                    kind = kind_name(req.kind),
+                    reasons = found.reason_names(),
+                    office_kind = office.as_ref().map_or("none", |doc| doc.kind.label()),
+                    url = %req.url,
+                    title = %req.title,
+                    chars = found.chars,
+                    tokens = found.tokens,
+                    vowelless_ratio = found.vowelless_ratio,
+                    commas_per_token = found.commas_per_token,
+                    excerpt,
+                    page_md = %inner.store.run_dir(id).join("page.md").display(),
+                    "page capture looks suspect"
+                );
+            }
             let span = inner.run_span(id, runner.harness(), req.kind, &req.url);
             let control = RunControl::new(launch, timeout, span);
             lock(&inner.runs).insert(id, Arc::new(control));
@@ -5196,6 +5226,62 @@ mod tests {
         req
     }
 
+    /// The Word keytip capture every run logged before 2026-11-01.
+    const KEYTIP_CAPTURE: &str = "Control Period, fzczazmzs02h, zzh, ch, fph, fsh, fgh, fkh, 1h, \
+        2h, 3h, ih, fch, eh, uh, nh, hlh, aoh, aih, ath, bh, psh, kh, pgh, lh, lh, znh, dh, syh";
+
+    /// A suspect capture is logged once, with what a log review needs to
+    /// follow it up; an ordinary one logs nothing, and neither run changes.
+    #[test]
+    fn a_suspect_page_capture_is_logged_for_review() {
+        let (fixture, _seen) = recording(&["Done.", "Done."]);
+        let ((suspect, fine), lines, _) = crate::diag::test_capture::capture(|| {
+            let start = |req| {
+                let (view, _) = fixture.supervisor.start_run(req).unwrap();
+                Uuid::parse_str(&view.run_id).unwrap()
+            };
+            let suspect = start(office_request(
+                fixture.task_request("suspect", INSTRUCTION),
+                KEYTIP_CAPTURE,
+            ));
+            let mut ordinary = fixture.task_request("fine", INSTRUCTION);
+            ordinary.content =
+                "An ordinary page about the release, with a sentence or two of prose.".to_string();
+            (suspect, start(ordinary))
+        });
+        assert_eq!(fixture.wait_finished(suspect).state, RunState::Succeeded);
+        assert_eq!(fixture.wait_finished(fine).state, RunState::Succeeded);
+        let events = crate::diag::test_capture::events(&lines, "page capture looks suspect");
+        assert_eq!(events.len(), 1, "{lines:?}");
+        let event = events[0];
+        assert_eq!(event["level"], "WARN");
+        let fields = &event["fields"];
+        assert_eq!(fields["run_id"], suspect.to_string());
+        assert_eq!(fields["kind"], "task");
+        assert_eq!(fields["reasons"], "token_like,comma_list,thin_office");
+        assert_eq!(fields["office_kind"], "PowerPoint presentation");
+        assert_eq!(fields["url"], OFFICE_URL);
+        assert_eq!(
+            fields["title"],
+            fixture.task_request("suspect", INSTRUCTION).title
+        );
+        assert_eq!(fields["chars"], KEYTIP_CAPTURE.chars().count());
+        assert!(
+            fields["excerpt"]
+                .as_str()
+                .unwrap()
+                .starts_with("Control Period, fzczazmzs02h, zzh")
+        );
+        let page_md = fields["page_md"].as_str().unwrap();
+        assert!(
+            page_md.ends_with(&format!("{suspect}/page.md")),
+            "{page_md}"
+        );
+        assert!(std::path::Path::new(page_md).is_file(), "{page_md}");
+        assert!(fields["vowelless_ratio"].as_f64().unwrap() > 0.0);
+        assert!(fields["commas_per_token"].as_f64().unwrap() > 0.0);
+    }
+
     #[test]
     fn an_office_task_names_the_document_in_page_md_and_its_prompt_says_to_fetch_it() {
         let (fixture, seen) = recording(&["Read the deck."]);
@@ -5304,6 +5390,8 @@ mod tests {
 
     #[test]
     fn run_queued_logs_only_whether_the_page_is_an_office_document() {
+        // Privacy is not a constraint (DESIGN.md §14, 2026-11-01): a suspect
+        // capture's warning names the page. The routine line stays small.
         use crate::diag::test_capture::{capture, events};
         let (fixture, _seen) = recording(&[TEST_ANSWER, TEST_ANSWER]);
         let office = office_request(fixture.request("a"), "Slides");
@@ -5317,6 +5405,7 @@ mod tests {
         assert_eq!(queued.len(), 2, "{text}");
         assert_eq!(queued[0]["fields"]["office_document"], true, "{text}");
         assert_eq!(queued[1]["fields"]["office_document"], false, "{text}");
+        let queued_text = serde_json::to_string(&queued).unwrap();
         for leak in [
             "X.pptx",
             "_layouts",
@@ -5325,7 +5414,10 @@ mod tests {
             "0a1b2c3d",
             "sourcedoc",
         ] {
-            assert!(!text.contains(leak), "{leak} logged:\n{text}");
+            assert!(
+                !queued_text.contains(leak),
+                "{leak} in run queued:\n{queued_text}"
+            );
         }
     }
 
