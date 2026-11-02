@@ -130,6 +130,7 @@ All were resolved autonomously on 2026-11-01 by the planning agent. John approve
     - The `run queued` event gains `office_document = office.is_some()`, a boolean.
     - No file name, path, sourcedoc or document address is ever logged. Origins are logged only through `diag::url_origin`, as today.
 11. **Smoke.** No new step. The fixture origin is `localhost`, so the detector never fires there, and the fake harness matches on prompt prefixes, which are unchanged. Unit and supervisor tests pin the behaviour, and a human check covers the live path.
+- **Legacy records never enable retrieval** (2026-11-01, decided autonomously after the Codex review's P2): `RunStatusFile.office_section` records that this build wrote `page.md` with the Office section; `drive` adds the fetch paragraph only when it is set and the URL is still an Office document. Tests: `a_resumed_office_summary_from_before_the_section_gets_no_fetch_paragraph`, `a_new_office_run_records_that_its_page_md_has_the_section`.
 
 ## Critic amendments (2026-11-01, applied by the implementing agent)
 

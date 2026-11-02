@@ -214,6 +214,13 @@ pub struct RunStatusFile {
     /// forward compatible, as the fields above.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub save_final: bool,
+    /// This run's `page.md` was written with the host's Office document
+    /// section (DESIGN §5.2), so its prompt may tell the agent to fetch the
+    /// document. A record from before the section has page text right
+    /// after `Source:`, where a page could forge one, so it never does.
+    /// Optional, and not forward compatible, as the fields above.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub office_section: bool,
     /// What the run is for: a page summary, or a Capture Site agent draft.
     /// A record without one (every record written before site drafts) is a
     /// summary. Optional, and not forward compatible, as `answered_at`.
@@ -733,6 +740,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            office_section: false,
             kind: RunKind::Summary,
             task: None,
         }

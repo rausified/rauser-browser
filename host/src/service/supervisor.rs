@@ -673,6 +673,7 @@ impl Supervisor {
                 answered_at: None,
                 first_answered_at: None,
                 save_final: false,
+                office_section: office.is_some(),
                 kind: req.kind,
                 task: req.task,
             };
@@ -1242,8 +1243,11 @@ impl Inner {
         // A task sends none either, because its answer is a plain-text
         // report, and its Codex thread is named after its instruction.
         // Recognised again from the run's own record, so a resumed run gets
-        // the same answer; only the yes or no reaches the prompt.
-        let office_document = office::office_document(&status.url).is_some();
+        // the same answer; only the yes or no reaches the prompt. A record
+        // whose page.md predates the host's Office section never enables
+        // retrieval: a page could have forged that section there.
+        let office_document =
+            status.office_section && office::office_document(&status.url).is_some();
         let (prompt, output_schema, title) = match status.kind {
             RunKind::Summary => (
                 summary_prompt(&page_path, &launch.cwd, &launch.vocabulary, office_document),
@@ -3387,6 +3391,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            office_section: false,
             kind: RunKind::Summary,
             task: None,
         }
@@ -3699,6 +3704,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            office_section: false,
             kind: RunKind::Summary,
             task: None,
         };
@@ -3783,6 +3789,65 @@ mod tests {
         assert_eq!(view.error.as_deref(), Some("Timed out after 1 second"));
         let prompt = read(&fixture.path("count.prompt"));
         assert!(prompt.contains("legal review"), "{prompt}");
+    }
+
+    #[test]
+    fn a_resumed_office_summary_from_before_the_section_gets_no_fetch_paragraph() {
+        // A record queued by a build without the Office section has page
+        // text right after `Source:`, where a page could forge the section;
+        // only a record whose page.md this build wrote enables retrieval.
+        let mut queued = None;
+        let fixture = Fixture::seeded(
+            "/bin/cat > \"$COUNT.prompt\"\nexec /bin/sleep 30\n",
+            DEFAULT_RUN_TIMEOUT,
+            |store, cwd| {
+                let id = seed_record(
+                    store,
+                    cwd,
+                    RunState::Queued,
+                    "2026-10-26T09:00:01.000000000Z",
+                );
+                let mut status = store.status(id).unwrap();
+                status.url = OFFICE_URL.to_string();
+                status.run_timeout_secs = Some(1);
+                assert!(!status.office_section);
+                store.write_status(&status).unwrap();
+                queued = Some(id);
+            },
+        );
+        fixture.wait_finished(queued.unwrap());
+        let prompt = read(&fixture.path("count.prompt"));
+        assert!(prompt.starts_with("Summarize a web page"), "{prompt}");
+        assert!(!prompt.contains(OFFICE_SUMMARY_PARAGRAPH), "{prompt}");
+    }
+
+    #[test]
+    fn a_new_office_run_records_that_its_page_md_has_the_section() {
+        let (fixture, _seen) = recording(&[TEST_ANSWER]);
+        let req = office_request(fixture.request("a"), "");
+        let (view, _) = fixture.supervisor.start_run(req).unwrap();
+        let id = Uuid::parse_str(&view.run_id).unwrap();
+        fixture.wait_finished(id);
+        assert!(
+            fixture
+                .supervisor
+                .inner
+                .store
+                .status(id)
+                .unwrap()
+                .office_section
+        );
+        let id = fixture.start("b");
+        fixture.wait_finished(id);
+        assert!(
+            !fixture
+                .supervisor
+                .inner
+                .store
+                .status(id)
+                .unwrap()
+                .office_section
+        );
     }
 
     #[test]
