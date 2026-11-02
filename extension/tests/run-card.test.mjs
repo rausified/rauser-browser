@@ -51,7 +51,7 @@ class FakeElement {
     if (this.children.includes(document.activeElement)) document.activeElement = document.body;
     this.children = children;
   }
-  focus() { document.activeElement = this; }
+  focus(options) { document.activeElement = this; this.focusOptions = options; }
 }
 
 function walk(root, visit) {
@@ -1287,6 +1287,8 @@ test("TaskDetail polls retain the focused action without stealing focus from els
   button(page.detail.element, "Cancel").focus();
   await tick();
   assert.equal(document.activeElement, button(page.detail.element, "Cancel"));
+  // A poll's restore must not scroll the reader back to the action.
+  assert.deepEqual(button(page.detail.element, "Cancel").focusOptions, { preventScroll: true });
   const outside = new FakeElement("input");
   outside.focus();
   await tick();

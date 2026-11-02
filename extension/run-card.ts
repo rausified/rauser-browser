@@ -195,7 +195,7 @@ function renderActions(area: HTMLElement, buttons: HTMLButtonElement[]): void {
     const target = buttons.find((button) => !button.disabled && button.textContent === label)
       ?? buttons.find((button) => !button.disabled);
     if (target) {
-      target.focus();
+      target.focus({ preventScroll: true });
       pendingActionFocus.delete(area);
     }
   }
