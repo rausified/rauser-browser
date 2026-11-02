@@ -168,6 +168,19 @@ to panel or run-card text. Why: PR #242 updated the summary unit tests but left
 the macOS smoke assertion expecting the old labels; the built panel reproduced
 the mismatch on Linux even though the macOS runner itself cannot run there.
 Where: the UI change checklist in `TESTING.md` and the platform smoke assertions.
+
+
+## 2026-11-02 — Generate padded tokens in differential tests
+
+Change: extend `scripts/adapter-templates-diff.mjs`'s `genValue` to emit
+unpadded tokens and one/two-character padding within the selected bounds,
+then exercise these values through titles and aliases as well as URLs.
+Keep malformed padding among the near misses. Why: `brwr-tp1` reproduced
+padded-title failures in both engines, but the random generator uses only the
+body alphabet and cannot explore this supported grammar family. Fixed shared
+vectors now cover it; generated combinations would catch future drift with
+case modifiers, bounds and title structure. Where: the generator and
+`scripts/tests/adapter-templates-diff.test.mjs`; tracked as `brwr-ys8y`.
 ## 2026-11-02 — Give the a11y browser launch a deadline and a clear failure
 
 What: in `scripts/a11y-browser.mjs`, wrap the Playwright `launch` (and the first page open) in a bounded timeout, for example 60 s, that fails the whole `npm run test:a11y` run at once with "Chrome did not start within 60 s (CHROME_PATH=…); is another Chrome using the profile, or is the machine overloaded?", instead of letting `node --test` wait forever.

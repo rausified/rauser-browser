@@ -885,6 +885,19 @@ every result and report the generated case counts. Engine crashes, invalid
 JSON and incomplete result sets fail. Deterministic runner/probe regressions
 run in `npm run test:scripts`, including denial in required CI mode.
 
+For an additional offline comparison when child pipes are denied, write
+requests from the exported `genCase(seed, index)` in
+`scripts/adapter-templates-diff.mjs` to a JSON Lines file under `target/`.
+Escape U+2028/U+2029 in input JSON strings as the standard runner does.
+Run `target/debug/brauser adapters eval < requests.jsonl > rust.jsonl` and
+`node scripts/adapter-templates-eval.mjs < requests.jsonl > ts.jsonl`
+sequentially after building both engines, then compare parsed JSON rows.
+Split outputs on literal `\n`, not Unicode line separators that can occur
+inside JSON strings. This exercises engine agreement using regular files;
+the standard command's child-pipe check remains skipped until the external
+gate or CI runs it. Fuzz-target compilation also needs `libfuzzer-sys` in the
+Cargo cache; an uncached offline dependency is unavailable, not a passing check.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser
