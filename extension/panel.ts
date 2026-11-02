@@ -10,7 +10,7 @@ import {
   type PanelNotice,
   type WorkerStatus,
 } from "./model.js";
-import { ConfigSession, captureStateText, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
+import { ConfigSession, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
 import { evaluate } from "./adapter-templates.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
@@ -878,9 +878,7 @@ async function reloadConfig(): Promise<void> {
   if (response.config_issue || response.adapter_issue) {
     show(response.config_issue ?? response.adapter_issue ?? "Adapter policy is invalid.", true);
   }
-  else show(session.config!.capture_enabled
-    ? captureStateText(session.config!)
-    : "Capture is paused. Resume it in settings.");
+  else show(session.config!.capture_enabled ? "" : "Capture is paused. Resume it in settings.");
   if (session.status?.pause_pending && session.config?.capture_enabled &&
       !session.configIssue && !session.adapterIssue) {
     // This status can outlive the connection. The live Why hint names the
