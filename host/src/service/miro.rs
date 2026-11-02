@@ -56,50 +56,25 @@ pub fn miro_board(url: &str) -> Option<MiroBoard> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const BOARD: &str = "uXjVM0uuBLo=";
-
-    #[test]
-    fn board_urls_are_recognised_with_their_canonical_address() {
-        for url in [
-            "https://miro.com/app/board/uXjVM0uuBLo=/",
-            "https://miro.com/app/board/uXjVM0uuBLo=",
-            "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990",
-            "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764680052296737&cot=14",
-            "https://miro.com/app/board/uXjVM0uuBLo%3D/",
-            "https://miro.com/app/board/uXjVM0uuBLo=/#frame",
-        ] {
-            let found = miro_board(url).unwrap_or_else(|| panic!("not recognised: {url}"));
-            assert_eq!(found.board_id, BOARD, "{url}");
-            assert_eq!(
-                found.url,
-                format!("https://miro.com/app/board/{BOARD}/"),
-                "{url}"
-            );
-        }
-        let legacy = miro_board("https://miro.com/app/board/o9J_kpXb3Lw=/").unwrap();
-        assert_eq!(legacy.board_id, "o9J_kpXb3Lw=");
-    }
+    use serde_json::Value;
 
     #[test]
-    fn other_pages_and_origins_are_not_boards() {
-        for url in [
-            "https://miro.com/app/dashboard/",
-            "https://miro.com/app/",
-            "https://miro.com/login/",
-            "https://miro.com/app/board/uXjVM0uuBLo=/export",
-            "https://miro.com/app/board/uXjVM0uuBL=/",
-            "https://miro.com/app/board/uXjVM0uuBLo=x/",
-            "https://miro.com/app/live-embed/uXjVM0uuBLo=/",
-            "http://miro.com/app/board/uXjVM0uuBLo=/",
-            "https://www.miro.com/app/board/uXjVM0uuBLo=/",
-            "https://miro.com.evil.example/app/board/uXjVM0uuBLo=/",
-            "https://miro.com:8443/app/board/uXjVM0uuBLo=/",
-            "https://user@miro.com/app/board/uXjVM0uuBLo=/",
-            "https://miro.com/app/board/uXjVM0uuBLo%2F/",
-            "not a url",
-        ] {
-            assert_eq!(miro_board(url), None, "{url}");
+    fn every_shared_vector_matches() {
+        let vectors: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/miro-board-urls.json"))
+                .unwrap();
+        let cases = vectors["cases"].as_array().unwrap();
+        assert!(cases.len() > 15);
+        for case in cases {
+            let url = case["url"].as_str().unwrap();
+            let found = miro_board(url);
+            if !case["board"].as_bool().unwrap() {
+                assert_eq!(found, None, "{url}");
+                continue;
+            }
+            let found = found.unwrap_or_else(|| panic!("not recognised: {url}"));
+            assert_eq!(found.board_id, case["board_id"].as_str().unwrap(), "{url}");
+            assert_eq!(found.url, case["board_url"].as_str().unwrap(), "{url}");
         }
     }
 }
