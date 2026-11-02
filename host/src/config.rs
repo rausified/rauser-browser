@@ -111,6 +111,9 @@ pub const DEFAULT_CATEGORIES: [&str; 7] = [
     "news",
 ];
 
+/// The longest auto-summary dwell, in seconds.
+pub(crate) const MAX_DWELL_SECS: u32 = 3600;
+
 /// Auto-summary's defaults: on, with no dwell (every recognized artifact is
 /// summarized once its page loads).
 pub(crate) fn default_auto_summary() -> AutoSummaryConfig {
@@ -1400,6 +1403,9 @@ struct StoredConfig {
     // Absent before protocol v6: the default lists.
     #[serde(default = "default_summary_vocabulary")]
     summary_vocabulary: SummaryVocabulary,
+    // Absent before auto-summary: on, with no dwell.
+    #[serde(default = "default_auto_summary")]
+    auto_summary: AutoSummaryConfig,
     // Accept and ignore the retired M1 key. New config writes omit it.
     #[serde(default, skip_serializing, rename = "near_repeat_secs")]
     _near_repeat_secs: Option<u32>,
@@ -1556,6 +1562,7 @@ impl StoredConfig {
             _sites: None,
             strip_params: value.strip_params.clone(),
             summary_vocabulary: value.summary_vocabulary.clone(),
+            auto_summary: value.auto_summary.clone(),
             _near_repeat_secs: None,
             _agent_denylist: None,
             _agent_denylist_confirmed: None,
@@ -1583,7 +1590,7 @@ impl From<StoredConfig> for ConfigSnapshot {
             strip_params: value.strip_params,
             agent: None,
             summary_vocabulary: value.summary_vocabulary,
-            auto_summary: default_auto_summary(),
+            auto_summary: value.auto_summary,
             adapters: AdapterDocument {
                 format: value.adapters.format,
                 artifacts: value.artifacts,
@@ -2014,6 +2021,9 @@ pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
     }
     validate_vocabulary("document type", &config.summary_vocabulary.document_types)?;
     validate_vocabulary("category", &config.summary_vocabulary.categories)?;
+    if config.auto_summary.dwell_secs > MAX_DWELL_SECS {
+        bail!("auto_summary.dwell_secs must be at most {MAX_DWELL_SECS}");
+    }
     if config.capture_enabled && config.storage.is_none() {
         bail!("capture requires a selected home folder");
     }
@@ -4763,6 +4773,59 @@ mod tests {
         assert_eq!(
             reloaded.snapshot().summary_vocabulary,
             next.summary_vocabulary
+        );
+    }
+
+    #[test]
+    fn an_old_config_without_auto_summary_loads_with_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        assert_eq!(
+            store.snapshot().auto_summary,
+            AutoSummaryConfig {
+                enabled: true,
+                dwell_secs: 0
+            }
+        );
+    }
+
+    #[test]
+    fn auto_summary_round_trips_through_update_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let mut store = loaded(&path);
+        let mut next = store.snapshot().clone();
+        next.auto_summary = AutoSummaryConfig {
+            enabled: false,
+            dwell_secs: 45,
+        };
+        let revision = store.revision().to_owned();
+        store.update(next.clone(), &revision).unwrap().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[auto_summary]"), "{text}");
+        let reloaded = loaded(&path);
+        assert_eq!(reloaded.config_issue(), None);
+        assert_eq!(reloaded.snapshot().auto_summary, next.auto_summary);
+    }
+
+    #[test]
+    fn dwell_over_an_hour_is_refused() {
+        let mut config = empty_config();
+        config.auto_summary.dwell_secs = 3600;
+        validate_base(&config).unwrap();
+        config.auto_summary.dwell_secs = 3601;
+        let error = validate_base(&config).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "auto_summary.dwell_secs must be at most 3600"
         );
     }
 
