@@ -191,7 +191,6 @@ queue".
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
 - [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
-- [ ] `brwr-ppn` **Curate a worklog before copying it.** Recent and the native worklog make captured work visible, but copying a day or week currently includes every recorded artifact. Let a person prepare a concise update by selecting the artifact-day rows they want to share and previewing the result, without altering measured… _(P3)_
 - [ ] `brwr-dfd` **Container roll-up follow-ups (from PR #126 final review).** Deferred minors from the GitHub repo containers work (PR #126): (1) a rolled-up visit never advances a container row's latest_at (index.rs roll_up), a trap for future consumers; (2) a repos-only setup (no linked PR/issue rule) shows the latest sub-page title instead of… _(P3)_
 - [ ] `brwr-4ex` **Guard PR branches against concurrent pushes during review.** On PR #126, a second agent session pushed four fix commits to the branch and merged it while the opening session's codex exec review was still running. The merged head was never covered by the opener's final review. Options: a branch-claim convention (the Owner: line now exists… _(P3)_
 - [ ] `brwr-sm4` **User-editable summary instructions with a fixed core.** John is considering letting the user edit SUMMARY.md. Proposal: keep the compiled-in SUMMARY.md as the default; allow an optional user file in the home folder that replaces only a marked 'style' part (or adds guidance), while the safety rules (untrusted page, no file writes, no… _(P3)_
@@ -233,6 +232,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** New Capability. **Choose captured work for a concise update (2026-11-02).** Recent offers explicit artifact-day selection and an exact text preview/Copy, with same-day context and direct-only container measures. Recovered the unintegrated implementation and both review fixes onto the redesigned panel; refresh preserves checked identities and focus, while period/home/host changes invalidate selection. **Metrics:** 6 restored Rust and 14 panel regressions; 1,380 Rust-reported outcomes (94 explicit IPC skips), all 44 extension files pass; 2 accessibility fixtures pass and 40 browser cases explicitly skip in sandbox.
+
 - **Category:** User Experience. **Reach the task bar from Chrome and the keyboard (2026-11-02).** Ctrl/Command+Shift+8 and Ask Brauser open and focus the task bar; panel-local slash focuses it outside editable controls. Drafts stay intact, fixed notices survive startup, and only Enter or Run starts a task. **Metrics:** 4 new offline gesture cases; all 44 extension files and required gate green, with 94 IPC and 39 browser sandbox skips.
 
 - **Category:** New Capability. **Recall full task instructions without losing a draft (2026-11-02).** ArrowUp and ArrowDown browse retained user instructions, preserve edits and restore the unsent draft. Lazy service reads use full records, keep cross-page chronology and discard late replacements after typing, Reuse, submission or teardown; no second persistent history is written. **Metrics:** 51 focused cases pass; 16 new offline cases across this cycle, all 44 extension files and required/README gates green with explicit sandbox skips.
@@ -1970,3 +1971,26 @@ open again rather than falsely shipped; brwr-p71k now has a real dependency on
 that implementation. brwr-sm2's existing unresolved window/tab-scope decisions
 remain blocked. A useful next task is recovery/integration of brwr-ppn, while
 brwr-k6rg proposes source-page context for recalled instructions before Run.
+
+### Cycle observations (2026-11-02 — recover selected-work curation)
+
+The clean `e9f7408c` baseline passed the required health gate. Assigned Re-learn
+and container-review items remain externally blocked with no changed evidence.
+Recovered `brwr-ppn` from archived `f42018a3` plus `00891487`, without restoring
+old queue rows or bookkeeping. Its worklog controls fit the current panel, and
+the curation browser journey uses the shared tablist helper already on main.
+The period-overlap regression remains: Today and This week on a Monday must
+still clear selections when the user changes the period.
+
+Full required/README gates pass: 1,380 Rust-reported outcomes include 94
+explicit IPC skips; all 44 extension files pass; accessibility has 2 fixture
+passes and 40 browser sandbox skips. Complete diff review is finished. The
+driver must still run its independent review and real browser/IPC gate; local
+skips do not establish acceptance there. No remote Git or live service call
+was made. `brwr-ppn` is closed locally; `brwr-1xmv` remains blocked on real
+Chromium and `brwr-p71k` retains busy-day pagination.
+
+Product observation: capture becomes more useful when people can turn measured
+work into an intentional update. The next improvement on this surface should
+let a person reach omitted work through explicit pages, preserving unchecked
+new rows and exact preview/Copy, rather than silently expanding an update.

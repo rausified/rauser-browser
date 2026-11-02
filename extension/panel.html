@@ -260,6 +260,16 @@
               <option value="week">This week</option>
             </select>
           </div>
+          <label class="check-label"><input id="worklog-curate" type="checkbox"> Choose work to share</label>
+          <div id="worklog-choices-area" hidden>
+            <p class="page-url">Selected work includes only checked entries. Container entries show direct activity, without work inside them. Choices last while this panel is open.</p>
+            <div class="note-header">
+              <button id="worklog-select-all" type="button" class="secondary" disabled>Select all shown</button>
+              <button id="worklog-clear" type="button" class="secondary" disabled>Clear</button>
+            </div>
+            <p id="worklog-selection-status" role="status"></p>
+            <fieldset id="worklog-choices" class="worklog-choices"><legend>Work to include</legend></fieldset>
+          </div>
           <aside id="worklog-gaps" hidden aria-live="polite">
             <p id="worklog-gap-status"></p>
             <ul id="worklog-gap-list" class="plain-list"></ul>

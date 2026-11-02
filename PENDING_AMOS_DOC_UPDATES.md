@@ -338,3 +338,5 @@
   lazily from the service with no second persistent instruction store; late
   replies cannot replace typing, Reuse or a submitted task. Recall targets the
   current page; Tasks-page Reuse also reopens the original page.
+
+- **Brauser — select captured work for a concise update (2026-11-02):** Recent offers explicit artifact-day checkboxes and a plain-text preview whose contents are copied exactly. Entries retain same-day titles, links and measured activity while excluding unselected container roll-ups. Same-period refresh preserves checked identities; period/home/host changes clear them. Recovered the unintegrated worklog capability onto the redesigned panel; no source history or notes change. Local browser/IPC sandbox skips remain subject to the driver's external acceptance gate; busy-day pagination stays queued as `brwr-p71k`.
