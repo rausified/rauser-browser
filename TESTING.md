@@ -1546,6 +1546,11 @@ for the settings repair workspace. `cargo test --locked -p brauser explicit_adap
 checks full replacement, exact-byte backups, invalid/stale refusals, and recorded
 identity protection; `cargo test --locked -p brauser adapter_repair_native` checks
 the native request boundary, and protocol `wire_config` pins its narrow shape.
+`cargo test --locked -p brauser adapter_repair_original` checks that copy-out
+retains TOML-only values in unknown fields (including NaN and dates), excludes
+unrelated settings, leaves the file unchanged, and refuses a changed revision.
+The settings suite also checks retrying a repair read after another settings
+save leaves the document invalid and produces no live worker lease.
 The accessibility pages suite includes an offline real-Chrome journey through
 future-format repair, match preview, Escape/focus return and save. Browser
 execution still requires the normal unsandboxed driver/CI gate.

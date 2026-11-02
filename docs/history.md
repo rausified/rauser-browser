@@ -1166,3 +1166,19 @@ formatting/comments remain in the exact backup. Tests cover unknown formats and
 keys, malformed adapters, stale revisions/drafts, policy refusals, identity
 freeze, original backups, preview and focus return. Real Chrome runs remain the
 unsandboxed driver/CI's responsibility.
+
+### 2026-11-02 — Preserve TOML-only artifact values in adapter repair
+
+Independent review found that an unknown artifact field containing TOML `nan`
+became JSON null in the host snapshot. Re-serializing that snapshot as TOML
+failed with `unsupported unit type`, preventing the repair workspace from
+opening. Copy-out now reads the bounded, revision-checked source as TOML and
+keeps only `adapters` and `artifacts`, so unsupported values remain intact and
+unrelated settings stay out of the response. A regression covers NaN, date
+types, unchanged source bytes and a file changed since the reviewed revision.
+
+Review also reproduced repeated read conflicts when settings changed while an
+invalid adapter document kept the worker lease suspended. Opening repair now
+reloads host settings after a conflict, matching the save path, so the next
+explicit attempt uses the current revision. The offline settings regression
+requires the read fixture to enforce the real host's revision check.

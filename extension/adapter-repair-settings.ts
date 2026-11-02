@@ -120,6 +120,9 @@ export class AdapterRepairControls {
       this.heading.focus({ preventScroll: true });
     } catch (error) {
       this.show(`Could not open adapter repair: ${describe(error)}`, true);
+      if (error instanceof HostError && error.code === "conflict") {
+        await this.session.reload().catch(() => undefined);
+      }
     } finally {
       this.setBusy(false);
       this.render();

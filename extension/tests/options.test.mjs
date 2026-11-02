@@ -710,10 +710,15 @@ function installAdapterRepair({ format = 2, artifacts = [{ future: "untouched" }
       config_issue: null, agent_status: AGENT_STATUS, adapter_issue: current.repaired ? null : "adapter configuration is invalid",
       adapter_warnings: [], adopted_state: current.adoptedState,
     }),
-    get_adapter_repair: (_request, current) => ({
-      type: "adapter_repair_loaded", revision: String(current.revision),
-      original_toml: `[adapters]\nformat = ${format}\nfuture_mode = "semantic"\n# preserved values\n`,
-    }),
+    get_adapter_repair: (request, current) => {
+      if (request.expected_revision !== String(current.revision)) {
+        return { type: "error", code: "conflict", message: "configuration changed; reopen adapter repair" };
+      }
+      return {
+        type: "adapter_repair_loaded", revision: String(current.revision),
+        original_toml: `[adapters]\nformat = ${format}\nfuture_mode = "semantic"\n# preserved values\n`,
+      };
+    },
     replace_adapters: (request, current) => {
       if (request.expected_revision !== String(current.revision)) {
         return { type: "error", code: "conflict", message: "configuration changed; reopen adapter repair" };
@@ -762,6 +767,19 @@ test("repair copies preserved future values without interpreting or saving them"
   env.elements.get("adapter-repair-cancel").click();
   assert.equal(env.elements.get("adapter-repair").hidden, true);
   assert.equal(FakeElement.focused, env.elements.get("repair-adapters"));
+  assert.equal(state.requests.some(({ type }) => type === "replace_adapters" || type === "update_config"), false);
+});
+
+test("opening a stale repair refreshes settings so the next attempt can succeed", async () => {
+  const state = installAdapterRepair();
+  await openSettings();
+  // An unrelated save while adapters remain invalid publishes no live lease.
+  state.revision++;
+  env.elements.get("repair-adapters").click();
+  await until(() => /Could not open adapter repair/.test(statusText()) && idle(), "repair read conflict");
+  assert.equal(env.elements.get("adapter-repair").hidden, true);
+  await openAdapterRepair();
+  assert.equal(state.requests.filter(({ type }) => type === "get_adapter_repair").at(-1).expected_revision, "2");
   assert.equal(state.requests.some(({ type }) => type === "replace_adapters" || type === "update_config"), false);
 });
 

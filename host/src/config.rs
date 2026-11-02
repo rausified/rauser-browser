@@ -1173,18 +1173,19 @@ impl ConfigStore {
     /// Preserved adapter values, including unsupported header keys. TOML
     /// serialization preserves value types; this is not the file's formatting.
     pub(crate) fn adapter_repair_original(&self) -> Result<String> {
-        #[derive(Serialize)]
-        struct Original<'a> {
-            adapters: StoredAdapters,
-            artifacts: &'a [serde_json::Value],
+        // Read TOML directly: the wire snapshot's JSON values cannot retain
+        // non-finite floats in unknown artifact fields. Keep this read bound
+        // to the reviewed bytes even if a local editor ignores our lock.
+        let mut bytes = Vec::new();
+        File::open(&self.path)?
+            .take(MAX_CONFIG_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > MAX_CONFIG_BYTES || revision_for(&bytes) != self.revision {
+            bail!("configuration changed; reopen adapter repair");
         }
-        let text = toml::to_string_pretty(&Original {
-            adapters: StoredAdapters {
-                format: self.config.adapters.format,
-                extensions: self.adapter_extensions.clone(),
-            },
-            artifacts: &self.config.adapters.artifacts,
-        })?;
+        let mut original: toml::Table = toml::from_str(std::str::from_utf8(&bytes)?)?;
+        original.retain(|key, _| matches!(key, "adapters" | "artifacts"));
+        let text = toml::to_string_pretty(&original)?;
         if text.len() > 256 * 1024 {
             bail!("preserved adapter values exceed the repair preview limit");
         }
@@ -6289,6 +6290,44 @@ mod tests {
             assert_eq!(loaded(&path).snapshot(), &original);
             assert!(!fs::read_to_string(&path).unwrap().contains("future_mode"));
         }
+    }
+
+    #[test]
+    fn adapter_repair_original_preserves_toml_artifact_value_types() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let original = r#"
+capture_enabled = false
+strip_params = ["utm_*"]
+
+[adapters]
+format = 2
+introduced = 2026-11-02
+
+[[artifacts]]
+type = "future.item"
+origin = "https://work.example"
+updated = 2026-11-02T12:34:56Z
+threshold = nan
+"#;
+        fs::write(&path, original).unwrap();
+        let store = loaded(&path);
+        assert_eq!(store.config_issue(), None);
+        assert!(store.adapter_issue().is_some());
+        let preserved = store.adapter_repair_original().unwrap();
+        let expected: toml::Table = toml::from_str(original).unwrap();
+        let actual: toml::Table = toml::from_str(&preserved).unwrap();
+        assert_eq!(actual.len(), 2);
+        assert_eq!(actual["adapters"], expected["adapters"]);
+        let artifact = &actual["artifacts"].as_array().unwrap()[0];
+        assert_eq!(
+            artifact["updated"],
+            expected["artifacts"].as_array().unwrap()[0]["updated"]
+        );
+        assert!(artifact["threshold"].as_float().unwrap().is_nan());
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        fs::write(&path, original.replace("format = 2", "format = 3")).unwrap();
+        assert!(store.adapter_repair_original().is_err());
     }
 
     #[test]
