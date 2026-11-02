@@ -185,7 +185,7 @@ pub(super) fn catch_up_into(
         }
         return Ok(CatchUp::Rebuilding);
     }
-    let shown = |relative: &Path| log_dir.join(relative).display().to_string();
+    let shown = |relative: &Path| shown_log(&log_dir, relative);
     let limit = scan_byte_limit();
     let (mut scanned, mut logs_read, mut complete) = (0u64, 0usize, true);
     for stat in &stats {
@@ -286,6 +286,16 @@ pub(super) fn portable_path(path: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
+/// A log file as error and warning messages show it: the log dir joined
+/// with its relative path, with `/` separators on every OS, the portable
+/// form the host shows vault paths in (so a message reads the same on
+/// Windows as it does in a golden). A path `portable_path` refuses falls
+/// back to its native display.
+pub(super) fn shown_log(log_dir: &Path, relative: &Path) -> String {
+    let joined = log_dir.join(relative);
+    portable_path(&joined).unwrap_or_else(|| joined.display().to_string())
+}
+
 fn unchanged(mark: &Watermark, stat: &Stat) -> bool {
     mark.bytes == stat.checkpoint.bytes && mark.modified_ns == stat.modified_ns
 }
@@ -364,7 +374,7 @@ fn stat_logs(
     let mut files = Vec::new();
     collect_markdown(&logs, Path::new(""), 0, &mut files, false)?;
     files.sort();
-    let shown = |relative: &Path| log_dir.join(relative).display().to_string();
+    let shown = |relative: &Path| shown_log(&log_dir, relative);
     let mut stats = Vec::with_capacity(files.len());
     for relative in files {
         let Some(key) = portable_path(&relative) else {
