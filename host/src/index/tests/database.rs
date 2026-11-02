@@ -311,13 +311,36 @@ fn no_legacy_writer_remains() {
             }
         }
     }
-    let legacy = include_str!("../legacy.rs");
+    assert_legacy_writes_only_its_marker(include_str!("../legacy.rs"));
+}
+
+/// `legacy.rs`'s only write is `atomic_write` of its import marker.
+/// Compared token by token (whitespace dropped), so a CRLF checkout (the
+/// Windows CI default) or a reformat cannot fail it while it still holds.
+fn assert_legacy_writes_only_its_marker(legacy: &str) {
     for write in ["fs::write", "File::create", ".create(true)", "remove_file"] {
         assert!(!legacy.contains(write), "legacy.rs writes through {write}");
     }
-    assert_eq!(legacy.matches("atomic_write(").count(), 1);
+    let tokens = legacy.split_whitespace().collect::<String>();
+    assert_eq!(tokens.matches("atomic_write(").count(), 1);
     assert!(
-        legacy.contains("atomic_write(\n                &self.legacy_file(IMPORTED_MARKER),"),
+        tokens.contains("atomic_write(&self.legacy_file(IMPORTED_MARKER),"),
         "legacy.rs writes something other than its import marker"
     );
+}
+
+#[test]
+fn the_legacy_writer_scan_survives_a_crlf_checkout() {
+    let crlf = include_str!("../legacy.rs").replace('\n', "\r\n");
+    assert_legacy_writes_only_its_marker(&crlf);
+}
+
+#[test]
+#[should_panic(expected = "something other than its import marker")]
+fn the_legacy_writer_scan_still_catches_another_write() {
+    let other = include_str!("../legacy.rs").replace(
+        "&self.legacy_file(IMPORTED_MARKER)",
+        "&self.legacy_file(STATE_FILE)",
+    );
+    assert_legacy_writes_only_its_marker(&other);
 }
