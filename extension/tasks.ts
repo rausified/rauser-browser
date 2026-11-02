@@ -20,7 +20,7 @@ import { SELECT_KEY, parseSelectSignal, sendReuse } from "./task-handoff.js";
 import { TASK_NEEDS_HARNESS_MESSAGE, UNSUPPORTED_REQUEST_TEXT } from "./task.js";
 import {
   HISTORY_KINDS, fetchOffPageRun, filterTasks, groupTasks, listAllTasks, listTaskPage, mergeRuns, ofKind,
-  parseRunHash, runKind, type StatusFilter,
+  parseRunHash, runKind, supersededSummaries, type StatusFilter,
 } from "./task-history.js";
 
 initDiag("tasks");
@@ -56,6 +56,8 @@ const storage = chrome.storage.local;
 
 // Every task and summary run seen, newest first (mergeRuns' order).
 let runs: RunView[] = [];
+// The summary runs a newer run of their page replaced, from `runs`.
+let superseded = new Set<string>();
 let dismissed = new Set<string>();
 // The run ids in the order the list shows them, for the arrow keys.
 let order: string[] = [];
@@ -123,9 +125,12 @@ async function listFirstPages(): Promise<RunView[]> {
   return pages.flatMap((page, index) => ofKind(page.runs, HISTORY_KINDS[index]!));
 }
 
-/** A row's headline: a task's instruction, or the page a summary is of. */
+/** A row's headline: a task's instruction, or the page a summary is of
+ * (marked once a newer run of the page replaced its file). */
 function rowText(run: RunView): string {
-  return runKind(run) === "task" ? run.instruction ?? "" : `Summary · ${run.title || run.url}`;
+  if (runKind(run) === "task") return run.instruction ?? "";
+  const text = `Summary · ${run.title || run.url}`;
+  return superseded.has(run.run_id) ? `${text} · superseded` : text;
 }
 
 function shownRuns(): RunView[] {
@@ -216,6 +221,8 @@ function rowFor(run: RunView): HTMLLIElement {
  * only their text changes, so a row keeps its element and its focus; a
  * rebuild puts focus back on the selected row if a row held it. */
 function renderList(): void {
+  superseded = supersededSummaries(runs);
+  detail?.setSuperseded(selectedId !== null && superseded.has(selectedId));
   const groups = runs.length === 0 ? [] : groupTasks(shownRuns(), new Date());
   const key = runs.length === 0
     ? "empty"
@@ -350,6 +357,7 @@ function select(runId: string, focus = false): void {
     const run = runs.find((candidate) => candidate.run_id === runId)!;
     detail?.dispose();
     detail = new TaskDetail(run, detailDeps);
+    detail.setSuperseded(superseded.has(runId));
     selectedId = runId;
     detailArea.replaceChildren(detail.element);
     detail.start();
