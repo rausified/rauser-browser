@@ -164,15 +164,22 @@ export function extractReadablePage(limits: ExtractLimits): ExtractedPage {
   // tells the agent to read the document itself when the page falls short.
   const wordLines: { text: string; item: boolean }[] = [];
   if (rendered) {
+    // Text the reader sees: hidden, aria-hidden, and boxless (display:none)
+    // elements contribute nothing, and a `br` is a line break.
     const visibleText = (node: Node): string => {
       if (node.nodeType === 3) return node.nodeValue ?? "";
-      if (node.nodeType !== 1 || (node as Element).getAttribute("aria-hidden") === "true") return "";
+      if (node.nodeType !== 1) return "";
+      const element = node as Element;
+      if (element.tagName.toUpperCase() === "BR") return "\n";
+      if (element.getAttribute("aria-hidden") === "true" || element.getAttribute("hidden") !== null) return "";
+      if (!hasBoxes(element)) return "";
       return Array.from(node.childNodes).map(visibleText).join("");
     };
     for (const paragraph of Array.from(document.querySelectorAll("#PagesContainer .Paragraph"))) {
       const outline = paragraph.closest(".OutlineElement");
-      if (!outline) continue;
-      const line = visibleText(paragraph).replace(/[\u200b\ufeff]/g, "").replace(/\s+/g, " ").trim();
+      if (!outline || paragraph.closest("[hidden], [aria-hidden='true']")) continue;
+      const line = visibleText(paragraph).replace(/[\u200b\ufeff]/g, "").split("\n")
+        .map((part) => part.replace(/\s+/g, " ").trim()).filter((part) => part !== "").join("\n");
       if (line === "") continue;
       const level = Number(paragraph.getAttribute("aria-level"));
       const depth = Math.max(1, Number(outline.getAttribute("aria-level")) || 1);

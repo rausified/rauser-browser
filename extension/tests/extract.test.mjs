@@ -248,6 +248,22 @@ test("Word for the web is read from its paragraphs, not Readability's keytip pic
   ].join("\n\n"));
 });
 
+test("Word paragraphs keep their soft line breaks and drop hidden text", () => {
+  const boxless = (node) => Object.assign(node, { getClientRects: () => [] });
+  const soft = wordParagraph(["first"]);
+  soft.childNodes.splice(1, 0, tagged("br", {}), tagged("span", { class: "TextRun" }, "second"));
+  const hiddenSpan = wordParagraph(["shown"]);
+  hiddenSpan.childNodes.splice(1, 0, boxless(tagged("span", { class: "TextRun" }, " secret")));
+  const hiddenParagraph = Object.assign(wordParagraph(["gone"]), {
+    getAttribute: (name) => (name === "hidden" ? "" : name === "class" ? "Paragraph" : null),
+  });
+  const insideHidden = wordParagraph(["also gone"]);
+  const outline = insideHidden.closest(".OutlineElement");
+  insideHidden.closest = (selector) => (selector === ".OutlineElement" ? outline : selector.includes("aria-hidden") ? {} : null);
+  const { scope } = page({ rendered: true, wordParagraphs: [soft, hiddenSpan, hiddenParagraph, insideHidden] });
+  assert.equal(run(scope).content, "first\nsecond\n\nshown");
+});
+
 test("a Word frame with no paragraph text yet falls back to Readability", () => {
   const { scope, seen } = page({
     article: el("p", "Article body"), rendered: true, wordParagraphs: [wordParagraph(["\u00a0"])],
