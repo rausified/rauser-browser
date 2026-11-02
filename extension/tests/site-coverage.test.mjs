@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { coverageSentence, joinRecordedTypes, siteCoverage } = await import("../dist/site-coverage.js");
+const { coverageSentence, joinRecordedTypes, nearMiss, siteCoverage } = await import("../dist/site-coverage.js");
+const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
 const { starterOffers } = await import("../dist/starter-adapters.js");
 
 const adaptersOf = (origin, scope = []) => starterOffers(origin, scope).map((offer) => offer.adapter);
@@ -75,4 +76,84 @@ test("accounts union across scoped adapters and are dropped when any adapter is 
   assert.equal(coverageSentence(coverage, "no_rule"),
     "github.com captures repositories, pull requests and issues; this page isn't one of them.");
   assert.equal(coverageSentence(coverage, "out_of_scope"), null);
+});
+
+// Near-miss detection runs only after the full document returned no_rule.
+const GUID = "%7B8BAF1543-CDBF-4003-A48F-D4A939774FC0%7D";
+const SOURCEDOC = { sourcedoc: "{doc:uuid}" };
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
+const staleOneDrive = (origin = "https://cisco-my.sharepoint.com") => ({
+  type: "sharepoint.doc", origin, path_case: "insensitive",
+  match: [
+    { path: "/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
+    { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
+    PERSONAL_RULE,
+  ],
+  id: "sharepoint:{host}/{doc}",
+});
+const narrowed = () => ({ ...staleOneDrive("https://acme.sharepoint.com"), match: [staleOneDrive().match[0]] });
+const CUSTOM_DOC = {
+  type: "example.doc", origin: "https://docs.example", match: [{ path: "/a/Doc.aspx", query: SOURCEDOC }], id: "example.doc:{host}/{doc}",
+};
+
+function noRule(artifacts, url) {
+  const compiled = compileDocument({ format: 1, artifacts });
+  assert.equal(compiled.ok, true);
+  assert.equal(evaluate(compiled.doc, url).reason, "no_rule", url);
+  return nearMiss(artifacts, url);
+}
+
+test("a stale OneDrive starter is one current rule short of a sharing link", () => {
+  const other = { type: "work.item", origin: "https://a.com", match: [{ path: "/i/{id:int}" }], id: "work.item:{host}/{id}" };
+  const url = `https://cisco-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=${GUID}&file=x.docx`;
+  assert.deepEqual(noRule([other, staleOneDrive()], url),
+    { kind: "starter_rule", adapter: 1, label: "OneDrive for work documents", rule: SHARE_RULE });
+});
+
+test("a hand-narrowed adapter is offered exactly the starter rule for the page", () => {
+  const url = `https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=${GUID}`;
+  assert.deepEqual(noRule([narrowed()], url),
+    { kind: "starter_rule", adapter: 0, label: "SharePoint documents", rule: PERSONAL_RULE });
+});
+
+test("a starter rule the adapter's own scope rejects is not a near-miss", () => {
+  const [pr] = starterOffers("https://github.com", ["acme"]);
+  const handWritten = {
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["acme"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+    id: "github.pr:{host}/{owner}/{repo}/{number}",
+  };
+  assert.deepEqual(noRule([handWritten], "https://github.com/acme/widget/pull/4/files"),
+    { kind: "starter_rule", adapter: 0, label: "GitHub pull requests", rule: pr.adapter.match[0] });
+  assert.equal(noRule([handWritten], "https://github.com/other/widget/pull/4/files"), null);
+});
+
+test("a fixed-shape query identifier on another route is explained, with no rule", () => {
+  assert.deepEqual(noRule([CUSTOM_DOC], `https://docs.example/b/Doc.aspx?sourcedoc=${GUID}`),
+    { kind: "identifier", adapter: 0, label: "example.doc", key: "sourcedoc" });
+  const hex = { ...CUSTOM_DOC, match: [{ path: "/a", query: { id: "{doc:hex(32)}" } }] };
+  assert.deepEqual(noRule([hex], `https://docs.example/b?id=${"a".repeat(32)}`),
+    { kind: "identifier", adapter: 0, label: "example.doc", key: "id" });
+  // A short or variable hex, or a plain token, is not a fixed shape.
+  for (const ctype of ["hex(8)", "hex(32,40)", "token", "int"]) {
+    const loose = { ...CUSTOM_DOC, match: [{ path: "/a", query: { id: `{doc:${ctype}}` } }] };
+    assert.equal(noRule([loose], `https://docs.example/b?id=${"a".repeat(32)}`), null, ctype);
+  }
+});
+
+test("pages with no, a bad, or two identifiers, and path-only pages, are not near-misses", () => {
+  for (const url of [
+    "https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx",
+    "https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=not-a-guid",
+    "https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?file=x.docx",
+    `https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=${GUID}&sourcedoc=${GUID}`,
+  ]) assert.equal(noRule([narrowed()], url), null, url);
+  for (const url of [
+    "https://docs.example/b/Doc.aspx",
+    "https://docs.example/b/Doc.aspx?sourcedoc=nope",
+    `https://docs.example/b/Doc.aspx?sourcedoc=${GUID}&sourcedoc=${GUID}`,
+  ]) assert.equal(noRule([CUSTOM_DOC], url), null, url);
+  assert.equal(noRule(GITHUB, "https://github.com/search?q=work"), null, "a single-segment GitHub page");
+  assert.equal(nearMiss(GITHUB, "https://example.com/"), null, "another origin");
 });

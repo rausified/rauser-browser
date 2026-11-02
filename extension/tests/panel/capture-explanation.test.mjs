@@ -86,6 +86,88 @@ test("custom types, long account lists and mixed scope read as configured", asyn
   assert.equal(updates(page).length, 0);
 });
 
+// Near-miss offers (brwr-0t1): settings opens the review; the panel saves nothing.
+const GUID = "8BAF1543-CDBF-4003-A48F-D4A939774FC0";
+const SOURCEDOC = { sourcedoc: "{doc:uuid}" };
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
+const staleOneDrive = () => ({
+  type: "sharepoint.doc", origin: "https://acme-my.sharepoint.com", path_case: "insensitive",
+  match: [
+    { path: "/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
+    { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
+    PERSONAL_RULE,
+  ],
+  id: "sharepoint:{host}/{doc}",
+});
+
+function reviewOpened(page) {
+  assert.equal(page.created.length, 1, "one new tab");
+  const { url } = page.created[0];
+  const prefix = "chrome-extension://test-id/options.html#adapter-review=";
+  assert.ok(url.startsWith(prefix), url);
+  assert.equal(url.toLowerCase().includes(GUID.toLowerCase()), false, "no document ID in the hand-off");
+  assert.equal(url.includes("/u/"), false, "no page path in the hand-off");
+  assert.equal(page.calls("openOptionsPage"), 0);
+  assert.equal(updates(page).length, 0, "the panel never saves rules");
+  assert.equal(page.sent("save_config").length, 0);
+  return JSON.parse(decodeURIComponent(url.slice(prefix.length)));
+}
+
+test("a stale OneDrive starter offers the current rule for review in settings", async () => {
+  const adapter = staleOneDrive();
+  const page = await explained(
+    `https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc={${GUID}}`, withAdapters([adapter]));
+  assert.equal(page.el("capture-explanation-text").textContent,
+    "acme-my.sharepoint.com captures OneDrive for work documents; this page isn't one of them. " +
+    "The current OneDrive for work documents starter has a rule for pages like this one.");
+  assert.equal(page.el("capture-explanation-action").textContent, "Review rule");
+  page.el("capture-explanation-action").click();
+  await until(() => page.created.length > 0, "the settings tab");
+  assert.deepEqual(reviewOpened(page), { adapter: [adapter.origin, adapter.type, adapter.id], rule: SHARE_RULE });
+});
+
+test("a hand-narrowed SharePoint adapter is offered only the starter rule for the page", async () => {
+  const narrowed = { ...staleOneDrive(), origin: "https://acme.sharepoint.com", match: [staleOneDrive().match[0]] };
+  const page = await explained(
+    `https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc={${GUID}}`, withAdapters([narrowed]));
+  assert.match(page.el("capture-explanation-text").textContent,
+    / The current SharePoint documents starter has a rule for pages like this one\.$/);
+  page.el("capture-explanation-action").click();
+  await until(() => page.created.length > 0, "the settings tab");
+  assert.deepEqual(reviewOpened(page).rule, PERSONAL_RULE);
+});
+
+test("a query identifier on an uncovered route is explained and opens Edit rules", async () => {
+  const custom = { type: "example.doc", origin: "https://docs.example", match: [{ path: "/a/Doc.aspx", query: SOURCEDOC }], id: "example.doc:{host}/{doc}" };
+  const page = await explained(`https://docs.example/b/Doc.aspx?sourcedoc={${GUID}}`, withAdapters([custom]));
+  assert.equal(page.el("capture-explanation-text").textContent,
+    "docs.example captures example.doc; this page isn't one of them. " +
+    "This page has a example.doc ID (sourcedoc), but its address is not one of the routes the rules cover.");
+  assert.equal(page.el("capture-explanation-action").textContent, "Edit rules");
+  page.el("capture-explanation-action").click();
+  await until(() => page.created.length > 0, "the settings tab");
+  assert.deepEqual(reviewOpened(page), { adapter: [custom.origin, custom.type, custom.id], rule: null });
+});
+
+for (const [name, url, config] of [
+  ["Doc.aspx with no sourcedoc", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx", null],
+  ["a non-GUID sourcedoc", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=nope", null],
+  ["a file=-only link", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?file=x.docx", null],
+  ["two sourcedoc values", `https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc={${GUID}}&sourcedoc={${GUID}}`, null],
+  ["a single-segment GitHub page", "https://github.com/search?q=work", GITHUB_SCOPED],
+  ["a GitHub repository outside scope", "https://github.com/personal/repo", GITHUB_SCOPED],
+]) {
+  test(`${name} is not a near-miss and keeps Open settings`, async () => {
+    const page = await explained(url, config ?? withAdapters([staleOneDrive()]));
+    assert.doesNotMatch(page.el("capture-explanation-text").textContent, /starter has a rule|ID \(/);
+    assert.equal(page.el("capture-explanation-action").textContent, "Open settings");
+    page.el("capture-explanation-action").click();
+    assert.equal(page.calls("openOptionsPage"), 1);
+    assert.equal(page.created.length, 0);
+  });
+}
+
 test("an unknown site's explanation opens the existing Capture Site review", async () => {
   const page = await install({
     tab: { id: 1, url: JIRA_URL, title: "Issue" }, config: CAPTURING, workerStatus: LIVE_POLICY,

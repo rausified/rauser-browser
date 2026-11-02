@@ -5,7 +5,9 @@
 // consumes it, so it has no Rust twin.
 
 import type { AdapterObject } from "./adapter-review.js";
-import { matchingStarter } from "./starter-adapters.js";
+import { canonicalCapture, compileDocument, evaluate } from "./adapter-templates.js";
+import { canonicalJson } from "./capture-site-handoff.js";
+import { matchingStarter, starterRuleAddition, type AdapterRule } from "./starter-adapters.js";
 
 // The confirmation line names only what is actually checked, in this fixed
 // order, so the privacy-boundary scope line is never wider than the save.
@@ -115,4 +117,84 @@ export function coverageSentence(coverage: Coverage, reason: "no_rule" | "out_of
   const captures = `${coverage.host} captures ${joinRecordedTypes(coverage.types)}${forAccounts}`;
   if (reason === "no_rule") return `${captures}; this page isn't one of them.`;
   return accounts.length ? `${captures}; this page belongs to another account.` : null;
+}
+
+/** Why a page the rules missed is close to an artifact: the adapter's
+ * current starter has a rule that would match it (offered for review), or
+ * the page carries a rule's fixed-shape query identifier on a route no rule
+ * covers (explained only). `adapter` indexes the lease's adapters. */
+export type NearMiss =
+  | { kind: "starter_rule"; adapter: number; label: string; rule: AdapterRule }
+  | { kind: "identifier"; adapter: number; label: string; key: string };
+
+const QUERY_CAPTURE = /^\{[A-Za-z_][A-Za-z0-9_]*:([^{}]+)\}$/;
+const FIXED_HEX = /^hex\((\d+)(?:,(\d+))?\)$/;
+
+/** The ctype of a query value that is exactly one required capture of a
+ * fixed shape, the anchor definition of adapter-templates.md §4.1: `uuid`, or
+ * `hex` whose bounds fix its length at 32 or more. */
+function fixedShapeCapture(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const ctype = QUERY_CAPTURE.exec(value)?.[1];
+  if (ctype === undefined) return null;
+  const base = ctype.split("|")[0]!;
+  if (base === "uuid") return ctype;
+  const hex = FIXED_HEX.exec(base);
+  if (!hex) return null;
+  const min = Number(hex[1]);
+  const max = hex[2] === undefined ? min : Number(hex[2]);
+  return min === max && min >= 32 ? ctype : null;
+}
+
+function matchesAlone(adapter: AdapterObject, url: string): boolean {
+  const compiled = compileDocument({ format: 1, artifacts: [adapter] });
+  return compiled.ok && evaluate(compiled.doc, url).match;
+}
+
+/** The first near-miss for `url`, which the caller has already found matches
+ * no rule of the full document. No site list is hard-coded: starter rules
+ * come from the starter catalog, and identifiers from the adapters' own
+ * query captures. Path-only identity is never guessed. */
+export function nearMiss(artifacts: readonly AdapterObject[], url: string): NearMiss | null {
+  const adapters = originAdapters(artifacts, url);
+  // 1. A rule of the adapter's current starter that it lacks, which alone
+  // would match the page under the adapter's own scope. The full document
+  // matched no rule, so it would be the page's first match once saved.
+  for (const { adapter, index } of adapters) {
+    const starter = matchingStarter(adapter);
+    const current = starter?.adapter;
+    if (!starter || !current || !Array.isArray(current.match) || !Array.isArray(adapter.match)) continue;
+    const saved = new Set((adapter.match as unknown[]).map(canonicalJson));
+    for (const rule of current.match as AdapterRule[]) {
+      if (saved.has(canonicalJson(rule))) continue;
+      const addition = starterRuleAddition(adapter, rule);
+      if (addition && matchesAlone(addition.adapter, url)) {
+        return { kind: "starter_rule", adapter: index, label: starter.label, rule };
+      }
+    }
+  }
+  // 2. A rule's fixed-shape query identifier, present exactly once and valid.
+  let query: URLSearchParams;
+  try {
+    query = new URL(url).searchParams;
+  } catch {
+    return null;
+  }
+  for (const { adapter, index } of adapters) {
+    if (!Array.isArray(adapter.match)) continue;
+    for (const rule of adapter.match as unknown[]) {
+      const table = rule && typeof rule === "object" && !Array.isArray(rule)
+        ? (rule as Record<string, unknown>).query
+        : undefined;
+      if (!table || typeof table !== "object" || Array.isArray(table)) continue;
+      for (const [key, value] of Object.entries(table as Record<string, unknown>)) {
+        const ctype = fixedShapeCapture(value);
+        const values = query.getAll(key);
+        if (ctype !== null && values.length === 1 && canonicalCapture(ctype, values[0]!) !== null) {
+          return { kind: "identifier", adapter: index, label: typeNoun(adapter) ?? String(adapter.type), key };
+        }
+      }
+    }
+  }
+  return null;
 }
