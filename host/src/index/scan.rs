@@ -107,7 +107,9 @@ impl LogScan {
             if !text.starts_with(LOG_HEADER) {
                 continue;
             }
-            for (line, event) in parse_log_lines(&text) {
+            for (line, event) in parse_log_lines(&text, strict)
+                .with_context(|| format!("inspecting artifact log {}", shown(relative)))?
+            {
                 scan.ingest(event, (relative.clone(), line));
             }
             for (number, line) in text.lines().enumerate() {
@@ -224,23 +226,37 @@ pub(super) fn collect_markdown(
 
 #[cfg(test)]
 pub(super) fn parse_log(text: &str) -> Vec<CachedEvent> {
-    parse_log_lines(text)
+    parse_log_lines(text, false)
+        .unwrap()
         .into_iter()
         .map(|(_, event)| event)
         .collect()
 }
 
-/// Owned events with their zero-based line numbers.
-pub(super) fn parse_log_lines(text: &str) -> Vec<(u64, CachedEvent)> {
+/// Owned events with their zero-based line numbers. `strict` refuses a
+/// damaged owned marker instead of skipping it.
+pub(super) fn parse_log_lines(text: &str, strict: bool) -> Result<Vec<(u64, CachedEvent)>> {
     let mut output = Vec::new();
     let mut previous = "";
     for (number, line) in text.lines().enumerate() {
-        if let Some(event) = parse_marker_event(line, previous) {
+        let event = parse_marker_event(line, previous);
+        let marker_start = concat!("<!-- ", crate::namespace!(), ":visit");
+        if strict
+            && line.contains(marker_start)
+            && (line.matches(marker_start).count() != 1
+                || (event.is_none() && parse_overflow_marker(line).is_none()))
+        {
+            // Indexing tolerates torn/invalid entries so later completed
+            // appends can recover them. An identity review must never turn
+            // the same omission into an apparently complete, approvable plan.
+            bail!("damaged owned log marker at line {}", number + 1);
+        }
+        if let Some(event) = event {
             output.push((number as u64, event));
         }
         previous = line;
     }
-    output
+    Ok(output)
 }
 
 /// Overflow is system evidence, never an artifact, visit, duration or open.

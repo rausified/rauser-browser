@@ -7,7 +7,7 @@
 //! and `markdown::wikilink`, so it runs unchanged against an older
 //! `markdown.rs`.
 
-use crate::answer::{Entities, Importance, SummaryAnswer};
+use crate::answer::{Entities, Importance, Metadata, ReadScope, Reference, SummaryAnswer};
 use crate::markdown::{LinkStyle, inline, neutralize_remote, wikilink, yaml_string};
 use crate::presentation::plain_line;
 use crate::summary::{SessionLink, SummaryDocument, owned_summary, render_summary};
@@ -184,6 +184,23 @@ struct Case {
 /// A summary file of `url` whose agent fields and title are all `input`.
 fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
     let answer = SummaryAnswer {
+        overview: input.into(),
+        key_points: vec![input.into()],
+        keywords: vec![input.into()],
+        metadata: Metadata {
+            authors: vec![input.into()],
+            owner: input.into(),
+            status: input.into(),
+            created: input.into(),
+            updated: input.into(),
+            version: input.into(),
+        },
+        references: vec![Reference {
+            title: input.into(),
+            url: format!("https://e.example/{input}"),
+        }],
+        read_scope: Some(ReadScope::Partial),
+        access: crate::answer::Access::Ok,
         document_type: input.into(),
         category: input.into(),
         entities: Entities {
@@ -205,6 +222,9 @@ fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
         LinkStyle::Relative => "[Page note](../notes/e-example-a.md)".to_owned(),
         LinkStyle::Wikilink => wikilink("notes/e-example-a", Some("Page note")),
     };
+    let mut incoming = crate::summary::incoming::example();
+    incoming.source.title = input.into();
+    incoming.source.url = url.into();
     render_summary(
         &SummaryDocument {
             key: &key,
@@ -216,6 +236,7 @@ fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
             session: SessionLink::CodexThread(input.into()),
             note_link,
             answer: &answer,
+            incoming: &[incoming],
         },
         style,
     )

@@ -2,6 +2,7 @@ use super::*;
 
 fn page_summary(url: &str, occurred_at: &str) -> crate::summary::PageSummary {
     crate::summary::PageSummary {
+        overview: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         url: url.into(),
         title: "A good discussion".into(),
@@ -176,6 +177,7 @@ fn a_summary_joins_the_m1_legacy_visit_of_the_same_url() {
     );
 
     let event = SummaryEvent {
+        overview: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         artifact_id: artifact_id.clone(),
         artifact_type: "web.page".into(),
@@ -223,6 +225,7 @@ fn forged_summary_markers_are_ignored() {
     let url = "https://news.ycombinator.com/item?id=50251344";
     let url_hash = sha256_hex(url.as_bytes());
     let event = SummaryEvent {
+        overview: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         artifact_id:
             "web:evil.example/0000000000000000000000000000000000000000000000000000000000000000"
@@ -255,6 +258,7 @@ fn forged_summary_markers_are_ignored() {
 
 fn web_summary(url: &str, at: &str) -> SummaryEvent {
     SummaryEvent {
+        overview: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         artifact_id: crate::summary::web_page_artifact_id(url).unwrap(),
         artifact_type: "web.page".into(),
@@ -558,6 +562,7 @@ fn worklog_keeps_measures_when_a_summary_lands_on_an_already_measured_artifact()
     index.record_activity(&event, &[]).unwrap();
     index
         .record_summary(&SummaryEvent {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: event.artifact_id.clone(),
             artifact_type: event.artifact_type.clone(),
@@ -593,7 +598,7 @@ fn worklog_keeps_measures_when_a_summary_lands_on_an_already_measured_artifact()
     assert!(text.contains("focused 2 min"), "{text}");
 }
 
-fn summary_marker(event: &SummaryEvent) -> String {
+pub(super) fn summary_marker(event: &SummaryEvent) -> String {
     format!(
         "<!-- brauser:visit id={} url={} at={} kind=summary data={} -->\n",
         sha256_hex(event.event_id.as_bytes()),
@@ -952,4 +957,62 @@ fn reusing_a_summary_event_id_with_other_content_bails() {
         index.artifact(&first.artifact_id).unwrap().unwrap().title,
         "A good discussion"
     );
+}
+
+/// Ported from origin/main 99714a7 onto format 9: the overview is stored in
+/// the event body (absent when the event had none, so older bodies are
+/// byte-identical), survives reopen without migration and survives reindex.
+#[test]
+fn old_and_new_summary_overviews_survive_cache_reopen_and_reindex() {
+    for overview in [None, Some("The release plan and its tradeoffs.".to_owned())] {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        let mut event = web_summary(url, "2026-10-26T18:00:00Z");
+        event.overview = overview;
+        let dir = root.path().join("log/2026/10");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-10-26.md"),
+            format!("{LOG_HEADER}\n{}", summary_marker(&event)),
+        )
+        .unwrap();
+        let body_query = format!(
+            "SELECT body FROM brauser_events WHERE event_id = '{}'",
+            event.event_id
+        );
+        let first = index(&root, &cache);
+        first.reindex().unwrap();
+        let body = sql::sql_rows(&first.database_path(), &body_query);
+        let [row] = body.as_slice() else {
+            panic!("one stored body: {body:?}")
+        };
+        let text = sql::display(&row[0]);
+        // Absence keeps the pre-overview body shape.
+        assert_eq!(
+            text.contains("\"overview\""),
+            event.overview.is_some(),
+            "{text}"
+        );
+        drop(first);
+        let reopened = index(&root, &cache);
+        assert_eq!(
+            reopened.summary_for(&event.artifact_id).unwrap(),
+            Some(expected_view(&event))
+        );
+        assert_eq!(
+            sql::sql_rows(&reopened.database_path(), &body_query),
+            body,
+            "stored bodies need no migration"
+        );
+        reopened.reindex().unwrap();
+        assert_eq!(
+            reopened.summary_for(&event.artifact_id).unwrap(),
+            Some(expected_view(&event))
+        );
+        assert_eq!(
+            reopened.recent(None, None, 32).unwrap().0[0].summary,
+            Some(expected_view(&event))
+        );
+    }
 }

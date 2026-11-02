@@ -1,6 +1,6 @@
 use super::*;
 
-fn overflow_line(id: &str, marker: &OverflowMarker) -> String {
+pub(super) fn overflow_line(id: &str, marker: &OverflowMarker) -> String {
     format!(
         "{MARKER_PREFIX}{} url={} at={} kind=overflow data={} -->\n",
         sha256_hex(id.as_bytes()),

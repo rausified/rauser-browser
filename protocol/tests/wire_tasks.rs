@@ -55,6 +55,25 @@ fn task_view() -> Value {
 }
 
 #[test]
+fn capture_truncation_is_an_optional_boolean_on_start_task() {
+    let mut value = start_task();
+    let Request::StartTask(legacy) = assert_request_round_trips("StartTaskRequest", &value) else {
+        panic!("expected start_task");
+    };
+    assert_eq!(legacy.capture_truncated, None);
+    for flag in [true, false] {
+        value["capture_truncated"] = json!(flag);
+        let Request::StartTask(request) = assert_request_round_trips("StartTaskRequest", &value)
+        else {
+            panic!("expected start_task");
+        };
+        assert_eq!(request.capture_truncated, Some(flag));
+    }
+    value["capture_truncated"] = json!(1);
+    assert!(serde_json::from_value::<Request>(value).is_err());
+}
+
+#[test]
 fn start_task_round_trips_and_is_schema_valid() {
     let parsed = assert_request_round_trips("StartTaskRequest", &start_task());
     let Request::StartTask(value) = &parsed else {

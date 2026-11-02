@@ -49,7 +49,9 @@ import {
   matchingStarter,
   parseGitHubOrganizations,
   starterOffers,
+  starterRuleAddition,
   starterRuleUpdate,
+  type AdapterRule,
   withContainerLinks,
   type StarterOffer,
 } from "./starter-adapters.js";
@@ -106,6 +108,9 @@ const revealAgentEnvButton = element<HTMLButtonElement>("reveal-agent-env");
 const vocabularyTypes = element<HTMLTextAreaElement>("vocab-types");
 const vocabularyCategories = element<HTMLTextAreaElement>("vocab-categories");
 const saveVocabularyButton = element<HTMLButtonElement>("save-vocabulary");
+const autoSummaryEnabled = element<HTMLInputElement>("auto-summary-enabled");
+const autoSummaryDwell = element<HTMLInputElement>("auto-summary-dwell");
+const saveAutoSummaryButton = element<HTMLButtonElement>("save-auto-summary");
 
 let picker: { path: string; token: string } | null = null;
 let busy = false;
@@ -117,6 +122,7 @@ let selectedHarnessId: HarnessId | null = null;
 // Fields the user has typed in keep their text across config renders.
 let timeoutEdited = false;
 let vocabularyEdited = false;
+let autoSummaryEdited = false;
 // Setup instructions while the last service request found no service.
 let serviceProblem: string | null = null;
 type AdapterEdit =
@@ -254,6 +260,8 @@ function updateControls(): void {
   removeHarnessButton.disabled = !idle || !session.config?.agent;
   revealAgentEnvButton.disabled = !idle;
   saveVocabularyButton.disabled = !idle || session.configIssue !== null;
+  saveAutoSummaryButton.disabled = !idle || session.configIssue !== null;
+  autoSummaryDwell.disabled = !autoSummaryEnabled.checked;
   // The knowledge base is stored with the home folder, so it needs one.
   const folderReady = idle && !repairing && !!session.config?.storage;
   chooseKnowledgeBaseButton.disabled = !folderReady;
@@ -305,6 +313,11 @@ function renderAgent(): void {
   harnessState.textContent = serviceProblem ?? state.join(" ");
   harnessState.classList.toggle("warning", serviceProblem !== null);
   if (!timeoutEdited) timeoutInput.value = String(agent ? Math.max(1, Math.round(agent.timeout_secs / 60)) : 10);
+  if (!autoSummaryEdited && config) {
+    autoSummaryEnabled.checked = config.auto_summary.enabled;
+    autoSummaryDwell.value = String(config.auto_summary.dwell_secs);
+    autoSummaryDwell.disabled = !config.auto_summary.enabled;
+  }
   if (!vocabularyEdited && config) {
     vocabularyTypes.value = config.summary_vocabulary.document_types.join("\n");
     vocabularyCategories.value = config.summary_vocabulary.categories.join("\n");
@@ -442,7 +455,7 @@ function renderStarterGallery(): void {
   const compatible = origins.flatMap((origin) => starterOffers(origin, githubScope())
     .map((offer) => ({ origin, offer })));
   if (!compatible.length) {
-    addText(starterGallery, "p", "Enter a Jira Cloud, SharePoint/OneDrive, or GitHub site address above to see starter drafts.");
+    addText(starterGallery, "p", "Enter an Atlassian Cloud (Jira or Confluence), SharePoint/OneDrive, GitHub, or Miro site address above to see starter drafts.");
     return;
   }
   let githubScopeRendered = false;
@@ -835,6 +848,77 @@ function beginStarterUpdate(index: number): void {
       example: { ...update.adapter, match: [added[0]] },
     },
   );
+}
+
+/** Open a saved starter adapter in the editor with one rule of its current
+ * starter appended, for the page the side panel offered it on. Saving is the
+ * usual edit of that adapter. */
+function beginStarterRuleAddition(index: number, rule: AdapterRule): void {
+  if (!session.config || busy) return;
+  const adapter = session.config.adapters.artifacts[index];
+  const addition = adapter ? starterRuleAddition(adapter, rule) : null;
+  const label = adapter ? matchingStarter(adapter)?.label : undefined;
+  if (!adapter || !addition || label === undefined) return;
+  openAdapterEditor(
+    { kind: "existing", identity: adapterIdentity(adapter)!, snapshot: adapterSnapshot(adapter), starterUpdate: true },
+    addition.adapter,
+    `Add a rule to ${adapterLabel(adapter, index)}`,
+    {
+      line: `Adds 1 rule from the current ${label} starter for the page you were on:`,
+      items: addition.added.map((added) => `Adds ${ruleDescription(added, null)}`),
+      example: { ...addition.adapter, match: [addition.added[0]] },
+    },
+  );
+}
+
+const ADAPTER_REVIEW_HASH = /^#adapter-review=(.{1,4096})$/;
+
+/** The `#adapter-review=` hand-off from the side panel's near-miss offer:
+ * an adapter identity and a starter rule (or null), never a page address. */
+function adapterReviewHandoff(hash: string): { identity: string; rule: AdapterRule | null } | null {
+  const match = ADAPTER_REVIEW_HASH.exec(hash);
+  if (!match) return null;
+  try {
+    const value: unknown = JSON.parse(decodeURIComponent(match[1]!));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const { adapter, rule } = value as Record<string, unknown>;
+    if (!Array.isArray(adapter) || adapter.length !== 3 || !adapter.every((part) => typeof part === "string")) return null;
+    if (rule !== null && (!rule || typeof rule !== "object" || Array.isArray(rule))) return null;
+    return { identity: JSON.stringify(adapter), rule: rule as AdapterRule | null };
+  } catch {
+    return null;
+  }
+}
+
+/** Open the review the side panel offered for a page its rules just miss.
+ * Only an existing review opens: the current starter update when the rule is
+ * part of it, a one-rule starter addition, or Edit and preview. Nothing saves
+ * until the editor's Save. The hash is cleared so a reload does not reopen. */
+function openHandedOffAdapterReview(): void {
+  const hash = typeof location === "undefined" ? "" : location.hash;
+  if (!hash.startsWith("#adapter-review=")) return;
+  if (typeof history !== "undefined") history.replaceState(null, "", `${location.pathname}${location.search}`);
+  const handoff = adapterReviewHandoff(hash);
+  if (!handoff || busy || !session.config) return;
+  const index = session.config.adapters.artifacts.findIndex((adapter) => adapterIdentity(adapter) === handoff.identity);
+  const adapter = session.config.adapters.artifacts[index];
+  if (!adapter) {
+    show("This site's rules changed since the panel offered this. Open the panel on the page again.", true);
+    return;
+  }
+  if (handoff.rule === null) {
+    beginAdapterEdit(index);
+    return;
+  }
+  const key = canonicalJson(handoff.rule);
+  if (starterRuleUpdate(adapter)?.added.some((rule) => canonicalJson(rule) === key)) {
+    beginStarterUpdate(index);
+  } else if (starterRuleAddition(adapter, handoff.rule)) {
+    beginStarterRuleAddition(index, handoff.rule);
+  } else {
+    show("This rule can no longer be added here; edit the rules by hand.", true);
+    beginAdapterEdit(index);
+  }
 }
 
 function focusAdapterOpener(opener: HTMLElement | null): void {
@@ -1444,6 +1528,32 @@ async function saveVocabulary(): Promise<void> {
   }
 }
 
+async function saveAutoSummary(): Promise<void> {
+  if (busy || !session.config || session.configIssue) return;
+  const text = autoSummaryDwell.value.trim();
+  const dwell = /^\d+$/.test(text) ? Number(text) : NaN;
+  if (!Number.isInteger(dwell) || dwell > 3600) {
+    show("Enter a wait of 0 to 3600 whole seconds.", true);
+    return;
+  }
+  busy = true;
+  updateControls();
+  try {
+    await withConfigMutationLock(() => session.saveConfig({
+      ...session.config!,
+      auto_summary: { enabled: autoSummaryEnabled.checked, dwell_secs: dwell },
+    }, null));
+    autoSummaryEdited = false;
+    show("Automatic summaries saved.");
+  } catch (error) {
+    show(`Could not save automatic summaries: ${describe(error)}`, true);
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    renderConfig();
+  }
+}
+
 async function removeHarness(): Promise<void> {
   if (busy || !session.config?.agent) return;
   busy = true;
@@ -1478,6 +1588,12 @@ testButton.addEventListener("click", () => void testHarness());
 removeHarnessButton.addEventListener("click", () => void removeHarness());
 revealAgentEnvButton.addEventListener("click", () => void revealAgentEnv());
 saveVocabularyButton.addEventListener("click", () => void saveVocabulary());
+saveAutoSummaryButton.addEventListener("click", () => void saveAutoSummary());
+autoSummaryEnabled.addEventListener("change", () => {
+  autoSummaryEdited = true;
+  autoSummaryDwell.disabled = !autoSummaryEnabled.checked;
+});
+autoSummaryDwell.addEventListener("input", () => { autoSummaryEdited = true; });
 timeoutInput.addEventListener("input", () => { timeoutEdited = true; });
 vocabularyTypes.addEventListener("input", () => { vocabularyEdited = true; });
 vocabularyCategories.addEventListener("input", () => { vocabularyEdited = true; });
@@ -1578,5 +1694,6 @@ void (async () => {
     updateControls();
   }
   if (session.connected) await openHandedOffDraft();
+  if (session.connected) openHandedOffAdapterReview();
   if (session.connected) await refreshAgentEnv();
 })();

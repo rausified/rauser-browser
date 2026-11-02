@@ -401,73 +401,7 @@
     }
   },
   "relearn": {
-    "ok": {
-      "evidence": [
-        {
-          "record_key": {
-            "kind": "artifact",
-            "value": "work:example.com/M1"
-          },
-          "url": {
-            "stripped_params": [
-              "utm_source"
-            ],
-            "url": "https://example.com/items/M1"
-          }
-        },
-        {
-          "record_key": {
-            "kind": "artifact",
-            "value": "work:example.com/M1"
-          },
-          "url": {
-            "stripped_params": [],
-            "url": "https://example.com/items/M1"
-          }
-        },
-        {
-          "record_key": {
-            "kind": "artifact",
-            "value": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9"
-          },
-          "url": {
-            "stripped_params": null,
-            "url": "https://docs.example.org/guide"
-          }
-        },
-        {
-          "record_key": {
-            "kind": "artifact",
-            "value": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9"
-          },
-          "url": {
-            "stripped_params": null,
-            "url": "https://docs.example.org/guide"
-          }
-        },
-        {
-          "record_key": {
-            "kind": "artifact",
-            "value": "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c"
-          },
-          "url": {
-            "stripped_params": null,
-            "url": "https://news.example.org/item?id=7"
-          }
-        },
-        {
-          "record_key": {
-            "kind": "artifact",
-            "value": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9"
-          },
-          "url": {
-            "stripped_params": null,
-            "url": "https://docs.example.org/guide"
-          }
-        }
-      ],
-      "revision": "5554c119fd14103711eba0a7349bbcf49eb26c4f661b96c0b38f54ea07cf98aa"
-    }
+    "error": "inspecting artifact log log/2026/10/2026-10-18.md: damaged owned log marker at line 8"
   },
   "tables": {
     "artifacts": [

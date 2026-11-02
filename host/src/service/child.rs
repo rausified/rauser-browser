@@ -88,15 +88,24 @@ impl LineChild {
     /// Spawn `command` with all three standard streams piped, through
     /// `slot`. After [`ProcessSlot::kill`] this fails with
     /// [`io::ErrorKind::Interrupted`].
-    pub fn spawn(slot: &ProcessSlot, mut command: Command) -> io::Result<Self> {
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+    pub fn spawn(slot: &ProcessSlot, command: Command) -> io::Result<Self> {
         let program = Path::new(command.get_program())
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
+        Self::spawn_as(slot, command, &program)
+    }
+
+    /// [`LineChild::spawn`], recording `program` in diagnostics instead of
+    /// the binary's file name. A harness's resolved binary can be named for
+    /// its version (Claude Code installs `~/.local/bin/claude` as a link to
+    /// `versions/2.1.316`), so runners pass the harness's own name.
+    pub fn spawn_as(slot: &ProcessSlot, mut command: Command, program: &str) -> io::Result<Self> {
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let program = program.to_owned();
         let mut child = match slot.spawn(&mut command) {
             Ok(child) => child,
             Err(error) => {
@@ -395,6 +404,18 @@ mod tests {
             })
             .flatten()
             .collect()
+    }
+
+    #[test]
+    fn spawn_as_records_the_name_it_is_given() {
+        let slot = ProcessSlot::default();
+        let child = LineChild::spawn_as(&slot, sh("true"), "claude").unwrap();
+        assert_eq!(child.trace.program, "claude");
+        collect(&child);
+        let _ = child.wait();
+        // spawn still names the binary.
+        let child = LineChild::spawn(&slot, sh("true")).unwrap();
+        assert_eq!(child.trace.program, "sh");
     }
 
     #[test]

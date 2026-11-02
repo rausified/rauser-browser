@@ -28,6 +28,7 @@ use super::open::{list_agent_env, open_target};
 use super::paths::{self, ServicePaths};
 use super::record::{TaskStatus, check_start_run, check_task_instruction};
 use super::setup;
+use super::shell_env;
 use super::supervisor::{CwdCheck, EnvSource, ListQuery, ServiceOptions, StartRun, Supervisor};
 use crate::capture_site::exact_origin;
 use crate::config::{ConfigLock, ConfigStore, SUMMARY_TIMEOUT_SECS, default_summary_vocabulary};
@@ -526,7 +527,7 @@ impl Server {
             return error(&id, ErrorCode::InvalidRequest, message);
         }
         let setup = match kind {
-            RunKind::Summary => self.run_setup(value.harness),
+            RunKind::Summary => self.run_setup(value.harness, &value.url),
             RunKind::SiteDraft => self.site_draft_setup(value.harness),
             RunKind::Task => self.task_setup(value.harness),
         };
@@ -544,9 +545,11 @@ impl Server {
             protected: setup.protected,
         });
         match self.supervisor.start_run(StartRun {
+            incoming: setup.incoming,
             kind,
             url: value.url,
             title: value.title,
+            capture_truncated: value.capture_truncated.unwrap_or(false),
             content: value.content,
             selection: value.selection,
             harness: Some(setup.harness),
@@ -581,7 +584,13 @@ impl Server {
             }
         };
         let mut config = lock(&self.config).reopen();
-        match setup::set_up(&mut config, self.supervisor.registry(), &value, env) {
+        match setup::set_up(
+            &mut config,
+            self.supervisor.registry(),
+            &value,
+            env,
+            &shell_env::login_shell_names,
+        ) {
             Ok((config, revision)) => Response::ConfigUpdated(ConfigUpdated {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -601,6 +610,7 @@ impl Server {
     fn run_setup(
         &self,
         requested: Option<HarnessId>,
+        url: &str,
     ) -> Result<RunSetup, (ErrorCode, &'static str)> {
         let mut config = lock(&self.config);
         let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
@@ -611,6 +621,7 @@ impl Server {
             timeout,
             vocabulary: config.snapshot().summary_vocabulary.clone(),
             protected: Vec::new(),
+            incoming: super::section::recorded_incoming(&config, url),
         })
     }
 
@@ -633,6 +644,7 @@ impl Server {
             timeout: timeout.map(task_timeout),
             vocabulary: config.snapshot().summary_vocabulary.clone(),
             protected,
+            incoming: Vec::new(),
         })
     }
 
@@ -654,6 +666,7 @@ impl Server {
             timeout,
             vocabulary: default_summary_vocabulary(),
             protected: Vec::new(),
+            incoming: Vec::new(),
         })
     }
 }
@@ -790,6 +803,7 @@ pub(crate) fn checked_knowledge_base(
 
 /// What [`Server::run_setup`] resolved for a new run.
 struct RunSetup {
+    incoming: Vec<brauser_protocol::IncomingTrailView>,
     harness: HarnessId,
     cwd: PathBuf,
     timeout: Option<Duration>,
@@ -1054,6 +1068,7 @@ mod tests {
                 request_id: "start".into(),
                 url: "https://example.com/a".into(),
                 title: "Page A".into(),
+                capture_truncated: None,
                 content: "Body text".into(),
                 selection: None,
                 harness: None,
@@ -1269,6 +1284,7 @@ mod tests {
                 request_id: "req-start-1".into(),
                 url: url.clone(),
                 title: TITLE.into(),
+                capture_truncated: None,
                 content: PAGE.into(),
                 selection: None,
                 harness: None,
@@ -1477,6 +1493,7 @@ mod tests {
             request_id: "big".into(),
             url: "https://example.com/a".into(),
             title: "t".repeat(64 * 1024),
+            capture_truncated: None,
             content: "Body text".into(),
             selection: None,
             harness: None,
@@ -1683,6 +1700,7 @@ mod tests {
             request_id: "named".into(),
             url: "https://example.com/a".into(),
             title: "Page A".into(),
+            capture_truncated: None,
             content: "Body text".into(),
             selection: None,
             harness: Some(harness),
@@ -1705,6 +1723,7 @@ mod tests {
             request_id: "site".into(),
             url: origin.into(),
             title: format!("Capture Site: {origin}"),
+            capture_truncated: None,
             content: crate::service::prompt::site_draft_input(
                 origin,
                 &[("/docs/{num}".to_string(), 2)],
@@ -2102,6 +2121,7 @@ mod tests {
             request_id: "task".into(),
             url: "https://example.com/a".into(),
             title: "Page A".into(),
+            capture_truncated: None,
             content: "Body text".into(),
             selection: None,
             harness: None,
@@ -2197,6 +2217,7 @@ mod tests {
             request_id: "direct-task".into(),
             url: "https://example.com/a".into(),
             title: "Page A".into(),
+            capture_truncated: None,
             content: "Body text".into(),
             selection: None,
             instruction: INSTRUCTION.into(),
@@ -2490,6 +2511,7 @@ mod tests {
                 request_id: request_id.into(),
                 url: url.clone(),
                 title: TITLE.into(),
+                capture_truncated: None,
                 content: PAGE.into(),
                 selection: None,
                 harness: None,

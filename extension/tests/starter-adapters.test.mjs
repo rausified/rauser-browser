@@ -6,10 +6,12 @@ const { compileDocument, evaluate } = await import("../dist/adapter-templates.js
 const {
   githubOwnerFromUrl,
   hasAdapter,
+  matchingStarter,
   orderContainedFirst,
   parseGitHubOrganizations,
   starterKind,
   starterOffers,
+  starterRuleAddition,
   starterRuleUpdate,
   withContainerLinks,
   containerLinks,
@@ -34,7 +36,9 @@ test("generated starters stay identical to the shared cross-engine fixtures", ()
     ...starterOffers("https://acme-my.sharepoint.com", []),
     ...starterOffers("https://miro.com", []),
   ].map((offer) => offer.adapter);
-  const expectedTypes = new Set(["jira.issue", "github.pr", "github.issue", "github.repo", "sharepoint.doc", "miro.board"]);
+  const expectedTypes = new Set([
+    "jira.issue", "confluence.page", "github.pr", "github.issue", "github.repo", "sharepoint.doc", "miro.board",
+  ]);
   const expected = recorded.filter((adapter) => expectedTypes.has(adapter.type));
   assert.deepEqual(generated, expected);
 });
@@ -97,7 +101,8 @@ test("orderContainedFirst is stable and leaves other origins alone", () => {
 });
 
 test("starter origins are classified narrowly", () => {
-  assert.equal(starterKind("https://acme.atlassian.net"), "jira");
+  assert.equal(starterKind("https://acme.atlassian.net"), "atlassian");
+  assert.equal(starterKind("https://acme.atlassian.net.evil.example"), null);
   assert.equal(starterKind("https://atlassian.net"), null);
   assert.equal(starterKind("http://acme.atlassian.net"), null);
   assert.equal(starterKind("https://acme.sharepoint.com"), "sharepoint");
@@ -111,7 +116,7 @@ test("starter origins are classified narrowly", () => {
   assert.equal(starterKind("https://www.miro.com"), null);
   assert.equal(starterKind("https://miro.com.evil.example"), null);
   assert.deepEqual(starterOffers("https://example.com", []), []);
-  assert.equal(starterOffers("https://acme.atlassian.net", []).length, 1);
+  assert.equal(starterOffers("https://acme.atlassian.net", []).length, 2);
 });
 
 test("GitHub organization scopes normalize, deduplicate, and reject unsafe forms", () => {
@@ -160,6 +165,59 @@ test("Jira draft joins issue pages and board modals under one canonical ID", () 
   assert.equal(page.artifact_id, "jira:acme.atlassian.net/PROJ-42");
   assert.equal(modal.artifact_id, page.artifact_id);
   assert.equal(evaluate(doc, "https://acme.atlassian.net/issues/?jql=project%3DPROJ").match, false);
+});
+
+test("Atlassian sites offer Jira issues and Confluence pages as separate starters", () => {
+  const origin = "https://acme.atlassian.net";
+  const offers = starterOffers(origin, []);
+  assert.deepEqual(offers.map((offer) => [offer.key, offer.kind, offer.artifact_type, offer.label]), [
+    [`jira:${origin}`, "atlassian", "jira.issue", "Jira issues"],
+    [`confluence.page:${origin}`, "atlassian", "confluence.page", "Confluence pages"],
+  ]);
+  assert.ok(offers.every((offer) => offer.needs_scope === false && offer.origin === origin));
+  // Either compiles alone, so the user can choose one without the other.
+  for (const offer of offers) compiled([offer]);
+  const [jira, confluence] = offers;
+  // An already-configured type is not offered twice, and one Atlassian
+  // starter never counts as the other.
+  assert.equal(hasAdapter([jira.adapter], jira), true);
+  assert.equal(hasAdapter([jira.adapter], confluence), false);
+  assert.equal(hasAdapter([confluence.adapter], confluence), true);
+  assert.equal(hasAdapter([{ ...confluence.adapter, origin: "https://other.atlassian.net" }], confluence), false);
+  assert.equal(matchingStarter(confluence.adapter)?.key, confluence.key);
+  assert.equal(matchingStarter(jira.adapter)?.key, jira.key);
+  // A Confluence-typed adapter with its own ID is the user's, not the starter.
+  assert.equal(matchingStarter({ ...confluence.adapter, id: "confluence:{host}/{id}" }), null);
+  // Each origin's starters are its own.
+  assert.equal(starterOffers("https://other.atlassian.net", [])[1].adapter.origin, "https://other.atlassian.net");
+});
+
+test("Confluence draft keys pages by page ID across view, edit, history and legacy links", () => {
+  const origin = "https://acme.atlassian.net";
+  const [jira, confluence] = starterOffers(origin, []);
+  assert.equal(confluence.adapter.id, "confluence.page:{host}/{id}");
+  const doc = compiled([jira, confluence]);
+  const id = "confluence.page:acme.atlassian.net/1000001";
+  const page = evaluate(doc, `${origin}/wiki/spaces/ENG/pages/1000001/Release+Plan?atl_f=PAGETREE#0a1b2c3d4e5f`,
+    "OPS-12 rollout plan - Engineering - Confluence");
+  assert.equal(page.artifact_id, id);
+  assert.equal(page.mode, null);
+  assert.equal(page.title, "OPS-12 rollout plan");
+  assert.deepEqual(page.refs, [{ type: "jira.issue", value: "OPS-12" }]);
+  // The ID never carries the space key: a moved page keeps its identity.
+  assert.equal(evaluate(doc, `${origin}/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1000001`).artifact_id, id);
+  const edit = evaluate(doc, `${origin}/wiki/spaces/ENG/pages/edit-v2/1000001`);
+  assert.deepEqual([edit.artifact_id, edit.mode], [id, "edit"]);
+  const history = evaluate(doc, `${origin}/wiki/spaces/ENG/history/1000001/Release+Plan`,
+    "Version history - Release plan - Engineering - Confluence");
+  assert.deepEqual([history.artifact_id, history.mode, history.title], [id, "view", "Release plan"]);
+  assert.equal(evaluate(doc, `${origin}/wiki/pages/viewpage.action?pageId=1000001`).artifact_id, id);
+  for (const path of [
+    "/wiki", "/wiki/home", "/wiki/search?text=plan", "/wiki/spaces/ENG/overview", "/wiki/spaces/ENG/database/1000001",
+    "/wiki/x/AbCdEf", "/wiki/spaces/ENG/whiteboard/1000001", "/wiki/spaces/ENG/blog/2026/10/30/1000001/Notes",
+  ]) assert.equal(evaluate(doc, `${origin}${path}`).match, false, path);
+  // Jira keeps its own routes on the shared origin.
+  assert.equal(evaluate(doc, `${origin}/browse/OPS-12`).artifact_id, "jira:acme.atlassian.net/OPS-12");
 });
 
 test("SharePoint and OneDrive drafts key documents by sourcedoc and ignore roots", () => {
@@ -216,7 +274,8 @@ test("every starter type is reserved in the host catalog", () => {
     ...starterOffers("https://miro.com", []),
   ];
   const types = new Set(offers.map((offer) => offer.artifact_type));
-  assert.deepEqual([...types].sort(), ["github.issue", "github.pr", "github.repo", "jira.issue", "miro.board", "sharepoint.doc"]);
+  assert.deepEqual([...types].sort(),
+    ["confluence.page", "github.issue", "github.pr", "github.repo", "jira.issue", "miro.board", "sharepoint.doc"]);
   for (const type of types) assert.ok(catalog.starter_types.includes(type), type);
 });
 
@@ -316,4 +375,70 @@ test("an update stays within 16 rules", () => {
   const update = starterRuleUpdate(full);
   assert.equal(update.adapter.match.length, 16);
   assert.deepEqual(update.adapter.match.slice(2, 15), filler);
+});
+
+// A hand-narrowed SharePoint adapter: the sites rule only.
+const narrowed = () => ({ ...staleOneDrive(), origin: "https://acme.sharepoint.com", match: [staleOneDrive().match[0]] });
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+
+test("starterRuleAddition appends one current starter rule and changes nothing else", () => {
+  const saved = { ...narrowed(), title: "{title}.docx" };
+  const addition = starterRuleAddition(saved, { query: { sourcedoc: "{doc:uuid}" }, path: PERSONAL_RULE.path });
+  assert.ok(addition);
+  assert.deepEqual(addition.added, [PERSONAL_RULE]);
+  assert.deepEqual(addition.removed, []);
+  assert.deepEqual(addition.adapter, { ...saved, match: [...saved.match, PERSONAL_RULE] });
+  assert.equal(saved.match.length, 1, "the saved adapter is not mutated");
+  // Not gated by STARTER_HISTORY: starterRuleUpdate refuses the narrowed one.
+  assert.equal(starterRuleUpdate(saved), null);
+  const doc = compileDocument({ format: 1, artifacts: [addition.adapter] });
+  assert.equal(doc.ok, true);
+  const url = "https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B8BAF1543-CDBF-4003-A48F-D4A939774FC0%7D";
+  assert.equal(evaluate(doc.doc, url).match, true);
+});
+
+test("a Confluence adapter saved without the history rule can gain it, with its fixed view mode", () => {
+  const [, confluence] = starterOffers("https://acme.atlassian.net", []);
+  const historyRule = confluence.adapter.match[2];
+  assert.deepEqual(historyRule, { path: "/wiki/spaces/{_}/history/{id:int}/{*}", mode: "view" });
+  const saved = { ...confluence.adapter, match: confluence.adapter.match.filter((rule) => rule !== historyRule) };
+  const addition = starterRuleAddition(saved, historyRule);
+  assert.ok(addition);
+  assert.deepEqual(addition.added, [historyRule]);
+  assert.equal(addition.adapter.modes, undefined, "a fixed rule mode needs no modes table");
+  const doc = compileDocument({ format: 1, artifacts: [addition.adapter] });
+  assert.equal(doc.ok, true);
+  const history = evaluate(doc.doc, "https://acme.atlassian.net/wiki/spaces/ENG/history/1000001");
+  assert.deepEqual([history.artifact_id, history.mode], ["confluence.page:acme.atlassian.net/1000001", "view"]);
+  // The current starter itself needs no update.
+  assert.equal(starterRuleUpdate(confluence.adapter), null);
+});
+
+test("starterRuleAddition refuses a rule outside the catalog, a duplicate, a 17th rule, and a non-starter", () => {
+  assert.equal(starterRuleAddition(narrowed(), { path: "/anything/{*}" }), null, "not in the current starter");
+  assert.equal(starterRuleAddition(narrowed(), OLD_SHARE_RULE), null, "a retired rule is not current");
+  assert.equal(starterRuleAddition(narrowed(), narrowed().match[0]), null, "already present");
+  const filler = Array.from({ length: 15 }, (_, at) =>
+    ({ path: `/extra${at}/_layouts/15/Doc.aspx`, query: { sourcedoc: "{doc:uuid}" } }));
+  const full = { ...narrowed(), match: [...narrowed().match, ...filler] };
+  assert.equal(full.match.length, 16);
+  assert.equal(starterRuleAddition(full, PERSONAL_RULE), null, "the 17th rule");
+  assert.equal(starterRuleAddition({ ...narrowed(), type: "sharepoint.page" }, PERSONAL_RULE), null);
+  assert.equal(starterRuleAddition({ ...narrowed(), match: "nonsense" }, PERSONAL_RULE), null);
+});
+
+test("starterRuleAddition adds only the modes the new rule's mode capture needs", () => {
+  const [pr] = starterOffers("https://github.com", ["acme-corp"]);
+  const handWritten = {
+    type: "github.pr", origin: "https://github.com", scope: { owner: ["acme-corp"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}" }],
+    modes: { files: "view" },
+    id: "github.pr:{host}/{owner}/{repo}/{number}",
+  };
+  const addition = starterRuleAddition(handWritten, pr.adapter.match[0]);
+  assert.ok(addition);
+  assert.deepEqual(addition.adapter.modes, { files: "view", commits: "view", checks: "view" },
+    "the user's own files mode stays; only the missing modes are added");
+  assert.deepEqual(addition.adapter.scope, handWritten.scope);
+  assert.equal(Object.hasOwn(addition.adapter, "within"), false);
 });

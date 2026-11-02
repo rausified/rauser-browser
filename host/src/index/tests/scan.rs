@@ -167,3 +167,82 @@ fn a_strict_log_scan_refuses_symlinked_history_and_a_lenient_one_skips_it() {
     );
     assert!(scan(&root, false).unwrap().events.is_empty());
 }
+
+/// Ported from origin/main d322188: strict review refuses a damaged owned
+/// marker, and ordinary indexing still tolerates it.
+#[test]
+fn strict_review_accepts_legacy_activity_why_summary_and_both_overflow_forms() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let at = "2026-11-02T10:00:00Z";
+    let url = "https://example.com/items/1";
+    let activity = activity(&uuid::Uuid::new_v4().to_string(), "1", "Item", at);
+    let summary = adapter_summary("work:example.com/1", "work.item", url, at);
+    let why = WhyEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        artifact_id: "work:example.com/1".into(),
+        url: url.into(),
+        text: "Context".into(),
+        occurred_at: at.into(),
+        incognito: false,
+    };
+    let legacy = format!(
+        "- {at} — Legacy — <{url}>\n{MARKER_PREFIX}{} url={} at={at} -->\n",
+        sha256_hex(b"legacy"),
+        sha256_hex(url.as_bytes())
+    );
+    let why = format!(
+        "{MARKER_PREFIX}{} url={} at={at} kind=why data={} -->\n",
+        sha256_hex(why.event_id.as_bytes()),
+        sha256_hex(url.as_bytes()),
+        hex::encode(serde_json::to_vec(&why).unwrap())
+    );
+    let overflow = OverflowMarker {
+        count: 1,
+        first_occurred_at: at.into(),
+        last_occurred_at: at.into(),
+    };
+    let mut attached_payload = serde_json::to_value(&overflow).unwrap();
+    attached_payload["url"] = serde_json::json!(url);
+    let attached = format!(
+        "{MARKER_PREFIX}{} url={} at={at} kind=overflow data={} -->\n",
+        sha256_hex(b"attached"),
+        sha256_hex(url.as_bytes()),
+        hex::encode(serde_json::to_vec(&attached_payload).unwrap())
+    );
+    let logs = root.path().join("log");
+    fs::create_dir_all(&logs).unwrap();
+    let path = logs.join("day.md");
+    let mut contents = format!(
+        "{LOG_HEADER}\n{legacy}{why}{}{}{}{attached}",
+        activity_marker(&activity),
+        super::summaries::summary_marker(&summary),
+        super::gaps::overflow_line("standalone", &overflow)
+    );
+    fs::write(&path, &contents).unwrap();
+    let (_, evidence) = index.relearn_evidence().unwrap();
+    assert_eq!(
+        evidence.len(),
+        5,
+        "legacy, why, summary, activity and its mode URL"
+    );
+    assert!(
+        !index.database_path().exists(),
+        "review never opens index.db"
+    );
+
+    // A torn marker still must not stop ordinary indexing or destroy its
+    // successfully parsed neighbors, including when it has no provenance.
+    let bare = why.trim_end();
+    contents.push_str(&format!("{bare}{bare}\n<!-- brauser:visit id=torn"));
+    fs::write(&path, &contents).unwrap();
+    let error = index.relearn_evidence().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("damaged owned log marker"),
+        "{error:#}"
+    );
+    index.reindex().unwrap();
+    assert!(index.artifact("work:example.com/1").unwrap().is_some());
+    assert_eq!(fs::read_to_string(path).unwrap(), contents);
+}

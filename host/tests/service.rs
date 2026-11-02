@@ -27,7 +27,7 @@ use time::format_description::well_known::Rfc3339;
 
 const HOST: &str = env!("CARGO_BIN_EXE_brauser");
 /// A valid §6.4 answer, already in the normalized form `result.json` keeps.
-const ANSWER: &str = r#"{"document_type":"report","category":"news","entities":{"technologies":[],"products":[],"people":[],"companies":[]},"description":"A fake summary.","importance":{"level":"medium","reason":"A test page."},"assessment":"Nothing new.","related_notes":[]}"#;
+const ANSWER: &str = r#"{"overview":"A fake page.","description":"A fake summary.","key_points":["It is fake."],"document_type":"report","category":"news","keywords":["fake"],"metadata":{"authors":[],"owner":"","status":"","created":"","updated":"","version":""},"references":[],"read_scope":"whole","access":"ok","entities":{"technologies":[],"products":[],"people":[],"companies":[]},"importance":{"level":"medium","reason":"A test page."},"assessment":"Nothing new.","related_notes":[]}"#;
 /// Long enough for a slow machine; every wait polls and returns early.
 const WAIT: Duration = Duration::from_secs(20);
 const POLL: Duration = Duration::from_millis(50);

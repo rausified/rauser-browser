@@ -12,14 +12,17 @@ pub mod command_runner;
 pub mod finisher;
 pub mod harness_api;
 pub mod maintenance;
+pub mod miro;
 pub mod office;
 pub mod open;
 pub mod paths;
 pub mod prompt;
 pub mod queue;
 pub mod record;
+pub mod section;
 pub mod server;
 pub mod setup;
+pub mod shell_env;
 pub mod supervisor;
 
 use std::time::Duration;

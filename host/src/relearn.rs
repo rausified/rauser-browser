@@ -170,10 +170,11 @@ pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result
         ArtifactIndex::open_in(storage, current.root_identity(), &current.cache_dir()?)?
             .relearn_evidence()?;
     let files = vault.relearn_files()?;
-    let raw_contracts: Vec<_> = current
-        .relearn_contracts()
-        .into_iter()
+    let all_contracts = current.relearn_contracts();
+    let raw_contracts: Vec<_> = all_contracts
+        .iter()
         .filter(|c| c["origin"].as_str() == Some(request.origin.as_str()))
+        .cloned()
         .collect();
     ensure!(
         !raw_contracts.is_empty(),
@@ -192,7 +193,7 @@ pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result
         "proposed rules must belong to the reviewed origin only"
     );
     let proposed = compile(&request.proposed.artifacts)?;
-    let before = raw_contracts
+    let before = all_contracts
         .iter()
         .map(|raw| compile(std::slice::from_ref(raw)))
         .collect::<Result<Vec<_>>>()?;
@@ -248,18 +249,14 @@ pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result
         };
         if let Some((key, stored)) = parsed {
             file_keys.insert(index, key.clone());
-            if stored_origin(&stored).as_deref() == Some(request.origin.as_str()) {
-                evidence.push((key, stored));
-            }
+            evidence.push((key, stored));
         }
     }
     // Roll-ups have durable identity even without a direct visit or note.
     // Derive them only from a contract that verifies the logged source ID.
     let mut containers = Vec::new();
     for (key, stored) in &evidence {
-        if key.kind != RecordKeyKind::Artifact
-            || stored_origin(stored).as_deref() != Some(request.origin.as_str())
-        {
+        if key.kind != RecordKeyKind::Artifact {
             continue;
         }
         for doc in &before {
@@ -284,6 +281,14 @@ pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result
         log_revision,
         hex::encode(inventory_hash.finalize()),
     ))?);
+    // Record keys are global, even when rules on HTTP/HTTPS or unrelated
+    // origins happen to derive the same value. Foreign evidence is occupancy,
+    // never input to this origin's proposed mapping or a migration row.
+    let foreign_keys: BTreeSet<_> = evidence
+        .iter()
+        .filter(|(_, stored)| stored_origin(stored).as_deref() != Some(request.origin.as_str()))
+        .map(|(key, _)| key_order(key))
+        .collect();
     let mut rows = BTreeMap::new();
     for (key, stored) in evidence {
         if stored_origin(&stored).as_deref() != Some(request.origin.as_str()) {
@@ -402,6 +407,17 @@ pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result
         by_key.entry(key_order(key)).or_default().push(index);
     }
     for row in rows.values_mut() {
+        if foreign_keys.contains(&key_order(&row.source)) {
+            row.issues.insert("other_origin_source");
+        }
+        if row
+            .targets
+            .iter()
+            .any(|target| foreign_keys.contains(&key_order(&artifact_key(&target.artifact_id))))
+        {
+            row.issues.insert("other_origin_destination");
+            row.classifications.insert("merged");
+        }
         if !row.targets.is_empty() {
             row.classifications.insert(if row.targets.len() > 1 {
                 "split"
@@ -480,7 +496,7 @@ pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result
         origin: request.origin.clone(),
         config_revision: current.revision().into(),
         contracts_revision: hash(&serde_json::to_vec(&(
-            raw_contracts,
+            all_contracts,
             current.adopted_state().revision,
         ))?),
         evidence_revision,
@@ -623,11 +639,14 @@ mod tests {
             .unwrap()
         }
         fn note(&self, id: &str, route: &str, provenance: Option<Vec<String>>) {
+            self.note_url(id, &format!("{ORIGIN}{route}"), provenance);
+        }
+        fn note_url(&self, id: &str, url: &str, provenance: Option<Vec<String>>) {
             let key = artifact_key(id);
             crate::note::save_keyed_note_with_provenance(
                 &self.vault(),
                 &StoredUrl {
-                    url: format!("{ORIGIN}{route}"),
+                    url: url.into(),
                     stripped_params: provenance,
                 },
                 &key,
@@ -638,16 +657,21 @@ mod tests {
             .unwrap();
         }
         fn summary(&self, id: &str, route: &str) {
-            let url = format!("{ORIGIN}{route}");
+            self.summary_url(id, &format!("{ORIGIN}{route}"));
+        }
+        fn summary_url(&self, id: &str, url: &str) {
             let key = artifact_key(id);
             let bytes = format!(
                 "---\ntitle: \"Summary\"\nbrauser:\n  kind: summary\n  canonical_url: {}\n  artifact_id: {}\n  stripped_params: []\n---\n\nKeep this summary.\n",
                 serde_json::to_string(&url).unwrap(),
                 serde_json::to_string(id).unwrap()
             );
-            self.vault().write_summary(&key, &url, &bytes).unwrap();
+            self.vault().write_summary(&key, url, &bytes).unwrap();
         }
         fn log(&self, id: &str, route: &str) -> std::path::PathBuf {
+            self.log_url(id, &format!("{ORIGIN}{route}"))
+        }
+        fn log_url(&self, id: &str, url: &str) -> std::path::PathBuf {
             let store = CaptureStore::open_in(
                 self.config.snapshot().storage.as_ref().unwrap(),
                 self.config.root_identity(),
@@ -657,7 +681,7 @@ mod tests {
             let event = brauser_protocol::WhyEvent {
                 event_id: uuid::Uuid::new_v4().to_string(),
                 artifact_id: id.into(),
-                url: format!("{ORIGIN}{route}"),
+                url: url.into(),
                 text: "Keep context".into(),
                 occurred_at: crate::capture::fixtures::event_time()
                     .format(&Rfc3339)
@@ -667,7 +691,7 @@ mod tests {
             let outcome = store.record_why(
                 CapturePolicy {
                     enabled: true,
-                    origins: &[ORIGIN.into()],
+                    origins: &[Url::parse(url).unwrap().origin().ascii_serialization()],
                     strip_params: &[],
                 },
                 &event,
@@ -935,6 +959,150 @@ mod tests {
                 refused
             );
         }
+    }
+
+    #[test]
+    fn damaged_owned_markers_refuse_review_and_recording_without_cache_or_journal() {
+        let f = fixture(vec![standard()]);
+        let path = f.log("work:work.example/1", "/items/1");
+        let contents = fs::read_to_string(&path).unwrap();
+        let marker = contents.lines().last().unwrap();
+        let review = f.request(vec![standard()]);
+        let revision = plan(&f.config, &review).unwrap().plan_revision;
+        for damaged in [
+            marker[..marker.len() / 2].to_string(),
+            marker.trim_end_matches(" -->").to_string(),
+            marker.replace(" id=", " "),
+            marker.replace(" data=", " data=zz"),
+            marker.replace(" kind=why ", " kind=future "),
+            marker.replace(" stripped=", " stripped=zz"),
+            format!(" {marker}"),
+            format!("{marker}{marker}"),
+            "<!-- brauser:visit".into(),
+        ] {
+            fs::write(&path, contents.replace(marker, &damaged)).unwrap();
+            let error = plan(&f.config, &review).unwrap_err();
+            assert!(format!("{error:#}").contains("damaged owned log marker"));
+            let error = journal::record(
+                &f.config,
+                &journal::RecordRequest {
+                    operation_id: uuid::Uuid::new_v4().to_string(),
+                    decision: journal::Decision::Approve,
+                    review: review.clone(),
+                    expected_plan_revision: revision.clone(),
+                },
+            )
+            .unwrap_err();
+            assert!(format!("{error:#}").contains("damaged owned log marker"));
+            assert!(!f.config.cache_dir().unwrap().exists());
+            assert!(!f.config.dir().unwrap().join("rekey").exists());
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                contents.replace(marker, &damaged)
+            );
+        }
+    }
+
+    fn assert_approval_refused(f: &Fixture, review: PlanRequest, plan: &Plan) {
+        let error = journal::record(
+            &f.config,
+            &journal::RecordRequest {
+                operation_id: uuid::Uuid::new_v4().to_string(),
+                decision: journal::Decision::Approve,
+                review,
+                expected_plan_revision: plan.plan_revision.clone(),
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("unresolved, split, merge or key-reuse"));
+        assert!(!f.config.dir().unwrap().join("rekey").exists());
+    }
+
+    fn http_adapter(id: &str) -> Json {
+        let mut rule = adapter("/items/{id:int}", id);
+        rule["origin"] = json!("http://work.example");
+        rule
+    }
+
+    #[test]
+    fn other_origin_log_note_and_summary_destinations_block_approval() {
+        for kind in ["log", "note", "summary"] {
+            let f = fixture(vec![standard(), http_adapter("new:{host}/{id}")]);
+            f.note("work:work.example/1", "/items/1", None);
+            let review = f.request(vec![adapter("/items/{id:int}", "new:{host}/{id}")]);
+            let before = plan(&f.config, &review).unwrap();
+            let url = "http://work.example/items/1";
+            match kind {
+                "log" => {
+                    f.log_url("new:work.example/1", url);
+                }
+                "note" => f.note_url("new:work.example/1", url, Some(vec![])),
+                "summary" => f.summary_url("new:work.example/1", url),
+                _ => unreachable!(),
+            }
+            let p = plan(&f.config, &review).unwrap();
+            assert_eq!(p.identities.len(), 1, "foreign evidence is occupancy only");
+            assert_ne!(before.plan_revision, p.plan_revision);
+            let r = row(&p, "work:work.example/1");
+            assert!(r.classifications.contains("merged"), "{kind}: {p:?}");
+            assert!(r.issues.contains("other_origin_destination"));
+            assert_approval_refused(&f, review, &p);
+        }
+    }
+
+    #[test]
+    fn a_source_shared_with_another_origin_cannot_move_or_remain_unreviewed() {
+        let f = fixture(vec![standard(), http_adapter("work:{host}/{id}")]);
+        f.log("work:work.example/1", "/items/1");
+        f.log_url("work:work.example/1", "http://work.example/items/1");
+        for id in ["new:{host}/{id}", "work:{host}/{id}"] {
+            let review = f.request(vec![adapter("/items/{id:int}", id)]);
+            let p = plan(&f.config, &review).unwrap();
+            assert_eq!(p.identities.len(), 1);
+            assert!(p.identities[0].issues.contains("other_origin_source"));
+            assert!(p.identities[0].classifications.contains("unresolvable"));
+            assert_approval_refused(&f, review, &p);
+        }
+    }
+
+    #[test]
+    fn foreign_containers_without_direct_visits_occupy_destination_keys() {
+        let mut child = http_adapter("child:{host}/{id}");
+        child["type"] = json!("work.child");
+        child["within"] = json!({"type":"work.item", "id":"new:{host}/{id}"});
+        let mut parent = http_adapter("new:{host}/{id}");
+        parent["match"][0]["path"] = json!("/groups/{id:int}");
+        let f = fixture(vec![standard(), child, parent]);
+        f.note("work:work.example/1", "/items/1", None);
+        f.log_url("child:work.example/1", "http://work.example/items/1");
+        let review = f.request(vec![adapter("/items/{id:int}", "new:{host}/{id}")]);
+        let p = plan(&f.config, &review).unwrap();
+        assert_eq!(p.identities.len(), 1);
+        assert!(p.identities[0].issues.contains("other_origin_destination"));
+        assert_approval_refused(&f, review, &p);
+    }
+
+    #[test]
+    fn unrelated_foreign_evidence_never_becomes_a_migration_row_or_blocks_approval() {
+        let f = fixture(vec![standard(), http_adapter("new:{host}/{id}")]);
+        f.log_url("new:work.example/2", "http://work.example/items/2");
+        assert!(f.review(vec![standard()]).identities.is_empty());
+        f.note("work:work.example/1", "/items/1", None);
+        let review = f.request(vec![adapter("/items/{id:int}", "new:{host}/{id}")]);
+        let p = plan(&f.config, &review).unwrap();
+        assert_eq!(p.identities.len(), 1);
+        assert!(p.identities[0].issues.is_empty());
+        let receipt = journal::record(
+            &f.config,
+            &journal::RecordRequest {
+                operation_id: uuid::Uuid::new_v4().to_string(),
+                decision: journal::Decision::Approve,
+                review,
+                expected_plan_revision: p.plan_revision,
+            },
+        )
+        .unwrap();
+        assert!(!receipt.applied);
     }
 
     #[test]

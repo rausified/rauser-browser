@@ -24,6 +24,7 @@ pub(super) fn summary_view(event: &SummaryEvent) -> Option<SummaryView> {
     };
     Some(SummaryView {
         summarized_at,
+        overview: event.overview.clone(),
         document_type: event.document_type.clone(),
         category: event.category.clone(),
         importance: event.importance,

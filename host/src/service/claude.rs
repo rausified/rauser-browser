@@ -180,7 +180,7 @@ impl HarnessSession for ClaudeSession {
             .env_clear()
             .envs(self.env.iter().map(|(name, value)| (name, value)));
         self.turns += 1;
-        let mut child = match LineChild::spawn(&self.slot, command) {
+        let mut child = match LineChild::spawn_as(&self.slot, command, "claude") {
             Ok(child) => child,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
                 return failed("the run was stopped before claude started".to_string());

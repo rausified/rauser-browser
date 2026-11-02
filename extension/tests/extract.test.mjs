@@ -7,7 +7,7 @@ import vm from "node:vm";
 // it in the page, so each test runs its source text in a fresh context that
 // holds only the fakes it is given.
 const { EXTRACT_LIMITS, extractReadablePage } = await import("../dist/extract.js");
-const { readTab, summarizeTab, isOfficeDocumentUrl, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
+const { autoSummarizeTab, readTab, summarizeTab, isOfficeDocumentUrl, isMiroBoardUrl, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
 
 // The host refuses a frame over this many bytes (`frame::MAX_INBOUND_BYTES`).
 const MAX_INBOUND_BYTES = 4 * 1024 * 1024;
@@ -509,6 +509,25 @@ function framesDeps(frames, { readability = async () => [] } = {}) {
   };
 }
 
+test("automatic summaries preserve the chosen frame's truncation flag", async () => {
+  for (const truncated of [true, false, undefined]) {
+    const { deps, requests } = framesDeps([
+      { frameId: 0, result: framePage({ content: "Viewer", truncated: true }) },
+      { frameId: 3, result: framePage({ content: "Document excerpt", truncated }) },
+    ]);
+    deps.host.callAny = async (request) => {
+      requests.push(request);
+      return { type: "auto_summary_skipped", reason: "already_summarized" };
+    };
+    assert.equal(await autoSummarizeTab(TAB, deps), "already_summarized");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].type, "start_auto_summary");
+    assert.equal(requests[0].content, "Document excerpt");
+    assert.equal(requests[0].capture_truncated, truncated === true ? true : undefined);
+    assert.equal("selection" in requests[0], false);
+  }
+});
+
 test("summarizeTab injects Readability and the extractor into every frame", async () => {
   const { deps, injections } = framesDeps([{ frameId: 0, result: framePage({ content: "Body" }) }]);
   await summarizeTab(TAB, deps);
@@ -526,15 +545,15 @@ test("readTab reads the page summarizeTab would send, and sends nothing", async 
   ];
   const read = framesDeps(frames);
   const page = await readTab(TAB, read.deps);
-  assert.deepEqual(page, { url: TAB.url, title: "Top\uFFFD title", content: "Office text\uFFFD", selection: "picked" });
+  assert.deepEqual(page, { url: TAB.url, title: "Top\uFFFD title", content: "Office text\uFFFD", selection: "picked", truncated: false });
   assert.equal(read.requests.length, 0);
   assert.deepEqual(read.injections.map((injection) => injection.files ?? injection.args), [
     ["vendor/readability.js"], [EXTRACT_LIMITS],
   ]);
   const summarized = framesDeps(frames);
   await summarizeTab(TAB, summarized.deps);
-  const { url, title, content, selection } = summarized.requests[0];
-  assert.deepEqual({ url, title, content, selection }, page);
+  const { url, title, content, selection, capture_truncated = false } = summarized.requests[0];
+  assert.deepEqual({ url, title, content, selection, truncated: capture_truncated }, page);
 
   const untitled = framesDeps([{ frameId: 0, result: framePage({ title: "", content: "Body" }) }]);
   assert.equal((await readTab(TAB, untitled.deps)).title, TAB.title);
@@ -671,6 +690,30 @@ test("an Office tab that moved is still page_changed, and one with no top frame 
   const refused = framesDeps(() => { throw new Error("Cannot access contents of the page"); });
   await assert.rejects(readTab(TAB, refused.deps), (error) => error.code === "unreadable");
   assert.equal(moved.requests.length + noTop.requests.length + refused.requests.length, 0);
+});
+
+test("a Miro board tab with no text still starts a run with empty content", async () => {
+  // Miro draws the board on a canvas; the host names the board in page.md
+  // and the agent reads it with its own Miro tools (DESIGN.md §4.5).
+  const board = { id: 7, url: "https://miro.com/app/board/uXjVM0uuBLo=/", title: "Agent Security - Miro" };
+  const frames = [{ frameId: 0, result: framePage({ title: "", content: " ", href: board.url }) }];
+  const summarized = framesDeps(frames);
+  await summarizeTab(board, summarized.deps);
+  assert.equal(summarized.requests.length, 1);
+  assert.equal(summarized.requests[0].type, "start_run");
+  assert.equal(summarized.requests[0].content.trim(), "");
+  assert.equal(summarized.requests[0].url, board.url);
+  // The Miro dashboard is not a board: with no text it is unreadable.
+  const dashboard = { id: 8, url: "https://miro.com/app/dashboard/", title: "Miro" };
+  const empty = framesDeps([{ frameId: 0, result: framePage({ content: "", href: dashboard.url }) }]);
+  await assert.rejects(summarizeTab(dashboard, empty.deps), (error) => error.code === "unreadable");
+  assert.equal(empty.requests.length, 0);
+});
+
+test("isMiroBoardUrl agrees with the host's shared vectors", () => {
+  const vectors = JSON.parse(readFileSync(new URL("../../host/tests/fixtures/miro-board-urls.json", import.meta.url), "utf8"));
+  assert.ok(vectors.cases.length > 15);
+  for (const { url, board } of vectors.cases) assert.equal(isMiroBoardUrl(url), board, url);
 });
 
 test("isOfficeDocumentUrl agrees with the host's shared vectors", () => {

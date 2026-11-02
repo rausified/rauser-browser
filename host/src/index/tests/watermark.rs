@@ -74,7 +74,8 @@ fn len(path: &Path) -> u64 {
 
 /// Every event a full parse of `path` finds, as catch-up reports them.
 fn full_parse(path: &Path, relative: &str) -> Seen {
-    parse_log_lines(&fs::read_to_string(path).unwrap())
+    parse_log_lines(&fs::read_to_string(path).unwrap(), false)
+        .unwrap()
         .into_iter()
         .map(|(line, event)| (event_identity(&event).0, PathBuf::from(relative), line))
         .collect()

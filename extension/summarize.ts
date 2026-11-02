@@ -1,7 +1,8 @@
 // Summarize & log: reads a tab's main text and starts its summary run. The
 // panel button, the `summarize` shortcut, and the context menu all use
 // summarizeTab; the host and the service check every field again.
-import type { AgentStatus, RunView } from "../protocol/ts/generated.js";
+import type { AgentStatus, AutoSummarySkipReason, RunView } from "../protocol/ts/generated.js";
+import { canonicalCapture } from "./adapter-templates.js";
 import { serviceSetupText } from "./agent.js";
 import { APP_NAME, BINARY_NAME } from "./brand.js";
 import { EXTRACT_LIMITS, extractReadablePage, wellFormed, type ExtractedPage } from "./extract.js";
@@ -62,6 +63,26 @@ function sameAddress(a: string, b: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/** Whether `url` is a Miro board, as the host's `service::miro::miro_board`
+ * recognises it (the shared vectors in host/tests/fixtures/miro-board-urls.json):
+ * `https://miro.com/app/board/<token(12)>` with an optional trailing slash,
+ * a `%3D` read as `=`. Like an Office document, it only lets a board with no
+ * text start a run; the host decides what the run is told. */
+export function isMiroBoardUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "miro.com" || parsed.port !== "" ||
+      parsed.username !== "" || parsed.password !== "") return false;
+  const segments = parsed.pathname.split("/").slice(1);
+  if (segments.at(-1) === "") segments.pop();
+  if (segments.length !== 3 || segments[0] !== "app" || segments[1] !== "board") return false;
+  return canonicalCapture("token(12)", segments[2]!.replaceAll(/%3d/gi, "=")) !== null;
 }
 
 /** Whether `url` is an Office for the web document address, as the host's
@@ -137,7 +158,7 @@ const encodedBytes = (value: string | null): number => new TextEncoder().encode(
  * blank; readTab decides whether that page is unreadable. */
 function choosePage(
   results: readonly { frameId: number; result?: unknown }[],
-): { top: ExtractedPage; content: string; selection: string | null } | undefined {
+): { top: ExtractedPage; content: string; selection: string | null; truncated: boolean } | undefined {
   let top: ExtractedPage | undefined;
   const pages: ExtractedPage[] = [];
   for (const entry of results) {
@@ -165,14 +186,17 @@ function choosePage(
   // The chosen frame's own selection fits its content by construction; one
   // borrowed from another frame travels only if both still fit the cap.
   let selection = chosen.selection;
+  let truncated = chosen.truncated === true;
   if (selection === null) {
-    const borrowed = pages.find((page) => page.selection !== null)?.selection ?? null;
+    const borrowedPage = pages.find((page) => page.selection !== null);
+    const borrowed = borrowedPage?.selection ?? null;
     if (borrowed !== null
       && encodedBytes(chosen.content) + encodedBytes(borrowed) <= EXTRACT_LIMITS.maxRequestBytes) {
       selection = borrowed;
+      truncated ||= borrowedPage?.truncated === true;
     }
   }
-  return { top, content: chosen.content, selection };
+  return { top, content: chosen.content, selection, truncated };
 }
 
 /** The page a run sends: what readTab read from a tab. */
@@ -180,6 +204,7 @@ export interface TabPage {
   url: string;
   title: string;
   content: string;
+  truncated: boolean;
   selection: string | null;
 }
 
@@ -187,8 +212,9 @@ export interface TabPage {
  * the frame content choosePage picks, every string well-formed. A page whose
  * top frame cannot be read, or no frame of which yields text, throws
  * `HostError("unreadable")`, except that an Office document address
- * (isOfficeDocumentUrl) with no text is read with empty content: the host
- * names the document in page.md and the agent reads it itself; a top frame that by then holds another address
+ * (isOfficeDocumentUrl) or a Miro board (isMiroBoardUrl) with no text is read
+ * with empty content: the host names the document or board in page.md and
+ * the agent reads it itself; a top frame that by then holds another address
  * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`.
  * It sends nothing to the host: Summarize & log and the task bar both read
  * pages through it. */
@@ -232,7 +258,7 @@ export async function readTab(
   }
   const page = choosePage(Array.isArray(results) ? results : []);
   if (!page) throw new HostError("unreadable", UNREADABLE_MESSAGE);
-  if (page.content.trim().length === 0 && !isOfficeDocumentUrl(tab.url)) {
+  if (page.content.trim().length === 0 && !isOfficeDocumentUrl(tab.url) && !isMiroBoardUrl(tab.url)) {
     throw new HostError("unreadable", UNREADABLE_MESSAGE);
   }
   // The run is keyed by `tab.url`, so its content must come from that page;
@@ -244,6 +270,7 @@ export async function readTab(
     url: wellFormed(tab.url),
     title: wellFormed(cutTitle(page.top.title || tab.title)),
     content: wellFormed(page.content),
+    truncated: page.truncated,
     selection: page.selection === null ? null : wellFormed(page.selection),
   };
 }
@@ -262,6 +289,7 @@ export async function summarizeTab(
     url: page.url,
     title: page.title,
     content: page.content,
+    ...(page.truncated ? { capture_truncated: true } : {}),
     selection: page.selection,
     harness: null,
     record_key: null,
@@ -269,4 +297,39 @@ export async function summarizeTab(
   }, "run_started");
   await markRunsMayExist(deps.storage, deps.now().getTime());
   return { run: response.run, existing: response.existing };
+}
+
+/** What an automatic summary attempt came to: a run started (or joined), the
+ * host's reason for skipping it, or a page that could not be read. */
+export type AutoSummaryOutcome = "started" | AutoSummarySkipReason | "unreadable" | "page_changed";
+
+/** Reads `tab` (readTab) and asks the host to summarize it automatically
+ * (start_auto_summary). A failure to reach the host or the service throws, so
+ * the caller keeps the tab for a later try. */
+export async function autoSummarizeTab(
+  tab: { id: number; url: string; title: string },
+  deps: Omit<SummarizeDeps, "host"> & { host: Pick<HostClient, "callAny"> },
+): Promise<AutoSummaryOutcome> {
+  let page: TabPage;
+  try {
+    page = await readTab(tab, deps);
+  } catch (error) {
+    if (error instanceof HostError && (error.code === "unreadable" || error.code === "page_changed")) {
+      return error.code;
+    }
+    throw error;
+  }
+  const response = await deps.host.callAny({
+    type: "start_auto_summary",
+    protocol_version: PROTOCOL_VERSION,
+    request_id: newRequestId(),
+    url: page.url,
+    title: page.title,
+    content: page.content,
+    ...(page.truncated ? { capture_truncated: true } : {}),
+    requested_at: localTimestamp(deps.now()),
+  }, ["run_started", "auto_summary_skipped"]);
+  if (response.type === "auto_summary_skipped") return response.reason;
+  await markRunsMayExist(deps.storage, deps.now().getTime());
+  return "started";
 }

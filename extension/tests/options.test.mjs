@@ -73,6 +73,7 @@ function configWith(adapters, captureEnabled, stripParams = []) {
     strip_params: stripParams,
     agent: null,
     summary_vocabulary: { document_types: ["report"], categories: ["news"] },
+    auto_summary: { enabled: true, dwell_secs: 0 },
     adapters: { format: 1, artifacts: [] },
   };
 }
@@ -119,6 +120,7 @@ function install({
     ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
     ["agent-env-names", "p"], ["reveal-agent-env", "button"],
     ["vocab-types", "textarea"], ["vocab-categories", "textarea"], ["save-vocabulary", "button"],
+    ["auto-summary-enabled", "input"], ["auto-summary-dwell", "input"], ["save-auto-summary", "button"],
     ["build-id", "span"], ["host-build", "span"],
     ["adopted-state", "div"], ["adopted-issue", "p"], ["adopted-warnings", "ul"],
     ["forget-adopted", "button"], ["forget-adopted-confirm", "div"],
@@ -837,6 +839,37 @@ test("a Jira starter resolves the typed site address and enters preview before s
   assert.match(nodeText(env.elements.get("starter-gallery")), /Already configured/);
 });
 
+test("an Atlassian site offers Jira issues and Confluence pages, each once", async () => {
+  const jira = {
+    type: "jira.issue", origin: "https://acme.atlassian.net",
+    match: [{ path: "/browse/{key:jira_key}" }], id: "jira:{host}/{key}",
+  };
+  const state = install({ adapters: [jira] });
+  await openSettings();
+  const gallery = env.elements.get("starter-gallery");
+  const cards = gallery.querySelectorAll("button");
+  assert.match(nodeText(gallery), /Jira issues/);
+  assert.match(nodeText(gallery), /Confluence pages/);
+  const [jiraButton, confluenceButton] = cards;
+  assert.equal(jiraButton.dataset.starterKey, "jira:https://acme.atlassian.net");
+  assert.equal(jiraButton.textContent, "Already configured");
+  assert.equal(jiraButton.disabled, true);
+  assert.equal(confluenceButton.dataset.starterKey, "confluence.page:https://acme.atlassian.net");
+  assert.equal(confluenceButton.textContent, "Review starter…");
+  assert.equal(confluenceButton.disabled, false);
+
+  confluenceButton.click();
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.equal(draft.type, "confluence.page");
+  assert.equal(draft.origin, "https://acme.atlassian.net");
+  assert.equal(draft.id, "confluence.page:{host}/{id}");
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 2 && idle(), "the Confluence starter save");
+  assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.type), ["jira.issue", "confluence.page"]);
+  const after = env.elements.get("starter-gallery").querySelectorAll("button");
+  assert.deepEqual(after.map((button) => button.textContent), ["Already configured", "Already configured"]);
+});
+
 test("GitHub starters stay disabled until an explicit valid organization scope", async () => {
   install();
   await openSettings();
@@ -1394,6 +1427,57 @@ test("vocabulary edits save through update_config", async () => {
     { ...configWith([]), summary_vocabulary: null }, "nothing else changes");
   assert.match(statusText(), /vocabulary saved/i);
   assert.equal(env.elements.get("vocab-types").value, "report\nmemo\nminutes");
+});
+
+test("autoSummarySettingsLoadFromConfig", async () => {
+  const state = install();
+  state.config = { ...state.config, auto_summary: { enabled: false, dwell_secs: 90 } };
+  await openSettings();
+  assert.equal(env.elements.get("auto-summary-enabled").checked, false);
+  assert.equal(env.elements.get("auto-summary-dwell").value, "90");
+});
+
+test("autoSummarySettingsSaveInUpdateConfig", async () => {
+  const state = install();
+  await openSettings();
+  assert.equal(env.elements.get("auto-summary-enabled").checked, true);
+  assert.equal(env.elements.get("auto-summary-dwell").value, "0");
+  env.elements.get("auto-summary-enabled").checked = false;
+  env.elements.get("auto-summary-enabled").dispatch("change");
+  env.elements.get("auto-summary-dwell").value = "90";
+  env.elements.get("auto-summary-dwell").dispatch("input");
+  const before = state.revision;
+  env.elements.get("save-auto-summary").click();
+  await until(() => state.revision > before && idle(), "the auto-summary save");
+  const update = lastUpdate();
+  assert.deepEqual(update.config.auto_summary, { enabled: false, dwell_secs: 90 });
+  assert.deepEqual({ ...update.config, auto_summary: null },
+    { ...configWith([]), auto_summary: null }, "nothing else changes");
+  assert.match(statusText(), /automatic summar.* saved/i);
+});
+
+test("an auto-summary wait outside 0 to 3600 whole seconds is not sent", async () => {
+  const state = install();
+  await openSettings();
+  for (const value of ["-1", "3601", "1.5", "soon", ""]) {
+    env.elements.get("auto-summary-dwell").value = value;
+    env.elements.get("auto-summary-dwell").dispatch("input");
+    const before = state.requests.length;
+    env.elements.get("save-auto-summary").click();
+    await until(() => idle(), "the refusal");
+    assert.equal(state.requests.slice(before).some((request) => request.type === "update_config"), false, value);
+    assert.match(statusText(), /0 to 3600/, value);
+  }
+});
+
+test("dwellInputDisabledWhenAutoSummaryOff", async () => {
+  const state = install();
+  state.config = { ...state.config, auto_summary: { enabled: false, dwell_secs: 0 } };
+  await openSettings();
+  assert.equal(env.elements.get("auto-summary-dwell").disabled, true);
+  env.elements.get("auto-summary-enabled").checked = true;
+  env.elements.get("auto-summary-enabled").dispatch("change");
+  assert.equal(env.elements.get("auto-summary-dwell").disabled, false);
 });
 
 test("an empty vocabulary list is not sent", async () => {
@@ -2007,6 +2091,100 @@ test("a starter update the host refuses as a retired-contract change explains it
   await until(() => statusText().startsWith("This update") && idle(), "the refused save");
   assert.equal(statusText(), "This update overlaps an adapter you used before; edit it by hand in the editor.");
   assert.equal(env.elements.get("adapter-editor").hidden, false, "the editor stays open for a hand edit");
+});
+
+// The side panel's near-miss offer hands an adapter (and a starter rule)
+// to settings in `#adapter-review=`; settings only opens a review.
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+const reviewHash = (adapter, rule) => `#adapter-review=${encodeURIComponent(JSON.stringify({
+  adapter: [adapter.origin, adapter.type, adapter.id], rule,
+}))}`;
+function installReview(adapters, hash, options = {}) {
+  const state = install({ adapters, hash, ...options });
+  globalThis.location.pathname = "/options.html";
+  globalThis.location.search = "";
+  state.replaced = [];
+  globalThis.history = { replaceState: (_data, _title, url) => {
+    state.replaced.push(url);
+    globalThis.location.hash = "";
+  } };
+  return state;
+}
+const updateRequests = () => env.requests.filter((request) => request.type === "update_config");
+const narrowedSharePoint = () => ({ ...staleOneDrive(), origin: "https://acme.sharepoint.com", match: [staleOneDrive().match[0]] });
+
+test("a handed-off rule from the current update opens Update to current rules, and Cancel saves nothing", async () => {
+  const state = installReview([staleOneDrive()], reviewHash(staleOneDrive(), SHARE_RULE));
+  await openSettings();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.equal(env.elements.get("adapter-editor-heading").textContent, "Update sharepoint.doc to current rules");
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), updatedOneDrive(staleOneDrive()));
+  assert.match(nodeText(env.elements.get("adapter-editor-review")), /Replaces 1 rule with 1 rule from the current OneDrive for work documents starter:/);
+  assert.deepEqual(state.replaced, ["/options.html"], "the hash is cleared so a reload does not reopen it");
+  assert.equal(updateRequests().length, 0, "nothing saves on load");
+  env.elements.get("cancel-adapter").click();
+  assert.equal(env.elements.get("adapter-editor").hidden, true);
+  assert.equal(updateRequests().length, 0, "Cancel writes nothing");
+
+  installReview([staleOneDrive()], reviewHash(staleOneDrive(), SHARE_RULE));
+  await openSettings();
+  await saveOpenAdapter("the handed-off starter update");
+  assert.equal(updateRequests().length, 1);
+  assert.deepEqual(lastUpdate().config.adapters.artifacts, [updatedOneDrive(staleOneDrive())]);
+});
+
+test("a handed-off starter rule for a narrowed adapter opens a one-rule addition", async () => {
+  const saved = { ...narrowedSharePoint(), title: "{title}.docx" };
+  installReview([artifactFor("https://a.com"), saved], reviewHash(saved, PERSONAL_RULE));
+  await openSettings();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.equal(env.elements.get("adapter-editor-heading").textContent, "Add a rule to sharepoint.doc");
+  const review = nodeText(env.elements.get("adapter-editor-review"));
+  assert.match(review, /Adds 1 rule from the current SharePoint documents starter for the page you were on:/);
+  assert.ok(review.includes("Adds /personal/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), review);
+  assert.equal(env.elements.get("adapter-editor-review").querySelectorAll("li").length, 1);
+  assert.match(env.elements.get("adapter-preview-url").value, /^https:\/\/acme\.sharepoint\.com\/personal\//);
+  assert.equal(updateRequests().length, 0, "nothing saves on load");
+  await saveOpenAdapter("the one-rule addition");
+  const [other, adapter] = lastUpdate().config.adapters.artifacts;
+  assert.deepEqual(other, artifactFor("https://a.com"));
+  assert.deepEqual(adapter, { ...saved, match: [...saved.match, PERSONAL_RULE] }, "one rule appended, nothing else changed");
+});
+
+test("a handed-off adapter with no rule opens Edit and preview", async () => {
+  const custom = { type: "work.doc", origin: "https://docs.example", match: [{ path: "/a/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } }], id: "work.doc:{host}/{doc}" };
+  installReview([custom], reviewHash(custom, null));
+  await openSettings();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.equal(env.elements.get("adapter-editor-heading").textContent, "Edit and review work.doc");
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), custom);
+  assert.equal(updateRequests().length, 0);
+});
+
+test("a stale or crafted hand-off is refused with a plain message and saves nothing", async () => {
+  // The adapter is gone.
+  let state = installReview([artifactFor("https://a.com")], reviewHash(staleOneDrive(), SHARE_RULE));
+  await openSettings();
+  assert.equal(statusText(), "This site's rules changed since the panel offered this. Open the panel on the page again.");
+  assert.equal(env.elements.get("adapter-editor").hidden, true);
+  assert.deepEqual(state.replaced, ["/options.html"]);
+  // The rule is already present, or is not in the starter catalog.
+  for (const rule of [narrowedSharePoint().match[0], { path: "/anything/{*}" }]) {
+    installReview([narrowedSharePoint()], reviewHash(narrowedSharePoint(), rule));
+    await openSettings();
+    assert.equal(statusText(), "This rule can no longer be added here; edit the rules by hand.");
+    assert.equal(env.elements.get("adapter-editor-heading").textContent, "Edit and review sharepoint.doc");
+    assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), narrowedSharePoint(), "the crafted rule is not added");
+  }
+  // Malformed hashes are ignored.
+  for (const hash of ["#adapter-review=%E0%A4%A", "#adapter-review=notjson", `#adapter-review=${encodeURIComponent('{"adapter":["a","b"],"rule":null}')}`,
+    `#adapter-review=${encodeURIComponent('{"adapter":["a","b","c"],"rule":"x"}')}`, `#adapter-review=${"x".repeat(5000)}`]) {
+    state = installReview([narrowedSharePoint()], hash);
+    await openSettings();
+    assert.equal(env.elements.get("adapter-editor").hidden, true, hash.slice(0, 40));
+    assert.doesNotMatch(statusText(), /rules changed|can no longer be added/);
+  }
+  assert.equal(updateRequests().length, 0);
 });
 
 test("diagnostics show their count, copy as JSON lines with a header, and clear", async () => {

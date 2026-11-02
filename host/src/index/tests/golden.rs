@@ -983,7 +983,10 @@ fn legacy_m1() -> Fixture {
                         r"A \*starred\* title",
                         news,
                     ),
-                    // No presentation line: never a visit.
+                    // No presentation line: never a visit. Since d322188 (merged
+                    // from main) strict relearn review refuses it as a damaged
+                    // owned marker, so this fixture's relearn golden is that
+                    // error; indexing still skips it.
                     format!(
                         "{MARKER_PREFIX}{} url={} at=2026-10-18T11:00:00Z -->\n",
                         sha256_hex(b"orphan"),
@@ -1037,6 +1040,7 @@ fn summary_event(
 ) -> SummaryEvent {
     let artifact_id = crate::summary::summary_artifact_id(&key, kind, url).unwrap();
     SummaryEvent {
+        overview: None,
         event_id: uuid(5, n),
         artifact_id,
         artifact_type: kind.into(),

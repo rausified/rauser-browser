@@ -1793,6 +1793,7 @@ test("host config shape requires every v6 agent and adapter key and no retired p
     capture_enabled: false, strip_params: [],
     agent: null,
     summary_vocabulary: { document_types: ["report"], categories: ["news"] },
+    auto_summary: { enabled: true, dwell_secs: 0 },
     adapters: { format: 1, artifacts: [] },
   };
   assert.equal(isConfig(config), true);
@@ -1894,6 +1895,7 @@ function configResult(request, origin, overrides = {}) {
       capture_enabled: true, strip_params: [],
       agent: null,
       summary_vocabulary: { document_types: ["report"], categories: ["news"] },
+      auto_summary: { enabled: true, dwell_secs: 0 },
       adapters: { format: 1, artifacts: [artifact(origin)] },
     },
     config_issue: null,
@@ -2917,3 +2919,350 @@ for (const [name, oldTitle, newTitle, oldRefs, newRefs, expected] of [
     assert.deepEqual(merged.refs, expected);
   });
 }
+
+// --- Auto-summary (plan 2026-11-02-auto-summary, Task 5) ---------------------
+
+const AUTO_KEY = storageKey("auto_summary_v1");
+const AUTO_ALARM = `${BINARY_NAME}-auto-summary`;
+const AUTO_ORIGIN = "https://auto.example";
+const AUTO_SETTLE_WAIT_MS = 700;
+
+function autoLease(auto = { enabled: true, dwell_secs: 0 }, extra = {}) {
+  return { ...lease(AUTO_ORIGIN), auto_summary: auto, ...extra };
+}
+
+/** The extractor reads `url`'s page, so readTab accepts it. */
+function readingAs(url) {
+  executeScript = async (injection) => injection.files ? [{ frameId: 0 }] : [{
+    frameId: 0, result: {
+      title: "Doc", content: "Doc body", selection: null, truncated: false, readable: true, href: url,
+    },
+  }];
+}
+
+/** A recognized cold open of `${AUTO_ORIGIN}/items/<name>` in `tabId`, loaded. */
+async function openArtifact(tabId, name, { origin = AUTO_ORIGIN, load = true } = {}) {
+  const url = `${origin}/items/${name}`;
+  tabs.set(tabId, { id: tabId, windowId: 1, url, title: "Doc", incognito: false, status: "complete" });
+  readingAs(url);
+  onCommitted({
+    tabId, frameId: 0, documentId: `auto-doc-${tabId}-${name}`, documentLifecycle: "active", url,
+    timeStamp: Date.now(), transitionType: "link", transitionQualifiers: [],
+  });
+  await flush();
+  if (load) onTabUpdated(tabId, { status: "complete" }, tabs.get(tabId));
+  return url;
+}
+
+const autoRequests = (after) => ports.slice(after)
+  .flatMap((port) => port.sent.filter((message) => message.type === "start_auto_summary")
+    .map((request) => ({ port, request })));
+
+async function autoRequest(after) {
+  return until(() => autoRequests(after)[0], "start_auto_summary");
+}
+
+async function noAutoRequest(after) {
+  await new Promise((resolve) => setTimeout(resolve, AUTO_SETTLE_WAIT_MS + 300));
+  await flush();
+  assert.deepEqual(autoRequests(after).map(({ request }) => request.url), []);
+}
+
+function resetAuto() {
+  sessionValues.delete(AUTO_KEY);
+  alarms.delete(AUTO_ALARM);
+}
+
+test("recognizedOpenAtDwellZeroSendsOneStartAutoSummary", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  const url = await openArtifact(201, "first");
+  const { port, request } = await autoRequest(before);
+  assert.equal(request.url, url);
+  assert.equal(request.title, "Doc");
+  assert.equal(request.content, "Doc body");
+  for (const key of ["record_key", "kind", "harness", "selection", "instruction"]) {
+    assert.equal(key in request, false, key);
+  }
+  assert.match(request.requested_at, /[+-]\d\d:\d\d$|Z$/);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: { ...SUMMARY_RUN, url, record_key: { kind: "artifact", value: "test:auto.example/first" } },
+    existing: false,
+  });
+  // A started run skips the artifact briefly; the host decides later opens
+  // (already_summarized once saved, a new run if the agent met a wall).
+  await until(() => sessionValues.get(AUTO_KEY)?.skipped?.["test:auto.example/first"] > Date.now(),
+    "the artifact skipped for a while");
+  assert.deepEqual(sessionValues.get(AUTO_KEY).submitted, []);
+  // Another load of the same tab asks nothing more.
+  const after = ports.length;
+  onTabUpdated(201, { status: "complete" }, tabs.get(201));
+  await noAutoRequest(after);
+  assert.equal(autoRequests(before).length, 1);
+});
+
+test("unrecognizedPagesSendNothing", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(202, "x", { origin: "https://other.example" });
+  await noAutoRequest(before);
+});
+
+test("pausedCaptureOrDisabledAutoSummarySendsNothing", async () => {
+  for (const policy of [
+    autoLease({ enabled: false, dwell_secs: 0 }),
+    autoLease({ enabled: true, dwell_secs: 0 }, { capture_enabled: false }),
+    lease(AUTO_ORIGIN),
+  ]) {
+    resetAuto();
+    values.set(storageKey("policy_v1"), policy);
+    const before = ports.length;
+    await openArtifact(203, `paused-${ports.length}`);
+    await noAutoRequest(before);
+  }
+});
+
+test("alreadySummarizedIsAskedAgainNextLocalDayInTheSameBrowserSession", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 2, 23, 59).getTime() });
+  t.after(() => {
+    resetAuto();
+    values.set(storageKey("policy_v1"), autoLease({ enabled: false, dwell_secs: 0 }));
+  });
+  resetAuto();
+  // Advancing a whole day should reconsider only this test's open tabs.
+  sessionValues.delete(storageKey("activity_session_v1"));
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(204, "known");
+  const { port, request } = await autoRequest(before);
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "already_summarized",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/known"),
+    "the summarized artifact recorded");
+  const again = ports.length;
+  await openArtifact(205, "known");
+  await noAutoRequest(again);
+  t.mock.timers.setTime(new Date(2026, 10, 3, 0, 1).getTime());
+  // Renew the lease, keeping its revision, then focus a tab that stayed open.
+  values.set(storageKey("policy_v1"), autoLease());
+  const nextDay = ports.length;
+  onTabActivated({ tabId: 205, windowId: 1 });
+  await until(() => sessionValues.get(AUTO_KEY)?.candidates["205"], "the next-day candidate");
+  // Let the unchanged, already-loaded tab pass the route-settle fallback.
+  t.mock.timers.setTime(new Date(2026, 10, 3, 0, 1, 4).getTime());
+  onAlarm({ name: AUTO_ALARM });
+  const second = await autoRequest(nextDay);
+  assert.equal(second.request.url, request.url);
+  second.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: second.request.request_id, reason: "already_summarized",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted_day === "2026-11-03" &&
+    sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/known"), "the next-day decision to settle");
+});
+
+test("yesterdaysAlreadySummarizedReplyDoesNotSuppressToday", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 2, 23, 59, 59).getTime() });
+  t.after(() => {
+    resetAuto();
+    values.set(storageKey("policy_v1"), autoLease({ enabled: false, dwell_secs: 0 }));
+  });
+  resetAuto();
+  sessionValues.delete(storageKey("activity_session_v1"));
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(220, "midnight-reply");
+  const first = await autoRequest(before);
+  assert.equal(first.request.requested_at.slice(0, 10), "2026-11-02");
+  t.mock.timers.setTime(new Date(2026, 10, 3, 0, 0, 1).getTime());
+  values.set(storageKey("policy_v1"), autoLease());
+  first.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: first.request.request_id, reason: "already_summarized",
+  });
+  await until(() => first.port.closed, "yesterday's reply to close");
+  await flush();
+  assert.deepEqual(sessionValues.get(AUTO_KEY).submitted, [], "yesterday's judgment cannot suppress today");
+  const again = ports.length;
+  await openArtifact(221, "midnight-reply");
+  const second = await autoRequest(again);
+  assert.equal(second.request.requested_at.slice(0, 10), "2026-11-03");
+  second.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: second.request.request_id, reason: "already_summarized",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/midnight-reply"),
+    "today's judgment to be remembered");
+});
+
+test("notSetUpLeavesTheArtifactEligible", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(206, "setup");
+  const { port, request } = await autoRequest(before);
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "not_set_up",
+  });
+  await until(() => sessionValues.get(AUTO_KEY) && !sessionValues.get(AUTO_KEY).candidates["206"],
+    "the candidate dropped");
+  assert.deepEqual(sessionValues.get(AUTO_KEY).submitted, []);
+  // Tab switches and reopens do not ask again while nothing changed...
+  const quiet = ports.length;
+  onTabActivated({ tabId: 206, windowId: 1 });
+  await openArtifact(210, "setup");
+  await noAutoRequest(quiet);
+  // ...but a new config revision (a harness set up) does.
+  values.set(storageKey("policy_v1"), { ...autoLease(), revision: "host-revision:after-setup" });
+  const again = ports.length;
+  await openArtifact(207, "setup");
+  const retried = await autoRequest(again);
+  retried.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: retried.request.request_id, reason: "already_summarized",
+  });
+  await until(() => retried.port.closed, "the retried port to close");
+});
+
+test("hostUnavailableKeepsTheCandidate", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(208, "later");
+  const { port, request } = await autoRequest(before);
+  port.reply({
+    type: "error", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    code: "service_unavailable", message: "The Brauser service is not running.",
+  });
+  await until(() => port.closed, "the auto host port to close");
+  await flush();
+  const state = sessionValues.get(AUTO_KEY);
+  assert.equal(state.candidates["208"]?.artifact_id, "test:auto.example/later");
+  assert.deepEqual(state.submitted, []);
+  assert.ok(alarms.has(AUTO_ALARM), "a retry is scheduled");
+});
+
+test("aRefusedStartSkipsOnlyThatArtifact", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(211, "refused");
+  const { port, request } = await autoRequest(before);
+  port.reply({
+    type: "error", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    code: "internal", message: "history is unavailable",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.skipped?.["test:auto.example/refused"] > Date.now(),
+    "the refused artifact skipped");
+  assert.equal(sessionValues.get(AUTO_KEY).retry_after, undefined, "the queue is not held");
+  const next = ports.length;
+  await openArtifact(212, "next");
+  const second = await autoRequest(next);
+  assert.equal(second.request.url, `${AUTO_ORIGIN}/items/next`);
+  second.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: second.request.request_id, reason: "already_summarized",
+  });
+  await until(() => second.port.closed, "the second port to close");
+});
+
+test("aStartedArtifactIsAskedAgainOnceItsSkipEnds", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(213, "wall");
+  const first = await autoRequest(before);
+  first.port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: first.request.request_id,
+    run: { ...SUMMARY_RUN, record_key: { kind: "artifact", value: "test:auto.example/wall" } }, existing: false,
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.skipped?.["test:auto.example/wall"], "the start recorded");
+  // The run met a sign-in wall and saved nothing; once the short skip ends,
+  // a reload asks the host again.
+  const state = sessionValues.get(AUTO_KEY);
+  state.skipped["test:auto.example/wall"] = Date.now() - 1;
+  sessionValues.set(AUTO_KEY, state);
+  const again = ports.length;
+  await openArtifact(214, "wall");
+  const second = await autoRequest(again);
+  second.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: second.request.request_id, reason: "already_summarized",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/wall"),
+    "a saved summary is then remembered");
+});
+
+test("aSinglePageRouteWaitsForItsTitleOrSettle", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  // A route change: the tab is already "complete" and no load event comes.
+  await openArtifact(215, "route", { load: false });
+  await noAutoRequest(before);
+  // The new route's title arriving means it rendered.
+  onTabUpdated(215, { title: "Route title" }, tabs.get(215));
+  const { port, request } = await autoRequest(before);
+  assert.equal(request.url, `${AUTO_ORIGIN}/items/route`);
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "already_summarized",
+  });
+  await until(() => port.closed, "the route port to close");
+});
+
+test("aDwellStartedBeforeTheLoadStillCompletes", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease({ enabled: true, dwell_secs: 1 }));
+  const before = ports.length;
+  onWindowFocusChanged(1);
+  // Focus first, then the load: nothing else happens afterwards.
+  await openArtifact(216, "focused", { load: false });
+  onTabActivated({ tabId: 216, windowId: 1 });
+  await flush();
+  onTabUpdated(216, { status: "complete" }, tabs.get(216));
+  const { port, request } = await until(() => autoRequests(before)[0], "the dwell to complete");
+  assert.equal(request.url, `${AUTO_ORIGIN}/items/focused`);
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "already_summarized",
+  });
+  await until(() => port.closed, "the dwell port to close");
+});
+
+test("aTabThatMovedOnIsNotSubmittedForItsOldArtifact", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(217, "old");
+  // Before the drain reads it, the tab shows another page (no event yet).
+  tabs.set(217, { ...tabs.get(217), url: `${AUTO_ORIGIN}/items/new` });
+  readingAs(`${AUTO_ORIGIN}/items/new`);
+  await noAutoRequest(before);
+});
+
+test("dwellSurvivesWorkerRestart", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease({ enabled: true, dwell_secs: 1 }));
+  const before = ports.length;
+  onWindowFocusChanged(1);
+  await openArtifact(209, "dwell");
+  onTabActivated({ tabId: 209, windowId: 1 });
+  await flush();
+  // Focus is counted in session storage, so a restarted worker resumes it,
+  // and an alarm is set for the rest of the dwell.
+  const stored = sessionValues.get(AUTO_KEY).candidates["209"];
+  assert.equal(stored.loaded, true);
+  assert.equal(typeof stored.focused_since, "number");
+  assert.ok(alarms.has(AUTO_ALARM), "the dwell alarm is set");
+  await noAutoRequest(before).catch(() => {});
+  onAlarm({ name: AUTO_ALARM });
+  const { request } = await autoRequest(before);
+  assert.equal(request.url, `${AUTO_ORIGIN}/items/dwell`);
+});

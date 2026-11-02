@@ -812,6 +812,7 @@ mod tests {
                 title: format!("Legacy {n}"),
             }),
             2 => EventData::Summary(SummaryEvent {
+                overview: None,
                 event_id: id,
                 artifact_id: artifact_id.clone(),
                 artifact_type,

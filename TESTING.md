@@ -15,7 +15,8 @@ When you can't test something without UI, don't fall back to the user's screen o
 Accessibility tests use axe-core through playwright-core against a real headless Chromium, launched through `scripts/a11y-browser.mjs` (`a11yBrowser(t)`; open pages with `browser.newContext()` then `context.newPage()`, because AxeBuilder rejects `browser.newPage()`). The packages are exact-pinned devDependencies (`playwright-core` 1.64.1, `@axe-core/playwright` 4.14.0, `axe-core` 4.14.0); nothing downloads a browser (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`).
 
 - **Which browser:** `CHROME_PATH`, else `/opt/browsers/chromium` on Linux (a stable symlink to Playwright's Chrome for Testing build on the worker VMs: 156.0.8078.4, revision chromium-1248), else the Google Chrome app on macOS. Launch flags are `headless` plus `--no-sandbox`, which is harmless where Chrome's own sandbox works.
-- **Codex sandbox:** Chromium cannot start inside Codex's workspace-write sandbox on Linux with any flags: its seccomp filter returns EPERM for `setsockopt` and `shutdown` on Unix socketpairs, and Chromium aborts at startup. That sandbox sets `CODEX_SANDBOX_NETWORK_DISABLED=1`, so the launcher skips with a one-line reason there. A missing browser elsewhere also skips. `BRAUSER_REQUIRE_A11Y_TESTS=1` turns both into failures.
+- **Codex sandbox:** Chromium cannot start inside Codex's workspace-write sandbox on Linux with any flags: its seccomp filter returns EPERM for `setsockopt` and `shutdown` on Unix socketpairs, and Chromium aborts at startup. That sandbox sets `CODEX_SANDBOX_NETWORK_DISABLED=1`. There the launcher tries Chromium once per test process (30-second bound); if it does not start, every browser test is skipped with a `blocked by sandbox:` reason and the run stays green, even with `BRAUSER_REQUIRE_A11Y_TESTS=1`. Cookie runs that exact command as its in-sandbox health check, so the sandbox must not read as a red suite; the unsandboxed commit gate runs it for real. If Chromium does start in the sandbox, the tests run.
+- **Outside the sandbox:** a launch failure fails the test. A missing browser skips, and `BRAUSER_REQUIRE_A11Y_TESTS=1` turns that skip into a failure, inside the sandbox or out. `scripts/tests/a11y-browser.test.mjs` covers both sides, including an end-to-end run with a stand-in browser that exits at once.
 - **Where they run for real:** CI's macOS job and the worker's unsandboxed commit gate (a `--test-cmd`). On a worker VM, install offline with `npm ci --offline --ignore-scripts` against the committed lockfile; `npm install --offline` fails in the sandbox because `~/.npm` is read-only there.
 
 After `npm run build:extension`, run `npm run test:a11y`. Set
@@ -263,6 +264,19 @@ The Tasks page keyboard-focus regression triggers
 the existing hide/show refresh handler and waits for a rendered status pill
 or new row, so both focus assertions avoid racing the real polling interval.
 
+## Capped browser captures
+
+The existing extraction, task and built-panel summarize tests cover the
+extractor's combined text/selection truncation flag through manual summaries,
+automatic summaries and tasks. Frame-choice fixtures distinguish a capped
+chosen frame from discarded frame text and a borrowed highlight. Protocol
+wire tests pin missing/true/false compatibility. Rust page-file tests cover
+ordinary, Office and Miro pages with and without Incoming navigation; supervisor
+fixtures verify both initial prompts and queued recovery use stored provenance,
+including a page that forges a completeness notice. The agent boundary is a
+recording fake: these tests prove the context delivered to an agent, not that a
+real agent fetched a full artifact or selected the right reading scope.
+
 ## Panel status and artifact refresh coverage
 
 The built-panel tests assert adapter-based capture wording with zero and some
@@ -390,8 +404,9 @@ smoke step, real dialog or protocol changed for recovery.
 
 `npm run test:extension` builds on the extension build from the development
 checks. `extension/tests/capture-site.test.mjs` exercises the existing starter
-catalog through the new plan builder: real Jira, SharePoint/OneDrive and GitHub
-URL forms, independent PR/issue scopes, current-page misses, all 27 fixed
+catalog through the new plan builder: real Jira, Confluence, SharePoint/OneDrive
+and GitHub URL forms (Jira issues and Confluence pages chosen together or
+alone on one Atlassian origin), independent PR/issue scopes, current-page misses, all 27 fixed
 probes, invalid inputs, full-document limits and preservation of other sites.
 `extension/tests/panel/capture-site.test.mjs` loads the shipped panel markup and JavaScript
 with a scripted native client, worker and Chrome APIs. It covers review/save,
@@ -520,6 +535,34 @@ harness whose prompt named its own `page.md` by path, with the usual argv,
 in its run directory; and that the same Save writes the draft. This proves
 the real Chrome, host and service path with a fake agent; it does not judge
 a real agent's drafts.
+
+## Auto-summary
+
+- Pure candidate logic: `extension/tests/auto-summary.test.mjs` (dwell 0 and
+  dwell counting only focused time, replacement on another artifact, one
+  submission per artifact across tabs, the 500-entry submitted cap, FIFO
+  order, the next-due time).
+- Worker wiring: `extension/tests/worker.test.mjs` "Auto-summary" tests drive
+  the fake Chrome: one `start_auto_summary` per recognized open, none for an
+  unrecognized page, a paused capture, a disabled setting or a lease without
+  the field, no second ask after `already_summarized`, a dropped candidate
+  after `not_set_up` (no re-ask on tab switches until the lease revision
+  changes), a refusal that skips only its artifact, a started artifact asked
+  again once its short skip ends, a route change that waits for its title, a
+  kept candidate and a retry alarm after `service_unavailable`, and focus kept
+  in session storage with a dwell alarm. Each test answers every request it causes: the worker runs one
+  drain at a time, so an unanswered request stalls the next test's drain.
+- Host: `native::tests::run_proxy` (each skip reason before connecting, the
+  forwarded summary `start_run`, manual Summarize ignoring an existing summary,
+  `summary_blocks_auto` dates and read scopes), `service::queue`
+  (`auto_runs_queue_in_arrival_order`), `service::finisher`
+  (`a_sign_in_answer_writes_nothing`), `config` (defaults, round trip, the
+  3600 s bound), and `protocol/tests/wire_auto_summary.rs`.
+- Headless smoke: `step("Automatic summaries turn off from settings")` before
+  harness setup keeps every later summary step's counts exact (a new install
+  defaults to on), and `step("An automatic summary runs once for a recognized
+  artifact with none")` turns it on, opens `/allowed/auto`, waits for exactly
+  one `smoke.page` summary event, checks a reopen adds none, and turns it off.
 
 ## Agent tasks, task bar
 
@@ -856,6 +899,19 @@ every result and report the generated case counts. Engine crashes, invalid
 JSON and incomplete result sets fail. Deterministic runner/probe regressions
 run in `npm run test:scripts`, including denial in required CI mode.
 
+For an additional offline comparison when child pipes are denied, write
+requests from the exported `genCase(seed, index)` in
+`scripts/adapter-templates-diff.mjs` to a JSON Lines file under `target/`.
+Escape U+2028/U+2029 in input JSON strings as the standard runner does.
+Run `target/debug/brauser adapters eval < requests.jsonl > rust.jsonl` and
+`node scripts/adapter-templates-eval.mjs < requests.jsonl > ts.jsonl`
+sequentially after building both engines, then compare parsed JSON rows.
+Split outputs on literal `\n`, not Unicode line separators that can occur
+inside JSON strings. This exercises engine agreement using regular files;
+the standard command's child-pipe check remains skipped until the external
+gate or CI runs it. Fuzz-target compilation also needs `libfuzzer-sys` in the
+Cargo cache; an uncached offline dependency is unavailable, not a passing check.
+
 ## UI-free end-to-end: the recipe
 
 ### Browser
@@ -997,7 +1053,7 @@ Real-UI checks run on a desktop, so:
 Checks of this kind in this repo:
 
 - `npm run smoke:macos -- --auto`: the full flow with the real folder picker, answered through UI scripting. It takes keyboard focus.
-- **[human] The Brauser service under launchd** (PR 2 of the open-access spec; also tracked as `brwr-sv2` in BOSUN_FEATURE_BACKLOG.md). It changes the user's own launchd domain, so a person runs it: (1) register the dev build with `node scripts/register-dev-host.mjs <extension ID> "$(pwd)/target/debug/brauser"` and close Chrome; (2) reopen Chrome and send a `start_run` from the panel's DevTools console; (3) confirm that `launchctl print gui/$UID/com.rauser.brauser.service` shows the service, and that it exits after 10 idle minutes; (4) confirm that `agent.env` values reach a run (possible since PR 3 registered the real runners); (5) confirm that a rebuild plus a request restarts the service. *Run 2026-11-02 by John on macOS with real Chrome and the dev build: (1)–(4) passed, (5) not run.* After registering build `0.1.0+029a398fa684`, the first panel request started the service through launchd (`launchctl print` showed it running); it exited on its own at 01:13:16, ten minutes after its last request, with exit code 0; and Claude Code passed setup and ran only once its Bedrock settings were in `agent.env`, so those values reached its runs. (5) stays open as `brwr-rsr`: `scripts/dev/deploy-live` and `register-dev-host.mjs` boot out the LaunchAgent, so a deploy never reaches the stale-build restart.
+- **[human] The Brauser service under launchd** (PR 2 of the open-access spec; also tracked as `brwr-sv2` in BOSUN_FEATURE_BACKLOG.md). It changes the user's own launchd domain, so a person runs it: (1) register the dev build with `node scripts/register-dev-host.mjs <extension ID> "$(pwd)/target/debug/brauser"` and close Chrome; (2) reopen Chrome and send a `start_run` from the panel's DevTools console; (3) confirm that `launchctl print gui/$UID/com.rauser.brauser.service` shows the service, and that it exits after 10 idle minutes; (4) confirm that `agent.env` values reach a run (possible since PR 3 registered the real runners); (5) confirm that a rebuild plus a request restarts the service. *Run 2026-11-02 by John on macOS with real Chrome and the dev build: (1)–(5) passed.* After registering build `0.1.0+029a398fa684`, the first panel request started the service through launchd (`launchctl print` showed it running); it exited on its own at 01:13:16, ten minutes after its last request, with exit code 0; and Claude Code passed setup and ran only once its Bedrock settings were in `agent.env`, so those values reached its runs. (5) passed later that night (`brwr-rsr`): with the service running build `ab3e37853370`, John rebuilt `target/debug/brauser` with a throwaway change and no re-registration, and the next panel request logged "service is another build; taking the restart lock" and a launchd kickstart, and launchd started the new build (runs 2, a new pid) at 02:12:14. That rebuild stamped `unknown`, not `-dirty`, because the main checkout's cached build script still held a removed worktree's path; `host/build.rs` now reads `CARGO_MANIFEST_DIR` at run time. `scripts/dev/deploy-live` and `register-dev-host.mjs` boot out the LaunchAgent, so a deploy never reaches this restart.
 
 - **[human] Real summaries from the dev build** (PR 3 of the open-access spec; tracked with `brwr-sr3` in BOSUN_FEATURE_BACKLOG.md). It runs real agents with full access on the user's login, so a person runs it: (1) register the dev build and set up Codex in settings (**Detect harnesses**, then **Test and use**); (2) on a page you trust, click **Summarize & log** and confirm the card reaches "Summarized" with a sensible type, category, and importance line; (3) click **Open in Codex** and confirm Codex Desktop opens that thread; (4) set up Claude Code (for Bedrock, through `agent.env`), summarize a page, and confirm the card reaches "Summarized" and **Copy resume command** resumes the session in a terminal. *Run 2026-11-02 by John on macOS with real Chrome and the dev build: passed.* Codex summaries (Word, PowerPoint and Excel documents on SharePoint) reached "Summarized" with a sensible line, and **Open in Codex** opened the thread in Codex Desktop. Claude Code first failed setup with "Not logged in" because `CLAUDE_CODE_USE_BEDROCK` and the model names lived only in `~/.zshenv`, which the service never reads; with them in `agent.env` (the AWS credentials stay in `~/.claude/settings.json`) setup passed, Claude Code summaries succeeded, and **Copy resume command** resumed the session.
 
@@ -1510,10 +1566,43 @@ bytes and verify no cache or adopted-contract file is created.
 The log inventory regression refuses symlinked daily files, archive directories
 and the logs directory itself, so the index's normal symlink skipping cannot
 produce an incomplete impact plan.
+Damaged owned-marker regressions cover truncated payloads/closers, invalid hex
+and provenance, missing IDs, unsupported kinds, indentation and joined markers.
+Both planning and decision recording refuse them without creating a cache or
+journal. `cargo test --locked -p brauser --lib strict_review_accepts` verifies
+legacy visits, activity, why, summary and both overflow forms remain readable;
+ordinary reindex still tolerates torn entries and preserves the daily file.
+Cross-origin regressions occupy destinations through HTTP history, owned notes,
+owned summaries and implicit containers, and protect a source already shared
+with HTTPS. Fresh approval refuses each conflict, unrelated foreign history
+stays outside the migration rows, and changed foreign evidence changes the token.
 `cargo test --locked -p brauser --test relearn_plan` also runs the real CLI
 against malformed/oversized requests and an apply flag. An injected absolute
 `--config` path keeps these child processes away from real user state on every
 platform. The library request/JSON output path is tested with that same seam.
+`cargo test --locked -p brauser --test relearn_journal` includes a real-binary
+regression that truncates a valid why marker: both commands refuse even when
+the caller supplies a previously valid empty-plan revision. It checks exact
+config/log bytes and the absence of cache and journal writes.
 These tests use no browser or harness and do not establish panel Re-learn or
 migration acceptance. POSIX symlink fixtures state their Windows exclusion;
 all other planning tests are portable.
+
+
+## Recorded incoming navigation in summaries
+
+`cargo test --locked -p brauser --lib incoming_navigation` exercises the host-owned
+summary context and file list: real log/index trails, cache deletion and failed
+lookup, five-row bounds, rejected unsafe URLs and invalid dates, hostile titles
+and Unicode line separators, plain/Office/Miro section boundaries, legacy run
+records, queued snapshot persistence, restart with an in-process fake runner,
+and byte-identical Retry save. Empty snapshots omit both the section and the
+prompt paragraph. The existing Office/Miro prompt tests retain their retrieval
+checks; malformed SUMMARY.md tests include the new conditional block.
+
+`npm run test:markdown-neutralizer` now also puts every hostile corpus value
+into Incoming source titles and destinations across both summary profiles.
+These are offline tests: they do not fetch a source or run a real harness.
+The private run record's optional `incoming` field is omitted when empty;
+older services cannot read records containing it. Before rollback, leave no
+queued/running runs; preserved newer records remain unreadable to that build.

@@ -15,6 +15,7 @@ import { httpOrigin, type SampledShape } from "./site-patterns.js";
 import { githubOwnerFromUrl, parseTenantList, starterKind } from "./starter-adapters.js";
 import { SitePatternPanel, collectPagePatterns } from "./site-pattern-panel.js";
 import { draftHandoff, handoffKey, storeDraftHandoff } from "./capture-site-handoff.js";
+import { GITHUB_RECORD_LABELS, GITHUB_RECORD_ORDER, joinRecordedTypes } from "./site-coverage.js";
 
 export interface CapturePage {
   url: string;
@@ -150,22 +151,6 @@ interface RestorePlan {
   startsCapture: boolean;
 }
 
-// The confirmation line names only what is actually checked, in this fixed
-// order, so the privacy-boundary scope line is never wider than the save.
-const GITHUB_RECORD_LABELS: Record<string, string> = {
-  "github.repo": "repositories",
-  "github.pr": "pull requests",
-  "github.issue": "issues",
-};
-const GITHUB_RECORD_ORDER = ["github.repo", "github.pr", "github.issue"];
-
-/** "A", "A and B", or "A, B and C" — no Oxford comma, matching this panel's
- * existing list copy (e.g. the "Remember: X and Y" summary line). */
-function joinRecordedTypes(labels: string[]): string {
-  if (labels.length < 2) return labels.join("");
-  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
-}
-
 /** An in-panel, revision-bound review. All transient page URLs and scopes
  * remain in this panel; only the reviewed config goes to the native host. */
 export class CaptureSitePanel {
@@ -176,6 +161,9 @@ export class CaptureSitePanel {
   private readonly hint = element<HTMLElement>("capture-site-hint");
   private readonly review = element<HTMLElement>("capture-site-review");
   private readonly heading = element<HTMLElement>("capture-site-heading");
+  private readonly atlassian = element<HTMLElement>("capture-site-atlassian");
+  private readonly jira = element<HTMLInputElement>("capture-site-jira");
+  private readonly confluence = element<HTMLInputElement>("capture-site-confluence");
   private readonly github = element<HTMLElement>("capture-site-github");
   private readonly repos = element<HTMLInputElement>("capture-site-repos");
   private readonly prs = element<HTMLInputElement>("capture-site-prs");
@@ -252,7 +240,7 @@ export class CaptureSitePanel {
       cancel();
     });
     this.save.addEventListener("click", () => void this.commit());
-    for (const input of [this.repos, this.prs, this.issues, this.orgs]) {
+    for (const input of [this.jira, this.confluence, this.repos, this.prs, this.issues, this.orgs]) {
       input.addEventListener("input", () => this.updatePreview());
     }
     this.scoped.addEventListener("input", () => {
@@ -374,6 +362,9 @@ export class CaptureSitePanel {
     this.recurringStart.hidden = true;
     this.heading.textContent = `Capture work on ${new URL(origin).host}`;
     this.source.textContent = mode === "draft" ? DRAFT_SOURCE : STARTER_SOURCE;
+    this.atlassian.hidden = mode !== "starter" || starterKind(origin) !== "atlassian";
+    this.jira.checked = true;
+    this.confluence.checked = true;
     this.github.hidden = mode !== "starter" || starterKind(origin) !== "github";
     this.repos.checked = true;
     this.prs.checked = true;
@@ -412,6 +403,7 @@ export class CaptureSitePanel {
       this.restorePlan = { origin: target.origin, document, startsCapture: this.session.config!.capture_enabled };
       this.heading.textContent = `Restore capture on ${new URL(target.origin).host}`;
       this.source.textContent = "Recorded capture rules · existing notes keep their identity. Title cleanup and reference extraction can be adjusted in settings.";
+      this.atlassian.hidden = true;
       this.github.hidden = true;
       this.preview.replaceChildren();
       for (const adapter of recorded.artifacts) {
@@ -752,7 +744,9 @@ export class CaptureSitePanel {
     this.message.textContent = problem ?? this.previewMessage;
     this.save.disabled = busy || !plan || !!problem || !this.session.connected;
     this.cancel.disabled = this.saving;
-    for (const input of [this.repos, this.prs, this.issues, this.orgs]) input.disabled = this.saving || stale;
+    for (const input of [this.jira, this.confluence, this.repos, this.prs, this.issues, this.orgs]) {
+      input.disabled = this.saving || stale;
+    }
     this.orgs.disabled ||= !this.repos.checked && !this.prs.checked && !this.issues.checked;
     const draftInputs = [
       ...this.draftViews.flatMap((view) => [view.type, ...view.rules]), this.scoped, this.unscoped, this.titleSuffix,
@@ -905,6 +899,8 @@ export class CaptureSitePanel {
       repositories: this.repos.checked,
       pullRequests: this.prs.checked,
       issues: this.issues.checked,
+      jiraIssues: this.jira.checked,
+      confluencePages: this.confluence.checked,
     });
     const target = this.target;
     const check = ++this.starterCheck;

@@ -2,7 +2,10 @@ import type { AdapterObject } from "./adapter-review.js";
 import { canonicalCapture, compileDocument } from "./adapter-templates.js";
 import { canonicalJson } from "./capture-site-handoff.js";
 
-export type StarterKind = "jira" | "sharepoint" | "github" | "miro";
+/** The starter family an origin belongs to. One family can offer several
+ * starters: an Atlassian Cloud site offers Jira issues and Confluence pages,
+ * GitHub offers pull requests, issues and repositories. */
+export type StarterKind = "atlassian" | "sharepoint" | "github" | "miro";
 
 export interface StarterOffer {
   key: string;
@@ -35,7 +38,7 @@ function secureHostname(origin: string): string | null {
 export function starterKind(origin: string): StarterKind | null {
   const host = secureHostname(origin);
   if (!host) return null;
-  if (host.endsWith(".atlassian.net") && host !== "atlassian.net") return "jira";
+  if (host.endsWith(".atlassian.net") && host !== "atlassian.net") return "atlassian";
   if (host.endsWith(".sharepoint.com") && host !== "sharepoint.com") return "sharepoint";
   if (origin === GITHUB_ORIGIN) return "github";
   if (origin === MIRO_ORIGIN) return "miro";
@@ -108,6 +111,29 @@ function jira(origin: string): AdapterObject {
     id: "jira:{host}/{key}",
     title: "[{key:jira_key}] {title} - Jira",
     alias: { from: "tab_title", capture: "key" },
+    refs: [{ type: "jira.issue", find: "jira_key" }],
+  };
+}
+
+/** Confluence Cloud pages (docs/adapters/confluence.page.md). The ID is the
+ * numeric page ID alone, never the space key, so a page moved to another
+ * space keeps its identity. The ID template is type-qualified so later
+ * Confluence starters (blog posts, whiteboards, databases) each get their
+ * own namespace. A page's version history counts toward the page, in view
+ * mode; the first title entry strips that view's "Version history - "
+ * prefix. */
+function confluencePage(origin: string): AdapterObject {
+  return {
+    type: "confluence.page",
+    origin,
+    match: [
+      { path: "/wiki/spaces/{_}/pages/{id:int}/{*}" },
+      { path: "/wiki/spaces/{_}/pages/edit-v2/{id:int}", mode: "edit" },
+      { path: "/wiki/spaces/{_}/history/{id:int}/{*}", mode: "view" },
+      { path: "/wiki/pages/viewpage.action", query: { pageId: "{id:int}" } },
+    ],
+    id: "confluence.page:{host}/{id}",
+    title: ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"],
     refs: [{ type: "jira.issue", find: "jira_key" }],
   };
 }
@@ -187,17 +213,31 @@ function githubRepository(organizations: string[]): AdapterObject {
  * adapter until `githubOrganizations` names at least one organization. */
 export function starterOffers(origin: string, githubOrganizations: string[]): StarterOffer[] {
   const kind = starterKind(origin);
-  if (kind === "jira") {
-    return [{
-      key: `jira:${origin}`,
-      kind,
-      artifact_type: "jira.issue",
-      label: "Jira issues",
-      description: "Issue pages and board modals become one artifact per Jira key.",
-      origin,
-      needs_scope: false,
-      adapter: jira(origin),
-    }];
+  if (kind === "atlassian") {
+    // Jira and Confluence share the site's origin; their routes (/browse and
+    // /jira against /wiki) never overlap, so either can be chosen alone.
+    return [
+      {
+        key: `jira:${origin}`,
+        kind,
+        artifact_type: "jira.issue",
+        label: "Jira issues",
+        description: "Issue pages and board modals become one artifact per Jira key.",
+        origin,
+        needs_scope: false,
+        adapter: jira(origin),
+      },
+      {
+        key: `confluence.page:${origin}`,
+        kind,
+        artifact_type: "confluence.page",
+        label: "Confluence pages",
+        description: "Each page becomes one artifact by its page ID, whether you view it, edit it, or open its version history.",
+        origin,
+        needs_scope: false,
+        adapter: confluencePage(origin),
+      },
+    ];
   }
   if (kind === "sharepoint") {
     return [{
@@ -343,9 +383,17 @@ export function starterRuleUpdate(adapter: AdapterObject): StarterRuleUpdate | n
   const kept = savedRules.filter((rule) => !retired.has(canonicalJson(rule)));
   const removed = savedRules.filter((rule) => retired.has(canonicalJson(rule))) as AdapterRule[];
   if (kept.length + added.length > MAX_RULES) return null;
-  const updated: AdapterObject = { ...adapter, match: [...kept, ...added] };
-  const own = adapter.modes && typeof adapter.modes === "object" && !Array.isArray(adapter.modes)
-    ? adapter.modes as Record<string, unknown>
+  return withStarterModes({ ...adapter, match: [...kept, ...added] }, current, added, removed);
+}
+
+/** `updated` with `modes` gaining the entries each `added` rule's `mode`
+ * capture needs, taken from the current starter, when the adapter lacks
+ * them; then the update, when the result compiles on its own. */
+function withStarterModes(
+  updated: AdapterObject, current: AdapterObject, added: AdapterRule[], removed: AdapterRule[],
+): StarterRuleUpdate | null {
+  const own = updated.modes && typeof updated.modes === "object" && !Array.isArray(updated.modes)
+    ? updated.modes as Record<string, unknown>
     : {};
   const starterModes = (current.modes ?? {}) as Record<string, unknown>;
   const missingModes: Record<string, unknown> = {};
@@ -361,6 +409,28 @@ export function starterRuleUpdate(adapter: AdapterObject): StarterRuleUpdate | n
   }
   if (Object.keys(missingModes).length) updated.modes = { ...own, ...missingModes };
   return compileDocument({ format: 1, artifacts: [updated] }).ok ? { adapter: updated, added, removed } : null;
+}
+
+/**
+ * `adapter` with one rule of its current starter appended. The rule must be
+ * in the current starter's `match` (compared by canonical JSON, and the
+ * starter's own copy is the one added), absent from the adapter, keep the
+ * adapter within 16 rules, and compile. `modes` gains only what the rule's
+ * `mode` capture needs; nothing else about the adapter changes. Unlike
+ * `starterRuleUpdate` this is not gated by STARTER_HISTORY: it is offered per
+ * page and per rule, and confirmed in the editor, so a hand-narrowed adapter
+ * gains only the one rule that covers the page in front of the user.
+ */
+export function starterRuleAddition(adapter: AdapterObject, rule: AdapterRule): StarterRuleUpdate | null {
+  const current = matchingStarter(adapter)?.adapter;
+  if (!current || !Array.isArray(adapter.match) || !Array.isArray(current.match)) return null;
+  const key = canonicalJson(rule);
+  const starterRule = (current.match as AdapterRule[]).find((entry) => canonicalJson(entry) === key);
+  if (!starterRule) return null;
+  const savedRules = adapter.match as unknown[];
+  if (savedRules.some((entry) => canonicalJson(entry) === key)) return null;
+  if (savedRules.length + 1 > MAX_RULES) return null;
+  return withStarterModes({ ...adapter, match: [...savedRules, starterRule] }, current, [starterRule], []);
 }
 
 export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): boolean {

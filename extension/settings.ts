@@ -67,6 +67,7 @@ export function leaseFor(config: ConfigSnapshot, currentRevision: string): Polic
     expires_at: Date.now() + POLICY_LEASE_MS,
     capture_enabled: config.capture_enabled,
     adapters: config.adapters,
+    auto_summary: config.auto_summary,
   };
 }
 

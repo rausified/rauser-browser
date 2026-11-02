@@ -1061,3 +1061,172 @@ instead of reapplying an obsolete quarantine patch. All eleven non-browser
 health commands pass locally. Required browser mode still fails at the
 explicit sandbox guard, so this run adds no new browser acceptance evidence.
 Incomplete axe results and screen-reader behavior still require human review.
+
+### 2026-11-02 — Refuse incomplete Re-learn history
+
+Re-learning review now stops when an owned daily log contains a recognizable
+but damaged visit marker. Previously a truncated marker could silently vanish
+from the impact report and let the host record approval of an empty plan.
+The strict scan reuses the existing event and overflow parsers and reports the
+file and line that need inspection. Legacy visits, activity, saved context,
+summary markers and both overflow forms remain readable; normal indexing
+continues to tolerate incomplete entries for capture recovery. Regressions
+exercise malformed payloads, provenance and joined markers, plus the real
+`relearn-plan` and `relearn-record` commands with a torn why marker. Neither
+command changes the config, log, cache or decision journal on refusal.
+
+### 2026-11-02 — Include other sites when checking Re-learn key collisions
+
+A site's proposed keys are now checked against recorded identities from every
+origin, including owned notes, summaries and containers that have never been
+opened directly. HTTP and HTTPS pages can share a hostname and therefore an
+artifact ID; previously reviewing just one scheme could miss a merge with the
+other scheme's history. A foreign-occupied destination now reports a merge and
+blocks approval. A source already shared with another origin is also blocked,
+even when its new key would otherwise be free. Other sites remain outside the
+migration rows, and unrelated foreign history still permits a clean approval.
+All recorded contracts used to derive occupancy bind the review token. These
+two assigned prerequisites add seven regression tests; the full local gate
+passes with 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension
+test files and both Clippy builds. Browser execution still skips 36 cases in
+this sandbox. Durable apply (`brwr-dbp`) and panel Re-learn remain unfinished.
+
+
+### 2026-11-02 — Keep recorded incoming navigation with a summary
+
+Summaries can now retain the recorded path into an artifact, so a reader
+returning later can see the planning ticket, document or other known artifact
+from which it was opened. The service looks up the existing recorded trail
+for the page's current host-derived identity and freezes up to five source and
+transition pairs when the summary is requested. The saved file's Incoming
+list gives each source's title and safe link, the browser transition and the
+last recorded date. It describes observed navigation; the agent's outgoing
+References still mean sources the artifact itself cites.
+
+The same bounded snapshot goes into a host-written section of page.md and
+stays with the private run record through queueing, restart and Retry save.
+The agent may use it as attributed assessment context, but may not open the
+source links or treat navigation as a dependency or endorsement. The host
+renders the final list itself, so it cannot be invented by the answer. Unsafe
+addresses and unattributed transitions are omitted, titles stay inert, and a
+run with no known incoming sources adds no section or prompt paragraph. Older
+runs keep their original behavior. A service rollback cannot read new run
+records containing the optional snapshot; finish queued/running runs first.
+
+Ten new offline tests cover actual recorded trails, cache loss and lookup
+failure, bounds and hostile text, Office/Miro boundaries, legacy records,
+queue/restart persistence and byte-identical Retry save. The full required
+and README gate passes with 1,331 reported Rust outcomes (92 explicit IPC
+guard skips), 40 extension test files, both Clippy builds and 10,696 inert
+Markdown renderings. Accessibility passes two fixtures and explicitly skips
+36 browser cases inside the sandbox. This completes brwr-sm1; no live
+harness, external API or deployed runtime was used.
+
+## 2026-11-02 — Read the summary before reopening it (brwr-sm3)
+
+Saved summaries now tell you what a page is about directly in the panel and
+Recent: their one-sentence overview appears alongside the document type. A
+finished summary run leads its result with that same overview while keeping
+its type, category and importance details. Previously the overview reached
+only the summary file, so deciding what to reopen required opening that file.
+The host now carries the validated sentence through the daily-log event and
+run result to each view. Older summaries retain their familiar wording, and
+new and old overviews survive reopening the cache and rebuilding it from
+logs. Agent text stays literal, including markup-like strings. This additive
+protocol-v8 change needs the host and extension deployed together; older
+hosts cannot replay newly written overview fields.
+
+## 2026-11-02 — Keep dismissed summaries reachable (brwr-tsh1)
+
+Removing the harness no longer makes retained summary history disappear
+after a panel restore. Brauser keeps its browser-local history hint when a
+retained summary exists, even if its card was dismissed or aged out of the
+panel's one-day restore window. Tasks still lists those records and its Show
+dismissed control reveals them. An end-to-end controller regression follows
+a dismissed summary through panel restore, harness removal and Tasks, and
+additional cases cover older summaries and mixed legacy history.
+
+
+## 2026-11-02 — Recognize padded IDs in tab titles (brwr-tp1)
+
+Custom capture rules can now remove an identifier from a tab title even when
+it ends with base64 padding, such as `[uXjVM0uuBLo=] Roadmap`. The same ID
+already worked in URLs; the title matcher stopped before its `=` and left the
+whole title in place. Both the native host and browser now recognize the
+padded title in either direction, and tab-title alias suggestions retain the
+complete identifier. They still reject empty bodies, internal or excessive
+padding, and values whose padding exceeds the configured length limit.
+
+The fix reuses the existing longest-run matcher, with strict validation after
+scanning, following a separate parser design challenge. A custom template
+that uses `=` as the delimiter beside a token capture now fails validation;
+use a delimiter outside the token alphabet, such as brackets or spaces.
+Shipped starter rules do not use token title captures. The 26 shared regression
+vectors reproduced ten failures in each engine before the fix and now pass.
+The full local gate passed with 1,337 Rust-reported test outcomes, all 40
+extension files and both Clippy builds; 1,265 individual adapter JavaScript
+tests pass. A regular-file comparison also verified agreement on 2,024 cases.
+IPC and real Chromium checks explicitly skip in this sandbox; the ordinary
+differential runner skipped its blocked child pipes and fuzz compilation
+could not find the uncached `libfuzzer-sys` dependency. Those checks remain for
+the external gate/CI. No live service, harness or external API was used.
+
+
+## 2026-11-02 — Keep automatic summaries within current page rules
+
+Brauser now checks the site's current capture rules when an automatic summary
+reaches the native host. If the site was removed or its rules narrowed while
+the browser was reading the page, the host skips the automatic run. Earlier
+rules still preserve the shared page note, and a person can explicitly choose
+Summarize & log as before. The eligibility settings, note key and current-rule
+check share one refreshed configuration lock; it is released before talking
+to the service. An offline regression saves a real note, removes or narrows
+the rules, and verifies both the skip and the preserved note.
+
+## 2026-11-02 — Retry viewer-only summaries across local days
+
+A browser that stays open overnight can now revisit a summary made from only
+the document viewer. The worker remembers already-summarized artifacts for the
+current local day rather than the whole browser session. On the next day's
+activity synchronization, an open tab can become eligible again; the host
+still refuses a new automatic summary when its existing whole or partial
+summary is sufficient. Same-day duplicate tabs remain suppressed. Older
+undated browser caches are cleared once, while dwell progress and retry state
+stay intact. Pure clock-controlled tests cover midnight and a backward date
+change, and a worker test verifies a second host request without restarting
+the browser.
+
+A delayed already-summarized reply that crosses midnight does not mark the
+new day: the worker retains the local day of the actual request timestamp,
+and lets the next activity update ask the host for a current-day decision.
+A failing-first worker regression covers the delayed reply.
+
+Final validation for both changes: 1,365 Rust-reported outcomes (94 explicit
+IPC sandbox skips), all 41 extension test files, both Clippy configurations,
+14 pure-state cases in UTC and Pacific time, and 102 worker cases. Five new
+regressions and one enhanced case cover the changed behavior. The browser
+accessibility command passes its two fixtures and explicitly skips 36 real
+browser checks in this sandbox; external driver/CI evidence is still needed.
+
+
+## 2026-11-02 — Tell agents when browser capture is only an excerpt
+
+Brauser now preserves the browser extractor's signal that page text or a
+highlight hit its size limit. Previously that information disappeared before
+the agent saw the page, allowing an excerpt to look like the complete artifact.
+Manual summaries, automatic summaries and tasks now carry the same optional
+flag. The service adds a short completeness notice to the page file and tells
+the summary agent to retrieve the full artifact or report a partial/viewer-only
+read. Task agents get an incomplete-context warning within the user's request.
+
+The notice also survives a queued-run restart. Its authority comes from stored
+run metadata, so a web page cannot activate it just by copying its words.
+Frame tests cover the chosen document iframe, discarded page chrome and borrowed
+highlights; Office, Miro and Incoming navigation keep their bounded sections.
+The existing combined flag is conservative about which text was cut, and it
+does not claim that a capture with no reported cut contains the full artifact.
+This restores the earlier isolated work and covers the automatic path it
+missed. Host and extension must deploy together; downgrade only while no run
+is queued/running, because older services cannot read the new true status flag.
+
+Validation: 1,374 Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension test files, both Clippy configurations, 2 accessibility fixture passes with 36 explicit browser sandbox skips. Twelve new regressions cover this change. The supplementary README checks and fresh full-diff review passed; real browser, IPC and platform acceptance remain external.

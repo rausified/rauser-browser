@@ -241,6 +241,7 @@ fn github_file(root: &Path, kind: &str) -> String {
 
 fn expected_view(event: &SummaryEvent) -> brauser_protocol::SummaryView {
     brauser_protocol::SummaryView {
+        overview: event.overview.clone(),
         summarized_at: event.occurred_at.clone(),
         document_type: event.document_type.clone(),
         category: event.category.clone(),
@@ -254,6 +255,7 @@ fn expected_view(event: &SummaryEvent) -> brauser_protocol::SummaryView {
 /// writes it for an `Artifact` record key.
 fn adapter_summary(artifact_id: &str, artifact_type: &str, url: &str, at: &str) -> SummaryEvent {
     SummaryEvent {
+        overview: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         artifact_id: artifact_id.into(),
         artifact_type: artifact_type.into(),
