@@ -11,6 +11,7 @@ use serde_json::Value;
 pub const AGENT_AND_ADAPTERS: &str = concat!(
     r#""agent":null,"#,
     r#""summary_vocabulary":{"document_types":["report"],"categories":["news"]},"#,
+    r#""auto_summary":{"enabled":true,"dwell_secs":0},"#,
     r#""adapters":{"format":1,"artifacts":[]}"#,
 );
 

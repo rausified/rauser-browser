@@ -73,6 +73,7 @@ function configWith(adapters, captureEnabled, stripParams = []) {
     strip_params: stripParams,
     agent: null,
     summary_vocabulary: { document_types: ["report"], categories: ["news"] },
+    auto_summary: { enabled: true, dwell_secs: 0 },
     adapters: { format: 1, artifacts: [] },
   };
 }

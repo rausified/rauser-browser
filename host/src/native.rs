@@ -344,6 +344,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::DiscoverHarnesses(_) => "discover_harnesses",
         Request::SetUpHarness(_) => "set_up_harness",
         Request::StartRun(_) => "start_run",
+        Request::StartAutoSummary(_) => "start_auto_summary",
         Request::GetRun(_) => "get_run",
         Request::ListRuns(_) => "list_runs",
         Request::CancelRun(_) => "cancel_run",
@@ -774,6 +775,12 @@ fn dispatch(
         Request::StartRun(value) => start_run(value, config, context.service),
         #[cfg(unix)]
         Request::StartTask(value) => start_task(value, config, context.service),
+        // Until the host checks it (auto-summary plan, Task 3).
+        Request::StartAutoSummary(value) => error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "start_auto_summary is not supported yet",
+        ),
         // Run ids and offsets are the service's to check, harness setup
         // detects and probes on the service's PATH and environment, and
         // agent.env and run threads live in the service's directory.
@@ -3101,6 +3108,7 @@ id = "work:{host}/{id}"
                     strip_params: Vec::new(),
                     agent: None,
                     summary_vocabulary: crate::config::default_summary_vocabulary(),
+                    auto_summary: crate::config::default_auto_summary(),
                     adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
@@ -3361,6 +3369,7 @@ id = "work:{host}/{id}"
                 strip_params: Vec::new(),
                 agent: None,
                 summary_vocabulary: crate::config::default_summary_vocabulary(),
+                auto_summary: crate::config::default_auto_summary(),
                 adapters: crate::config::empty_config().adapters,
             };
             let update = dispatch(

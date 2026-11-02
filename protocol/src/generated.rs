@@ -128,6 +128,7 @@ pub struct ConfigSnapshot {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub agent: Option<AgentConfig>,
     pub summary_vocabulary: SummaryVocabulary,
+    pub auto_summary: AutoSummaryConfig,
     pub adapters: AdapterDocument,
 }
 
@@ -1083,6 +1084,41 @@ pub struct StartSiteDraftRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AutoSummaryConfig {
+    pub enabled: bool,
+    pub dwell_secs: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartAutoSummaryRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    pub title: String,
+    pub content: String,
+    pub requested_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoSummarySkipReason {
+    Disabled,
+    NotSetUp,
+    NotAnArtifact,
+    AlreadySummarized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutoSummarySkippedResponse {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub reason: AutoSummarySkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StartTaskRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1384,6 +1420,7 @@ pub enum Request {
     DraftSite(DraftSiteRequest),
     StartSiteDraft(StartSiteDraftRequest),
     StartTask(StartTaskRequest),
+    StartAutoSummary(StartAutoSummaryRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
     WorklogReport(WorklogReportRequest),
     CheckCaptureSite(CheckCaptureSiteRequest),
@@ -1426,6 +1463,7 @@ impl Request {
             Self::DraftSite(value) => value.protocol_version,
             Self::StartSiteDraft(value) => value.protocol_version,
             Self::StartTask(value) => value.protocol_version,
+            Self::StartAutoSummary(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
             Self::WorklogReport(value) => value.protocol_version,
             Self::CheckCaptureSite(value) => value.protocol_version,
@@ -1468,6 +1506,7 @@ impl Request {
             Self::DraftSite(value) => &value.request_id,
             Self::StartSiteDraft(value) => &value.request_id,
             Self::StartTask(value) => &value.request_id,
+            Self::StartAutoSummary(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
             Self::WorklogReport(value) => &value.request_id,
             Self::CheckCaptureSite(value) => &value.request_id,
@@ -1500,6 +1539,7 @@ pub enum Response {
     ArtifactsRefreshed(ArtifactsRefreshed),
     HarnessesDiscovered(HarnessesDiscovered),
     RunStarted(RunStarted),
+    AutoSummarySkipped(AutoSummarySkippedResponse),
     RunFetched(RunFetched),
     RunsListed(RunsListed),
     RunUpdated(RunUpdated),
@@ -1536,6 +1576,7 @@ impl Response {
             Self::ArtifactsRefreshed(value) => value.protocol_version,
             Self::HarnessesDiscovered(value) => value.protocol_version,
             Self::RunStarted(value) => value.protocol_version,
+            Self::AutoSummarySkipped(value) => value.protocol_version,
             Self::RunFetched(value) => value.protocol_version,
             Self::RunsListed(value) => value.protocol_version,
             Self::RunUpdated(value) => value.protocol_version,
@@ -1572,6 +1613,7 @@ impl Response {
             Self::ArtifactsRefreshed(value) => &value.request_id,
             Self::HarnessesDiscovered(value) => &value.request_id,
             Self::RunStarted(value) => &value.request_id,
+            Self::AutoSummarySkipped(value) => &value.request_id,
             Self::RunFetched(value) => &value.request_id,
             Self::RunsListed(value) => &value.request_id,
             Self::RunUpdated(value) => &value.request_id,

@@ -283,8 +283,18 @@ function isArtifactListItem(value: unknown): boolean {
 /** Exactly the v6 `ConfigSnapshot` keys: a retired key such as
  * `agent_denylist` or `sites` means the host speaks another shape. */
 const CONFIG_KEYS: readonly string[] = [
-  "storage", "capture_enabled", "strip_params", "agent", "summary_vocabulary", "adapters",
+  "storage", "capture_enabled", "strip_params", "agent", "summary_vocabulary", "auto_summary",
+  "adapters",
 ];
+
+/** `AutoSummaryConfig`: exactly its two keys, a dwell of 0–3600 whole seconds. */
+function isAutoSummary(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const auto = value as Record<string, unknown>;
+  return Object.keys(auto).length === 2 && typeof auto.enabled === "boolean" &&
+    Number.isInteger(auto.dwell_secs) && (auto.dwell_secs as number) >= 0 &&
+    (auto.dwell_secs as number) <= 3600;
+}
 
 /** The host validates entry lengths and duplicates; this checks the shape. */
 function isSummaryVocabulary(value: unknown): boolean {
@@ -310,7 +320,7 @@ export function isConfig(value: unknown): boolean {
   return typeof config.capture_enabled === "boolean" &&
     isStringArray(config.strip_params) &&
     isAgent(config.agent) && isSummaryVocabulary(config.summary_vocabulary) &&
-    isAdapterDocument(config.adapters);
+    isAutoSummary(config.auto_summary) && isAdapterDocument(config.adapters);
 }
 
 // --- Capture Site drafting (additive v7) ---------------------------------

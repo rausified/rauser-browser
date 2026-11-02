@@ -582,6 +582,28 @@ asks for a host rebuild. An extension built before them rejects a
 `runs_listed` or `run_fetched` that holds a task view, so the extension and
 the host deploy together.
 
+### Auto-summary (added within version 8)
+
+The extension summarizes recognized artifacts on its own, through the same
+service queue as Summarize & log. All of it is additive.
+
+- `ConfigSnapshot` gains the required `auto_summary` object: `enabled`
+  (boolean) and `dwell_secs` (0 to 3,600). An older `config.toml` without it
+  reads as `{ enabled: true, dwell_secs: 0 }`.
+- `start_auto_summary` carries `url`, `title`, `content` (the same bounds as
+  `start_run`) and `requested_at`. It has no `selection`, `harness`, `kind`,
+  `record_key` or `instruction`. The host answers `auto_summary_skipped` with a
+  `reason`, before contacting the service, when auto-summary is off
+  (`disabled`), no harness is set up (`not_set_up`), the page's record key is
+  URL-keyed (`not_an_artifact`), or the artifact already has a summary
+  (`already_summarized`). Otherwise it forwards a summary `start_run` with the
+  record key it resolved, answered with the existing `run_started` (which joins
+  a queued or running run for the same key).
+
+An extension built before these additions rejects a `config_result` that
+holds `auto_summary`, and an older host answers `invalid_request` for
+`start_auto_summary`, so the extension and the host deploy together.
+
 ### Task history (added within version 8)
 
 The Tasks page pages back through one kind's runs with `list_runs`. All of it

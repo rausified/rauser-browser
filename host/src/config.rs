@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use adapter_templates::{Document as AdapterTemplates, NoMatch, Value as AdapterValue};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, ConfigSnapshot,
-    HarnessId, StorageConfig, SummaryVocabulary,
+    AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, AutoSummaryConfig,
+    ConfigSnapshot, HarnessId, StorageConfig, SummaryVocabulary,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -110,6 +110,15 @@ pub const DEFAULT_CATEGORIES: [&str; 7] = [
     "research paper",
     "news",
 ];
+
+/// Auto-summary's defaults: on, with no dwell (every recognized artifact is
+/// summarized once its page loads).
+pub(crate) fn default_auto_summary() -> AutoSummaryConfig {
+    AutoSummaryConfig {
+        enabled: true,
+        dwell_secs: 0,
+    }
+}
 
 pub(crate) fn default_summary_vocabulary() -> SummaryVocabulary {
     SummaryVocabulary {
@@ -1574,6 +1583,7 @@ impl From<StoredConfig> for ConfigSnapshot {
             strip_params: value.strip_params,
             agent: None,
             summary_vocabulary: value.summary_vocabulary,
+            auto_summary: default_auto_summary(),
             adapters: AdapterDocument {
                 format: value.adapters.format,
                 artifacts: value.artifacts,
@@ -1946,6 +1956,7 @@ pub(crate) fn empty_config() -> ConfigSnapshot {
         strip_params: default_strip_params(),
         agent: None,
         summary_vocabulary: default_summary_vocabulary(),
+        auto_summary: default_auto_summary(),
         adapters: AdapterDocument {
             format: 1,
             artifacts: Vec::new(),
