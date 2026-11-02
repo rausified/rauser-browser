@@ -102,6 +102,19 @@ The older M2 design follows.
 
 ## §5.7 Side panel layout — history
 
+**Accessibility acceptance and stale quarantine notice (2026-11-02,
+`brwr-e7b0`).** PR #212 incorporated the quarantined implementation and
+made the scrollable adapter match preview keyboard-focusable with an
+accessible label. Its keyboard test waits for the asynchronous diagnostics
+copy, and run-action focus restoration preserves the scroll position. The
+coordinator recorded three passing required 38-case runs on macOS Chrome
+and closed the assignment. This supersedes the pending-acceptance statements
+below. The cycle-4 rejection notice still present at checkout `0641650e`
+describes work already recovered and repaired in that history; reapplying
+its patch would conflict with newer changes. No new recovery patch is needed.
+Sandbox skips still do not establish browser acceptance, and incomplete axe
+checks remain human review.
+
 **Tasks listbox gate recovery (2026-11-02, `brwr-e7b0`).** The external
 cycle-3 gate rejected the recovered accessibility work for critical
 `aria-required-children` violations: day labels exposed headings inside the
