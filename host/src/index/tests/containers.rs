@@ -48,19 +48,7 @@ fn mentions_resolve_through_the_adapter_document() {
     for id in [&issue.artifact_id, &pull.artifact_id] {
         assert_eq!(index.artifact(id).unwrap().unwrap().linked_count, 1, "{id}");
     }
-    let query = |sql: &str| {
-        let output = Command::new("python3")
-                .args([
-                    "-c",
-                    "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone()[0])",
-                ])
-                .arg(index.database_path())
-                .arg(sql)
-                .output()
-                .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    };
+    let query = |query: &str| sql::display(&sql::sql_rows(&index.database_path(), query)[0][0]);
     let linked = "select count(*) from edges e join artifacts a on a.artifact_id = e.target_artifact_id where e.kind = 'mentions'";
     assert_eq!(query(linked), "1");
     // A repeated ref is one mention, not one per copy.

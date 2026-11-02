@@ -2837,6 +2837,7 @@ pub(crate) fn error(request_id: &str, code: ErrorCode, message: &str) -> Respons
 mod tests {
     use super::*;
     use crate::frame::{MAX_INBOUND_BYTES, MAX_OUTBOUND_BYTES};
+    use crate::index::tests::sql::{Value as SqlValue, sql_rows};
     use brauser_protocol::{
         ActivityEvent, ActivityMode, ActivityTrail, CaptureBatchItem, ConfigSnapshot,
         GetConfigRequest, HelloRequest, RecordActivityRequest, RecordBatchRequest,
@@ -7118,16 +7119,13 @@ scope = { owner = ["acme"] }
             }
             other => panic!("expected a recognized visit result, got {other:?}"),
         }
-        let output = std::process::Command::new("python3")
-            .args([
-                "-c",
-                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])",
-            ])
-            .arg(config.cache_dir().unwrap().join("index.db"))
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
+        assert_eq!(
+            sql_rows(
+                &config.cache_dir().unwrap().join("index.db"),
+                "select count(*) from visits"
+            ),
+            [[SqlValue::Integer(1)]]
+        );
     }
 
     #[test]
@@ -7718,13 +7716,9 @@ id = "work:{host}/{id}"
                 assert!(log.text.contains("Issue 2"));
                 // Catch-up must persist its checkpoint and repair the public
                 // SQLite snapshot too, without waiting for another delivery.
-                let output = std::process::Command::new("python3")
-                    .args(["-c", "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])"])
-                    .arg(cache.join("index.db")).output().unwrap();
-                assert!(output.status.success());
                 assert_eq!(
-                    String::from_utf8(output.stdout).unwrap().trim(),
-                    expected.to_string()
+                    sql_rows(&cache.join("index.db"), "select count(*) from visits"),
+                    [[SqlValue::Integer(expected as i64)]]
                 );
             }
         }
@@ -8361,18 +8355,12 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected duplicate activity suppression, got {other:?}"),
         }
-        let output = std::process::Command::new("python3")
-            .args([
-                "-c",
-                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select title from artifacts').fetchone()[0])",
-            ])
-            .arg(config.cache_dir().unwrap().join("index.db"))
-            .output()
-            .unwrap();
-        assert!(output.status.success());
         assert_eq!(
-            String::from_utf8(output.stdout).unwrap().trim(),
-            "Work item"
+            sql_rows(
+                &config.cache_dir().unwrap().join("index.db"),
+                "select title from artifacts"
+            )[0],
+            [SqlValue::Text("Work item".into())]
         );
         assert!(!root.join("artifacts").exists());
         regenerate_artifacts(&mut config, true);

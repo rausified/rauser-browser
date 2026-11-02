@@ -19,34 +19,29 @@ fn index_db_has_queryable_tables_and_capture_does_not_touch_artifact_files() {
         .unwrap();
     assert!(!root.path().join("artifacts").exists());
 
-    let script = r#"import json, sqlite3, sys
-c=sqlite3.connect(sys.argv[1])
-tables=[r[0] for r in c.execute("select name from sqlite_schema where type='table' order by name")]
-row=c.execute("select title, url from artifacts").fetchone()
-print(json.dumps([tables,row]))"#;
-    let output = Command::new("python3")
-        .args(["-c", script])
-        .arg(index.database_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    let db = index.database_path();
+    let tables = sql::sql_rows(
+        &db,
+        "select name from sqlite_schema where type='table' order by name",
     );
-    let decoded: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        decoded[0],
-        serde_json::json!([
+        tables,
+        [
             "artifacts",
             "dirty_artifacts",
             "edges",
             "url_provenance",
             "visits"
-        ])
+        ]
+        .map(|name| vec![sql::Value::Text(name.into())])
     );
-    assert_eq!(decoded[1][0], hostile);
-    assert_eq!(decoded[1][1], "https://example.com/items/ABC");
+    assert_eq!(
+        sql::sql_rows(&db, "select title, url from artifacts")[0],
+        [
+            sql::Value::Text(hostile.into()),
+            sql::Value::Text("https://example.com/items/ABC".into())
+        ]
+    );
 }
 
 #[test]
@@ -110,23 +105,13 @@ fn stripped_url_evidence_survives_cache_rebuild_and_sqlite_queries() {
         index.artifact_url_evidence(&event.artifact_id).unwrap(),
         evidence
     );
-    let script = r#"import sqlite3,sys,json
-c=sqlite3.connect(sys.argv[1])
-print(json.dumps(list(c.execute('select role,url,stripped_params from url_provenance order by role'))))"#;
-    let output = Command::new("python3")
-        .args(["-c", script])
-        .arg(index.database_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    let rows = sql::sql_rows(
+        &index.database_path(),
+        "select role,url,stripped_params from url_provenance order by role",
     );
-    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         rows,
-        serde_json::json!([
+        [
             [
                 "mode:0",
                 "https://example.com/items/ABC/edit",
@@ -134,7 +119,8 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
             ],
             ["trail:0", "https://example.com/source", "[\"utm_source\"]"],
             ["url", "https://example.com/items/ABC", "[\"utm_source\"]"],
-        ])
+        ]
+        .map(|row| row.map(|value| sql::Value::Text(value.into())).to_vec())
     );
     // A v6 cache has no evidence. Upgrade schedules a gap rescan and does
     // not manufacture an empty list for an older stripped address.

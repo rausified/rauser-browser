@@ -69,15 +69,13 @@ fn a_heavy_day_only_marks_the_artifact_dirty_until_regeneration() {
         .collect::<Vec<_>>();
     index.record_activities(events.iter(), &[]).unwrap();
     assert!(!root.path().join("artifacts").exists());
-    let output = Command::new("python3")
-            .args([
-                "-c",
-                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from dirty_artifacts').fetchone()[0])",
-            ])
-            .arg(index.database_path())
-            .output()
-            .unwrap();
-    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
+    assert_eq!(
+        sql::sql_rows(
+            &index.database_path(),
+            "select count(*) from dirty_artifacts"
+        ),
+        [[sql::Value::Integer(1)]]
+    );
     assert_eq!(index.regenerate_dirty().unwrap().written, 1);
 }
 

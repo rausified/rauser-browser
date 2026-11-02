@@ -394,11 +394,10 @@ fn reindex_rebuilds_database_and_files_from_log_markers() {
     assert_eq!(report.written, 1);
     let artifact = fs::read_to_string(artifact_files(root.path()).pop().unwrap()).unwrap();
     assert!(artifact.contains("Rebuilt"));
-    let output = Command::new("python3").args([
-            "-c", "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])",
-        ]).arg(index.database_path()).output().unwrap();
-    assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
+    assert_eq!(
+        sql::sql_rows(&index.database_path(), "select count(*) from visits"),
+        [[sql::Value::Integer(1)]]
+    );
 }
 
 #[test]
