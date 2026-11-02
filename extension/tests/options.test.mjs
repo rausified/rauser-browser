@@ -2009,6 +2009,100 @@ test("a starter update the host refuses as a retired-contract change explains it
   assert.equal(env.elements.get("adapter-editor").hidden, false, "the editor stays open for a hand edit");
 });
 
+// The side panel's near-miss offer hands an adapter (and a starter rule)
+// to settings in `#adapter-review=`; settings only opens a review.
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+const reviewHash = (adapter, rule) => `#adapter-review=${encodeURIComponent(JSON.stringify({
+  adapter: [adapter.origin, adapter.type, adapter.id], rule,
+}))}`;
+function installReview(adapters, hash, options = {}) {
+  const state = install({ adapters, hash, ...options });
+  globalThis.location.pathname = "/options.html";
+  globalThis.location.search = "";
+  state.replaced = [];
+  globalThis.history = { replaceState: (_data, _title, url) => {
+    state.replaced.push(url);
+    globalThis.location.hash = "";
+  } };
+  return state;
+}
+const updateRequests = () => env.requests.filter((request) => request.type === "update_config");
+const narrowedSharePoint = () => ({ ...staleOneDrive(), origin: "https://acme.sharepoint.com", match: [staleOneDrive().match[0]] });
+
+test("a handed-off rule from the current update opens Update to current rules, and Cancel saves nothing", async () => {
+  const state = installReview([staleOneDrive()], reviewHash(staleOneDrive(), SHARE_RULE));
+  await openSettings();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.equal(env.elements.get("adapter-editor-heading").textContent, "Update sharepoint.doc to current rules");
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), updatedOneDrive(staleOneDrive()));
+  assert.match(nodeText(env.elements.get("adapter-editor-review")), /Replaces 1 rule with 1 rule from the current OneDrive for work documents starter:/);
+  assert.deepEqual(state.replaced, ["/options.html"], "the hash is cleared so a reload does not reopen it");
+  assert.equal(updateRequests().length, 0, "nothing saves on load");
+  env.elements.get("cancel-adapter").click();
+  assert.equal(env.elements.get("adapter-editor").hidden, true);
+  assert.equal(updateRequests().length, 0, "Cancel writes nothing");
+
+  installReview([staleOneDrive()], reviewHash(staleOneDrive(), SHARE_RULE));
+  await openSettings();
+  await saveOpenAdapter("the handed-off starter update");
+  assert.equal(updateRequests().length, 1);
+  assert.deepEqual(lastUpdate().config.adapters.artifacts, [updatedOneDrive(staleOneDrive())]);
+});
+
+test("a handed-off starter rule for a narrowed adapter opens a one-rule addition", async () => {
+  const saved = { ...narrowedSharePoint(), title: "{title}.docx" };
+  installReview([artifactFor("https://a.com"), saved], reviewHash(saved, PERSONAL_RULE));
+  await openSettings();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.equal(env.elements.get("adapter-editor-heading").textContent, "Add a rule to sharepoint.doc");
+  const review = nodeText(env.elements.get("adapter-editor-review"));
+  assert.match(review, /Adds 1 rule from the current SharePoint documents starter for the page you were on:/);
+  assert.ok(review.includes("Adds /personal/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), review);
+  assert.equal(env.elements.get("adapter-editor-review").querySelectorAll("li").length, 1);
+  assert.match(env.elements.get("adapter-preview-url").value, /^https:\/\/acme\.sharepoint\.com\/personal\//);
+  assert.equal(updateRequests().length, 0, "nothing saves on load");
+  await saveOpenAdapter("the one-rule addition");
+  const [other, adapter] = lastUpdate().config.adapters.artifacts;
+  assert.deepEqual(other, artifactFor("https://a.com"));
+  assert.deepEqual(adapter, { ...saved, match: [...saved.match, PERSONAL_RULE] }, "one rule appended, nothing else changed");
+});
+
+test("a handed-off adapter with no rule opens Edit and preview", async () => {
+  const custom = { type: "work.doc", origin: "https://docs.example", match: [{ path: "/a/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } }], id: "work.doc:{host}/{doc}" };
+  installReview([custom], reviewHash(custom, null));
+  await openSettings();
+  assert.equal(env.elements.get("adapter-editor").hidden, false);
+  assert.equal(env.elements.get("adapter-editor-heading").textContent, "Edit and review work.doc");
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), custom);
+  assert.equal(updateRequests().length, 0);
+});
+
+test("a stale or crafted hand-off is refused with a plain message and saves nothing", async () => {
+  // The adapter is gone.
+  let state = installReview([artifactFor("https://a.com")], reviewHash(staleOneDrive(), SHARE_RULE));
+  await openSettings();
+  assert.equal(statusText(), "This site's rules changed since the panel offered this. Open the panel on the page again.");
+  assert.equal(env.elements.get("adapter-editor").hidden, true);
+  assert.deepEqual(state.replaced, ["/options.html"]);
+  // The rule is already present, or is not in the starter catalog.
+  for (const rule of [narrowedSharePoint().match[0], { path: "/anything/{*}" }]) {
+    installReview([narrowedSharePoint()], reviewHash(narrowedSharePoint(), rule));
+    await openSettings();
+    assert.equal(statusText(), "This rule can no longer be added here; edit the rules by hand.");
+    assert.equal(env.elements.get("adapter-editor-heading").textContent, "Edit and review sharepoint.doc");
+    assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), narrowedSharePoint(), "the crafted rule is not added");
+  }
+  // Malformed hashes are ignored.
+  for (const hash of ["#adapter-review=%E0%A4%A", "#adapter-review=notjson", `#adapter-review=${encodeURIComponent('{"adapter":["a","b"],"rule":null}')}`,
+    `#adapter-review=${encodeURIComponent('{"adapter":["a","b","c"],"rule":"x"}')}`, `#adapter-review=${"x".repeat(5000)}`]) {
+    state = installReview([narrowedSharePoint()], hash);
+    await openSettings();
+    assert.equal(env.elements.get("adapter-editor").hidden, true, hash.slice(0, 40));
+    assert.doesNotMatch(statusText(), /rules changed|can no longer be added/);
+  }
+  assert.equal(updateRequests().length, 0);
+});
+
 test("diagnostics show their count, copy as JSON lines with a header, and clear", async () => {
   const { DIAG_STORAGE_KEY, diag } = await import("../dist/diag.js");
   const seeded = [
