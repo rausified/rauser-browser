@@ -195,7 +195,7 @@ queue".
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
 - [ ] `brwr-0t1` **Near-miss detection: offer a rule when an enabled-site page looks like an artifact.** When a page on a site with capture rules carries an adapter's identifying parameter (e.g. OneDrive Doc.aspx with a sourcedoc GUID) but no rule matches, the panel says so and offers a one-click rule addition through the Update-to-current-rules editor flow. URL-only and local.… _(P2)_
-- [ ] `brwr-hkn8` **Summary events lose the local offset: evening summaries west of UTC are dated the next day.** Evidence: on 2026-11-01 (CI, PR #195's smoke) a page visit was dated 11-01 local, but its summary event was stamped 2026-11-02T00:11:29Z UTC and filed under 11-02. The extension sends a local `requested_at`, and the local offset appears to be lost before the service records the… _(P2)_
+- [ ] `brwr-hkn8` **Summary events lose the local offset: evening summaries west of UTC are dated the next day.** Evidence: on 2026-11-01 (CI, PR #195's smoke) a page visit was dated 11-01 local, but its summary event was stamped 2026-11-02T00:11:29Z UTC and filed under 11-02. The extension sends a local `requested_at`, and the local offset appears to be lost before the service records the… _(P2; labels: assigned)_
 - [ ] `brwr-qn4` **Explain why a page on a captured site is 'Not an artifact'.** When the current origin has capture rules but none matches the page, the panel's artifact card should name the artifact types the site covers instead of a bare '○ Not an artifact'. Example: 'github.com captures repositories, pull requests and issues for cisco-sbg; this page… _(P2)_
 - [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
@@ -1689,3 +1689,42 @@ Logs are in `target/cookie-tasks-final-after-review/` and
 `target/cookie-tasks-final/`. Independent driver review and publication are
 next. A Wardroom summary carries the two existing gate requirements; no
 assigned item was closed without completing its local acceptance.
+
+
+### Cycle observations (2026-11-02 — assignment mirror repair)
+
+The cycle began at `51b46b89` with clean product sources and no quarantined
+commit. The required product gate passed, but the README queue gate found
+one stale generated line: the operator update added `assigned` to
+`brwr-hkn8`, while its backlog rendering still omitted that label. Exported
+the unchanged authoritative beads database and regenerated the backlog.
+This is a repair-only cycle under the red-start rule; no product work was
+started, no assigned bead was claimed or closed, and no migration is enabled.
+
+Next cycle: `brwr-e7b0` is the highest-priority ready assignment. Its browser
+and axe dependencies are provisioned; build the real-browser accessibility
+matrix and keyboard checks using `scripts/a11y-browser.mjs`, add the
+`test:a11y` npm script, and wire strict macOS CI execution. Chromium skips
+inside this sandbox; the driver already requires that script when present.
+Leave acceptance open until real browser results exist. The current
+`npm run --if-present test:a11y` succeeds without running a browser because
+no such script exists yet. `brwr-6x2` still
+waits on `brwr-dbp`; the strict-log and cross-origin collision findings must
+be resolved before relying on Re-learn approvals. `brwr-hkn8` remains ready
+and assigned, with its original local-day acceptance criteria intact.
+
+Driver follow-up: after applying an operator queue update, re-render
+`BOSUN_FEATURE_BACKLOG.md` and run `scripts/check_queue_consistency.py`
+before launching the agent. A label-only update can stale a generated block
+just as a new row can; this cycle repaired that exact handoff mismatch.
+No new self-directed proposal was added while seven assigned items remain.
+
+Final validation passed the complete required and README gates: 1,276
+reported Rust passes (including the existing sandbox IPC guards), all 38
+extension test files, both Clippy configurations, eight Node script test
+files, 85 Python script tests, and 10,696 inert Markdown renderings.
+Protocol generation, formatting, build, typecheck, lint, current-state,
+queue consistency and renderer freshness checks passed. Full diff reviewed
+locally; logs are in `target/overnight-health/assignment-mirror-repair/`.
+No new feature shipped, so no feature-briefing or product-design change was
+needed. Independent review and publication remain with the driver.
