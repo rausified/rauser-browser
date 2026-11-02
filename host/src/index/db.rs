@@ -110,7 +110,7 @@ CREATE INDEX IF NOT EXISTS brauser_days_by_date
 CREATE TABLE IF NOT EXISTS brauser_logs(
   path TEXT NOT NULL, purpose TEXT NOT NULL CHECK(purpose IN ('events','gaps')),
   bytes INTEGER NOT NULL, modified_ns INTEGER NOT NULL,
-  parsed_bytes INTEGER NOT NULL, tail_sha256 BLOB NOT NULL,
+  parsed_bytes INTEGER NOT NULL, parsed_lines INTEGER NOT NULL, tail_sha256 BLOB NOT NULL,
   PRIMARY KEY(path, purpose)) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS brauser_gaps(

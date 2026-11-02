@@ -20,6 +20,7 @@ mod scan;
 pub(crate) mod sql;
 mod summaries;
 mod views;
+mod watermark;
 
 fn storage(root: &Path) -> StorageConfig {
     StorageConfig {
