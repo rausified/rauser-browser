@@ -13,7 +13,7 @@
 
 use super::*;
 use std::cell::RefCell;
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use crate::capture::{CapturePolicy, CaptureStore};
 
