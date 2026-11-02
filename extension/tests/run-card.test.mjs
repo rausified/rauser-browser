@@ -47,7 +47,11 @@ class FakeElement {
     for (const listener of this.listeners.get("click") ?? []) listener({ type: "click", target: this });
   }
   append(...children) { this.children.push(...children); }
-  replaceChildren(...children) { this.children = children; }
+  replaceChildren(...children) {
+    if (this.children.includes(document.activeElement)) document.activeElement = document.body;
+    this.children = children;
+  }
+  focus() { document.activeElement = this; }
 }
 
 function walk(root, visit) {
@@ -1239,7 +1243,8 @@ const { TaskDetail } = await import("../dist/run-card.js");
 
 // A TaskDetail with a scripted host; `reply` answers get_run.
 function detailSetup(initial, { reply = () => null, storage = storageArea() } = {}) {
-  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  const body = new FakeElement("body");
+  globalThis.document = { body, activeElement: body, createElement: (tag) => new FakeElement(tag) };
   const requests = [];
   const copied = [];
   const reused = [];
@@ -1273,6 +1278,37 @@ function detailSetup(initial, { reply = () => null, storage = storageArea() } = 
 function output(detail) {
   return byClass(detail.element, "task-detail-output");
 }
+
+test("TaskDetail polls retain the focused action without stealing focus from elsewhere", async () => {
+  const run = taskView();
+  const page = detailSetup(run, { reply: () => ({ type: "run_fetched", run, stream_text: "", next_offset: 0, more: false }) });
+  page.detail.start();
+  await settle();
+  button(page.detail.element, "Cancel").focus();
+  await tick();
+  assert.equal(document.activeElement, button(page.detail.element, "Cancel"));
+  const outside = new FakeElement("input");
+  outside.focus();
+  await tick();
+  assert.equal(document.activeElement, outside);
+  page.detail.dispose();
+});
+
+test("TaskDetail Cancel restores focus after disabled actions become terminal actions", async () => {
+  const run = taskView();
+  let resolveCancel;
+  const canceled = new Promise((resolve) => { resolveCancel = resolve; });
+  const page = detailSetup(run, { reply: (request) => request.type === "cancel_run" ? canceled
+    : { type: "run_fetched", run, stream_text: "", next_offset: 0, more: false } });
+  const cancel = button(page.detail.element, "Cancel");
+  cancel.focus();
+  cancel.click();
+  assert.equal(document.activeElement, document.body);
+  resolveCancel({ type: "run_updated", run: { ...run, state: "canceled", finished_at: new Date(NOW).toISOString() } });
+  await settle();
+  assert.equal(document.activeElement, button(page.detail.element, "Open page"));
+  page.detail.dispose();
+});
 
 test("TaskDetail shows Running with live output open, then Done with the report and output closed", async () => {
   const pages = [

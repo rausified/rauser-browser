@@ -267,6 +267,11 @@ test("the page lists every page of tasks and selects the newest", async () => {
   assert.equal(page.el("tasks-layout").hidden, false);
   const row = page.rows()[0];
   assert.equal(row.getAttribute("role"), "option");
+  for (const group of descendants(page.el("tasks-list")).filter((node) => node.getAttribute("role") === "group")) {
+    const label = group.children[0];
+    assert.equal(group.getAttribute("aria-labelledby"), label.id);
+    assert.equal(label.getAttribute("role"), "presentation", "listbox group names must not introduce heading children");
+  }
   assert.match(row.textContent, /Task 1/);
   assert.match(page.pill(runId(1)).className, /\bdone\b/);
   assert.match(page.pill(runId(1)).textContent, /^Done · 30s$/);
@@ -677,6 +682,20 @@ test("search and status filter narrow the list; Running includes queued", async 
   assert.deepEqual(ids(), [runId(1)]);
   assert.match(page.pill(runId(1)).className, /\brunning\b/);
   assert.equal(page.pill(runId(1)).textContent, "Queued");
+  page.el("tasks-search").value = "no matching task";
+  page.el("tasks-search").dispatch("input");
+  assert.deepEqual(ids(), []);
+  const none = page.el("tasks-none");
+  assert.equal(none.textContent, "No tasks match.");
+  assert.equal(none.hidden, false);
+  assert.equal(page.el("tasks-list").contains(none), false, "the empty message belongs outside the listbox");
+  assert.equal(page.el("tasks-list").hidden, true, "a listbox without options must not be exposed");
+  assert.equal(page.el("tasks-layout").hidden, false, "the selected detail stays available");
+  page.el("tasks-search").value = "";
+  page.el("tasks-search").dispatch("input");
+  assert.equal(none.hidden, true);
+  assert.equal(page.el("tasks-list").hidden, false);
+  assert.equal(ids().length, 2);
 });
 
 test("the page stops polling while hidden and refreshes on show", async () => {

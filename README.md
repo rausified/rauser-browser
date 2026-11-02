@@ -31,6 +31,7 @@ npm run typecheck
 npm run lint
 npm run build:extension
 npm run test:extension
+npm run test:a11y        # real headless Chrome; see TESTING.md for sandbox skips
 npm run test:markdown-neutralizer
 npm run test:scripts
 npm run test:queue

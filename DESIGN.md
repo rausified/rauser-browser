@@ -767,6 +767,24 @@ The free-text row is built as the task bar (2026-10-28, §4.5, §5.7). Slash com
 
 The panel is about the page in the active tab. Capture housekeeping collapses into a one-line strip at the bottom, and configuration stays on the settings page.
 
+**Keyboard access.** This page and Recent form a labelled tablist with one
+tab stop, selected state and associated tabpanels. Left/Right switch tabs;
+Home/End choose the first/last tab. Capture Site, Page patterns and the
+settings adapter editor accept Escape while idle and return focus to their
+entry control. A completed site save returns keyboard focus to the page tab;
+an adapter save returns it to its opener or Add adapter if the opener was
+rebuilt. The Tasks listbox uses Up/Down and Home/End, with Enter or Space to
+select. Polling preserves row and run-action focus; dismissing a task selects
+and focuses its neighbor, or the search field when no row remains. Async
+restoration does not take focus back from another control. Tasks group labels
+name their groups without exposing heading children inside the listbox. When
+no tasks match, a message beside the hidden listbox replaces the empty widget
+while the selected detail stays available. Focus outlines, muted text and
+state colors follow the light/dark theme, with the document background and
+text explicitly using the browser's Canvas/CanvasText colors.
+Automated browser coverage and its manual-review limits are specified in
+TESTING.md.
+
 The enabled-capture status describes sites with adapters, including when none
 are configured. An unreadable tab (including a Chrome page or withdrawn site
 access) has no artifact verdict; a readable page the host does not recognize

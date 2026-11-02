@@ -182,6 +182,25 @@ function actionButton(text: string, action: () => void): HTMLButtonElement {
   return button;
 }
 
+/** Polls rebuild actions as a run changes state. Keep keyboard focus on
+ * the same action, or its first enabled successor when that action ends. */
+const pendingActionFocus = new WeakMap<HTMLElement, string>();
+function renderActions(area: HTMLElement, buttons: HTMLButtonElement[]): void {
+  const focused = Array.from(area.children).find((child) => child === document.activeElement);
+  if (focused) pendingActionFocus.set(area, focused.textContent ?? "");
+  else if (document.activeElement !== document.body) pendingActionFocus.delete(area);
+  const label = pendingActionFocus.get(area);
+  area.replaceChildren(...buttons);
+  if (label !== undefined) {
+    const target = buttons.find((button) => !button.disabled && button.textContent === label)
+      ?? buttons.find((button) => !button.disabled);
+    if (target) {
+      target.focus();
+      pendingActionFocus.delete(area);
+    }
+  }
+}
+
 /** What every run view shares: it polls `get_run` while the run is
  * unfinished and the panel is visible, fetches once more after the run
  * finishes so it holds all of its stream, and offers Cancel and the
@@ -513,7 +532,7 @@ class RunCard extends RunWatcher {
     }
     if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.onDismiss(this)));
     for (const button of buttons) button.disabled = this.acting;
-    this.actions.replaceChildren(...buttons);
+    renderActions(this.actions, buttons);
   }
 }
 
@@ -683,7 +702,7 @@ export class TaskDetail extends RunWatcher {
     ];
     if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.dismiss()));
     for (const button of buttons) button.disabled = this.acting;
-    this.actions.replaceChildren(...buttons);
+    renderActions(this.actions, buttons);
   }
 }
 
@@ -748,7 +767,7 @@ export class RunProgress extends RunWatcher {
     this.problemLine.hidden = this.problem === null;
     const buttons = [...this.cancelButtons(), ...this.resumeButtons()];
     for (const button of buttons) button.disabled = this.acting;
-    this.actions.replaceChildren(...buttons);
+    renderActions(this.actions, buttons);
   }
 }
 
