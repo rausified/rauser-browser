@@ -158,7 +158,7 @@ fn scalar(index: &ArtifactIndex, query: &str) -> i64 {
 #[cfg(unix)]
 type FileIdentity = (u64, u64);
 #[cfg(windows)]
-type FileIdentity = u64;
+type FileIdentity = (u64, u64);
 
 #[cfg(unix)]
 fn file_identity(path: &Path) -> FileIdentity {
@@ -167,12 +167,15 @@ fn file_identity(path: &Path) -> FileIdentity {
     (metadata.dev(), metadata.ino())
 }
 
-/// Windows has no stable file index in std; a replaced file brings its
-/// own creation time.
+/// The volume serial number and file index: std's by-handle accessors are
+/// unstable, so winapi-util wraps GetFileInformationByHandle. Creation
+/// time would not do, as NTFS name tunneling gives a file renamed or
+/// created into a just-vacated name the old file's creation time.
 #[cfg(windows)]
 fn file_identity(path: &Path) -> FileIdentity {
-    use std::os::windows::fs::MetadataExt;
-    fs::metadata(path).unwrap().creation_time()
+    let file = fs::File::open(path).unwrap();
+    let info = winapi_util::file::information(&file).unwrap();
+    (info.volume_serial_number(), info.file_index())
 }
 
 type Tree = BTreeMap<PathBuf, (u64, SystemTime, FileIdentity)>;
