@@ -186,6 +186,18 @@ def active_runs(support: Path) -> list[str]:
     return found
 
 
+def check_runs(d: "Deploy", support: Path, allow: bool) -> list[str]:
+    """Refuse (unless allowed) while runs are queued or running; report them."""
+    active = active_runs(support)
+    if active and not allow:
+        raise DeployError("Brauser runs are queued or running; the service restart would end "
+                          "them. Wait for them, or pass --allow-active-runs: "
+                          + ", ".join(active))
+    d.say("    " + ("deploying anyway (--allow-active-runs): " + ", ".join(active)
+                    if active else "none queued or running"))
+    return active
+
+
 def extension_id_from_manifest(path: Path) -> str:
     if not path.exists():
         raise DeployError(f"no native host manifest at {path}; pass --extension-id "
@@ -337,13 +349,7 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         d.say("    ok")
 
         d.step(f"runs in {support / 'runs'}")
-        active = active_runs(support)
-        if active and not args.allow_active_runs:
-            raise DeployError("Brauser runs are queued or running; the service restart would end "
-                              "them. Wait for them, or pass --allow-active-runs: "
-                              + ", ".join(active))
-        d.say("    " + ("deploying anyway (--allow-active-runs): " + ", ".join(active)
-                        if active else "none queued or running"))
+        active = check_runs(d, support, args.allow_active_runs)
 
         if args.extension_id is not None:
             if not EXTENSION_ID.match(args.extension_id):
@@ -409,6 +415,13 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
 
         d.step("npm run build:extension")
         d.act(["npm", "run", "build:extension"], "npm run build:extension")
+
+        # The builds above can take minutes; a run queued or started meanwhile
+        # would be ended by the service restart below, so check again.
+        d.step(f"runs in {support / 'runs'} (again, before the service restart)")
+        for run in check_runs(d, support, args.allow_active_runs):
+            if run not in active:
+                active.append(run)
 
         d.step("register the native host and service")
         d.act(["node", "scripts/register-dev-host.mjs", ext_id, str(binary)],

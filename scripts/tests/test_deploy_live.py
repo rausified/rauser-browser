@@ -56,6 +56,7 @@ class FakeRunner:
         self.host_version = None  # default: 0.1.0+<NEW[:12]>
         self.hello_type = "hello_result"
         self.build_writes_dist = True
+        self.on_cargo = None  # optional callable run during the cargo build
 
     # Calls whose first words match one of these act on the system.
     ACTING = ("pull", "cargo", "npm", "node", "binary", "hygiene-apply")
@@ -100,6 +101,8 @@ class FakeRunner:
             return dl.Result(0, b"Updating\n")
         if k == "diff":
             return dl.Result(0, self.changed_files.encode())
+        if k == "cargo" and self.on_cargo:
+            self.on_cargo()
         if k in ("hygiene", "hygiene-apply"):
             return dl.Result(0, self.hygiene_out.encode())
         if k == "npm" and argv[1:3] == ["run", "build:extension"] and self.build_writes_dist:
@@ -285,6 +288,30 @@ class Refusals(Fixture):
         code, out = self.deploy("--allow-active-runs")
         self.assertEqual(code, 0, out)
         self.assertIn("r-4", out)
+
+    def test_run_started_during_the_build_stops_before_register(self):
+        self.runner.on_cargo = lambda: self.add_run("late-1", "running")
+        code, out = self.deploy()
+        self.assertEqual(code, 1, out)
+        self.assertIn("cargo", self.kinds())
+        self.assertNotIn("node", self.kinds())
+        self.assertNotIn("binary", self.kinds())
+        self.assertIn("late-1", out)
+        self.assertIn("--allow-active-runs", out)
+
+    def test_run_queued_during_the_build_stops_before_register(self):
+        self.runner.on_cargo = lambda: self.add_run("late-2", "queued")
+        code, out = self.deploy()
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("node", self.kinds())
+        self.assertIn("late-2", out)
+
+    def test_allow_active_runs_covers_runs_started_during_the_build(self):
+        self.runner.on_cargo = lambda: self.add_run("late-3", "running")
+        code, out = self.deploy("--allow-active-runs")
+        self.assertEqual(code, 0, out)
+        self.assertIn("node", self.kinds())
+        self.assertIn("late-3", out)
 
     def test_extension_id_unknown_stops_before_acting(self):
         self.manifest.unlink()
