@@ -2093,7 +2093,7 @@
       "description": "A page boundary for list_runs: the created_at and run_id of the oldest run already seen, since created_at alone does not order runs uniquely.",
       "required": ["created_at", "run_id"],
       "properties": {
-        "created_at": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "created_at": { "type": "string", "minLength": 20, "maxLength": 64 },
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 }
       }
     },

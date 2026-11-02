@@ -64,6 +64,47 @@ function sameAddress(a: string, b: unknown): boolean {
   }
 }
 
+/** Whether `url` is an Office for the web document address, as the host's
+ * `service::office::office_document` recognises it (the shared vectors in
+ * host/tests/fixtures/office-document-urls.json): an https
+ * `*.sharepoint.com` address with a `:w:`, `:x:` or `:p:` path segment, or a
+ * `/_layouts/15/Doc.aspx` or `WopiFrame.aspx` with a non-blank `sourcedoc`
+ * or `file`; or an https `*.officeapps.live.com` viewer whose `src` is an
+ * https URL. It only lets an Office page with no text start a run; the host
+ * decides on its own what the run's page.md and prompt say. */
+export function isOfficeDocumentUrl(url: string): boolean {
+  let page: URL;
+  try {
+    page = new URL(url);
+  } catch {
+    return false;
+  }
+  if (page.protocol !== "https:") return false;
+  // The first value of a key (ASCII case-insensitive), when not blank.
+  const param = (name: string): string | null => {
+    for (const [key, value] of page.searchParams) {
+      if (key.toLowerCase() === name) return value.trim() === "" ? null : value;
+    }
+    return null;
+  };
+  const host = page.hostname.toLowerCase();
+  if (host.endsWith(".officeapps.live.com")) {
+    const src = param("src");
+    if (src === null) return false;
+    try {
+      return new URL(src).protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+  if (!host.endsWith(".sharepoint.com")) return false;
+  const share = page.pathname.split("/").some((segment) => /^(:[wxp]:|%3a[wxp]%3a)$/i.test(segment));
+  const path = page.pathname.toLowerCase();
+  const docPage = (path.endsWith("/_layouts/15/doc.aspx") || path.endsWith("/_layouts/15/wopiframe.aspx"))
+    && (param("sourcedoc") !== null || param("file") !== null);
+  return share || docPage;
+}
+
 // A top frame with at least this much trimmed text is the page's content,
 // whatever its subframes hold (ads, embeds, comment widgets).
 const TOP_FRAME_ENOUGH_CHARS = 200;
@@ -92,7 +133,8 @@ const encodedBytes = (value: string | null): number => new TextEncoder().encode(
  * no article (`readable === false`) also yields to a subframe holding at
  * least CHROME_TOP_FRAME_RATIO times its text, so page chrome such as
  * SharePoint's suite bar never stands in for the document. Missing,
- * malformed, or failed frame results are skipped. */
+ * malformed, or failed frame results are skipped. The chosen content may be
+ * blank; readTab decides whether that page is unreadable. */
 function choosePage(
   results: readonly { frameId: number; result?: unknown }[],
 ): { top: ExtractedPage; content: string; selection: string | null } | undefined {
@@ -120,7 +162,6 @@ function choosePage(
     && length(longestSub) >= CHROME_TOP_FRAME_RATIO * length(top)) {
     chosen = longestSub;
   }
-  if (length(chosen) === 0) return undefined;
   // The chosen frame's own selection fits its content by construction; one
   // borrowed from another frame travels only if both still fit the cap.
   let selection = chosen.selection;
@@ -143,9 +184,11 @@ export interface TabPage {
 }
 
 /** Extracts every frame of `tab` with the bundled Readability and returns
- * the frame content choosePage picks, every string well-formed. A page no
- * frame of which yields text, or whose top frame cannot be read, throws
- * `HostError("unreadable")`; a top frame that by then holds another address
+ * the frame content choosePage picks, every string well-formed. A page whose
+ * top frame cannot be read, or no frame of which yields text, throws
+ * `HostError("unreadable")`, except that an Office document address
+ * (isOfficeDocumentUrl) with no text is read with empty content: the host
+ * names the document in page.md and the agent reads it itself; a top frame that by then holds another address
  * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`.
  * It sends nothing to the host: Summarize & log and the task bar both read
  * pages through it. */
@@ -189,6 +232,9 @@ export async function readTab(
   }
   const page = choosePage(Array.isArray(results) ? results : []);
   if (!page) throw new HostError("unreadable", UNREADABLE_MESSAGE);
+  if (page.content.trim().length === 0 && !isOfficeDocumentUrl(tab.url)) {
+    throw new HostError("unreadable", UNREADABLE_MESSAGE);
+  }
   // The run is keyed by `tab.url`, so its content must come from that page;
   // subframe addresses differ from it by design.
   if (!sameAddress(tab.url, page.top.href)) throw new HostError("page_changed", PAGE_CHANGED_MESSAGE);

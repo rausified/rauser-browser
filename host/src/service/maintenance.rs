@@ -187,7 +187,7 @@ mod tests {
 
     fn store() -> (tempfile::TempDir, RunStore) {
         let dir = tempfile::tempdir().unwrap();
-        let store = RunStore::open(dir.path().join("runs")).unwrap();
+        let store = RunStore::ephemeral(dir.path().join("runs")).unwrap();
         (dir, store)
     }
 
@@ -225,6 +225,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            office_section: false,
             kind: RunKind::Summary,
             task: None,
         }

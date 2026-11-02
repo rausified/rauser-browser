@@ -748,3 +748,76 @@ with mocked timers. `brwr-b2p`: the Tasks page keyboard-focus test now drives
 the existing visibility refresh and waits for rendered changes, removing
 its dependency on the real two-second poll. Production task behavior is
 unchanged. Browser CSS rendering and macOS CI remain separate validation.
+
+
+### 2026-11-01 — Bounded adapter differential runner
+
+`brwr-wg5`: the optional comparison stall was reproduced after seed-1/case-0
+generation, inside the Rust engine's piped `spawnSync` call. The runner now
+uses the existing child-pipe probe and decision policy before either engine:
+permission denial prints an explicit skip outside required mode and fails
+with `BRAUSER_REQUIRE_IPC_TESTS=1`. The shared probe times out after three
+seconds; engine batches time out after 60 seconds with SIGKILL and report
+the command, seed and batch indexes. Engine output must have one JSON
+result per input. Neither adapter engine nor its evaluation-time checks
+changed. `test:scripts` includes the runner regressions. Supplemental
+regular-file transport compared 5,000 real cases without differences;
+normal piped CI/platform checks remain separate evidence.
+
+
+### 2026-11-01 — Assigned task tracker follow-ups
+
+Cookie completed `brwr-jlz`, `brwr-2p0`, `brwr-7u4`, `brwr-4r1` and
+`brwr-ug2`: completion announcements remember run IDs, merged refreshes drain
+after failures, and consecutive unsuccessful list/off-page passes back off at
+2/4/8/16 seconds before pausing on the fifth failure. Explicit refreshes restart
+the budget, successful passes reset it, and hidden/disposed panels retain their
+existing polling boundaries. The unused tracker clock dependency is removed.
+The panel now restores a task-list error after every summary-card restore,
+including live and stored worker notices. Direct tests use mocked timers and
+deferred host replies; panel tests exercise both notice delivery paths.
+
+Independent review found that a successful automatic task poll left the
+panel's cached list error behind, so a later worker summary restore could
+resurrect it. Successful tracker updates now clear that error and its notice;
+a panel regression reproduces the failed list, automatic recovery and later
+worker notice.
+
+
+### 2026-11-01 — Separate supervisor fixture timing from disk durability
+
+The initial health gate reproduced supervisor state-wait failures with a
+single file fsync taking 5.6 seconds. `brwr-pnti` adds the explicit
+`RunStore::ephemeral` unit-test constructor and uses it in supervisor and
+retention fixtures, including their seeded and restarted stores. It omits
+file and directory sync waits while sharing the real writer's private modes,
+atomic renames, error handling and cleanup. The ordinary `RunStore::open`
+constructor and the existing record storage tests remain durable, and the
+ephemeral field and constructor are absent from production and
+scripted-dialogs builds. No supervisor timeout or product contract changed.
+
+The full gate then exposed a resumed-run test racing its one-second watchdog
+against a shell copying the prompt. Separate tests retain the recorded
+one-second limit and check the full vocabulary prompt with the existing
+in-process recording runner, preserving both assertions without the shell
+startup dependency.
+
+### 2026-11-01 — Tasks-page review follow-ups
+
+Assigned PR #188 follow-ups now coalesce page refreshes through a shared
+promise and pending flag, including after a failed list (`brwr-um4`). Hash
+selection follows the latest location rather than an earlier handler's
+captured target. Off-page reads use `Promise.allSettled`, preserve failed
+rows for retry and ignore replies after pagehide (`brwr-sm8`).
+
+Dismissals keep their document queue and acquire one origin-wide Web Lock
+around the shared storage read/write (`brwr-90b`), with best-effort recovery
+after rejected lock or storage operations. Independent module instances
+exercise the cross-document race. The Tasks-page tests use mocked timers
+and held host replies (`brwr-jzs`); Reuse's failure case now asserts the
+source-window open attempt and consumption by another window (`brwr-3pv`).
+
+RunCursor.created_at now shares RunView's 20–64 character schema bounds
+(`brwr-0at`); this is length alignment, not syntax validation. The generator
+was run and both generated type files remain unchanged. The unknown-kind
+wire test checks schema rejection as well as serde rejection (`brwr-3wh`).

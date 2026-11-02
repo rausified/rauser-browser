@@ -10,6 +10,8 @@ import { fetchOffPageRun, listTaskPage, mergeRuns, runningCount } from "./task-h
 
 /** How often the tracker re-reads the list while a task is active. */
 export const TRACK_MS = 2000;
+/** Pause automatic retries after this many consecutive failed passes. */
+const MAX_FAILURES = 5;
 
 /** What the tracker reports after each list. */
 export interface TrackedState {
@@ -21,7 +23,6 @@ export interface TrackedState {
 
 export interface TaskTrackerDeps {
   host: Pick<HostClient, "call">;
-  now(): number;
   /** Whether the panel is visible; the tracker polls only then. */
   visible(): boolean;
   changed(state: TrackedState): void;
@@ -32,24 +33,31 @@ export interface TaskTrackerDeps {
 export class TaskTracker {
   // Every task seen queued or running and not yet reported finished.
   private readonly active = new Map<string, RunView>();
+  private readonly announced = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private inFlight: Promise<void> | null = null;
   private again = false;
   private disposed = false;
+  private failures = 0;
 
   constructor(private readonly deps: TaskTrackerDeps) {}
 
   /** Watches `run`, one the panel just started, before any list has it, so
    * a task that finishes before the next list is still announced. */
   track(run: RunView): void {
-    if (this.disposed || isTerminal(run)) return;
+    if (this.disposed || isTerminal(run) || this.announced.has(run.run_id)) return;
     this.active.set(run.run_id, run);
   }
 
   /** Reads the first page of tasks once (a refresh asked for while one is in
    * flight runs once more after it) and reports what changed. Rejects with
-   * the list's error; the tracker keeps polling while it watches a task. */
+   * the final list's error. An explicit refresh resumes paused retries. */
   refresh(): Promise<void> {
+    this.failures = 0;
+    return this.requestRefresh();
+  }
+
+  private requestRefresh(): Promise<void> {
     if (this.disposed) return Promise.resolve();
     if (this.inFlight) {
       this.again = true;
@@ -58,7 +66,14 @@ export class TaskTracker {
     const run = (async () => {
       do {
         this.again = false;
-        await this.once();
+        try {
+          await this.once();
+        } catch (error) {
+          // A caller requested fresher state while this attempt was held.
+          // Drain that request even when the held attempt failed; only the
+          // final attempt's outcome is returned to all merged callers.
+          if (!this.again || this.disposed) throw error;
+        }
       } while (this.again && !this.disposed);
     })();
     this.inFlight = run.finally(() => {
@@ -77,18 +92,21 @@ export class TaskTracker {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     let running = 0;
+    let healthy = false;
     try {
       const { runs } = await listTaskPage(this.deps.host, null);
       if (this.disposed) return;
       const listed = new Set(runs.map((run) => run.run_id));
       for (const run of runs) this.saw(run);
+      healthy = true;
       for (const run of [...this.active.values()]) {
-        if (!listed.has(run.run_id)) await this.fetchMissing(run);
+        if (!listed.has(run.run_id) && !await this.fetchMissing(run)) healthy = false;
         if (this.disposed) return;
       }
       running = runningCount(runs);
       this.deps.changed({ running, newestId: mergeRuns([], runs)[0]?.run_id ?? null });
     } finally {
+      this.failures = healthy ? 0 : this.failures + 1;
       if (!this.disposed) this.schedule(running);
     }
   }
@@ -96,33 +114,38 @@ export class TaskTracker {
   /** A run seen in a list or a get_run: watched while unfinished, reported
    * once when a watched run has finished. */
   private saw(run: RunView): void {
+    if (this.announced.has(run.run_id)) return;
     if (!isTerminal(run)) {
       this.active.set(run.run_id, run);
       return;
     }
     if (!this.active.delete(run.run_id)) return;
+    this.announced.add(run.run_id);
     this.deps.finished(run);
   }
 
   /** A watched run the first page left out: one get_run, from the stream
    * offset it had, says how it stands. A run the service no longer holds is
    * dropped; any other failure is tried again on the next refresh. */
-  private async fetchMissing(run: RunView): Promise<void> {
+  private async fetchMissing(run: RunView): Promise<boolean> {
     try {
       const fetched = await fetchOffPageRun(this.deps.host, run);
-      if (this.disposed) return;
+      if (this.disposed) return true;
       if (fetched === null) this.active.delete(run.run_id);
       else this.saw(fetched);
+      return true;
     } catch {
       // Tried again on the next refresh.
+      return false;
     }
   }
 
   private schedule(running: number): void {
-    if (this.timer !== null || (running === 0 && this.active.size === 0) || !this.deps.visible()) return;
+    if (this.timer !== null || this.failures >= MAX_FAILURES
+      || (running === 0 && this.active.size === 0) || !this.deps.visible()) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      if (this.deps.visible()) void this.refresh().catch(() => undefined);
-    }, TRACK_MS);
+      if (this.deps.visible()) void this.requestRefresh().catch(() => undefined);
+    }, TRACK_MS * 2 ** Math.max(0, this.failures - 1));
   }
 }

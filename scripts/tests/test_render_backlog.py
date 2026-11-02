@@ -541,6 +541,24 @@ class QueueCheckTests(unittest.TestCase):
                 (root / "b.md").write_text(SKELETON, encoding="utf-8")
                 self.assertEqual(check_queue_consistency.main(args), 1)
 
+    def test_cli_rejects_reuse_of_a_closed_id_even_with_a_fresh_backlog(self) -> None:
+        closed = bead("brwr-t33", status="closed")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            queue = root / "q.jsonl"
+            backlog = root / "b.md"
+            queue.write_text(jsonl(closed, bead("brwr-t33", title="Colliding new issue")), encoding="utf-8")
+            backlog.write_text(self.fresh(closed), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = check_queue_consistency.main([
+                    "--issues", str(queue), "--backlog", str(backlog), "--json",
+                ])
+            self.assertEqual(result, 1)
+            report = json.loads(output.getvalue())
+            self.assertEqual(report["status"], "error")
+            self.assertIn("duplicate issue id brwr-t33", report["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

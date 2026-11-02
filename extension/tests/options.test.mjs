@@ -32,6 +32,8 @@ class FakeElement {
     if (!this.disabled) this.dispatch("click");
   }
   setAttribute() {}
+  scrollIntoView(options) { this.scrolls = [...(this.scrolls ?? []), options]; }
+  focus() { FakeElement.focused = this; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   querySelectorAll(selector) {
@@ -79,6 +81,7 @@ function install({
   session = new Map(), hash = "",
 } = {}) {
   const elements = new Map();
+  FakeElement.focused = null;
   const state = {
     storage: new Map(Object.entries(storage)),
     session,
@@ -1646,6 +1649,45 @@ test("a pull request starter links to repositories only when a repository rule e
   prButton().click();
   assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value).within,
     { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" });
+});
+
+test("every way of opening the adapter editor scrolls it into view and focuses its heading", async () => {
+  const editor = () => env.elements.get("adapter-editor");
+  const heading = () => env.elements.get("adapter-editor-heading");
+  const assertBroughtIntoView = (what) => {
+    assert.equal(editor().hidden, false, what);
+    assert.deepEqual(editor().scrolls, [{ block: "start", behavior: "smooth" }], what);
+    assert.equal(FakeElement.focused, heading(), what);
+  };
+
+  install();
+  await openSettings();
+  typeSite("https://github.com");
+  const [scope] = env.elements.get("starter-gallery").querySelectorAll("input");
+  scope.value = "acme-corp";
+  scope.dispatch("input");
+  const review = env.elements.get("starter-gallery").querySelectorAll("button")
+    .find((button) => button.dataset.starterKey === "github.pr");
+  assert.equal(review.textContent, "Review starter…");
+  assert.equal(editor().scrolls, undefined);
+  review.click();
+  assertBroughtIntoView("Review starter…");
+
+  install();
+  await openSettings();
+  env.elements.get("new-adapter").click();
+  assertBroughtIntoView("Add adapter");
+
+  install({ adapters: [artifactFor("https://a.com")] });
+  await openSettings();
+  env.elements.get("adapter-list").querySelectorAll("button")
+    .find((button) => button.textContent === "Edit and preview").click();
+  assertBroughtIntoView("Edit and preview");
+
+  install({ adapters: [staleOneDrive()] });
+  await openSettings();
+  updateButtons()[0].click();
+  assertBroughtIntoView("Update to current rules");
 });
 
 test("github.repo is offered when only PR and issue rules exist", async () => {

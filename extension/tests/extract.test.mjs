@@ -7,7 +7,7 @@ import vm from "node:vm";
 // it in the page, so each test runs its source text in a fresh context that
 // holds only the fakes it is given.
 const { EXTRACT_LIMITS, extractReadablePage } = await import("../dist/extract.js");
-const { readTab, summarizeTab, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
+const { readTab, summarizeTab, isOfficeDocumentUrl, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
 
 // The host refuses a frame over this many bytes (`frame::MAX_INBOUND_BYTES`).
 const MAX_INBOUND_BYTES = 4 * 1024 * 1024;
@@ -34,7 +34,7 @@ const el = (tag, ...children) => ({
 // getClientRects, as in the older tests.
 function page({
   title = "Page title", article = null, articleTitle = "", bodyText = "", selection = "", href = PAGE_URL,
-  mainHeadings = [], rendered, bodyRendered = rendered, bodyNodes = [], rootText = bodyText,
+  mainHeadings = [], rendered, bodyRendered = rendered, bodyNodes = [], rootText = bodyText, cloneElements = [],
 } = {}) {
   const seen = { clonedDeep: null, options: null, parsed: 0 };
   const rects = (shown) => (shown === undefined ? {} : { getClientRects: () => (shown ? [{ width: 1, height: 1 }] : []) });
@@ -46,13 +46,13 @@ function page({
     querySelectorAll: () => mainHeadings,
     cloneNode(deep) {
       seen.clonedDeep = deep;
-      return { clone: true };
+      return { clone: true, querySelectorAll: () => cloneElements };
     },
   };
   const window = { getSelection: () => ({ toString: () => selection }), location: { href } };
   class Readability {
     constructor(doc, options) {
-      assert.deepEqual(doc, { clone: true });
+      assert.equal(doc.clone, true);
       seen.options = options;
     }
     parse() {
@@ -79,6 +79,22 @@ test("a current main heading wins over stale document and Readability titles", (
     });
     assert.equal(run(scope).title, "Fix the release #35");
   }
+});
+
+test("inline handler attributes are dropped from the clone Readability reads", () => {
+  // Readability re-parses the clone's HTML, and Chrome reports each inline
+  // handler it parses against the page's CSP as this extension's error.
+  const element = (attrs) => ({
+    attrs: { ...attrs },
+    getAttributeNames() { return Object.keys(this.attrs); },
+    removeAttribute(name) { delete this.attrs[name]; },
+  });
+  const img = element({ src: "a.png", onerror: "x()", ONLOAD: "y()" });
+  const p = element({ class: "lead", onclick: "z()" });
+  const { scope } = page({ article: el("p", "Body"), cloneElements: [img, p] });
+  run(scope);
+  assert.deepEqual(img.attrs, { src: "a.png" });
+  assert.deepEqual(p.attrs, { class: "lead" });
 });
 
 test("missing or ambiguous main headings retain article and document title fallbacks", () => {
@@ -387,6 +403,9 @@ const TAB = { id: 9, url: "https://cisco-my.sharepoint.com/:w:/r/personal/u/_lay
 const framePage = (fields) => ({
   title: "", content: "", selection: null, truncated: false, readable: false, href: TAB.url, ...fields,
 });
+// An ordinary page: with no text it is unreadable, unlike an Office document.
+const PLAIN_TAB = { id: 9, url: "https://read.example/article", title: "Article" };
+const plainFrame = (fields) => framePage({ href: PLAIN_TAB.url, ...fields });
 
 // Deps whose executeScript answers the extractor with `frames` (Chrome's
 // per-frame results) and records every injection.
@@ -445,8 +464,9 @@ test("readTab reads the page summarizeTab would send, and sends nothing", async 
 
   const untitled = framesDeps([{ frameId: 0, result: framePage({ title: "", content: "Body" }) }]);
   assert.equal((await readTab(TAB, untitled.deps)).title, TAB.title);
-  const empty = framesDeps([{ frameId: 0, result: framePage({ content: " " }) }]);
-  await assert.rejects(readTab(TAB, empty.deps), (error) => error.code === "unreadable" && error.message === UNREADABLE_MESSAGE);
+  const empty = framesDeps([{ frameId: 0, result: plainFrame({ content: " " }) }]);
+  await assert.rejects(readTab(PLAIN_TAB, empty.deps), (error) => error.code === "unreadable" && error.message === UNREADABLE_MESSAGE);
+  assert.equal(empty.requests.length, 0);
   const moved = framesDeps([{ frameId: 0, result: framePage({ content: "Body", href: "https://elsewhere.example/" }) }]);
   await assert.rejects(readTab(TAB, moved.deps),
     (error) => error.code === "page_changed" && error.message === PAGE_CHANGED_MESSAGE);
@@ -529,10 +549,10 @@ test("a frame that refuses injection or returns nothing is skipped", async () =>
 
 test("no frame with text is unreadable, and a missing top frame is too", async () => {
   const empty = framesDeps([
-    { frameId: 0, result: framePage({ content: "   " }) },
-    { frameId: 3, result: framePage({ content: "", href: "https://word-edit.officeapps.live.com/x" }) },
+    { frameId: 0, result: plainFrame({ content: "   " }) },
+    { frameId: 3, result: plainFrame({ content: "", href: "https://embed.example/x" }) },
   ]);
-  await assert.rejects(summarizeTab(TAB, empty.deps),
+  await assert.rejects(summarizeTab(PLAIN_TAB, empty.deps),
     (error) => error.code === "unreadable" && error.message === UNREADABLE_MESSAGE);
   assert.equal(empty.requests.length, 0);
 
@@ -544,6 +564,47 @@ test("no frame with text is unreadable, and a missing top frame is too", async (
   const refused = framesDeps(() => { throw new Error("Cannot access contents of the page"); });
   await assert.rejects(summarizeTab(TAB, refused.deps), (error) => error.code === "unreadable");
   assert.equal(noTop.requests.length + refused.requests.length, 0);
+});
+
+test("an Office document tab with no text still starts a run with empty content", async () => {
+  // PowerPoint renders slides with no readable DOM text; the host names the
+  // document in page.md and the agent reads it (DESIGN.md §4.5).
+  const frames = [
+    { frameId: 0, result: framePage({ title: "", content: "  " }) },
+    { frameId: 3, result: framePage({ content: "", href: "https://powerpoint.officeapps.live.com/p/PowerPointFrame.aspx" }) },
+  ];
+  const summarized = framesDeps(frames);
+  await summarizeTab(TAB, summarized.deps);
+  assert.equal(summarized.requests.length, 1);
+  assert.equal(summarized.requests[0].type, "start_run");
+  assert.equal(summarized.requests[0].content, "  ");
+  assert.equal(summarized.requests[0].content.trim(), "");
+  assert.equal(summarized.requests[0].title, TAB.title);
+  assert.equal(summarized.requests[0].url, TAB.url);
+  const read = framesDeps(frames);
+  const page = await readTab(TAB, read.deps);
+  assert.equal(page.content.trim(), "");
+  assert.equal(page.title, TAB.title);
+  assert.equal(read.requests.length, 0);
+});
+
+test("an Office tab that moved is still page_changed, and one with no top frame is still unreadable", async () => {
+  const moved = framesDeps([{ frameId: 0, result: framePage({ content: "", href: "https://cisco-my.sharepoint.com/other" }) }]);
+  await assert.rejects(summarizeTab(TAB, moved.deps),
+    (error) => error.code === "page_changed" && error.message === PAGE_CHANGED_MESSAGE);
+  const noTop = framesDeps([{ frameId: 3, result: framePage({ content: "", href: "https://word-edit.officeapps.live.com/x" }) }]);
+  await assert.rejects(summarizeTab(TAB, noTop.deps), (error) => error.code === "unreadable");
+  const refused = framesDeps(() => { throw new Error("Cannot access contents of the page"); });
+  await assert.rejects(readTab(TAB, refused.deps), (error) => error.code === "unreadable");
+  assert.equal(moved.requests.length + noTop.requests.length + refused.requests.length, 0);
+});
+
+test("isOfficeDocumentUrl agrees with the host's shared vectors", () => {
+  const vectors = JSON.parse(readFileSync(new URL("../../host/tests/fixtures/office-document-urls.json", import.meta.url), "utf8"));
+  assert.ok(vectors.cases.length > 20);
+  for (const { url, office } of vectors.cases) assert.equal(isOfficeDocumentUrl(url), office, url);
+  assert.equal(isOfficeDocumentUrl(TAB.url), true);
+  assert.equal(isOfficeDocumentUrl(PLAIN_TAB.url), false);
 });
 
 test("only the top frame's address must still name the tab's page", async () => {
@@ -576,9 +637,15 @@ test("a hidden script-only frame loses to a visible frame with short text", asyn
   assert.equal(requests[0].content, "Slide 1: Plan");
   assert.equal(requests[0].selection, null);
   assert.doesNotMatch(JSON.stringify(requests[0]), /tokenFactorySettings|user@example\.com/);
-  // With no visible text anywhere, the hidden frame cannot make it readable.
-  const alone = framesDeps(frames.slice(0, 2));
-  await assert.rejects(readTab(TAB, alone.deps), (error) => error.code === "unreadable");
+  // With no visible text anywhere, the hidden frame cannot make an ordinary
+  // page readable.
+  const plainTop = page({ title: "Article", bodyText: "", rendered: true, href: PLAIN_TAB.url }).scope;
+  const alone = framesDeps([
+    { frameId: 0, result: extracted(plainTop, PLAIN_TAB.url) },
+    { frameId: 2, result: extracted(hiddenScriptFrame().scope, "https://embed.example/tokenfactoryiframe") },
+  ]);
+  await assert.rejects(readTab(PLAIN_TAB, alone.deps), (error) => error.code === "unreadable");
+  assert.equal(alone.requests.length, 0);
 });
 
 test("hidden descendants in a display:contents frame cannot outweigh visible frame text", async () => {
