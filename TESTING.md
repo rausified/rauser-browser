@@ -627,6 +627,15 @@ the same way, for tasks and summaries alike:
   `office_paragraphs_mark_the_document_untrusted_and_bound_the_section`,
   `office_paragraphs_keep_a_downloaded_copy_out_of_the_knowledge_base` and
   `office_paragraphs_fetch_when_the_page_holds_only_part_of_the_document`;
+- the summary instructions, `SUMMARY.md` as rendered by
+  `host/src/service/prompt.rs`:
+  `summary_md_is_the_whole_prompt_without_its_maintainer_comment`,
+  `summary_values_are_inserted_in_one_pass` (a path or vocabulary value
+  holding `{{placeholder}}` text is never expanded) and
+  `summary_template_rejects_a_malformed_summary_md` (missing or repeated
+  placeholders, an unknown placeholder, a missing `{{#office}}` block or
+  maintainer comment); the untrusted-page and vocabulary tests above it
+  also guard edits to `SUMMARY.md`;
 - the supervisor, `host/src/service/supervisor.rs`:
   `an_office_task_names_the_document_in_page_md_and_its_prompt_says_to_fetch_it`,
   `office_page_content_with_forged_bullets_leaves_one_host_address_line`,
