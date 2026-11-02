@@ -1495,8 +1495,12 @@ impl ArtifactIndex {
         {
             return Err(error);
         }
-        let mut conn = db::open(&self.cache_dir, db::Mode::IfExists)?
-            .context("artifact history is unavailable: index.db is missing")?;
+        // The catch-up succeeded; with no database it found nothing to
+        // commit, and `index.db` is never created just to answer a read.
+        let mut conn = match db::open(&self.cache_dir, db::Mode::IfExists)? {
+            Some(conn) => conn,
+            None => db::empty()?,
+        };
         query::register(&conn)?;
         db::read_txn(&mut conn, |tx| {
             if catchup::rebuilding(tx)? {

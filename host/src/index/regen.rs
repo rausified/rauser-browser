@@ -231,7 +231,13 @@ impl ArtifactIndex {
         // Lock order: the regen lock before any SQLite transaction.
         let _lock = regen_lock(&self.cache_dir)?;
         let adapters = self.adapters.as_deref();
-        let mut conn = store::open(&self.cache_dir)?;
+        // An empty history has nothing to regenerate, and a pass never
+        // creates `index.db` (it is opened only to commit ingested data).
+        let mut conn = if self.nothing_to_commit(state)? {
+            db::empty()?
+        } else {
+            store::open(&self.cache_dir)?
+        };
         let marks = db::read_txn(&mut conn, dirty_marks)?;
         let mut report = RegenerationReport::default();
         let fail = |report: &mut RegenerationReport, path: String, error: anyhow::Error| {

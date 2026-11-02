@@ -271,6 +271,16 @@ fn open_with(
     Ok(Some(conn))
 }
 
+/// An empty format 9 store in memory, for a read over a history that has
+/// nothing to commit yet: `index.db` is created only to commit ingested
+/// data, so its absence after a successful catch-up means "no history".
+pub(crate) fn empty() -> Result<Connection> {
+    let mut conn = Connection::open_in_memory().map_err(sqlite)?;
+    configure(&conn).map_err(sqlite)?;
+    ensure_schema(&mut conn)?;
+    Ok(conn)
+}
+
 fn unavailable(path: &Path, error: io::Error) -> anyhow::Error {
     DbError::Unavailable(format!("{}: {error}", path.display())).into()
 }
