@@ -79,9 +79,12 @@ This is regression coverage, not full WCAG conformance or screen-reader
 certification. Human checks still include screen-reader announcements,
 reading order, meaningful labels in context, zoom/reflow, OS high-contrast
 mode and all reported incomplete results. A sandbox skip is not evidence of
-browser acceptance. In particular, the initial Cookie implementation of
-`brwr-e7b0` remains in progress until the required external browser gate has
-actually exercised it; the script and CI wiring alone do not close the bead.
+browser acceptance. The coordinator closed `brwr-e7b0` after PR #212 passed
+the required 38-case browser gate three times on macOS Chrome (2026-11-02).
+That evidence includes the keyboard-focusable adapter match preview,
+asynchronous diagnostics-copy wait and scroll-preserving run-action focus
+restore. Future changes still need the required browser gate; the script
+and CI wiring alone do not establish acceptance.
 
 ## Test layers
 
