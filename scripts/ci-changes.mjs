@@ -12,7 +12,9 @@
 // - Anything under docs/ (plans, specs, history, starter-adapter notes).
 // - Anything under .beads/ (the work queue).
 //
-// Everything else is code, including Markdown below the root (fixtures under
+// Everything else is code, including SUMMARY.md at the root (the native host
+// compiles it in as the page-summary prompt, so its tests must run) and
+// Markdown below the root (fixtures under
 // host/tests/, protocol/README.md and protocol/adapter-templates/README.md
 // are read by tests or define the protocol). An empty change list is never
 // docs-only, so a diff that found nothing (or failed) runs the full builds.
@@ -25,11 +27,14 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 const DOCS_DIRS = ["docs/", ".beads/"];
+/** Root Markdown that a build reads, so it is code. */
+const BUILT_ROOT_MARKDOWN = ["SUMMARY.md"];
 
 /** True when nothing in CI builds or tests from `path`. */
 export function isDocsOrQueuePath(path) {
   if (typeof path !== "string" || path === "") return false;
   if (DOCS_DIRS.some((dir) => path.startsWith(dir) && path.length > dir.length)) return true;
+  if (BUILT_ROOT_MARKDOWN.includes(path)) return false;
   return !path.includes("/") && path.endsWith(".md") && path.length > ".md".length;
 }
 

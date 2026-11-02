@@ -1952,7 +1952,7 @@ mod tests {
     use crate::service::finisher::{KindFinisher, SummaryFinisher};
     use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
     use crate::service::prompt::{
-        OFFICE_SUMMARY_PARAGRAPH, OFFICE_TASK_PARAGRAPH, TASK_PROMPT_START, site_draft_input,
+        OFFICE_TASK_PARAGRAPH, TASK_PROMPT_START, office_summary_paragraph, site_draft_input,
         task_prompt, task_repair_prompt,
     };
     use crate::service::record::{
@@ -3859,7 +3859,7 @@ mod tests {
         fixture.wait_finished(queued.unwrap());
         let prompt = read(&fixture.path("count.prompt"));
         assert!(prompt.starts_with("Summarize a web page"), "{prompt}");
-        assert!(!prompt.contains(OFFICE_SUMMARY_PARAGRAPH), "{prompt}");
+        assert!(!prompt.contains(office_summary_paragraph()), "{prompt}");
     }
 
     #[test]
@@ -5263,13 +5263,13 @@ mod tests {
         assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
         let seen = seen.lock().unwrap();
         assert!(seen.prompts[0].starts_with("Summarize a web page"));
-        assert!(seen.prompts[0].contains(OFFICE_SUMMARY_PARAGRAPH));
+        assert!(seen.prompts[0].contains(office_summary_paragraph()));
         assert!(!seen.prompts[0].contains("X.pptx"));
         // An ordinary page's summary prompt has no such paragraph.
         let (plain, plain_seen) = recording(&[TEST_ANSWER]);
         let id = plain.start("b");
         plain.wait_finished(id);
-        assert!(!plain_seen.lock().unwrap().prompts[0].contains(OFFICE_SUMMARY_PARAGRAPH));
+        assert!(!plain_seen.lock().unwrap().prompts[0].contains(office_summary_paragraph()));
     }
 
     #[test]
@@ -5299,7 +5299,7 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert_eq!(seen.starts[0].1, input);
         assert!(!seen.prompts[0].contains(OFFICE_TASK_PARAGRAPH));
-        assert!(!seen.prompts[0].contains(OFFICE_SUMMARY_PARAGRAPH));
+        assert!(!seen.prompts[0].contains(office_summary_paragraph()));
     }
 
     #[test]
