@@ -123,6 +123,10 @@ pub(crate) fn default_auto_summary() -> AutoSummaryConfig {
     }
 }
 
+fn is_default_auto_summary(value: &AutoSummaryConfig) -> bool {
+    *value == default_auto_summary()
+}
+
 pub(crate) fn default_summary_vocabulary() -> SummaryVocabulary {
     SummaryVocabulary {
         document_types: DEFAULT_DOCUMENT_TYPES.map(String::from).to_vec(),
@@ -1403,8 +1407,12 @@ struct StoredConfig {
     // Absent before protocol v6: the default lists.
     #[serde(default = "default_summary_vocabulary")]
     summary_vocabulary: SummaryVocabulary,
-    // Absent before auto-summary: on, with no dwell.
-    #[serde(default = "default_auto_summary")]
+    // Absent before auto-summary: on, with no dwell. The defaults are not
+    // written, since an older host refuses a config.toml with this table.
+    #[serde(
+        default = "default_auto_summary",
+        skip_serializing_if = "is_default_auto_summary"
+    )]
     auto_summary: AutoSummaryConfig,
     // Accept and ignore the retired M1 key. New config writes omit it.
     #[serde(default, skip_serializing, rename = "near_repeat_secs")]
@@ -4814,6 +4822,24 @@ mod tests {
         let reloaded = loaded(&path);
         assert_eq!(reloaded.config_issue(), None);
         assert_eq!(reloaded.snapshot().auto_summary, next.auto_summary);
+    }
+
+    /// An older host refuses a config.toml with an unknown table, so the
+    /// default auto-summary settings are left out: rolling back stays safe
+    /// until the user changes them.
+    #[test]
+    fn default_auto_summary_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let root = dir.path().join("notes");
+        fs::create_dir(&root).unwrap();
+        fixtures::write(&path, &root, "summaries_dir = \"summaries\"", "", "");
+        let mut store = loaded(&path);
+        let next = store.snapshot().clone();
+        let revision = store.revision().to_owned();
+        store.update(next, &revision).unwrap().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("auto_summary"), "{text}");
     }
 
     #[test]

@@ -2991,8 +2991,11 @@ test("recognizedOpenAtDwellZeroSendsOneStartAutoSummary", async () => {
     run: { ...SUMMARY_RUN, url, record_key: { kind: "artifact", value: "test:auto.example/first" } },
     existing: false,
   });
-  await until(() => sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/first"),
-    "the artifact recorded as submitted");
+  // A started run skips the artifact briefly; the host decides later opens
+  // (already_summarized once saved, a new run if the agent met a wall).
+  await until(() => sessionValues.get(AUTO_KEY)?.skipped?.["test:auto.example/first"] > Date.now(),
+    "the artifact skipped for a while");
+  assert.deepEqual(sessionValues.get(AUTO_KEY).submitted, []);
   // Another load of the same tab asks nothing more.
   const after = ports.length;
   onTabUpdated(201, { status: "complete" }, tabs.get(201));
@@ -3052,7 +3055,13 @@ test("notSetUpLeavesTheArtifactEligible", async () => {
   await until(() => sessionValues.get(AUTO_KEY) && !sessionValues.get(AUTO_KEY).candidates["206"],
     "the candidate dropped");
   assert.deepEqual(sessionValues.get(AUTO_KEY).submitted, []);
-  // A later open tries again.
+  // Tab switches and reopens do not ask again while nothing changed...
+  const quiet = ports.length;
+  onTabActivated({ tabId: 206, windowId: 1 });
+  await openArtifact(210, "setup");
+  await noAutoRequest(quiet);
+  // ...but a new config revision (a harness set up) does.
+  values.set(storageKey("policy_v1"), { ...autoLease(), revision: "host-revision:after-setup" });
   const again = ports.length;
   await openArtifact(207, "setup");
   const retried = await autoRequest(again);
@@ -3079,6 +3088,75 @@ test("hostUnavailableKeepsTheCandidate", async () => {
   assert.equal(state.candidates["208"]?.artifact_id, "test:auto.example/later");
   assert.deepEqual(state.submitted, []);
   assert.ok(alarms.has(AUTO_ALARM), "a retry is scheduled");
+});
+
+test("aRefusedStartSkipsOnlyThatArtifact", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(211, "refused");
+  const { port, request } = await autoRequest(before);
+  port.reply({
+    type: "error", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    code: "internal", message: "history is unavailable",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.skipped?.["test:auto.example/refused"] > Date.now(),
+    "the refused artifact skipped");
+  assert.equal(sessionValues.get(AUTO_KEY).retry_after, undefined, "the queue is not held");
+  const next = ports.length;
+  await openArtifact(212, "next");
+  const second = await autoRequest(next);
+  assert.equal(second.request.url, `${AUTO_ORIGIN}/items/next`);
+  second.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: second.request.request_id, reason: "already_summarized",
+  });
+  await until(() => second.port.closed, "the second port to close");
+});
+
+test("aStartedArtifactIsAskedAgainOnceItsSkipEnds", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(213, "wall");
+  const first = await autoRequest(before);
+  first.port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: first.request.request_id,
+    run: { ...SUMMARY_RUN, record_key: { kind: "artifact", value: "test:auto.example/wall" } }, existing: false,
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.skipped?.["test:auto.example/wall"], "the start recorded");
+  // The run met a sign-in wall and saved nothing; once the short skip ends,
+  // a reload asks the host again.
+  const state = sessionValues.get(AUTO_KEY);
+  state.skipped["test:auto.example/wall"] = Date.now() - 1;
+  sessionValues.set(AUTO_KEY, state);
+  const again = ports.length;
+  await openArtifact(214, "wall");
+  const second = await autoRequest(again);
+  second.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: second.request.request_id, reason: "already_summarized",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/wall"),
+    "a saved summary is then remembered");
+});
+
+test("aSinglePageRouteWaitsForItsTitleOrSettle", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  // A route change: the tab is already "complete" and no load event comes.
+  await openArtifact(215, "route", { load: false });
+  await noAutoRequest(before);
+  // The new route's title arriving means it rendered.
+  onTabUpdated(215, { title: "Route title" }, tabs.get(215));
+  const { port, request } = await autoRequest(before);
+  assert.equal(request.url, `${AUTO_ORIGIN}/items/route`);
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "already_summarized",
+  });
+  await until(() => port.closed, "the route port to close");
 });
 
 test("dwellSurvivesWorkerRestart", async () => {

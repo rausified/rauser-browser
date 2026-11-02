@@ -789,9 +789,18 @@ fn dispatch(
         | Request::SetUpHarness(_)
         | Request::OpenPath(_)
         | Request::GetAgentEnv(_)) => forward(&request, context.service),
+        // There is no service off Unix, so nothing is ever summarized on its
+        // own; a skip (not an error) keeps the extension from retrying.
+        #[cfg(not(unix))]
+        Request::StartAutoSummary(value) => {
+            Response::AutoSummarySkipped(brauser_protocol::AutoSummarySkippedResponse {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                reason: brauser_protocol::AutoSummarySkipReason::NotSetUp,
+            })
+        }
         #[cfg(not(unix))]
         Request::StartRun(_)
-        | Request::StartAutoSummary(_)
         | Request::StartSiteDraft(_)
         | Request::StartTask(_)
         | Request::GetRun(_)
@@ -11026,14 +11035,13 @@ id = "work:{host}/{id}"
             // Every other setting, including the adapters, is kept. The v5
             // `[agent]` and `[harness_record]` tables load as not set up and
             // are dropped by this first save, which also writes the default
-            // summary vocabulary (open access PR 3) and auto-summary settings.
+            // summary vocabulary (open access PR 3).
             let mut before = without_layout(before);
             assert!(before.remove("agent").is_some());
             assert!(before.remove("harness_record").is_some());
             let mut after = without_layout(after);
             assert!(!after.contains_key("agent") && !after.contains_key("harness_record"));
             assert!(after.remove("summary_vocabulary").is_some());
-            assert!(after.remove("auto_summary").is_some());
             assert_eq!(after, before);
 
             match install.load(&mut config, NEWS_URL) {

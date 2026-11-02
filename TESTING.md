@@ -532,9 +532,11 @@ a real agent's drafts.
   the fake Chrome: one `start_auto_summary` per recognized open, none for an
   unrecognized page, a paused capture, a disabled setting or a lease without
   the field, no second ask after `already_summarized`, a dropped candidate
-  after `not_set_up` (a later open tries again), a kept candidate and a retry
-  alarm after `service_unavailable`, and focus kept in session storage with a
-  dwell alarm. Each test answers every request it causes: the worker runs one
+  after `not_set_up` (no re-ask on tab switches until the lease revision
+  changes), a refusal that skips only its artifact, a started artifact asked
+  again once its short skip ends, a route change that waits for its title, a
+  kept candidate and a retry alarm after `service_unavailable`, and focus kept
+  in session storage with a dwell alarm. Each test answers every request it causes: the worker runs one
   drain at a time, so an unanswered request stalls the next test's drain.
 - Host: `native::tests::run_proxy` (each skip reason before connecting, the
   forwarded summary `start_run`, manual Summarize ignoring an existing summary,

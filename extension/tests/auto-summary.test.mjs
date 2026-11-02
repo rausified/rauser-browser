@@ -5,6 +5,7 @@ const {
   MAX_SUBMITTED, dropCandidate, dueTabs, emptyAutoSummaryState, markSubmitted, nextDueInMs,
   noteArtifact, noteAttention, noteClosed, noteLoaded,
 } = await import("../dist/auto-summary.js");
+const autoModule = await import("../dist/auto-summary.js");
 
 const doc = (n) => ({ artifact_id: `gdoc:docs.google.com/${n}`, url: `https://docs.google.com/d/${n}`, title: `Doc ${n}` });
 const SEC = 1_000;
@@ -115,4 +116,28 @@ test("closing a tab drops its candidate", () => {
   noteArtifact(state, 1, doc("a"), 0);
   noteClosed(state, 1);
   assert.deepEqual(state.candidates, {});
+});
+
+test("skippedArtifactMakesNoCandidateUntilItExpires", () => {
+  const { markSkipped } = autoModule;
+  const state = emptyAutoSummaryState();
+  noteArtifact(state, 1, doc("a"), 0);
+  noteArtifact(state, 2, doc("a"), 0);
+  markSkipped(state, 1, 10 * SEC);
+  assert.deepEqual(state.candidates, {}, "every tab's candidate for it goes");
+  assert.deepEqual(state.submitted, []);
+  noteArtifact(state, 1, doc("a"), 5 * SEC);
+  assert.equal(state.candidates["1"], undefined, "still skipped");
+  noteArtifact(state, 1, doc("a"), 10 * SEC);
+  assert.equal(state.candidates["1"]?.artifact_id, doc("a").artifact_id, "the skip expired");
+});
+
+test("clearSkipsAllowsAgain", () => {
+  const { clearSkips, markSkipped } = autoModule;
+  const state = emptyAutoSummaryState();
+  noteArtifact(state, 1, doc("a"), 0);
+  markSkipped(state, 1, 600 * SEC);
+  clearSkips(state);
+  noteArtifact(state, 1, doc("a"), SEC);
+  assert.equal(state.candidates["1"]?.artifact_id, doc("a").artifact_id);
 });

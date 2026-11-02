@@ -25,12 +25,12 @@ import { BINARY_NAME, storageKey } from "./brand.js";
 import { diag, initDiag } from "./diag.js";
 import { evaluate, type EvaluateResult } from "./adapter-templates.js";
 import { withLatestHostState } from "./coordination.js";
-import { HostClient, PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { HostClient, HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { leaseFor, withConfigMutationLock } from "./settings.js";
 import { httpOrigin, inspectSitePatterns, prunePatternSamples, samplePattern } from "./site-patterns.js";
 import { pruneDraftHandoffs } from "./capture-site-handoff.js";
 import {
-  dropCandidate, dueTabs, emptyAutoSummaryState, markSubmitted, nextDueInMs, noteArtifact,
+  clearSkips, dueTabs, emptyAutoSummaryState, markSkipped, markSubmitted, nextDueInMs, noteArtifact,
   noteAttention, noteLoaded, type AutoSummaryState,
 } from "./auto-summary.js";
 import {
@@ -92,6 +92,18 @@ const AUTO_SETTLE_MS = 500;
 const AUTO_RETRY_MS = 60_000;
 /** The most tabs one drain submits. */
 const AUTO_MAX_PER_DRAIN = 50;
+/** How long a refused, unreadable or changed artifact waits before another
+ * try, unless the host's config changes first (a harness set up, say). */
+const AUTO_SKIP_MS = 10 * 60_000;
+/** How long a just-started artifact waits before the host is asked again: a
+ * saved summary then answers already_summarized, and a run that met a sign-in
+ * wall (and saved nothing) is tried again. A run in progress is joined. */
+const AUTO_STARTED_SKIP_MS = 60_000;
+/** A tab that is already complete with no load or title event (a single-page
+ * app's route change) counts as loaded only after this long. */
+const AUTO_ROUTE_SETTLE_MS = 3_000;
+/** Host errors after which the same artifact is tried again soon. */
+const AUTO_TRANSIENT = new Set(["disconnected", "timeout", "service_unavailable"]);
 const DELIVER_DELAY_MINUTES = 0.5;
 const LEASE_RENEW_WINDOW_MS = 60 * 60_000;
 const encoder = new TextEncoder();
@@ -213,6 +225,13 @@ function autoSummaryOn(lease: PolicyLease | null, now = Date.now()): { dwellMs: 
  * schedule the next look at them. */
 async function syncAutoSummary(activity: ActivityState, now: number): Promise<void> {
   const state = await readAutoSummary();
+  const lease = await readPolicy();
+  // A new host config (a harness set up, auto-summary turned on) may change
+  // any earlier refusal, so every skip is forgotten.
+  if (lease && state.revision !== lease.revision) {
+    clearSkips(state);
+    state.revision = lease.revision;
+  }
   for (const key of Object.keys(state.candidates)) {
     if (!activity.tabs[key]) delete state.candidates[key];
   }
@@ -221,7 +240,7 @@ async function syncAutoSummary(activity: ActivityState, now: number): Promise<vo
   }
   noteAttention(state, attendedTab(activity), now);
   await writeAutoSummary(state);
-  const on = autoSummaryOn(await readPolicy(), now);
+  const on = autoSummaryOn(lease, now);
   if (on && Object.keys(state.candidates).length) {
     scheduleAutoAlarm(state, on.dwellMs, now);
     scheduleAutoDrain(AUTO_SETTLE_MS);
@@ -266,6 +285,11 @@ async function takeDueAuto(): Promise<AutoAttempt | null> {
   if (state.retry_after !== undefined && state.retry_after > now) return null;
   for (const [key, candidate] of Object.entries(state.candidates)) {
     if (candidate.loaded) continue;
+    const settled = now - candidate.queued_at >= AUTO_ROUTE_SETTLE_MS;
+    if (!settled) {
+      scheduleAutoDrain(candidate.queued_at + AUTO_ROUTE_SETTLE_MS - now + 50);
+      continue;
+    }
     const tab = await chrome.tabs.get(Number(key)).catch(() => null);
     if (tab?.status === "complete") noteLoaded(state, Number(key));
   }
@@ -286,6 +310,12 @@ async function attemptAuto(attempt: AutoAttempt): Promise<string> {
       { scripting: chrome.scripting, host, storage: chrome.storage.local, now: () => new Date() },
     );
   } catch (error) {
+    // Only an unreachable host or service is worth retrying soon; any other
+    // refusal skips this artifact, so it never holds up the rest.
+    if (error instanceof HostError && !AUTO_TRANSIENT.has(error.code)) {
+      diag.warn("auto summary refused", { error });
+      return "refused";
+    }
     diag.warn("auto summary deferred", { error });
     return "deferred";
   } finally {
@@ -297,12 +327,15 @@ async function settleAuto(attempt: AutoAttempt, outcome: string): Promise<void> 
   const state = await readAutoSummary();
   const current = state.candidates[String(attempt.tabId)];
   if (current?.artifact_id === attempt.artifactId) {
-    if (outcome === "started" || outcome === "already_summarized") {
+    const now = Date.now();
+    if (outcome === "already_summarized") {
       markSubmitted(state, attempt.tabId);
+    } else if (outcome === "started") {
+      markSkipped(state, attempt.tabId, now + AUTO_STARTED_SKIP_MS);
     } else if (outcome === "deferred") {
-      state.retry_after = Date.now() + AUTO_RETRY_MS;
+      state.retry_after = now + AUTO_RETRY_MS;
     } else {
-      dropCandidate(state, attempt.tabId);
+      markSkipped(state, attempt.tabId, now + AUTO_SKIP_MS);
     }
   }
   if (outcome !== "deferred") delete state.retry_after;
@@ -1500,7 +1533,9 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(onHistoryStateUpdated);
 
 // Chrome reports a tab's title only for origins this extension was granted.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "complete") {
+  // A load, or a title (a single-page app's route has rendered), means the
+  // tab's page can be read.
+  if (changeInfo.status === "complete" || changeInfo.title !== undefined) {
     void serialize(async () => {
       const state = await readAutoSummary();
       if (!state.candidates[String(tabId)]) return;

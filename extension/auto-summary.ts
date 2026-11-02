@@ -25,6 +25,11 @@ export interface AutoSummaryState {
   submitted: string[];
   /** No attempt before this time (ms), after the host could not be reached. */
   retry_after?: number;
+  /** Artifacts not to try again before a time (ms): a refusal, an unreadable
+   * page, or a run just started. Cleared when the host's config changes. */
+  skipped?: Record<string, number>;
+  /** The lease revision the skips were recorded under. */
+  revision?: string;
 }
 
 /** How many submitted artifact IDs are remembered. */
@@ -48,6 +53,7 @@ export function noteArtifact(
   if (match && current?.artifact_id === match.artifact_id) return;
   delete state.candidates[key];
   if (!match || state.submitted.includes(match.artifact_id)) return;
+  if ((state.skipped?.[match.artifact_id] ?? 0) > now) return;
   state.candidates[key] = {
     artifact_id: match.artifact_id, url: match.url, title: match.title,
     queued_at: now, loaded: false, focused_ms: 0, focused_since: null,
@@ -127,4 +133,25 @@ export function markSubmitted(state: AutoSummaryState, tabId: number): void {
  * open tries again. */
 export function dropCandidate(state: AutoSummaryState, tabId: number): void {
   delete state.candidates[String(tabId)];
+}
+
+/** Do not try the tab's artifact again before `until` (ms), in any tab. */
+export function markSkipped(state: AutoSummaryState, tabId: number, until: number): void {
+  const candidate = state.candidates[String(tabId)];
+  if (!candidate) return;
+  for (const [key, other] of Object.entries(state.candidates)) {
+    if (other.artifact_id === candidate.artifact_id) delete state.candidates[key];
+  }
+  state.skipped = { ...state.skipped, [candidate.artifact_id]: until };
+  const ids = Object.keys(state.skipped);
+  // Bounded like `submitted`: the soonest-expiring skips go first.
+  if (ids.length > MAX_SUBMITTED) {
+    ids.sort((a, b) => state.skipped![a]! - state.skipped![b]!);
+    for (const id of ids.slice(0, ids.length - MAX_SUBMITTED)) delete state.skipped[id];
+  }
+}
+
+/** Forget every skip, so each artifact is tried again on its next open. */
+export function clearSkips(state: AutoSummaryState): void {
+  delete state.skipped;
 }
