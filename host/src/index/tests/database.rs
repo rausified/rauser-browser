@@ -298,8 +298,8 @@ fn no_legacy_writer_remains() {
             assert!(!source.contains(pattern), "{name} still has {pattern}");
         }
     }
-    // The legacy JSON files are named only where the migration reads and
-    // then removes them, and nothing there writes a file.
+    // The legacy JSON files are named only where the migration reads them,
+    // and nothing there writes one: its only write is the import marker.
     let legacy_json = [
         concat!("index-state", ".json"),
         concat!("index-catch-up", ".json"),
@@ -312,7 +312,12 @@ fn no_legacy_writer_remains() {
         }
     }
     let legacy = include_str!("../legacy.rs");
-    for write in ["fs::write", "atomic_write", "File::create", ".create(true)"] {
+    for write in ["fs::write", "File::create", ".create(true)", "remove_file"] {
         assert!(!legacy.contains(write), "legacy.rs writes through {write}");
     }
+    assert_eq!(legacy.matches("atomic_write(").count(), 1);
+    assert!(
+        legacy.contains("atomic_write(\n                &self.legacy_file(IMPORTED_MARKER),"),
+        "legacy.rs writes something other than its import marker"
+    );
 }

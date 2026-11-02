@@ -21,13 +21,20 @@
 //!    renders that changed; after the fallback, only artifacts whose file is
 //!    missing (`rebuild::Finish::Missing`), so user edits are never
 //!    overwritten.
-//! 4. Once the rebuild has committed, the legacy JSON files are removed and
-//!    `legacy_import` becomes `done`. A crash before that repeats only what
-//!    has not committed.
+//! 4. Once the rebuild has committed, `index-legacy-imported` records the
+//!    legacy JSON files as they are and `legacy_import` becomes `done`. A
+//!    crash before that repeats only what has not committed.
 //!
+//! The legacy JSON files are left in place. A format 8 host still running
+//! the old binary (a side panel open across the upgrade) keeps catching up
+//! from its own checkpoints and marks only new events dirty; had they been
+//! removed, it would rebuild from nothing, mark every artifact dirty and
+//! rewrite every owned file, user edits included. Files that still match
+//! `index-legacy-imported` count as absent, so a format 9 host never imports
+//! the same stale cache twice (after a damaged `index.db` is replaced, say).
 //! A pre-format-9 host that later renames its snapshot over `index.db`
-//! leaves a foreign file again, so the next open migrates again and the
-//! logs recover anything written in between.
+//! rewrites them too, so the next open sees a foreign file and fresh JSON,
+//! migrates again, and the logs recover anything written in between.
 
 use rusqlite::{Transaction, params};
 
@@ -37,8 +44,13 @@ use super::*;
 const LEGACY_KEY: &str = "legacy_import";
 /// The JSON cache format a format 8 host wrote.
 const LEGACY_VERSION: u8 = 8;
-/// The legacy JSON files the migration removes once it has committed.
+/// The legacy JSON files a format 8 host writes. The migration reads them
+/// and leaves them for any format 8 host still running.
 const LEGACY_FILES: [&str; 2] = ["index-state.json", "index-catch-up.json"];
+/// Records the legacy JSON files as they were when a migration finished, so
+/// the same files are never imported again; a format 8 host that writes them
+/// afterwards changes them, and they count again.
+const IMPORTED_MARKER: &str = "index-legacy-imported";
 
 /// A format 8 `index-state.json`, read only for the fields the import
 /// uses. It is never written.
@@ -215,15 +227,47 @@ impl ArtifactIndex {
         self.cache_dir.join(name)
     }
 
+    /// The legacy JSON files' sizes and modification times, as one line.
+    fn legacy_fingerprint(&self) -> String {
+        LEGACY_FILES
+            .iter()
+            .map(|name| match fs::symlink_metadata(self.legacy_file(name)) {
+                Ok(metadata) => {
+                    let modified = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |since| since.as_nanos());
+                    format!("{name}:{}:{modified}", metadata.len())
+                }
+                Err(_) => format!("{name}:-"),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Whether the legacy JSON files are exactly the ones a finished
+    /// migration already imported.
+    fn legacy_files_imported(&self) -> bool {
+        fs::read_to_string(self.legacy_file(IMPORTED_MARKER))
+            .is_ok_and(|marker| marker == self.legacy_fingerprint())
+    }
+
+    /// Whether a legacy JSON file exists that no finished migration has
+    /// imported as it is now.
     fn legacy_files_exist(&self) -> bool {
         LEGACY_FILES
             .iter()
             .any(|name| fs::symlink_metadata(self.legacy_file(name)).is_ok())
+            && !self.legacy_files_imported()
     }
 
     /// The v8 cache, if it is usable for this folder: format 8 within the
     /// 64 MiB bound, written for this root and layout, with valid evidence.
     fn usable_legacy_state(&self) -> Option<LegacyState> {
+        if self.legacy_files_imported() {
+            return None;
+        }
         let state: LegacyState = read_bounded_json(&self.legacy_file(LEGACY_FILES[0])).ok()??;
         (state.version == LEGACY_VERSION
             && state.root == self.storage.root
@@ -360,22 +404,21 @@ impl ArtifactIndex {
         Ok(step == Legacy::Rebuild(rebuild::Finish::Missing))
     }
 
-    /// Migration step 7: remove the legacy JSON files and record the
-    /// migration as done, once, after the rebuild has committed.
+    /// Migration step 7: record the legacy JSON files as imported and the
+    /// migration as done, once, after the rebuild has committed. The files
+    /// stay: a format 8 host still running reads them (see the module docs).
     pub(super) fn finish_legacy(&self) -> Result<()> {
         let mut conn = store::open(&self.cache_dir)?;
         db::write_txn(&mut conn, |tx| {
             if store::meta(tx, LEGACY_KEY)?.as_deref() == Some("done") {
                 return Ok(());
             }
-            for name in LEGACY_FILES {
-                match fs::remove_file(self.legacy_file(name)) {
-                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                        return Err(error).with_context(|| format!("removing the legacy {name}"));
-                    }
-                    _ => {}
-                }
-            }
+            // The only file this module writes; never a legacy JSON file.
+            atomic_write(
+                &self.legacy_file(IMPORTED_MARKER),
+                self.legacy_fingerprint().as_bytes(),
+            )
+            .with_context(|| format!("recording the imported legacy cache in {IMPORTED_MARKER}"))?;
             store::set_meta(tx, LEGACY_KEY, "done")
         })
     }

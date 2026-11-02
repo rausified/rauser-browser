@@ -241,10 +241,11 @@ fn stray_sidecars_are_removed_before_the_legacy_file() {
 }
 
 /// The legacy JSON files outlive every pass of the migration's rebuild and
-/// are removed only once it commits. Each call advances one pass, as a
-/// rebuild split over passes always has.
+/// its commit: a format 8 host still running (a side panel open across the
+/// upgrade) reads them. Each call advances one pass, as a rebuild split over
+/// passes always has.
 #[test]
-fn legacy_json_files_are_removed_after_commit() {
+fn legacy_json_files_are_kept_for_a_running_format_8_host() {
     let v8 = V8::load();
     let pending = v8.cache.path().join("index-catch-up.json");
     fs::write(&pending, b"{\"rebuild\": true}").unwrap();
@@ -262,8 +263,6 @@ fn legacy_json_files_are_removed_after_commit() {
                     format!("{error:#}").contains(INCOMPLETE_CATCH_UP),
                     "{error:#}"
                 );
-                assert_eq!(fs::read(v8.state_path()).unwrap(), legacy);
-                assert!(pending.exists());
                 assert_ne!(v8.legacy_import(), vec![vec![text("done")]]);
             }
         }
@@ -271,12 +270,32 @@ fn legacy_json_files_are_removed_after_commit() {
     SCAN_LIMIT.with(|limit| limit.set(MAX_SCAN_BYTES));
     assert!(passes >= 2, "{passes}");
     assert!(outcome.is_some());
-    assert!(!pending.exists());
-    // Until plan T15 the host keeps its own JSON cache, rewritten from the
-    // store; it is never the legacy one again.
-    assert_ne!(fs::read(v8.state_path()).ok(), Some(legacy));
     assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
     assert_eq!(dirty(&v8), vec![vec![text(V8_DIRTY)]]);
+    // Removing them would make that host rebuild from nothing, mark every
+    // artifact dirty and rewrite every owned file, user edits included.
+    index.regenerate_dirty().unwrap();
+    assert_eq!(fs::read(v8.state_path()).unwrap(), legacy);
+    assert_eq!(fs::read(&pending).unwrap(), b"{\"rebuild\": true}");
+}
+
+/// The JSON files a finished migration left in place are never imported
+/// again as they are: after `index.db` is lost, the store is rebuilt from
+/// the logs alone, as if they were gone, and the old dirty set does not
+/// come back.
+#[test]
+fn imported_legacy_json_files_are_not_imported_again() {
+    let v8 = V8::load();
+    let index = v8.index();
+    assert!(index.artifact(V8_DIRTY).unwrap().is_some());
+    index.regenerate_dirty().unwrap();
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    remove_database(&index);
+
+    assert!(index.artifact(V8_DIRTY).unwrap().is_some());
+    assert_eq!(v8.legacy_import(), Vec::<Vec<sql::Value>>::new());
+    assert!(v8.state_path().exists());
+    assert_eq!(canonical(&index), reindexed(&v8));
 }
 
 /// A pre-format-9 host that finds no cache it can use rebuilds from the

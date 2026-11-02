@@ -392,10 +392,10 @@ This runs on the first write-capable open by a format-9 host, and only when ther
    - for every other artifact, `render_sha256` is seeded with the hash of the render the v8 state derives, which is the clean or dirty split `keep_unchanged_files_clean` used to compute, done once.
 5. **Fallback.** If the JSON is absent, any other version, oversized or invalid, nothing is imported. After the rebuild, only artifacts whose expected file is missing are marked dirty, and `render_sha256 = NULL` (open decision 2). User edits are never overwritten.
 6. **Rebuild.** Run the staged rebuild (below) from the logs. While it spans passes, reads return `INCOMPLETE_CATCH_UP` and each call advances one pass, as today.
-7. **Clean up.** After the swap commits, delete `index-state.json` and `index-catch-up.json` and set `legacy_import='done'`. A crash before this point simply repeats the import.
+7. **Clean up.** After the swap commits, record the sizes and modification times of `index-state.json` and `index-catch-up.json` in `index-legacy-imported` and set `legacy_import='done'`. A crash before this point simply repeats the import. *(Revised in final review: the files are no longer deleted. A format 8 host still running across the upgrade would otherwise rebuild from nothing, mark everything dirty and rewrite every owned file, user edits included. Files that still match `index-legacy-imported` count as absent, so the same cache is never imported twice.)*
 
 **Downgrade and mixed versions:**
-- A pre-format-9 host finds no `index-state.json`, rebuilds from the logs and renames its snapshot over `index.db`.
+- A pre-format-9 host still finds its own `index-state.json`, catches up from its checkpoints (marking only new events dirty) and renames its snapshot over `index.db`, rewriting the JSON files too.
 - The next format-9 open sees application_id 0 and takes steps 1-2. Writes made in that window landed in the orphaned inode and are recovered from the authoritative logs.
 
 ### Staged rebuild and `brauser reindex`

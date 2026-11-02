@@ -1381,7 +1381,8 @@ cleanup; on Windows an open handle makes the cleanup fail.
   and checks the one-time import: the dirty set, container files and user
   edits survive, the tables equal a fresh reindex, an unusable JSON cache
   dirties only missing files, the `-wal` and `-shm` sidecars go before the
-  legacy file, the JSON files go only after the commit, and an older host's
+  legacy file, the JSON files stay in place for a format 8 host still
+  running and are never imported twice as they are, and an older host's
   rename over `index.db` is recovered. First opens racing across threads
   (`two_first_opens_converge`, and `many_concurrent_first_opens_never_fail`
   with four threads, each its own index handle, over 20 rounds) must never fail or lose the other's file;
@@ -1411,9 +1412,19 @@ cleanup; on Windows an open handle makes the cleanup fail.
   written twice, no lost dirty mark, and an equal dump after `reindex`.
   `mp_killing_the_regenerator_hands_over_the_lock_and_keeps_its_mark` kills
   the lock holder mid-pass. Run them with
-  `cargo test --locked -p brauser --lib mp_`. A test that drives several
-  real `brauser` host processes over native messaging (plan T20(b)) is not
-  written yet; those hosts still take `.config.lock` around index calls.
+  `cargo test --locked -p brauser --lib mp_`.
+  `host/tests/index_concurrency.rs` (plan T20(b), scripted build only, on
+  every OS) drives three real `brauser serve` processes over native-messaging
+  framing with one injected config, home folder and cache. They interleave
+  `record_batch` (with retried batches), `list_artifacts` and `get_artifact`;
+  every response must succeed with no busy, locked or SQLite wording, no host
+  may log a warning, and afterwards the totals equal the delivered events and
+  every artifact has its file. Run it with `cargo test --locked -p brauser
+  --features scripted-dialogs --target-dir target/scripted-dialogs --test
+  index_concurrency`. Those hosts still take `.config.lock` around index
+  calls, so this covers the host's own paths (`open_index`, the response
+  mapping, the close pass) rather than unlocked interleavings, which the
+  index-level harness covers.
   Single-process tests stand in for the interleavings a run may not hit:
   the `AFTER_STAT`, `AFTER_NEEDS_REBUILD` and `BETWEEN_STAGE_TRANSACTIONS`
   hooks run another process's step (an append, a finished rebuild) at the
