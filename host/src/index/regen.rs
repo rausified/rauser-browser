@@ -43,9 +43,21 @@ enum Settled {
     Removed,
 }
 
-/// Take `<cache>/index-regen.lock`, waiting while another regenerator holds
-/// it. Released when the returned file is dropped.
-fn regen_lock(cache_dir: &Path) -> Result<fs::File> {
+/// Whether a pass waits for another regenerator or skips (7vf).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wait {
+    /// The explicit refresh and the reindex tail: their caller asked for
+    /// current files.
+    Block,
+    /// The connection-close and daily passes: the holder is already
+    /// regenerating, and whatever it leaves dirty waits for the next pass.
+    Skip,
+}
+
+/// Take `<cache>/index-regen.lock` (std `File::lock`, never the database
+/// file: Windows `LockFileEx` is mandatory). With [`Wait::Skip`], `None`
+/// when another regenerator holds it. Released when the file is dropped.
+fn regen_lock(cache_dir: &Path, wait: Wait) -> Result<Option<fs::File>> {
     fs::create_dir_all(cache_dir).context("creating artifact index cache directory")?;
     let mut options = StdOpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -57,9 +69,19 @@ fn regen_lock(cache_dir: &Path) -> Result<fs::File> {
     let file = options
         .open(cache_dir.join(REGEN_LOCK))
         .context("opening the artifact regeneration lock")?;
-    file.lock()
-        .context("taking the artifact regeneration lock")?;
-    Ok(file)
+    match wait {
+        Wait::Block => file
+            .lock()
+            .context("taking the artifact regeneration lock")?,
+        Wait::Skip => match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(error).context("taking the artifact regeneration lock");
+            }
+        },
+    }
+    Ok(Some(file))
 }
 
 /// `path` relative to the home folder with `/` separators, as stored in
@@ -144,18 +166,44 @@ fn newest_offset(tx: &Transaction<'_>) -> Result<Option<UtcOffset>> {
 }
 
 impl ArtifactIndex {
-    /// One regeneration pass under `index-regen.lock`. A container file to
-    /// remove is located by `brauser_group_state.file_path`, which a
-    /// rebuild also adopts vanished container files into. `after` (a test
-    /// seam) sees each artifact's steps.
+    /// The connection-close and daily pass (7vf): like `regenerate_dirty`,
+    /// but `None` without reading anything when another host process holds
+    /// `index-regen.lock`. That regenerator is already writing these files,
+    /// and a mark it leaves behind waits for the next pass.
+    pub fn regenerate_dirty_unless_busy(&self) -> Result<Option<RegenerationReport>> {
+        let (root, _) =
+            open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
+        // Lock order: the regen lock before any SQLite transaction.
+        let Some(lock) = regen_lock(&self.cache_dir, Wait::Skip)? else {
+            return Ok(None);
+        };
+        self.reconcile_from_logs()?;
+        self.regenerate_locked(&root, &lock, |_, _| {}).map(Some)
+    }
+
+    /// One regeneration pass under `index-regen.lock`, waiting for another
+    /// regenerator to finish first. `after` (a test seam) sees each
+    /// artifact's steps.
     pub(super) fn regenerate_with(
         &self,
-        mut after: impl FnMut(RegenStep, &str),
+        after: impl FnMut(RegenStep, &str),
     ) -> Result<RegenerationReport> {
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
         // Lock order: the regen lock before any SQLite transaction.
-        let _lock = regen_lock(&self.cache_dir)?;
+        let lock = regen_lock(&self.cache_dir, Wait::Block)?.context("regeneration lock")?;
+        self.regenerate_locked(&root, &lock, after)
+    }
+
+    /// The pass itself, for the holder of `_lock`. A container file to
+    /// remove is located by `brauser_group_state.file_path`, which a
+    /// rebuild also adopts vanished container files into.
+    fn regenerate_locked(
+        &self,
+        root: &Dir,
+        _lock: &fs::File,
+        mut after: impl FnMut(RegenStep, &str),
+    ) -> Result<RegenerationReport> {
         let adapters = self.adapters.as_deref();
         // An empty history has nothing to regenerate, and a pass never
         // creates `index.db` (it is opened only to commit ingested data).
@@ -185,7 +233,7 @@ impl ArtifactIndex {
                 None => {
                     let path = mark.file_path.as_deref().map(PathBuf::from);
                     if let Some(path) = path
-                        && let Err(error) = remove_artifact(&root, &path, id)
+                        && let Err(error) = remove_artifact(root, &path, id)
                     {
                         fail(&mut report, path.to_string_lossy().into_owned(), error);
                         continue;
@@ -196,8 +244,7 @@ impl ArtifactIndex {
                     let relative = artifact_path(&self.storage.artifacts_dir, artifact);
                     let shown = || relative.to_string_lossy().into_owned();
                     let rendered = render_artifact(&self.storage.artifacts_dir, artifact);
-                    match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &rendered)
-                    {
+                    match replace_artifact(root, &self.storage.artifacts_dir, artifact, &rendered) {
                         // A warning is post-publication work (temporary
                         // cleanup, directory sync); the file is in place, so
                         // it is written and not retried, as for page notes.

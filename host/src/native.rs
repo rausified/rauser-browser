@@ -1682,8 +1682,16 @@ fn regenerate_artifacts(config: &mut ConfigStore, interactive: bool) {
         return;
     }
     let started = Instant::now();
-    match index.regenerate_dirty() {
-        Ok(report) => {
+    // Another host process's regenerator is already writing these files
+    // (7vf); a mark it leaves behind waits for the next pass.
+    match index.regenerate_dirty_unless_busy() {
+        Ok(None) => {
+            tracing::debug!(
+                interactive,
+                "artifact pass skipped: another process is regenerating"
+            );
+        }
+        Ok(Some(report)) => {
             tracing::info!(
                 interactive,
                 written = report.written,
@@ -2796,6 +2804,13 @@ fn refresh_artifacts(
             conflicts: u32::try_from(report.conflicts).unwrap_or(u32::MAX),
             conflict_paths: report.conflict_paths,
         }),
+        // Another process held the index past the busy timeout: say so in
+        // the history-unavailable family, never in SQLite's words.
+        Err(cause) if crate::index::busy(&cause) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            crate::index::BUSY_MESSAGE,
+        ),
         Err(_) => error(
             &value.request_id,
             ErrorCode::Internal,
@@ -7948,6 +7963,188 @@ id = "work:{host}/{id}"
             assert_eq!(duplicate.reason.as_deref(), Some("duplicate_event"));
             assert_eq!(std::fs::read(log_path).unwrap(), durable_bytes);
         }
+    }
+
+    /// A configured work-item home with one delivered activity, so
+    /// `index.db` exists. Returns the folder, the home and the config.
+    fn indexed_work_item() -> (tempfile::TempDir, std::path::PathBuf, ConfigStore) {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+ type = "work.item"
+ origin = "https://work.example"
+ match = [{ path = "/issues/{id:int}" }]
+ id = "work:{host}/{id}"
+ "#,
+        );
+        let mut config = loaded(&path);
+        assert_eq!(
+            deliver_activity(&mut config, activity_for_invalid_policy()),
+            VisitOutcome::Persisted
+        );
+        assert!(config.cache_dir().unwrap().join("index.db").is_file());
+        (folder, root, config)
+    }
+
+    fn files_under(dir: &std::path::Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                if path.is_dir() { files_under(&path) } else { 1 }
+            })
+            .sum()
+    }
+
+    /// 7vf: another host process's regenerator holds `index-regen.lock`.
+    /// The panel's connection-close pass and the daily pass skip at once
+    /// and keep every mark; the settings refresh waits for the holder.
+    #[test]
+    fn a_held_regen_lock_skips_the_close_pass() {
+        let (_folder, root, mut config) = indexed_work_item();
+        let cache = config.cache_dir().unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(cache.join("index-regen.lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        let dirty = || {
+            sql_rows(
+                &cache.join("index.db"),
+                "select count(*) from dirty_artifacts",
+            )
+        };
+        for interactive in [true, false] {
+            let started = Instant::now();
+            regenerate_artifacts(&mut config, interactive);
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+            assert_eq!(files_under(&root.join("artifacts")), 0, "{interactive}");
+            assert!(!cache.join("regenerated.json").exists());
+            assert_eq!(dirty(), [[SqlValue::Integer(1)]]);
+        }
+        let hold = std::time::Duration::from_millis(300);
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(hold);
+            drop(lock);
+        });
+        let started = Instant::now();
+        let refreshed = refresh_artifacts(
+            brauser_protocol::RefreshArtifactsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "refresh".into(),
+            },
+            &mut config,
+        );
+        assert!(started.elapsed() >= hold);
+        let Response::ArtifactsRefreshed(refreshed) = refreshed else {
+            panic!("expected a refresh, got {refreshed:?}")
+        };
+        assert_eq!(refreshed.written, 1);
+        release.join().unwrap();
+        assert_eq!(files_under(&root.join("artifacts")), 1);
+        assert_eq!(dirty(), [[SqlValue::Integer(0)]]);
+    }
+
+    /// 7vf: while another connection holds the SQLite write lock past the
+    /// busy timeout, capture stays durable and no response carries SQLite's
+    /// busy or locked wording; an error is the "history is unavailable"
+    /// family.
+    #[test]
+    fn busy_text_never_reaches_a_response() {
+        let (_folder, _root, mut config) = indexed_work_item();
+        let cache = config.cache_dir().unwrap();
+        let _short = crate::index::BusyTimeout::set(std::time::Duration::from_millis(50));
+        let holder = rusqlite::Connection::open(cache.join("index.db")).unwrap();
+        holder.execute("BEGIN IMMEDIATE", []).unwrap();
+        let surfaced = || crate::index::BUSY_SURFACED.with(std::cell::Cell::get);
+        let before = surfaced();
+        let mut later = activity_for_invalid_policy();
+        later.artifact_id = "work:work.example/2".into();
+        later.url = "https://work.example/issues/2".into();
+        assert_eq!(
+            deliver_activity(&mut config, later.clone()),
+            VisitOutcome::Persisted
+        );
+        let replies = [
+            list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recent".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            ),
+            get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "artifact".into(),
+                    url: later.url.clone(),
+                    title: None,
+                },
+                &mut config,
+            ),
+            worklog(
+                brauser_protocol::WorklogRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "worklog".into(),
+                    start_date: invalid_policy_day(),
+                    end_date: invalid_policy_day(),
+                },
+                &mut config,
+            ),
+            refresh_artifacts(
+                brauser_protocol::RefreshArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "refresh".into(),
+                },
+                &mut config,
+            ),
+        ];
+        regenerate_artifacts(&mut config, true);
+        for reply in &replies {
+            let text = serde_json::to_string(reply).unwrap().to_lowercase();
+            for word in ["busy", "locked", "sqlite"] {
+                assert!(!text.contains(word), "{word} in {text}");
+            }
+        }
+        // The explicit refresh could not take the write lock: it says the
+        // history is unavailable, not that files failed to update.
+        let Response::Error(refresh) = &replies[3] else {
+            panic!("expected the refresh to fail, got {:?}", replies[3])
+        };
+        assert_eq!(refresh.code, ErrorCode::Internal);
+        assert!(
+            refresh
+                .message
+                .starts_with("artifact history is unavailable"),
+            "{}",
+            refresh.message
+        );
+        assert!(surfaced() > before);
+        holder.execute("ROLLBACK", []).unwrap();
+        drop(holder);
+        let Response::ArtifactsRefreshed(refreshed) = refresh_artifacts(
+            brauser_protocol::RefreshArtifactsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "refresh".into(),
+            },
+            &mut config,
+        ) else {
+            panic!("expected a refresh once the lock is free")
+        };
+        assert_eq!(refreshed.written, 2);
     }
 
     /// `index.db` is created only by a commit of ingested data: reads, the
