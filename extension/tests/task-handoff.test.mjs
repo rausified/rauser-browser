@@ -70,15 +70,24 @@ test("sendReuse stores the instruction, the window and a timestamp", async () =>
   assert.equal(storage.entries.get(REUSE_KEY).window_id, null);
 });
 
+test("Reuse preserves explicit no-page scope and refuses malformed scope", async () => {
+  const storage = storageArea();
+  await sendReuse(storage, "Organize my notes", 7, true);
+  assert.equal(storage.entries.get(REUSE_KEY).no_page, true);
+  assert.deepEqual(await takeReuse(storage, 7), { instruction: "Organize my notes", no_page: true });
+  storage.entries.set(REUSE_KEY, { instruction: "X", no_page: "true", window_id: 7, at: 1 });
+  assert.equal(await takeReuse(storage, 7), null);
+});
+
 test("takeReuse takes a value for its window or for any window, once", async () => {
   const forThisWindow = storageArea(new Map([[REUSE_KEY, { instruction: "For window 7", window_id: 7, at: 1 }]]));
-  assert.equal(await takeReuse(forThisWindow, 7), "For window 7");
+  assert.deepEqual(await takeReuse(forThisWindow, 7), { instruction: "For window 7", no_page: false });
   assert.equal(forThisWindow.entries.has(REUSE_KEY), false);
   // Taking it again finds nothing: it is gone.
   assert.equal(await takeReuse(forThisWindow, 7), null);
 
   const forAnyWindow = storageArea(new Map([[REUSE_KEY, { instruction: "For any window", window_id: null, at: 1 }]]));
-  assert.equal(await takeReuse(forAnyWindow, 42), "For any window");
+  assert.deepEqual(await takeReuse(forAnyWindow, 42), { instruction: "For any window", no_page: false });
   assert.equal(forAnyWindow.entries.has(REUSE_KEY), false);
 });
 
@@ -87,7 +96,7 @@ test("takeReuse leaves another window's value", async () => {
   assert.equal(await takeReuse(storage, 8), null);
   assert.equal(storage.entries.has(REUSE_KEY), true);
   // It is still there for the window it was meant for.
-  assert.equal(await takeReuse(storage, 7), "For window 7");
+  assert.deepEqual(await takeReuse(storage, 7), { instruction: "For window 7", no_page: false });
 });
 
 test("takeReuse ignores a missing or malformed value", async () => {
