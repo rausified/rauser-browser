@@ -566,6 +566,8 @@ class RunCard extends RunWatcher {
 
 const HARNESS_NAMES: Record<RunView["harness"], string> = { codex: "Codex", claude: "Claude Code" };
 const CHANGES_STAY = "Changes the agent already made stay; check before running it again.";
+/** A summary run's note once a newer run of its page replaced its file. */
+export const SUPERSEDED_TEXT = "Superseded by a newer summary of this page. Open current summary shows the newer one.";
 
 /** What the Tasks page's {@link TaskDetail} needs. */
 export interface TaskDetailDeps extends RunProgressDeps {
@@ -621,6 +623,8 @@ export class TaskDetail extends RunWatcher {
   private readonly streamText: HTMLPreElement;
   // Whether the output has been closed for the finish (or started closed).
   private outputSettled: boolean;
+  // Whether a newer summary run of the page has replaced this run's file.
+  private superseded = false;
 
   constructor(view: RunView, private readonly deps: TaskDetailDeps) {
     super(view, deps);
@@ -651,6 +655,14 @@ export class TaskDetail extends RunWatcher {
   /** The run as last seen. */
   get run(): RunView {
     return this.view;
+  }
+
+  /** Marks a summary run whose file a newer run of its page replaced (the
+   * Tasks page decides, from every run it lists). */
+  setSuperseded(superseded: boolean): void {
+    if (this.superseded === superseded) return;
+    this.superseded = superseded;
+    this.render();
   }
 
   protected override setView(run: RunView): void {
@@ -707,7 +719,9 @@ export class TaskDetail extends RunWatcher {
   private openSummaryButtons(): HTMLButtonElement[] {
     const run = this.view;
     if (!this.isSummary() || !isTerminal(run) || run.summary_path === null) return [];
-    return [actionButton("Open summary", () => void this.act(async () => {
+    // A superseded run's file now holds the newer answer, so say so.
+    const label = this.superseded ? "Open current summary" : "Open summary";
+    return [actionButton(label, () => void this.act(async () => {
       await this.deps.host.call({
         type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
         // The file this run wrote, whatever record its URL resolves to now.
@@ -734,8 +748,9 @@ export class TaskDetail extends RunWatcher {
     this.problemLine.textContent = this.problem ?? "";
     this.problemLine.hidden = this.problem === null;
     const changed = !summary && this.changesMayStay();
-    this.noteLine.textContent = changed ? CHANGES_STAY : "";
-    this.noteLine.hidden = !changed;
+    const note = summary && this.superseded ? SUPERSEDED_TEXT : changed ? CHANGES_STAY : "";
+    this.noteLine.textContent = note;
+    this.noteLine.hidden = note === "";
     // A summary's "report" is its answer line; a summary run writes only
     // its own summary file, so the changes note is a task's alone.
     const report = summary

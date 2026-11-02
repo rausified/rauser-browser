@@ -71,3 +71,10 @@ for personal Miro work if you do not want it recorded.
 - The ID template is frozen once shipped (adapter-templates.md §8.2).
   Widening the rule later (another ID length, or another route) goes through
   `STARTER_HISTORY` in `extension/starter-adapters.ts`.
+
+**Summaries and tasks.** A board's content is drawn on a canvas, so page
+extraction reads only Miro's interface text. The service recognises a board's
+URL and tells the agent to read that one board with its own Miro tools
+(DESIGN.md §4.5 "Miro boards"). That works only when the agent has a Miro
+connector, Miro's MCP server, or Miro API credentials of its own; otherwise
+the summary says the board could not be read.
