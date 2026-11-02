@@ -2265,11 +2265,26 @@ async function run() {
         `The kb page did not finish loading ${kbUrl}`)));
       await cdp.send("Target.activateTarget", { targetId });
       await openPanel();
-      await waitFor(() => onPanel(async (page) => {
-        requireCondition(await page.text("#page-url") === kbUrl, "The panel does not follow the kb tab");
-        requireCondition(await page.enabled("#capture-site"), "The Capture Site button is disabled");
-      }), { timeout: 20_000 });
-      await onPanel((page) => page.click("#capture-site"));
+      // Capture Site is a mouse press and release at the button's measured
+      // point, and the panel ignores it while it is busy or if the button
+      // moved in between (the page lookup's answer adds a line above it).
+      // A click that missed leaves the review closed with nothing to say
+      // why, so click again until it opens: once open, the button is hidden
+      // and another click cannot start a second review.
+      await waitUntil("the Capture Site review to open", async () => {
+        const state = await onPanel(async (page) => ({
+          url: await page.text("#page-url"),
+          area: await page.hidden("#capture-site-area"),
+          start: await page.hidden("#capture-site"),
+          enabled: await page.enabled("#capture-site"),
+          review: await page.hidden("#capture-site-review"),
+          status: await page.text("#status"),
+        }));
+        if (state.url === kbUrl && state.review && state.area === false && state.start === false && state.enabled) {
+          await onPanel((page) => page.click("#capture-site"));
+        }
+        return state;
+      }, (state) => state.url === kbUrl && state.review === false, { timeout: 20_000, interval: 1_000, signal: abort.signal });
       await waitUntil("the basic Capture Site review", () => reviewState(),
         (state) => !state.hidden && state.types.length > 0, { timeout: 30_000, signal: abort.signal });
       return targetId;
