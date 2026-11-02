@@ -23,9 +23,17 @@ fn index_db_has_queryable_tables_and_capture_does_not_touch_artifact_files() {
     let tables = sql::sql_rows(
         &db,
         "select name from sqlite_schema where type='table' order by name",
-    );
+    )
+    .into_iter()
+    .map(|row| sql::display(&row[0]))
+    .collect::<Vec<_>>();
+    // The public tables are exactly the legacy five; every other table is
+    // internal and says so by its prefix.
     assert_eq!(
-        tables,
+        tables
+            .iter()
+            .filter(|name| !name.starts_with("brauser_"))
+            .collect::<Vec<_>>(),
         [
             "artifacts",
             "dirty_artifacts",
@@ -33,8 +41,8 @@ fn index_db_has_queryable_tables_and_capture_does_not_touch_artifact_files() {
             "url_provenance",
             "visits"
         ]
-        .map(|name| vec![sql::Value::Text(name.into())])
     );
+    assert!(tables.iter().any(|name| name == "brauser_events"));
     assert_eq!(
         sql::sql_rows(&db, "select title, url from artifacts")[0],
         [
@@ -204,13 +212,13 @@ fn a_logged_title_over_the_capture_limit_is_skipped_without_stopping_the_index()
 }
 
 #[test]
-fn an_oversize_cached_row_is_left_out_of_index_db_without_stopping_publication() {
+fn an_oversize_cached_row_is_stored_in_index_db_without_stopping_publication() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
     let index = index(&root, &cache);
     // Log parsing bounds titles, so only a hand-edited or otherwise
     // unexpected cache can hold an event whose rows exceed one SQLite
-    // page. Publication must still survive it.
+    // page. SQLite stores it on overflow pages, and publication survives.
     let oversize = activity(
         "00000000-0000-4000-8000-0000000000b1",
         "OVERSIZE",
@@ -238,15 +246,14 @@ fn an_oversize_cached_row_is_left_out_of_index_db_without_stopping_publication()
     assert_eq!(
         sqlite_check(
             &index.database_path(),
-            "select title from visits order by title"
+            "select length(title) from visits order by title"
         ),
-        "ok\nGood\nLater\n"
+        "ok\n4\n5\n100000\n"
     );
     assert_eq!(
         sqlite_check(&index.database_path(), "select count(*) from artifacts"),
-        "ok\n2\n"
+        "ok\n3\n"
     );
-    // Only index.db leaves the row out; the derived history keeps it.
     assert!(index.artifact(&oversize.artifact_id).unwrap().is_some());
     // A version 4 cache (from before log titles were bounded) drops
     // the event while it migrates, as a log rescan now would.

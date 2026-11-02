@@ -67,7 +67,10 @@ fn a_heavy_day_only_marks_the_artifact_dirty_until_regeneration() {
             )
         })
         .collect::<Vec<_>>();
+    FULL_DERIVES.with(|count| count.set(0));
     index.record_activities(events.iter(), &[]).unwrap();
+    // A delivery re-derives only its group, never the whole history.
+    assert_eq!(FULL_DERIVES.with(|count| count.get()), 0);
     assert!(!root.path().join("artifacts").exists());
     assert_eq!(
         sql::sql_rows(
@@ -76,6 +79,15 @@ fn a_heavy_day_only_marks_the_artifact_dirty_until_regeneration() {
         ),
         [[sql::Value::Integer(1)]]
     );
+    // A second delivery to the same history derives nothing in full either.
+    let late = activity(
+        "00000000-0000-4000-8000-000000000999",
+        "BUSY",
+        "Busy day",
+        "2026-10-16T09:00:00Z",
+    );
+    index.record_activity(&late, &[]).unwrap();
+    assert_eq!(FULL_DERIVES.with(|count| count.get()), 0);
     assert_eq!(index.regenerate_dirty().unwrap().written, 1);
 }
 
