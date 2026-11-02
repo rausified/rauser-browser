@@ -15,6 +15,7 @@ mod migration;
 pub(super) mod mp_harness;
 mod ordering;
 mod presentation;
+mod rebuild;
 mod regeneration;
 mod scan;
 pub(crate) mod sql;

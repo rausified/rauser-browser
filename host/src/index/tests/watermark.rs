@@ -756,7 +756,7 @@ fn reconcile_writes_the_watermark_also_for_a_cache_without_one() {
 }
 
 #[test]
-fn a_shrunk_log_resets_the_watermark_until_the_staged_rebuild() {
+fn a_shrunk_log_is_rebuilt_through_the_stage_tables() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
     let index = index(&root, &cache);
