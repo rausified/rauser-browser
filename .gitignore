@@ -31,6 +31,8 @@ BOSUN_FEATURE_BACKLOG.md.bak-*
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
+# Legacy index caches checked in as migration test fixtures.
+!host/tests/fixtures/index/*/cache/index.db
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
