@@ -103,14 +103,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
 <!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-r62` **Re-learn review: include other-origin identities when detecting key collisions.**
-  Codex P2 from PR #203 (`host/src/relearn.rs:288`): HTTP/HTTPS origins sharing a host can
-  collide on artifact ID, but the plan drops other-origin evidence, so an approvable
-  plan can hide a merge. Fix before `brwr-dbp` relies on approvals.
-- [ ] `brwr-eo7` **Re-learn review: refuse damaged owned log markers in the strict scan.**
-  Codex P2 from PR #203 (`host/src/index.rs:1524`): the strict scan silently drops torn
-  log markers, so an incomplete plan can be approved. Refuse damaged owned markers;
-  fix before `brwr-dbp` relies on approvals.
 - [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.**
   Next prerequisite of `brwr-6x2`, after the completed decision journal:
   revalidate the review at apply, integrate crash-safe config/content changes,
@@ -159,6 +151,7 @@ strip_params note-identity follow-up has shipped (see Shipped).
   (`brwr-6x2`) with a deliberate review that retains notes and considers
   intervening repository-only capture; never relax the freeze or infer a
   primary key from a canonical address.
+- [ ] `brwr-pgxz` **Explain blocked Re-learn reviews with actionable local evidence.** The brwr-eo7/brwr-r62 fixes refuse damaged owned markers and foreign-occupied record keys, but the report currently exposes issue codes for cross-origin conflicts and a CLI path/line for marker damage. Before the panel consumes these plans, show why approval is blocked and how… _(P3)_
 <!-- END GENERATED section=proposals -->
 
 ### Task bar follow-ups
@@ -186,7 +179,6 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
-- [ ] `brwr-vtff` **Wardroom smoke test.** Wardroom smoke test Assigned by John in the Wardroom (ASSIGN-a5825eb21444). _(P1; labels: assigned, wardroom-assignment)_
 - [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2)_
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
@@ -246,6 +238,10 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Detect Re-learn key collisions across origins (2026-11-02).** All-origin log, owned-note/summary and verified implicit-container identities protect occupied sources and destinations, including HTTP/HTTPS keys sharing a host. Fresh approval refuses these conflicts; unrelated origins stay outside migration rows. All contracts used for occupancy bind the review revision. **Metrics:** 4 new regressions for this fix; 7 across the assigned pair, 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension files and both Clippy builds; 36 browser sandbox skips.
+
+- **Category:** Bug Fix. **Refuse damaged owned markers in Re-learn review (2026-11-02).** Strict review rejects recognizable invalid or joined daily-log markers with a path and line instead of silently approving incomplete history. Existing event/overflow parsers retain legacy compatibility; ordinary indexing and capture recovery stay tolerant. Planning and recording refuse without content, cache or journal writes. **Metrics:** 3 new regressions for this fix; 7 across the assigned pair, 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension files and full required/README gate green; 36 browser sandbox skips.
+
 - **Category:** Quality. `brwr-rsr` **The service restarts a stale build after a rebuild (2026-11-02).** John rebuilt the live host without re-registering; the next panel request found the running service on the older build, took the restart lock and kickstarted launchd, which started the new build. **Metrics:** 1 restart, 1.06 s for the first call.
 
 - **Category:** Infrastructure. `brwr-mff` **rusqlite (bundled) in the host, with an offline sandbox build on Constitution (2026-11-02).** PR #222 adds rusqlite 0.41 with the vendored SQLite; cargo deny passes unchanged and the host keeps #![forbid(unsafe_code)]. The VM's cargo cache is warmed, and Cookie's gate build compiles inside the Codex sandbox with the network blocked, so brwr-b2e can use a real SQLite index. **Metrics:** sandboxed workspace build 3m49s on Constitution.
@@ -422,6 +418,21 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-11-02 Re-learn review prerequisites completed.** The cycle began
+  clean and the full health gate passed with explicit sandbox skips. Assigned
+  `brwr-eo7` and `brwr-r62` now refuse damaged owned markers and foreign-occupied
+  source/destination keys, including implicit containers. Seven regressions
+  pass; the complete final gate reports 1,314 Rust outcomes (92 IPC skips),
+  40 extension files and both Clippy builds. Browser mode passes two fixture
+  checks and skips 36 sandbox-blocked cases. Fresh complete-diff review and one
+  local Codex pass found no remaining findings. `brwr-dbp` is next, with its own
+  migration design challenge before implementation; the parent and ID freeze
+  remain open/enforced. Revalidate old journal approvals before apply, since
+  exact retries merely acknowledge history. New unassigned `brwr-pgxz` proposes
+  actionable conflict evidence for the future panel; continue assigned work
+  before taking it. Export retained the operator's pre-existing closure of the
+  Wardroom smoke-test bead, rather than treating it as a new assignment.
 
 - **2026-11-02 accessibility recovery completed upstream.** The cycle-4
   rejection notice is stale on `0641650e`: PR #212 already recovered the

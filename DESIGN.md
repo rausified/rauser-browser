@@ -543,6 +543,12 @@ durable-migration and panel work under `brwr-6x2`. The second stage
 markers and existing notes/summaries, verifies known source keys through current
 and recorded contracts, and reports unchanged/changed identities, splits,
 merges, unresolved evidence and simultaneous key reuse, including containers.
+Recognizable damaged markers in owned daily logs refuse review instead of
+silently disappearing; ordinary indexing retains tolerant recovery. Other
+origins' log, owned-file and verified container identities occupy their keys:
+a foreign-occupied source or destination is unresolved, and a destination
+collision is also a merge. Foreign-only identities never become migration
+rows. All recorded contracts used to derive occupancy bind the review hash.
 Config, contract, evidence and proposal hashes bind the review. Unknown or
 lossy query evidence cannot supply a target; URL notes stay separate preserved
 copies requiring an explicit choice. Existing files on both sides remain

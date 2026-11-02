@@ -904,3 +904,30 @@ process and, if it cannot start, skips every browser test with a
 `blocked by sandbox:` reason whatever the require flag says. Outside the
 sandbox a launch failure fails, and the require flag still fails a missing
 browser everywhere. Same shape as the IPC guard (PR #125).
+
+
+### 2026-11-02 — Refuse incomplete and cross-origin Re-learn reviews
+
+Assigned PR #203 findings brwr-eo7/brwr-r62 are fixed before durable apply.
+The strict log scan now refuses recognizable invalid owned visit markers,
+including torn payloads and joined markers, with a path/line error. It reuses
+existing legacy/event/overflow parsers; ordinary indexing and frozen recovery
+remain tolerant. A real-binary regression proves both relearn-plan and
+relearn-record refuse a torn why marker without writing content or decisions.
+
+Impact planning retains all-origin log and owned-file evidence and derives
+implicit containers through all recorded contracts. Foreign-occupied sources
+receive other_origin_source; destinations receive other_origin_destination
+and merged. Fresh approval refuses both. Foreign-only identities stay out of
+migration rows, unrelated foreign history still permits approval, and the
+contracts revision binds all inputs used for occupancy. The ID freeze,
+read-only journal receipts and browser-local recovery remain unchanged.
+
+Seven new regressions pass. Full required/README checks pass: 1,314 reported
+Rust outcomes (92 explicit sandbox IPC skips), 40 extension test files, both
+Clippy configurations, 221 Python tests (92 platform skips), eight script
+files and 10,696 inert Markdown renderings. Accessibility runs two fixture
+checks and explicitly skips 36 sandbox-blocked browser cases. Fresh manual
+diff review and one local Codex reviewer pass found no remaining issues;
+external harness/API review was not invoked. Durable apply brwr-dbp, then
+panel Re-learn under brwr-6x2, remain next; no migration acceptance is claimed.
