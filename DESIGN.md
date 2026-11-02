@@ -765,7 +765,7 @@ The free-text row is built as the task bar (2026-10-28, §4.5, §5.7). Slash com
 
 ### 5.7 Side panel layout
 
-The panel is about the page in the active tab. Capture housekeeping collapses into a one-line strip at the bottom, and configuration stays on the settings page.
+The panel is about the page in the active tab. The page area shows only the artifact status ("● Artifact recognized" or "○ Not an artifact"), not the page's title or URL, which stay in the page area as visually hidden text for screen readers (2026-11-02). Capture housekeeping collapses into a one-line strip at the bottom, and configuration stays on the settings page.
 
 **Keyboard access.** This page and Recent form a labelled tablist with one
 tab stop, selected state and associated tabpanels. Left/Right switch tabs;
@@ -828,9 +828,8 @@ required `ArtifactView.incoming_trails` response field.
 ┌────────────────────────────────────────────┐
 │ Rauser Browser Assistant                ⚙  │  gear opens settings
 ├────────────────────────────────────────────┤
-│ Designing Data-Intensive Apps — Ch. 5      │  current page; follows the
-│ oreilly.com/library/view/…/ch05            │  active tab
-│ ● Artifact logged   ☆ Save                 │  status chips; ☆ = /save
+│ ● Artifact recognized   ☆ Save             │  status chips for the active
+│                                            │  tab's page; ☆ = /save
 ├────────────────────────────────────────────┤
 │ ┌────────────────────────────────────────┐ │  task bar (§5.6 free text),
 │ │ Tell the agent what to do with this… ⏎ │ │  under the page on both tabs;
@@ -915,7 +914,7 @@ Each state changes one area rather than the layout:
 | Enabled origin, page not an artifact | No artifact card; the chip reads `○ Not an artifact`. When the current page is unrecognized and the worker's sample holds an unrecognized shape with a route word visited at least three times, the site-capture area says "Looks like you have recurring pages on `<host>`." and offers **Draft rules for these pages**, which drafts from the sample and adds adapters only. Otherwise the area appears only on a configured starter origin, saying its rules are managed in settings. |
 | No agent set up | **Summarize & log** is disabled with the tooltip "Set up a summary harness in settings first."; the task bar stays visible, runs nothing, and its hint says "Set up an agent (Codex or Claude Code) in settings to run tasks." with **Open settings**; no run cards are restored, and the panel does not call `list_runs`. Later milestones add the chip `✦ AI not set up` and slash commands that need no agent. |
 | Brauser service unavailable | The service setup instructions and the host's reason show as the line of the summary or task that failed (in its own run area), or, when cards are restored, as one notice with **Open settings** in the task run area, which shows on both tabs. Notes and capture are unaffected. |
-| Not an HTTP(S) page | The page area names the tab and says Brauser can't use it; only Read later is active. |
+| Not an HTTP(S) page | The page area says Brauser can't use the tab; only Read later is active. |
 
 Milestones fill the layout in: the page area, My note, and the capture strip first; the artifact card, the Recent tab, and the worklog view in M1.5a, and worklog files in M1.5b; Summarize & log with its run area and run cards in open access PR 3 (protocol v6); the summary file and log event in PR 4; the task bar, the Omnibar's free-text row, with its task cards on 2026-10-28; slash commands, custom commands and the answer card later; Related and Read later in M3; the full command list in M4.
 
