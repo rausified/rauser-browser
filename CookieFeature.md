@@ -1276,3 +1276,25 @@ explicit browser skips; external driver/CI acceptance remains required. Sixteen
 new offline regressions and one new browser journey cover the cycle. The two
 feature beads are closed; the shared keyboard-entry helper's bead stays blocked
 for its explicit real-Chromium criterion.
+
+## 2026-11-02 — Choose the captured work to share
+
+Recent now offers **Choose work to share** beside its day/week worklog. A person
+can check the artifact-day entries for a standup or status update, inspect the
+result, and copy exactly that text. Nothing starts selected; Select all shown
+and Clear make larger updates easier. Each entry keeps its own day's title,
+recorded link and measured activity. Repository entries include only direct
+activity, so leaving out a pull request also leaves out its rolled-up measures.
+Summary-only days remain available without inventing time or opens.
+
+The host supplies a bounded, read-only snapshot checked against the panel's
+configuration revision. Same-period capture refreshes retain selected identities
+and keyboard focus while new rows stay unchecked. Changing the period or home
+folder, a host exit, or closing the panel clears the selection; errors and empty
+selections disable Copy. Capture-gap notices still concern the whole period and
+retain their inclusion checkbox. Source logs and notes are untouched. This
+cycle recovers the previously unintegrated implementation and both recorded
+review fixes, adapts it to the redesigned panel, and uses the shared tablist
+keyboard helper. Browser and IPC acceptance still run in the driver's external
+gate because this sandbox explicitly skips those checks. Pagination for busy
+days remains the separate `brwr-p71k` follow-up.

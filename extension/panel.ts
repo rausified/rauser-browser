@@ -47,6 +47,8 @@ import type {
   RunView,
   SummaryView,
   WorklogReported,
+  WorklogChoice,
+  WorklogChoicesResult,
 } from "../protocol/ts/generated.js";
 
 initDiag("panel");
@@ -140,6 +142,12 @@ const recentList = element<HTMLDivElement>("recent-list");
 const worklogPeriod = element<HTMLSelectElement>("worklog-period");
 const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
+const curateWorklog = element<HTMLInputElement>("worklog-curate");
+const worklogChoicesArea = element<HTMLElement>("worklog-choices-area");
+const worklogChoices = element<HTMLFieldSetElement>("worklog-choices");
+const worklogSelectAll = element<HTMLButtonElement>("worklog-select-all");
+const worklogClear = element<HTMLButtonElement>("worklog-clear");
+const worklogSelectionStatus = element<HTMLElement>("worklog-selection-status");
 const worklogGaps = element<HTMLElement>("worklog-gaps");
 const worklogGapStatus = element<HTMLElement>("worklog-gap-status");
 const worklogGapList = element<HTMLElement>("worklog-gap-list");
@@ -270,7 +278,32 @@ let recentLoadSeq = 0;
 let recentWaitingForHost = false;
 let worklogWaitingForHost = false;
 let worklogLoadSeq = 0;
-let worklogReport: WorklogReported | null = null;
+let worklogReport: WorklogReported | WorklogChoicesResult | null = null;
+let worklogScope = "";
+let worklogStorage = "";
+const selectedWork = new Set<string>();
+const worklogChoiceKey = (row: WorklogChoice): string => JSON.stringify([row.artifact_id, row.local_date]);
+
+function resetWorklogSelection(): void {
+  worklogScope = "";
+  selectedWork.clear();
+  ++worklogLoadSeq;
+  worklogReport = null;
+  worklogChoices.replaceChildren();
+  worklogGaps.hidden = true;
+  copyWorklogButton.disabled = true;
+  worklogSelectAll.disabled = true;
+  worklogClear.disabled = true;
+}
+
+// connected means a host can be reached, even after its port exits. Invalidate
+// the sharing snapshot on the actual port lifecycle, including idle exits.
+session.host.onHostExit(() => {
+  resetWorklogSelection();
+  worklogWaitingForHost = false;
+  worklogSelectionStatus.textContent = "Open Recent again to reload choices.";
+  worklogText.textContent = "The host exited. Open Recent again to generate a worklog.";
+});
 
 function show(message: string, warning = false): void {
   status.textContent = message;
@@ -977,6 +1010,13 @@ function renderQueue(state: WorkerStatus): void {
 
 function render(): void {
   const connected = session.connected;
+  const storage = JSON.stringify(session.config?.storage ?? null);
+  if (storage !== worklogStorage || (!connected && artifactHostConnected)) {
+    worklogStorage = storage;
+    resetWorklogSelection();
+    worklogText.textContent = connected ? "Open Recent to generate a worklog." : "Waiting for the host…";
+    if (!recentView.hidden) void loadWorklog();
+  }
   const reconnected = connected && !artifactHostConnected;
   const generation = session.status?.delivered_batches ?? null;
   const delivered = generation !== null && deliveredSince(artifactDeliveryGeneration, generation);
@@ -988,6 +1028,7 @@ function render(): void {
   updateControls();
   retryWaitingHistory();
   if (!closed && (reconnected || delivered)) void refreshArtifact(true);
+  if (!closed && delivered && !recentView.hidden && curateWorklog.checked) void loadWorklog();
 }
 
 // History needs only the host configuration, not the worker policy, so
@@ -1772,9 +1813,17 @@ async function loadRecent(): Promise<void> {
 }
 
 async function loadWorklog(): Promise<void> {
+  const focused = document.activeElement as HTMLElement | null;
+  const focusedKey = focused?.dataset?.worklogKey ?? null;
+  const focusedScope = worklogScope;
   const seq = ++worklogLoadSeq;
   worklogReport = null;
   worklogGaps.hidden = true;
+  worklogChoices.replaceChildren();
+  worklogSelectAll.disabled = true;
+  worklogClear.disabled = true;
+  worklogChoicesArea.hidden = !curateWorklog.checked;
+  worklogSelectionStatus.textContent = "Loading choices…";
   if (!session.connected) {
     worklogWaitingForHost = true;
     worklogText.textContent = "Waiting for the host…";
@@ -1788,26 +1837,68 @@ async function loadWorklog(): Promise<void> {
     return;
   }
   const range = worklogRange();
+  const revision = session.revision ?? "";
+  const scope = JSON.stringify([session.config.storage, range.start, range.end]);
+  if (scope !== worklogScope) selectedWork.clear();
+  worklogScope = scope;
   worklogText.textContent = "Generating…";
   copyWorklogButton.disabled = true;
   try {
-    const response: WorklogReported = await session.host.call({
-      type: "worklog_report",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-      start_date: range.start,
-      end_date: range.end,
-    }, "worklog_reported");
-    if (seq !== worklogLoadSeq) return;
+    const dates = { protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), start_date: range.start, end_date: range.end };
+    const response = curateWorklog.checked
+      ? await session.host.call({ ...dates, type: "worklog_choices", expected_revision: revision }, "worklog_choices_result")
+      : await session.host.call({ ...dates, type: "worklog_report" }, "worklog_reported");
+    if (seq !== worklogLoadSeq || closed) return;
     if (response.start_date !== range.start || response.end_date !== range.end) throw new Error("The host returned a different worklog period. Try again.");
+    if (response.type === "worklog_choices_result") {
+      if (session.revision !== revision) throw new Error("Settings changed. Open Recent again to choose work to share.");
+      const keys = new Set(response.choices.map(worklogChoiceKey));
+      if (keys.size !== response.choices.length || response.choices.some((row) => row.local_date < range.start || row.local_date > range.end)) {
+        throw new Error("The host returned invalid worklog choices. Try again.");
+      }
+      for (const key of selectedWork) if (!keys.has(key)) selectedWork.delete(key);
+    }
     worklogReport = response;
+    // A delivery refresh removes the old checkbox. Restore its stable identity
+    // only if the user has not moved focus elsewhere while the host answered.
+    const restoreFocus = focusedScope === scope &&
+      (document.activeElement === focused || document.activeElement === document.body);
+    renderWorklogChoices(restoreFocus ? focusedKey : null);
     renderWorklog();
-    copyWorklogButton.disabled = false;
   } catch (error) {
-    if (seq !== worklogLoadSeq) return;
+    if (seq !== worklogLoadSeq || closed) return;
+    worklogSelectionStatus.textContent = "Choices unavailable. Open Recent again to retry.";
     worklogText.textContent = error instanceof HostError && error.code === "invalid_request" && /unsupported request/.test(error.message)
-      ? "Rebuild the Brauser host and extension together, then reopen Recent to review capture gaps."
+      ? "Rebuild the Brauser host and extension together, then reopen Recent to generate this worklog."
       : `Could not generate worklog: ${describe(error)}`;
+  }
+}
+
+function renderWorklogChoices(focusedKey: string | null = null): void {
+  worklogChoices.replaceChildren();
+  const legend = document.createElement("legend");
+  legend.textContent = "Work to include";
+  worklogChoices.append(legend);
+  const report = worklogReport;
+  if (report?.type !== "worklog_choices_result") return;
+  for (const row of report.choices) {
+    const label = document.createElement("label");
+    label.className = "check-label";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    const key = worklogChoiceKey(row);
+    input.dataset.worklogKey = key;
+    input.checked = selectedWork.has(key);
+    input.addEventListener("change", () => {
+      if (input.checked) selectedWork.add(key);
+      else selectedWork.delete(key);
+      renderWorklog();
+    });
+    const text = document.createElement("span");
+    text.textContent = `${row.local_date} · ${row.text}\n${row.url}`;
+    label.append(input, text);
+    worklogChoices.append(label);
+    if (key === focusedKey) input.focus();
   }
 }
 
@@ -1826,8 +1917,22 @@ function renderWorklog(): void {
     item.textContent = line;
     worklogGapList.append(item);
   }
-  worklogText.textContent = report.text + (hasGaps && includeWorklogGaps.checked
-    ? `\n\nCapture gaps: this worklog is incomplete. Counts cover full reported ranges, may overlap, and are not added to activity totals.\n${lines.join("\n")}`
+  let text: string;
+  if (report.type === "worklog_choices_result") {
+    const selected = report.choices.filter((row) => selectedWork.has(worklogChoiceKey(row)));
+    worklogSelectionStatus.textContent = `${selected.length} of ${report.choices.length} shown entries selected.${report.truncated ? " More work omitted; choose a shorter period to review it." : ""}`;
+    worklogSelectAll.disabled = report.choices.length === 0;
+    worklogClear.disabled = selected.length === 0;
+    copyWorklogButton.disabled = selected.length === 0;
+    text = selected.length
+      ? `Selected work: ${report.start_date} through ${report.end_date}\n${selected.length} artifact-day entr${selected.length === 1 ? "y" : "ies"}\n\n${selected.map((row) => `${row.local_date} · ${row.text}\n${row.url}`).join("\n\n")}`
+      : "Select work to include in the preview.";
+  } else {
+    text = report.text;
+    copyWorklogButton.disabled = false;
+  }
+  worklogText.textContent = text + (hasGaps && includeWorklogGaps.checked
+    ? `\n\nCapture gaps: ${report.type === "worklog_choices_result" ? "this period has missing activity" : "this worklog is incomplete"}. Counts cover full reported ranges, may overlap, and are not added to activity totals.\n${lines.join("\n")}`
     : "");
 }
 
@@ -1855,6 +1960,7 @@ function selectView(view: "page" | "recent"): void {
 }
 
 function copyWorklog(): void {
+  if (copyWorklogButton.disabled || !worklogReport || !session.connected) return;
   void navigator.clipboard.writeText(worklogText.textContent ?? "")
     .then(() => show("Worklog copied."))
     .catch((error: unknown) => show(`Could not copy worklog: ${describe(error)}`, true));
@@ -2030,7 +2136,22 @@ for (const tab of [pageTab, recentTab]) {
 }
 recentType.addEventListener("change", () => void loadRecent());
 recentTitle.addEventListener("input", scheduleRecent);
-worklogPeriod.addEventListener("change", () => void loadWorklog());
+worklogPeriod.addEventListener("change", () => {
+  selectedWork.clear();
+  void loadWorklog();
+});
+curateWorklog.addEventListener("change", () => void loadWorklog());
+worklogSelectAll.addEventListener("click", () => {
+  if (worklogReport?.type !== "worklog_choices_result") return;
+  for (const row of worklogReport.choices) selectedWork.add(worklogChoiceKey(row));
+  renderWorklogChoices();
+  renderWorklog();
+});
+worklogClear.addEventListener("click", () => {
+  selectedWork.clear();
+  renderWorklogChoices();
+  renderWorklog();
+});
 includeWorklogGaps.addEventListener("change", renderWorklog);
 copyWorklogButton.addEventListener("click", copyWorklog);
 summarizeButton.addEventListener("click", () => void summarize());

@@ -77,6 +77,17 @@
 
 **Sync caution (removed 2026-10-26).** Earlier builds warned in the first adapter's confirmation when the folder was inside a known sync location; protocol v6 removed that warning with the native confirmation (§14).
 
+**2026-11-02 — Curated worklog preview (`brwr-ppn`).** Added a separate read-only
+`worklog_choices` query and explicit panel selection. The design challenge
+replaced globally latest artifact context with each chosen day's latest direct
+visit and excluded rolled-up container copies and global Why, preventing an
+excluded day or child from supplying shared context. Revision checks bind the
+query to the panel's home-folder configuration. In-memory selections survive
+same-period refresh only for still-visible identities; period/storage/port
+changes invalidate both selection and pending replies. Ordinary worklogs and
+source logs/notes are unchanged. Implementation and validation details:
+[worklog curation plan](superpowers/plans/2026-11-02-worklog-curation.md).
+
 ## §5.2 Summaries — history
 
 > **Superseded in part (2026-10-26).** Summaries move to a per-user Brauser service with full-access Codex or Claude Code runs, polling instead of streaming, and no denylist or `activeTab` trigger; see [the open-access spec](superpowers/specs/2026-10-26-open-access-and-agent-service-design.md) §5–§7. The Summarize & log flow below is as built in PRs 3 and 4; steps 1–3 of the older numbered list after it (the `activeTab` triggers, the denylist checks, and streamed chunks) no longer apply. Of its steps 4–7, PR 4 replaced step 4 (the write now follows the configuration current at finish, a changed key included, rather than discarding the output) and step 7 (save outcomes are the run card's Retry save, not `summary_result`); of steps 5 and 6, only the summary file's identity and ownership rules and the Markdown neutralizer still describe what was built (step 5's denylist and its "the host writes" wording no longer apply: the service's `SummaryFinisher` writes the file, step 7 above).

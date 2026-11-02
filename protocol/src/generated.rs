@@ -337,6 +337,38 @@ pub struct ListArtifactsRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct WorklogChoicesRequest {
+    pub expected_revision: String,
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub start_date: String,
+    pub end_date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogChoice {
+    pub artifact_id: String,
+    pub local_date: String,
+    pub text: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogChoicesResult {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub choices: Vec<WorklogChoice>,
+    pub truncated: bool,
+    pub gaps: Vec<OverflowMarker>,
+    pub gaps_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorklogReportRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1444,6 +1476,7 @@ pub enum Request {
     StartAutoSummary(StartAutoSummaryRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
     WorklogReport(WorklogReportRequest),
+    WorklogChoices(WorklogChoicesRequest),
     CheckCaptureSite(CheckCaptureSiteRequest),
     GetSiteRestore(GetSiteRestoreRequest),
     ForgetAdoptedContracts(ForgetAdoptedContractsRequest),
@@ -1487,6 +1520,7 @@ impl Request {
             Self::StartAutoSummary(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
             Self::WorklogReport(value) => value.protocol_version,
+            Self::WorklogChoices(value) => value.protocol_version,
             Self::CheckCaptureSite(value) => value.protocol_version,
             Self::GetSiteRestore(value) => value.protocol_version,
             Self::ForgetAdoptedContracts(value) => value.protocol_version,
@@ -1530,6 +1564,7 @@ impl Request {
             Self::StartAutoSummary(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
             Self::WorklogReport(value) => &value.request_id,
+            Self::WorklogChoices(value) => &value.request_id,
             Self::CheckCaptureSite(value) => &value.request_id,
             Self::GetSiteRestore(value) => &value.request_id,
             Self::ForgetAdoptedContracts(value) => &value.request_id,
@@ -1570,6 +1605,7 @@ pub enum Response {
     SiteDrafted(SiteDrafted),
     SiteDraftChecked(SiteDraftChecked),
     WorklogReported(WorklogReported),
+    WorklogChoicesResult(WorklogChoicesResult),
     CaptureSiteChecked(CaptureSiteChecked),
     SiteRestoreLoaded(SiteRestoreLoaded),
     ServiceReady(ServiceReady),
@@ -1607,6 +1643,7 @@ impl Response {
             Self::SiteDrafted(value) => value.protocol_version,
             Self::SiteDraftChecked(value) => value.protocol_version,
             Self::WorklogReported(value) => value.protocol_version,
+            Self::WorklogChoicesResult(value) => value.protocol_version,
             Self::CaptureSiteChecked(value) => value.protocol_version,
             Self::SiteRestoreLoaded(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
@@ -1644,6 +1681,7 @@ impl Response {
             Self::SiteDrafted(value) => &value.request_id,
             Self::SiteDraftChecked(value) => &value.request_id,
             Self::WorklogReported(value) => &value.request_id,
+            Self::WorklogChoicesResult(value) => &value.request_id,
             Self::CaptureSiteChecked(value) => &value.request_id,
             Self::SiteRestoreLoaded(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,
