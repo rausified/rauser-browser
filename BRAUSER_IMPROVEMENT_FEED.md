@@ -219,6 +219,12 @@ would help a person judge the overview and understand a later retry. Where:
 `protocol/schema.json`, `host/src/service/record.rs`, `extension/run-card.ts`
 and the built run-card/Tasks tests. Keep the label text-only and omit it for
 legacy answers without scope.
+- +1 2026-11-02: brwr-sm5 now tells agents when browser capture was capped,
+  including automatic summaries. Carry the validated resulting scope into saved
+  summary choices in Recent and This page too (`brwr-30xv`), where people decide
+  whether to reopen an artifact without opening Tasks detail. Keep this distinct
+  from the capture flag: a capped page can still yield a whole-artifact summary
+  after the agent retrieves it. The run-card projection is pending held PR #249.
 
 - Done 2026-11-02: `brwr-rr93` (cycle commit prepared for driver).
 
@@ -255,3 +261,67 @@ look complete when the agent read only its browser viewer. Where:
 `SummaryView` in `protocol/schema.json`, the host's saved-summary projection,
 `extension/summary-text.ts` and the built page-summary/Recent tests. Use
 recorded scope rather than inference from overview text.
+
+## 2026-11-02 — Give the browser fixture a recognized-artifact panel state
+
+Change: add a `recognized` state to `extension/tests/a11y/fixture.mjs` whose
+fake host answers `get_artifact` with a recognized artifact (mode, measures,
+`within`, incoming navigation), a saved summary with an overview, and one
+running task, and audit it in light and dark. Why: the side panel redesign
+added the page card's chips, the Summary card's tags and run-card state
+indicators, but the fixture only models an unrecognized page with no summary,
+so the axe gate never measures those surfaces and visual checks need DOM
+injection by hand. Where: `extension/tests/a11y/fixture.mjs` and
+`pages.test.mjs`; the same state would let a screenshot check compare the
+panel against the design.
+
+## 2026-11-02 — Record which frame a page read came from and whether the Word wait timed out
+
+Change: have `readTab` return a small read report (each frame's host, trimmed
+character count and `word` flag, which frame was chosen, and whether the Word
+paragraph wait ended by paragraphs, timeout or navigation, with its elapsed
+ms), and log it through the extension's diagnostics and the host's
+`request done kind=start_run|start_task` line. Why: diagnosing run 92dcfad9
+("Word is starting." as page.md) had only the 17-character page.md and the
+host's `thin_office` flag; nothing said which frame produced the text, so the
+fix had to key on "no Word paragraphs yet" without ever seeing the splash's
+markup, and a future timeout (empty Word content) will look the same as an
+unrendered document. Where: extension/summarize.ts `readTab`/`choosePage`,
+extension/diag.ts, protocol/schema.json (an optional field on `start_run` and
+`start_task`), host/src/service/capture_quality.rs for the log line.
+## 2026-11-02 — Show the source page when recalling a task
+
+Change: add a compact original-page cue and an explicit route to inspect or
+reopen the recalled task (`brwr-k6rg`). Why: keyboard recall reuses the complete
+stored instruction on the current page, whereas Tasks-page Reuse also reopens
+its original page; page-specific instructions deserve a visible distinction
+before Run. Keep the draft, current-page context and Enter/Run boundary intact;
+never navigate automatically. Where: `extension/task-recall.ts`, the task-bar
+context in `extension/panel.ts`, and `extension/tests/panel/task-bar.test.mjs`.
+
+## 2026-11-02 — Stop docs/history.md from blocking PRs on append conflicts
+
+Change: decide how `docs/history.md` merges so that two PRs each adding a
+dated note no longer conflict. Either give it `merge=union` in
+`.gitattributes`, as the feed, `CookieFeature.md` and
+`PENDING_AMOS_DOC_UPDATES.md` already have, or, since history.md is sectioned
+and union would also silently keep both sides of a real mid-file edit, have
+new notes go to one append-only tail section that union can handle safely.
+Why: PR #246 (Word-loading fix) went DIRTY twice in one afternoon, once after
+Cookie's cycle-8 merge (#252). Both times the only real conflict was two new
+`2026-11-02` entries in history.md. A DIRTY PR runs no CI, so auto-merge sat
+for about four hours with nothing failing visibly, until a status check found
+it. Also: the PR owner check could flag a PR whose auto-merge is armed but
+whose state is DIRTY, so the owner hears about it. Where: `.gitattributes`,
+the AGENTS.md history.md rule, and `scripts/pr-owner.mjs` or a small hygiene
+job.
+
+## 2026-11-02 — Name the working folder before running a task
+
+Show the configured knowledge-base folder beside the task scope in the panel
+(`brwr-5xpb`), using host-projected configuration as text. The no-page task work
+(`brwr-qin`) makes the instruction independent of a tab, but its context line
+still says only “Runs in your knowledge base”; a person choosing among multiple
+note/project folders cannot see the actual working location before Run. Extend
+`extension/panel.ts`'s task context and its built panel tests, retaining setup
+hints and leaving the separate per-task chooser (`brwr-zla`) for later.

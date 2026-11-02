@@ -27,7 +27,11 @@ import {
 } from "./task.js";
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
+import { TaskRecall } from "./task-recall.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
+import {
+  artifactLook, capturePill, compactDuration, importanceLabel, importanceTone, pageLook, summaryTimeLabel,
+} from "./panel-look.js";
 import { NoteEditor } from "./note-editor.js";
 import { NoteRecovery, type RecoveryText } from "./note-recovery.js";
 import { chromeManifests, newerBuildOnDisk } from "./build-update.js";
@@ -71,6 +75,10 @@ const replayButton = element<HTMLButtonElement>("replay");
 const discardButton = element<HTMLButtonElement>("discard-pending");
 const captureStrip = element<HTMLDetailsElement>("capture-strip");
 const captureStripSummary = element<HTMLElement>("capture-strip-summary");
+const captureStripAction = element<HTMLButtonElement>("capture-strip-action");
+const capturePillElement = element<HTMLElement>("capture-pill");
+const capturePillLabel = element<HTMLElement>("capture-pill-label");
+const pageGlyph = element<HTMLElement>("page-glyph");
 
 const pageTitle = element<HTMLParagraphElement>("page-title");
 const pageUrl = element<HTMLParagraphElement>("page-url");
@@ -100,6 +108,10 @@ const artifactWithin = element<HTMLParagraphElement>("artifact-within");
 const artifactContained = element<HTMLDivElement>("artifact-contained");
 const artifactContainedList = element<HTMLUListElement>("artifact-contained-list");
 const artifactMode = element<HTMLSpanElement>("artifact-mode");
+const artifactKindLabel = element<HTMLSpanElement>("artifact-kind-label");
+const artifactMeasuresShort = element<HTMLSpanElement>("artifact-measures-short");
+const artifactDetails = element<HTMLDetailsElement>("artifact-details");
+const artifactIncomingCount = element<HTMLSpanElement>("artifact-incoming-count");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
 const whyPausedHint = element<HTMLParagraphElement>("why-paused-hint");
@@ -137,10 +149,13 @@ const runArea = element<HTMLDivElement>("run-area");
 const pageSummary = element<HTMLDivElement>("page-summary");
 const pageSummaryText = element<HTMLParagraphElement>("page-summary-text");
 const pageSummaryOpen = element<HTMLButtonElement>("page-summary-open");
+const pageSummaryTime = element<HTMLSpanElement>("page-summary-time");
+const pageSummaryChips = element<HTMLDivElement>("page-summary-chips");
 const taskBar = element<HTMLElement>("task-bar");
 const taskForm = element<HTMLFormElement>("task-form");
 const taskInput = element<HTMLTextAreaElement>("task-input");
 const taskRunButton = element<HTMLButtonElement>("task-run");
+const taskUsePage = element<HTMLInputElement>("task-use-page");
 const taskContext = element<HTMLParagraphElement>("task-context");
 const taskHint = element<HTMLParagraphElement>("task-hint");
 const taskHintText = element<HTMLSpanElement>("task-hint-text");
@@ -150,6 +165,7 @@ const taskRunArea = element<HTMLDivElement>("task-run-area");
 const taskOpenButton = element<HTMLButtonElement>("task-open");
 
 const session = new ConfigSession(render);
+const taskRecall = new TaskRecall(session.host);
 const runCards = new RunCards(runArea, {
   host: session.host,
   now: () => Date.now(),
@@ -247,6 +263,7 @@ let taskSelection: { tabId: number; url: string; selected: boolean } | null = nu
 let selectionSeq = 0;
 // The last worker notice shown, since one can arrive both live and stored.
 let shownNotice: string | null = null;
+let pendingTaskFocus: Extract<PanelNotice, { kind: "focus_task" }> | null = null;
 let recentTimer: ReturnType<typeof setTimeout> | null = null;
 // The shown Recent rows' Open summary buttons, disabled with the host.
 let recentOpenButtons: HTMLButtonElement[] = [];
@@ -282,7 +299,43 @@ function renderPageSummary(summary: SummaryView | null, pageUrl: string | null):
   summaryPageUrl = summary === null ? null : pageUrl;
   summaryPagePath = summary?.summary_path ?? null;
   pageSummary.hidden = summaryPageUrl === null;
-  pageSummaryText.textContent = summary !== null && summaryPageUrl !== null ? summaryLine(summary) : "";
+  const shown = summary !== null && summaryPageUrl !== null ? summary : null;
+  // A summary with an overview shows it as prose and its labels as chips;
+  // an older one keeps its one-line description.
+  pageSummaryText.textContent = shown === null ? "" : shown.overview ?? summaryLine(shown);
+  pageSummaryTime.textContent = shown === null ? "" : summaryTimeLabel(shown.summarized_at);
+  pageSummaryChips.replaceChildren();
+  if (shown?.overview) {
+    for (const [text, tone] of [
+      [shown.document_type, "plain"], [shown.category, "plain"],
+      [importanceLabel(shown.importance), importanceTone(shown.importance)],
+    ] as const) {
+      const chip = document.createElement("span");
+      chip.className = "tag";
+      chip.dataset.tone = tone;
+      chip.textContent = text;
+      pageSummaryChips.append(chip);
+    }
+  }
+  renderSummarizeLabel();
+}
+
+/** The one Summarize & log button reads as the design's action for the
+ * page: Save Page for a page no adapter recognizes, Summarize again once a
+ * summary exists. */
+function renderSummarizeLabel(): void {
+  const summarized = summaryPageUrl !== null;
+  const label = summarized ? "Summarize again" : artifactPageUrl === null ? "Save Page" : "Summarize & log";
+  summarizeButton.textContent = label;
+}
+
+/** The page tile: the artifact type's look when recognized, else the host's. */
+function renderPageGlyph(): void {
+  const look = currentArtifact !== null && artifactPageUrl !== null
+    ? artifactLook(currentArtifact.artifact_type)
+    : pageLook(currentPage?.url ?? null);
+  pageGlyph.textContent = look.glyph;
+  pageGlyph.dataset.hue = look.hue;
 }
 
 async function openPageSummary(): Promise<void> {
@@ -353,6 +406,7 @@ const NAVIGATION_LABELS: Readonly<Record<string, string>> = {
 };
 
 function renderIncoming(trails: ArtifactView["incoming_trails"]): void {
+  artifactIncomingCount.textContent = trails.length ? String(trails.length) : "";
   artifactIncomingList.replaceChildren();
   artifactIncomingList.hidden = trails.length === 0;
   artifactIncomingEmpty.hidden = trails.length !== 0;
@@ -376,6 +430,9 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
   artifactCard.hidden = artifact === null;
+  artifactDetails.hidden = artifact === null;
+  renderPageGlyph();
+  renderSummarizeLabel();
   artifactStatus.textContent = pageUrl === null ? "" : recognized ? "● Artifact recognized" : "○ Not an artifact";
   if (!artifact) {
     whyArtifactId = null;
@@ -390,6 +447,10 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   artifactIdentity.textContent = `${artifact.artifact_type} · ${artifact.artifact_id}`;
   artifactMode.textContent = artifact.last_mode ?? "";
   artifactMode.hidden = artifact.last_mode === null;
+  artifactKindLabel.textContent = artifactLook(artifact.artifact_type).label;
+  artifactMeasuresShort.textContent = !artifact.first_seen || noActivityMeasured(artifact)
+    ? ""
+    : `${compactDuration(artifact.focused_seconds)} focused · ${artifact.opens} open${artifact.opens === 1 ? "" : "s"}`;
   // A restored tab can deliver focused/background time with no cold open,
   // so days_opened alone cannot distinguish real delivered activity from
   // the no-record-yet placeholder; first_seen is empty only for that
@@ -427,6 +488,8 @@ function showArtifactUnavailable(page: { url: string }, reason: string): void {
     currentArtifact = null;
     artifactPageUrl = null;
     artifactCard.hidden = true;
+    artifactDetails.hidden = true;
+    renderPageGlyph();
   }
   if (summaryPageUrl !== page.url) renderPageSummary(null, null);
   artifactStatus.textContent = `Artifact status unavailable: ${reason}`;
@@ -825,6 +888,7 @@ function updateControls(): void {
   replayButton.disabled = !connected || changing() || repairing || config?.capture_enabled !== true ||
     state?.pause_pending === true || (state?.queued ?? 0) === 0;
   discardButton.disabled = changing() || (state?.queued ?? 0) === 0;
+  renderCaptureControls();
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
   saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
@@ -840,6 +904,42 @@ function updateControls(): void {
   if (paused !== null) whyPausedHint.textContent = paused;
 }
 
+/** Whether capture is switched on in a healthy host configuration. */
+function captureIsOn(): boolean {
+  return session.config?.capture_enabled === true && session.configIssue === null &&
+    session.adapterIssue === null && session.status?.pause_pending !== true;
+}
+
+/** The header pill and the strip's one quick action (DESIGN.md §5.7). The
+ * action is never the destructive pause: it sends pending records while
+ * capture is on, or opens settings to resume a paused capture. */
+function renderCaptureControls(): void {
+  const state = session.status;
+  const pill = capturePill({
+    captureOn: captureIsOn(),
+    queued: state?.queued ?? 0,
+    deliveryProblem: Boolean(state?.retry_error || state?.host_error || state?.last_error),
+  });
+  capturePillElement.dataset.tone = pill.tone;
+  capturePillElement.title = pill.detail;
+  capturePillLabel.textContent = pill.label;
+  const paused = session.connected && session.config !== null && session.config?.capture_enabled === false;
+  if (captureIsOn() && (state?.queued ?? 0) > 0) {
+    captureStripAction.hidden = false;
+    captureStripAction.dataset.action = "send";
+    captureStripAction.textContent = "Send now";
+    captureStripAction.disabled = replayButton.disabled;
+  } else if (paused) {
+    captureStripAction.hidden = false;
+    captureStripAction.dataset.action = "settings";
+    captureStripAction.textContent = "Resume in settings";
+    captureStripAction.disabled = false;
+  } else {
+    captureStripAction.hidden = true;
+    captureStripAction.dataset.action = "";
+  }
+}
+
 function renderSetupWarning(): void {
   const problem = setupProblem(session.config, session.configIssue ?? session.adapterIssue);
   setupWarning.hidden = problem === null;
@@ -850,9 +950,7 @@ function renderQueue(state: WorkerStatus): void {
   queueSummary.textContent =
     `${state.live_activity} live hour total${state.live_activity === 1 ? "" : "s"} · ` +
     `${state.queued} pending capture record${state.queued === 1 ? "" : "s"}.`;
-  const captureOn = session.config?.capture_enabled === true && session.configIssue === null &&
-    session.adapterIssue === null &&
-    state.pause_pending !== true;
+  const captureOn = captureIsOn();
   captureStripSummary.textContent =
     `${captureOn ? "●" : "○"} Capture ${captureOn ? "on" : "off"} · ` +
     `${state.live_activity} live · ${state.queued} pending`;
@@ -1161,10 +1259,10 @@ function taskBlocked(): { text: string; settings: boolean } | null {
   // The Brauser service runs on macOS (and Unix) only; settings cannot fix it.
   if (/^win/i.test(navigator.platform ?? "")) return { text: "Tasks are not supported on Windows yet.", settings: false };
   if (!harnessReady(session)) return { text: TASK_NEEDS_HARNESS_MESSAGE, settings: true };
-  if (pageState === "site-access") {
+  if (taskUsePage.checked && pageState === "site-access") {
     return { text: "Re-enable site access in Chrome so the agent can read this page.", settings: false };
   }
-  if (currentPage === null || currentPage.tabId === undefined) return { text: "Tasks work on http(s) pages.", settings: false };
+  if (followedTabId === null) return { text: "Open a browser tab to run a task.", settings: false };
   return null;
 }
 
@@ -1175,18 +1273,21 @@ function renderTaskBar(): void {
   const label = taskStarting ? "Starting…" : "Run";
   if (taskRunButton.textContent !== label) taskRunButton.textContent = label;
   taskInput.readOnly = taskStarting;
+  taskUsePage.disabled = taskStarting || (currentPage === null && pageState !== "site-access");
   taskHint.hidden = blocked === null;
   if (taskHintText.textContent !== (blocked?.text ?? "")) taskHintText.textContent = blocked?.text ?? "";
   taskHintSettings.hidden = blocked?.settings !== true;
   renderTaskContext();
+  if (pendingTaskFocus !== null && showNotice(pendingTaskFocus)) void clearStoredNotice();
 }
 
 /** "Uses this page: <title>", naming the selection when the page has one,
  * so the user sees which page a task will get. */
 function renderTaskContext(): void {
   const page = currentPage;
-  let text = "";
-  if (page !== null && page.tabId !== undefined) {
+  let text = "No page · Runs in your knowledge base";
+  if (taskUsePage.checked && pageState === "site-access") text = "Page access required · Uncheck Include this page to run without it";
+  if (taskUsePage.checked && page !== null && page.tabId !== undefined) {
     const selected = taskSelection !== null && taskSelection.selected &&
       taskSelection.tabId === page.tabId && taskSelection.url === page.url;
     text = `${selected ? "Uses this page and your selection: " : "Uses this page: "}${page.title}`;
@@ -1207,7 +1308,7 @@ function pageHasSelection(): boolean {
 async function probeSelection(): Promise<void> {
   const seq = ++selectionSeq;
   const page = currentPage;
-  if (page === null || page.tabId === undefined || !harnessReady(session)) {
+  if (!taskUsePage.checked || page === null || page.tabId === undefined || !harnessReady(session)) {
     taskSelection = null;
     renderTaskContext();
     return;
@@ -1240,17 +1341,20 @@ async function probeSelection(): Promise<void> {
 async function runTask(): Promise<void> {
   const page = currentPage;
   const instruction = taskInput.value;
-  if (taskStarting || taskBlocked() !== null || !page || page.tabId === undefined) return;
+  if (taskStarting || taskBlocked() !== null || followedTabId === null) return;
   if (cleanInstruction(instruction) === "") return;
-  const tabId = page.tabId;
+  const tabId = followedTabId;
+  const tab = taskUsePage.checked && page?.tabId !== undefined
+    ? { id: page.tabId, url: page.url, title: page.title } : null;
   const hadFocus = document.activeElement === taskRunButton || document.activeElement === taskInput;
+  taskRecall.reset();
   taskStarting = true;
   updateControls();
-  showRunLine(taskRunArea, tabId, "Reading this page…");
+  showRunLine(taskRunArea, tabId, tab === null ? "Starting task…" : "Reading this page…");
   try {
     await showSetupWarningOnce(taskRunArea);
     const run = await startTask(
-      { id: tabId, url: page.url, title: page.title },
+      tab,
       instruction,
       { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
     );
@@ -1353,9 +1457,12 @@ async function checkReuse(): Promise<void> {
   if (taskStarting) return;
   const windowId = await panelWindowId;
   if (windowId === null) return;
-  const instruction = await takeReuse(chrome.storage.session, windowId).catch(() => null);
-  if (!closed && instruction !== null && !taskStarting) {
-    taskInput.value = instruction;
+  const reused = await takeReuse(chrome.storage.session, windowId).catch(() => null);
+  if (!closed && reused !== null && !taskStarting) {
+    taskRecall.reset();
+    taskInput.value = reused.instruction;
+    taskUsePage.checked = !reused.no_page;
+    renderTaskBar();
     taskInput.focus();
   }
 }
@@ -1376,9 +1483,24 @@ async function restoreCards(): Promise<void> {
 /** Shows a notice from the worker's shortcut or context-menu summary when it
  * is about the followed tab. Returns whether it is now shown. */
 function showNotice(notice: PanelNotice): boolean {
+  if (closed) return false;
+  if (notice.kind === "focus_task" && !freshTaskFocus(notice)) {
+    pendingTaskFocus = null;
+    return false;
+  }
   if (notice.tab_id !== followedTabId) return false;
   const id = `${notice.kind}:${notice.tab_id}:${notice.at}`;
   if (id === shownNotice) return true;
+  if (notice.kind === "focus_task") {
+    // Startup can discover the tab before rendering its bar; a starting
+    // task temporarily makes the field read-only. Keep the focus intent.
+    pendingTaskFocus = notice;
+    if (taskStarting || taskBar.hidden) return false;
+    taskInput.focus();
+    pendingTaskFocus = null;
+    shownNotice = id;
+    return true;
+  }
   shownNotice = id;
   // The shortcut and the context menu start a summary without the panel's
   // button, so the one-time warning (spec §6.1) shows here for them.
@@ -1392,6 +1514,11 @@ function showNotice(notice: PanelNotice): boolean {
     void restoreCards();
   }
   return true;
+}
+
+function freshTaskFocus(notice: PanelNotice): boolean {
+  const age = Date.now() - notice.at;
+  return age >= 0 && age < PANEL_NOTICE_MAX_AGE_MS;
 }
 
 function clearStoredNotice(): Promise<void> {
@@ -1412,10 +1539,13 @@ async function showStoredNotice(dropOthers: boolean): Promise<void> {
     return;
   }
   if (stored === undefined) return;
-  const current = isPanelNotice(stored) && Date.now() - stored.at < PANEL_NOTICE_MAX_AGE_MS ? stored : null;
+  const current = isPanelNotice(stored) && Date.now() - stored.at < PANEL_NOTICE_MAX_AGE_MS &&
+    (stored.kind !== "focus_task" || freshTaskFocus(stored)) ? stored : null;
   if (current && current.tab_id !== followedTabId && !dropOthers) return;
-  await clearStoredNotice();
-  if (current) showNotice(current);
+  // Focus is consumed only after the bar can accept it. Summary notices
+  // retain their existing one-shot behavior.
+  const shown = current ? showNotice(current) : false;
+  if (current?.kind !== "focus_task" || shown || current.tab_id !== followedTabId) await clearStoredNotice();
 }
 
 // --- Page area and note (§5.3, §5.7) ---------------------------------------
@@ -1541,6 +1671,12 @@ function worklogRange(): { start: string; end: string } {
 function recentRow(item: ArtifactListItem): HTMLElement {
   const row = document.createElement("div");
   row.className = "recent-row";
+  const look = artifactLook(item.artifact_type);
+  const glyph = document.createElement("span");
+  glyph.className = "glyph glyph-small";
+  glyph.dataset.hue = look.hue;
+  glyph.setAttribute("aria-hidden", "true");
+  glyph.textContent = look.glyph;
   const link = document.createElement("a");
   link.className = "recent-link";
   link.href = item.url;
@@ -1549,14 +1685,21 @@ function recentRow(item: ArtifactListItem): HTMLElement {
   const title = document.createElement("strong");
   title.textContent = item.title;
   const details = document.createElement("span");
-  details.textContent = `${item.artifact_type} · focused ${duration(item.focused_seconds)} · background ${duration(item.background_seconds)}${item.opens ? ` · opened ${item.opens}×` : ""}`;
+  details.className = "recent-sub";
+  details.textContent = `${look.label}${item.opens ? ` · opened ${item.opens}×` : ""}`;
+  // The full measures stay one hover away, as the row used to show them.
+  link.title = `${item.artifact_type} · focused ${duration(item.focused_seconds)} · background ${duration(item.background_seconds)}`;
   link.append(title, details);
+  const time = document.createElement("span");
+  time.className = "recent-time";
+  time.setAttribute("aria-hidden", "true");
+  time.textContent = compactDuration(item.focused_seconds);
   if (item.why) {
     const why = document.createElement("span");
     why.textContent = `Why: ${item.why}`;
     link.append(why);
   }
-  row.append(link);
+  row.append(glyph, link, time);
   if (item.summary) {
     const summarized = document.createElement("span");
     summarized.textContent = recentSummaryText(item.summary);
@@ -1762,6 +1905,7 @@ async function showNoPage(title: string, url: string, state: "none" | "unusable"
   void refreshArtifact();
   pageTitle.textContent = title;
   pageUrl.textContent = url;
+  renderPageGlyph();
   showPageArea(state);
   await notes.showPage(null);
 }
@@ -1805,6 +1949,7 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   const title = tab.title?.trim() || url.hostname;
   pageTitle.textContent = title;
   pageUrl.textContent = tab.url;
+  renderPageGlyph();
   showPageArea("note");
   if (currentPage?.url !== tab.url || currentPage.tabId !== tab.id) resetPreservedNotes();
   currentPage = { url: tab.url, title, tabId: tab.id };
@@ -1842,6 +1987,15 @@ dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
 saveWhyButton.addEventListener("click", () => void saveWhy());
+artifactWhy.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.isComposing) return;
+  event.preventDefault();
+  void saveWhy();
+});
+captureStripAction.addEventListener("click", () => {
+  if (captureStripAction.dataset.action === "send") void replayVisits();
+  else if (captureStripAction.dataset.action === "settings") openSettings();
+});
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
   updateControls();
@@ -1891,13 +2045,53 @@ taskForm.addEventListener("submit", (event) => {
   event.preventDefault?.();
   void runTask();
 });
+// Slash is a panel shortcut only. Native text fields, editable descendants,
+// composed text and modified shortcuts keep their ordinary keys.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "/" || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+      event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || closed || taskStarting || taskBar.hidden) return;
+  const target = event.target as HTMLElement | null;
+  if (target && (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
+      target.isContentEditable || target.closest?.("[contenteditable]"))) return;
+  event.preventDefault();
+  taskInput.focus();
+});
+
+async function recallTask(direction: 1 | -1): Promise<void> {
+  try {
+    const text = await taskRecall.move(direction, taskInput.value);
+    if (text === null) return;
+    clearRunLine(taskRunArea);
+    taskInput.value = text;
+    const caret = direction === 1 ? 0 : text.length;
+    taskInput.setSelectionRange(caret, caret);
+  } catch (error) {
+    if (followedTabId !== null) {
+      showRunLine(taskRunArea, followedTabId, `Could not recall earlier instructions: ${describe(error)}. Try again.`, true);
+    }
+  }
+}
+
 // Enter runs the task; Shift+Enter adds a newline, and Enter that ends an
 // IME composition is left to the input method.
 taskInput.addEventListener("keydown", (event) => {
+  if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !taskStarting && !closed &&
+      session.connected && harnessReady(session) && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229 &&
+      !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    const caret = taskInput.selectionStart;
+    if (caret === taskInput.selectionEnd &&
+        (event.key === "ArrowUp" ? caret === 0 : caret === taskInput.value.length)) {
+      event.preventDefault();
+      void recallTask(event.key === "ArrowUp" ? 1 : -1);
+      return;
+    }
+  }
   if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
   event.preventDefault?.();
   void runTask();
 });
+taskUsePage.addEventListener("change", () => { renderTaskBar(); void probeSelection(); });
+taskInput.addEventListener("input", () => taskRecall.edited());
 taskInput.addEventListener("focus", () => void probeSelection());
 // The selection may have changed in the page since the bar got focus: check
 // again as Run is pressed and when the panel's window gets focus back.
@@ -1977,6 +2171,8 @@ const pollTimer = setInterval(() => {
 }, STATUS_POLL_MS);
 window.addEventListener("pagehide", () => {
   closed = true;
+  taskRecall.reset();
+  pendingTaskFocus = null;
   clearInterval(pollTimer);
   if (reloadTimer !== null) clearTimeout(reloadTimer);
   if (recentTimer !== null) clearTimeout(recentTimer);

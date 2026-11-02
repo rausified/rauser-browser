@@ -264,6 +264,19 @@ The Tasks page keyboard-focus regression triggers
 the existing hide/show refresh handler and waits for a rendered status pill
 or new row, so both focus assertions avoid racing the real polling interval.
 
+## Capped browser captures
+
+The existing extraction, task and built-panel summarize tests cover the
+extractor's combined text/selection truncation flag through manual summaries,
+automatic summaries and tasks. Frame-choice fixtures distinguish a capped
+chosen frame from discarded frame text and a borrowed highlight. Protocol
+wire tests pin missing/true/false compatibility. Rust page-file tests cover
+ordinary, Office and Miro pages with and without Incoming navigation; supervisor
+fixtures verify both initial prompts and queued recovery use stored provenance,
+including a page that forges a completeness notice. The agent boundary is a
+recording fake: these tests prove the context delivered to an agent, not that a
+real agent fetched a full artifact or selected the right reading scope.
+
 ## Panel status and artifact refresh coverage
 
 The built-panel tests assert adapter-based capture wording with zero and some
@@ -572,6 +585,10 @@ The fake DOM's text assertions do not prove that CSS layout.
   one `smoke.page` summary event, checks a reopen adds none, and turns it off.
 
 ## Agent tasks, task bar
+
+Task entry tests live beside the existing task-bar tests: `worker.test.mjs` verifies that the command and context menu call `sidePanel.open` before any await, publish only a fixed focus notice and never start/read a task. `panel/task-bar.test.mjs` covers stored/live focus, startup and read-only deferral, duplicate/stale/future/wrong-tab notices, editable-key behavior, full instruction recall and cancellation after typing, Reuse, submission or teardown. `task-recall.test.mjs` covers lazy paging, full-record retrieval, draft/entry edits, pruned records, host failures, duplicate IDs and traversal bounds.
+
+The real-browser keyboard journey in `a11y/keyboard.test.mjs` covers slash focus, history arrows, draft restoration, a live focus notice, and literal slash entry in text fields without implicit submission. `enterPanelTab` in `a11y/fixture.mjs` enters the selected tab through Tab and selects its sibling with Home/End; an inactive tab has `tabindex=-1` and cannot be a direct Tab destination. Browser sandbox skips do not prove this journey passed; the driver and platform CI must run it in real Chromium. Chrome command binding and native context-menu behavior still need an interactive platform check.
 
 A task is a third run kind, `task` (DESIGN.md §4.5, §5.7). Each risk the plan
 (`docs/superpowers/plans/2026-10-28-task-bar.md` "Review focus") names is
@@ -1520,3 +1537,24 @@ These are offline tests: they do not fetch a source or run a real harness.
 The private run record's optional `incoming` field is omitted when empty;
 older services cannot read records containing it. Before rollback, leave no
 queued/running runs; preserved newer records remain unreadable to that build.
+
+## Tasks without a page
+
+`brwr-qin` adds explicit scope tests, all using temporary files or mocked
+Chrome/native transport. `wire_tasks` checks legacy and no-page shapes; native
+`run_proxy::task_without_a_page*` checks host-built identity, mixed page fields,
+stale requests, and bypass attempts. `service::server::tests::no_page_admission*`
+checks actual admission before setup without a socket, so it runs inside the
+sandbox. Record tests check exact service input shape, scope persistence, legacy
+defaults and omission of `page.md`. Supervisor tests use the in-process recording
+harness to prove reports, knowledge-base cwd, independent runs and no page file.
+Prompt tests cover the absence of both page-reading exemptions, retrieval
+sections and truncation claims while retaining protected paths and `agent.env`.
+
+Built task, handoff, task-bar and Tasks-page tests cover non-web starts, explicit
+web-page opt-out, scope labels and Reuse without navigation. The existing
+unreadable/moved-page tests continue to refuse extraction failures. The real
+keyboard journey `task page scope can be changed by keyboard` checks the new
+checkbox with Space, draft preservation, exact submitted shape and axe; sandbox
+browser skips are not browser acceptance. No smoke steps or native dialog counts
+change; macOS Chrome command/menu checks remain separate.

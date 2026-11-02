@@ -607,6 +607,7 @@ export type AnswerReadScope = "whole" | "partial" | "page_only";
 export type AnswerAccess = "ok" | "sign_in" | "denied" | "not_found";
 
 export interface RunView {
+  no_page?: boolean;
   run_id: string;
   state: RunState;
   harness: HarnessId;
@@ -633,12 +634,14 @@ export interface RunView {
 }
 
 export interface StartRunRequest {
+  no_page?: boolean;
   type: "start_run";
   protocol_version: 8;
   request_id: string;
   url: string;
   title: string;
   content: string;
+  capture_truncated?: boolean;
   selection: string | null;
   harness: HarnessId | null;
   record_key: RecordKey | null;
@@ -811,6 +814,7 @@ export interface StartAutoSummaryRequest {
   url: string;
   title: string;
   content: string;
+  capture_truncated?: boolean;
   requested_at: string;
 }
 
@@ -824,12 +828,14 @@ export interface AutoSummarySkippedResponse {
 }
 
 export interface StartTaskRequest {
+  no_page?: boolean;
   type: "start_task";
   protocol_version: 8;
   request_id: string;
-  url: string;
-  title: string;
-  content: string;
+  url?: string;
+  title?: string;
+  content?: string;
+  capture_truncated?: boolean;
   selection: string | null;
   instruction: string;
   harness: HarnessId | null;

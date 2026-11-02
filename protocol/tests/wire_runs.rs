@@ -42,6 +42,30 @@ fn start_run_requires_nullable_selection_harness_record_key_and_requested_at() {
 }
 
 #[test]
+fn capture_truncation_is_an_optional_boolean_on_start_run() {
+    let mut value = json!({
+        "type": "start_run", "protocol_version": 8, "request_id": "r",
+        "url": "https://a.example/x", "title": "T", "content": "excerpt",
+        "selection": null, "harness": null, "record_key": null,
+        "requested_at": "2026-10-26T14:00:00-07:00",
+    });
+    let Request::StartRun(legacy) = assert_request_round_trips("StartRunRequest", &value) else {
+        panic!("expected start_run");
+    };
+    assert_eq!(legacy.capture_truncated, None);
+    for flag in [true, false] {
+        value["capture_truncated"] = json!(flag);
+        let Request::StartRun(request) = assert_request_round_trips("StartRunRequest", &value)
+        else {
+            panic!("expected start_run");
+        };
+        assert_eq!(request.capture_truncated, Some(flag));
+    }
+    value["capture_truncated"] = json!("true");
+    assert!(serde_json::from_value::<Request>(value).is_err());
+}
+
+#[test]
 fn run_view_round_trips_every_state_and_error_kind() {
     for state in ["queued", "running", "succeeded", "failed", "canceled"] {
         let view = RUN_VIEW.replace(r#""state":"running""#, &format!(r#""state":"{state}""#));

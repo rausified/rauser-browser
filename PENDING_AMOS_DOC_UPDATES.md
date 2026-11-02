@@ -324,3 +324,22 @@
 
 - **Brauser — Honor capture pause when admitting automatic summaries (2026-11-02, brwr-q0i4).** The host rechecks capture_enabled under its refreshed configuration lock and skips paused automatic requests before service contact, including requests read under older settings. Manual summaries remain available; already admitted runs keep their lifecycle. An offline regression reproduces the old unwanted forwarding.
 - **Brauser — Show summary reading scope beside the overview (2026-11-02, brwr-rr93).** Run cards and Tasks summary detail disclose the agent's whole-artifact, partial-artifact or browser-page-only reading through one text-only formatter. Legacy results omit the label and access walls retain their explanation. The optional protocol projection changes no stored answer or retrieval authority; deploy host and extension together.
+- 2026-11-02 — Brauser (`brwr-sm5`): summary and task agents now learn when
+  browser page text or selection was capped, including automatic summaries and
+  queued recovery. Summaries must retrieve the full artifact or report partial/
+  viewer-only reading; a page cannot forge the stored provenance. Host and
+  extension deploy together, and service rollback requires no queued/running
+  runs because older services reject the new true status flag.
+
+- 2026-11-02 — Brauser (`brwr-2b5`): added the task-bar Chrome shortcut
+  (Ctrl/Command+Shift+8), **Ask Brauser…** context menu and panel-local `/` focus.
+  They preserve drafts and only focus the field; Enter/Run remains the start
+  gesture. Short-lived tab-specific notices retain focus through panel startup.
+
+- 2026-11-02 — Brauser (`brwr-18u`): ArrowUp/ArrowDown browse full retained task
+  instructions and restore the unsent draft and recalled edits. History is read
+  lazily from the service with no second persistent instruction store; late
+  replies cannot replace typing, Reuse or a submitted task. Recall targets the
+  current page; Tasks-page Reuse also reopens the original page.
+
+- **Brauser — tasks without a page (2026-11-02, brwr-qin).** The task bar now works on non-web tabs, and Include this page lets a user run a knowledge-base instruction without attaching the active web page. Explicit scope is checked by host and service, omits page.md and page-reading permissions, and survives Tasks history/Reuse without navigation. Local required/README gates pass; real browser/IPC acceptance and publication remain driver/platform work. Brauser project documentation remains in this repository.

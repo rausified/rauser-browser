@@ -1236,3 +1236,97 @@ so no stored summary, note, or retrieval permission changes. Rebuild host and
 extension together because older extensions reject the extra answer field.
 Tests cover all three scopes, legacy absence, invalid wire values, wall
 precedence, and hostile-looking overview text remaining inert.
+## 2026-11-02 — Tell agents when browser capture is only an excerpt
+
+Brauser now preserves the browser extractor's signal that page text or a
+highlight hit its size limit. Previously that information disappeared before
+the agent saw the page, allowing an excerpt to look like the complete artifact.
+Manual summaries, automatic summaries and tasks now carry the same optional
+flag. The service adds a short completeness notice to the page file and tells
+the summary agent to retrieve the full artifact or report a partial/viewer-only
+read. Task agents get an incomplete-context warning within the user's request.
+
+The notice also survives a queued-run restart. Its authority comes from stored
+run metadata, so a web page cannot activate it just by copying its words.
+Frame tests cover the chosen document iframe, discarded page chrome and borrowed
+highlights; Office, Miro and Incoming navigation keep their bounded sections.
+The existing combined flag is conservative about which text was cut, and it
+does not claim that a capture with no reported cut contains the full artifact.
+This restores the earlier isolated work and covers the automatic path it
+missed. Host and extension must deploy together; downgrade only while no run
+is queued/running, because older services cannot read the new true status flag.
+
+Validation: 1,374 Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension test files, both Clippy configurations, 2 accessibility fixture passes with 36 explicit browser sandbox skips. Twelve new regressions cover this change. The supplementary README checks and fresh full-diff review passed; real browser, IPC and platform acceptance remain external.
+
+## 2026-11-02 — Reach the task bar from Chrome
+
+Brauser's task bar now has its own Chrome shortcut, Ctrl+Shift+8 (Command+Shift+8
+on macOS), and an **Ask Brauser…** entry in the page and selection context menu.
+The shortcut can be changed in Chrome's extension shortcut settings. Inside the
+panel, pressing `/` outside a text field focuses the task bar. Existing drafts
+stay in place; these gestures never copy the page or selection into an instruction
+and never start an agent. Enter or Run remains the deliberate start action.
+
+The worker opens the panel while Chrome still recognizes the user gesture, then
+leaves a short-lived focus notice so a panel still loading can honor it. The
+panel rejects stale, future and wrong-tab notices and waits if a task start has
+made the field read-only. Text fields, editable page controls and input-method
+composition keep their normal keys. Worker and panel tests cover the transport
+and startup paths; actual Chrome shortcut binding and native menu behavior still
+need an interactive platform check.
+
+## 2026-11-02 — Recall complete task instructions without losing a draft
+
+ArrowUp at the start of the task field now brings back earlier task instructions.
+Repeated presses walk older instructions; ArrowDown at the end walks forward and
+returns to the original unsent draft. Edits to a recalled instruction survive the
+round trip too. Recall reads the complete user instruction from the service's
+stored run, rather than the shortened preview shown in history lists, and keeps
+its browsing state only in this panel's memory. It pages lazily through up to
+200 tasks or 20 list pages; the Tasks page remains available for older history.
+
+A delayed history response cannot replace text typed while it was loading, a
+Reuse handoff, or a new task submission. Missing retained records are skipped;
+other failures leave the draft untouched for retry, and a successful retry clears
+its previous error. Recall applies the instruction to the current page named
+under the field. Tasks-page Reuse remains the choice that also reopens the
+original page; a follow-up proposes making that distinction visible beside each
+recalled entry. Fifty-one focused recall/bar cases pass, with a separate worker case
+for the new gestures. The local browser keyboard journey also uses a shared
+helper that enters the selected panel tab before choosing its sibling; real
+Chromium acceptance is left explicit for the driver.
+
+Final cycle validation: all required and README checks passed, including 44
+extension files, 51 focused recall/bar cases and 1,374 Rust-reported outcomes
+(94 explicit IPC sandbox skips). Accessibility has 2 fixture passes and 39
+explicit browser skips; external driver/CI acceptance remains required. Sixteen
+new offline regressions and one new browser journey cover the cycle. The two
+feature beads are closed; the shared keyboard-entry helper's bead stays blocked
+for its explicit real-Chromium criterion.
+
+## 2026-11-02 — Run a task without attaching a browser page
+
+Brauser can now take a task such as “Organize my notes” from a new tab, browser
+settings or another non-web tab. On an ordinary web page, the new **Include this
+page** checkbox lets the user leave that page out while keeping their draft.
+The context line says “No page · Runs in your knowledge base”, so the instruction
+and its scope can be checked before Run. Ordinary page tasks keep their current
+behavior, including visible failures when a page cannot be read or changes
+while being extracted.
+
+This is an explicit task mode, rather than an empty page capture. The extension
+sends no page title, address or content; the host and service both check the
+shape, and the service creates no page.md. The agent still works in the
+configured knowledge-base folder under the existing task limits and file
+protections, but its prompt contains no page-reading exception or document
+retrieval section. History labels the task **No page** and leaves out Open page.
+**Reuse** carries that choice back to the bar without opening a tab or silently
+attaching the web page that happens to be active. Keyboard recall continues to
+reuse only instruction text under the currently visible scope.
+
+The complete local required and README gates pass, with eight new Rust/wire
+checks and seven extension regressions plus a new keyboard/axe journey. The
+Rust total is 1,382 reported outcomes (94 explicit IPC sandbox skips); all 44
+extension files pass. Real Chromium cannot launch here: two fixture checks pass
+and 40 browser cases explicitly skip, so the driver and platform CI still need
+to establish that acceptance before publication. No live service or API changed.

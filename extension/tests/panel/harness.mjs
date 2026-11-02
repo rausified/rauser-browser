@@ -467,6 +467,9 @@ export async function install({
     windowEvent(type) {
       for (const listener of type === "pagehide" ? [] : windowListeners.get(type) ?? []) listener({ type });
     },
+    documentEvent(type, init = {}) {
+      for (const listener of documentListeners.get(type) ?? []) listener({ type, ...init });
+    },
     // The panel is hidden (another side panel, a minimized window) or shown
     // again; Chrome fires visibilitychange either way.
     setHidden(hidden) {

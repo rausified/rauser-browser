@@ -164,6 +164,23 @@ external rerun; sandbox skips are still explicit and never count as passes.
 
 *Side panel states, the row for a non-artifact page on an enabled origin, before Capture Site was built:* No artifact card; chip `○ Not an artifact · Create adapter`. When unrecognized pages recur, a hint also offers to draft one from them (Tier 2, §5.1). **As built (2026-10-27, `brwr-t40`):** the chip reads `○ Not an artifact`.
 
+**Side panel redesign (2026-11-02).** John supplied the "Brauser Sidebar"
+dark-glass design and decided three things before the build: the page card
+shows the title and URL again (superseding the same day's status-only page
+area, PR #231), a light variant follows the system theme, and the full
+design is built, including pieces the panel lacked. A design challenge before
+task 1 kept one Summarize & log button (relabelled Save Page and Summarize
+again rather than a second control), kept the capture strip's smoke-tested
+wording, kept the destructive pause out of the strip's one-click action,
+limited the header pill to global capture, kept the native worklog select,
+and required solid surfaces so axe measures contrast instead of reporting it
+incomplete. The first light build failed the gate at 4.05:1 (white on the
+accent) and on a removed focus outline; both were fixed. The design's
+monospace and sans faces map to system stacks because the CSP sets
+`font-src 'none'`. The design's arrow-only Run button keeps its "Run" text,
+which the task bar sets as it starts. Plan:
+[2026-11-02-sidebar-redesign](superpowers/plans/2026-11-02-sidebar-redesign.md).
+
 ## §6.1 Folder layout — history
 
 **Moving an older layout (2026-10-27).** The rule this record introduced is now stated in DESIGN.md §6.1, “Moving an older layout”.
@@ -1072,3 +1089,70 @@ the panel card and Tasks detail. Legacy answers omit the label, and access
 walls retain their not-saved message. Host and extension deploy together;
 older extensions reject the extra reply key. No stored-answer, summary,
 cache, retrieval-authority or note-recovery format changes are involved.
+
+## 2026-11-02 — Capped browser capture provenance (brwr-sm5)
+
+Recovered the isolated implementation in 2cf67c46 and task wording correction
+5fa32bac onto the current base, then extended it to automatic summaries and
+corrected both Office/Miro SUMMARY.md paragraphs. The chosen frame's existing
+combined truncation flag reaches all three request paths; status.json retains
+it for queued recovery. page.md discloses the cut before its untrusted content,
+and fixed prompt notices come from status, so forged page warnings do not
+activate them. Missing/false keeps the prior page file. The summary agent must
+retrieve the full artifact or report partial/page_only; the task notice adds no
+authority. DESIGN.md §4.5 and protocol/README.md record coordinated deployment
+and idle-only rollback; no event, summary, note or cache format changes.
+
+Validation: 1,374 Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension test files, both Clippy configurations, 2 accessibility fixture passes with 36 explicit browser sandbox skips. Twelve new regressions cover this change. The supplementary README checks and fresh full-diff review passed; real browser, IPC and platform acceptance remain external.
+
+## 2026-11-02 — Task entry and retained-instruction recall
+
+Cookie implemented `brwr-2b5` and `brwr-18u`: the fixed `focus_task` notice from
+Chrome's task shortcut/context menu, panel-local slash focus, and lazy recall of
+complete user instructions through `list_runs` / `get_run`. The side panel keeps
+its unsent draft and visited edits in memory, cancels delayed replacements after
+input/Reuse/submission/teardown, and never executes from a focus or recall
+gesture. The current rules are in DESIGN.md §5.7 and the design challenge and
+resolved choices in `docs/superpowers/plans/2026-11-02-task-entry.md`.
+
+The accompanying `brwr-1xmv` helper enters a panel tab through its selected Tab
+stop before using Home/End. Its implementation is included, but explicit real-
+Chromium acceptance is still pending outside the sandbox. A queue audit also
+reopened `brwr-ppn`: its database held a historical closure for quarantined work
+that is absent from baseline `80abc368`. The historical notes are retained and
+`brwr-p71k` now actually depends on it; no missing product code was called shipped.
+
+Validation: the final required and README gates passed, with 44 extension files,
+51 focused recall/bar cases, 1,374 Rust-reported outcomes (94 explicit IPC skips),
+and 2 accessibility fixtures passing with 39 browser sandbox skips. Sixteen new
+offline cases and one browser journey were added. The driver retains external
+acceptance, independent review and publication; the two feature beads are closed
+and the shared-helper bead remains blocked for its real-Chromium criterion.
+
+### 2026-11-02 — Wait for Word's paragraphs instead of reading its splash
+
+Summarize & log run 92dcfad9 (2026-11-01) on a SharePoint Word document saved
+`page.md` with only "Word is starting.": the run was triggered while Word for
+the web still showed its loading splash, no frame had `#PagesContainer
+.Paragraph` yet, and the extractor's Readability/body-text fallback read the
+splash. The host's suspect-capture check flagged it (`thin_office`). The
+extractor now reports `word` (it read Word paragraphs), and `readTab` re-reads
+a Word document address every 500 ms for up to 5 s until a frame has them;
+on timeout it sends empty content, which the Office path already accepts, so
+the agent reads the document itself. Only Word addresses wait, since Excel and
+PowerPoint never have Word paragraphs and would always pay the full wait. A
+frame with Word paragraphs now also always wins the content choice. The wait
+keys on the absence of paragraphs rather than on splash markup, which was not
+available to test against. Live Word behavior was not verified headlessly.
+
+## 2026-11-02 — Tasks without a page (brwr-qin)
+
+The task bar can run from a non-web tab or with **Include this page** unchecked,
+with a visible No page context. Additive protocol-v8 `no_page` is validated by
+native and service boundaries, stored in TaskStatus and projected in RunView.
+The host selects a non-HTTP internal marker; a flag alone cannot discard supplied
+page data, and extraction errors never fall back. The supervisor omits page.md,
+and task_prompt omits page context and reading permissions while retaining file
+protections. Tasks detail and Reuse preserve scope, with no Open page action.
+Tests use local fixtures and fake transport/harnesses; real browser acceptance
+remains with the external driver/platform gate. See the task's plan and TESTING.md.

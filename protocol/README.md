@@ -119,6 +119,17 @@ revision-checked `update_config`; global pauses stay set. No page URL, title,
 content, folder path or save token is part of this pair. Historical title/ref
 extraction is not available. The host retains all existing identity guards.
 
+Version 8 (additive): `start_run`, `start_task` and `start_auto_summary`
+accept optional boolean `capture_truncated`. The extension sends it only when
+true: the extractor capped page text or highlighted selection. Missing/false
+means no reported cut. The native host forwards it into the summary/task run;
+the service stores it and uses it for a page-file disclosure and fixed prompt
+notice, including queued recovery. This grants no retrieval authority. Host
+and extension deploy together: an older host rejects the field. Roll back the
+service only with no queued/running run; older services reject status records
+containing true and cannot recover their process groups. Those records remain
+unreadable to the older service until pruned. See DESIGN.md §4.5.
+
 Version 8: incoming navigation. `ArtifactView.incoming_trails` is required
 and holds up to five `IncomingTrailView` entries: `source` is an
 `ArtifactRefView`, `transition` is a known Chrome transition other than
@@ -551,7 +562,7 @@ the panel cannot copy a stale report after that refusal.
 ### Agent tasks (added within version 8)
 
 The side panel's task bar runs the configured harness on the user's typed
-instruction, with the open page as untrusted context. All of it is additive.
+instruction, with optional open-page context. All of it is additive.
 
 - `start_task` carries `url`, `title`, `content`, `selection` (the same bounds
   as `start_run`), `instruction` (1 to 4,096 characters), the nullable
@@ -584,6 +595,24 @@ A version 8 host built before these additions answers `invalid_request`
 asks for a host rebuild. An extension built before them rejects a
 `runs_listed` or `run_fetched` that holds a task view, so the extension and
 the host deploy together.
+
+A task can omit its page by sending `no_page: true`, `selection: null`, and
+no `url`, `title`, `content` or `capture_truncated`. Missing/false `no_page`
+keeps the existing complete page-task shape; missing page fields then fail the
+native semantic check. Mixed page/no-page payloads are refused. Instruction and
+click-time validation still apply. The host forwards `no_page: true` with the
+reserved `brauser:task-without-page` URL and URL key, empty title/content, and no
+selection; the service accepts that exact shape only for tasks, before the
+ordinary task setup. The extension cannot send this flag through `start_run`.
+No page is inferred from a URL alone, and a failed extraction never falls back.
+
+Only no-page tasks project `RunView.no_page: true`, from the stored TaskStatus
+scope. They create no `page.md`, grant no page-reading/retrieval paragraph, and
+keep normal task cwd, protected paths, limits, report and restart behavior.
+History and Reuse preserve this explicit scope and never open the internal
+marker. Older services cannot read records containing the new scope field;
+leave no active tasks before rollback. Older hosts reject the new start-task
+shape and older extensions reject its new view field: deploy both together.
 
 ### Auto-summary (added within version 8)
 

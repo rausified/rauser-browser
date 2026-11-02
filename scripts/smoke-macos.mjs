@@ -2967,10 +2967,14 @@ async function run() {
         await panelOnPage(summaryPage);
         const shown = await waitUntil("the panel's summary line", () => onPanel(async (page) => ({
           hidden: await page.hidden("#page-summary"), text: await page.text("#page-summary-text"),
+          chips: await page.text("#page-summary-chips"),
           open: await page.enabled("#page-summary-open"),
         })), (state) => state.hidden === false && state.open, { timeout: 20_000, signal: abort.signal });
-        requireCondition(shown.text === `${FIXTURE_SUMMARY_ANSWER.overview} · ${FIXTURE_SUMMARY_ANSWER.document_type}`,
-          `The panel's summary line: ${JSON.stringify(shown)}`);
+        // The Summary card shows the overview as prose and the type as its
+        // first chip (DESIGN.md §5.7).
+        requireCondition(shown.text === FIXTURE_SUMMARY_ANSWER.overview &&
+          (shown.chips ?? "").startsWith(FIXTURE_SUMMARY_ANSWER.document_type),
+          `The panel's summary card: ${JSON.stringify(shown)}`);
         const openedLines = async () => (await readFile(openLog, "utf8").catch(() => "")).split("\n").filter(Boolean);
         const before = (await openedLines()).length;
         await onPanel((page) => page.click("#page-summary-open"));
