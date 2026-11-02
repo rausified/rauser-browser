@@ -1,170 +1,348 @@
+//! Migration of a format 8 cache (plan T16): a legacy `index.db` and
+//! `index-state.json` that the pre-change build (`48d80d6`) wrote, committed
+//! as bytes under `tests/fixtures/index/v8/`. They replace the in-place
+//! v1/v4/v5 JSON migrations; a pre-v8 cache now takes the fallback.
+
+use super::golden::{copy_tree, fixtures_root};
+use super::rebuild::canonical;
 use super::*;
+use std::sync::Barrier;
 
-/// A version 5 cache a #126 host published, holding a container with
-/// only rolled-up activity, migrates in place: its container records
-/// survive, and the container's file is regenerated with the rest.
-#[test]
-fn a_version_5_cache_with_containers_is_migrated() {
-    let document = github_document(true);
-    let root = TempDir::new().unwrap();
-    let cache = TempDir::new().unwrap();
-    let index = index(&root, &cache).with_adapters(Some(&document));
-    index
-        .record_activity(&github_pr(1, 7, "2026-10-15T10:00:00Z"), &[])
-        .unwrap();
-    assert_eq!(index.regenerate_dirty().unwrap().written, 2);
-    let current = github_file(root.path(), "github-repo");
-    let path = artifact_files(root.path())
-        .into_iter()
-        .find(|path| path.to_string_lossy().contains("github-repo"))
-        .unwrap();
-    // As a version 5 build rendered it.
-    let stale = current.replace(
-        "title: \"acme-corp/widgets\"\n",
-        "title: \"acme-corp/widgets (v5)\"\n",
-    );
-    assert_ne!(stale, current);
-    fs::write(&path, stale).unwrap();
-    let mut state: serde_json::Value =
-        serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
-    assert_eq!(state["containers"], serde_json::json!([GITHUB_REPO_ID]));
-    assert!(state["container_files"][GITHUB_REPO_ID].is_string());
-    state["version"] = 5.into();
-    fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+/// The fixture's clean work item, whose file a user may have edited.
+const V8_CLEAN: &str = "work:example.com/A1";
+const V8_CLEAN_FILE: &str = "artifacts/work-item/example-com/a1-481b108c117b.md";
+/// Logged and caught up, but not yet regenerated: the v8 dirty set.
+const V8_DIRTY: &str = "work:example.com/B1";
+const V8_REPO_FILE: &str = "artifacts/github-repo/github-com/acme-corp-widgets-c737120cdb17.md";
+const V8_PR_FILE: &str = "artifacts/github-pr/github-com/acme-corp-widgets-7-b8095322e3c0.md";
+const V8_LEGACY_URL: &str = "https://example.org/legacy-page";
 
-    LOG_BYTES_READ.with(|count| count.set(0));
-    let report = index.regenerate_dirty().unwrap();
-    assert_eq!((report.written, report.unchanged), (1, 1), "{report:?}");
-    assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
-    assert_eq!(fs::read_to_string(&path).unwrap(), current);
-    let migrated = read_state(&index.state_path()).unwrap().unwrap();
-    assert_eq!(migrated.version, STATE_VERSION);
-    assert!(migrated.containers.contains(GITHUB_REPO_ID));
-    assert!(migrated.container_files.contains_key(GITHUB_REPO_ID));
-    let repo = index.artifact(GITHUB_REPO_ID).unwrap().unwrap();
-    assert_eq!((repo.focused_seconds, repo.opens), (125, 1));
+/// The v8 fixture copied into a fresh root and cache. The JSON cache names
+/// the folder it was written for, so its root and identity are moved to
+/// this one, as if the same user's host had written it here.
+struct V8 {
+    root: TempDir,
+    cache: TempDir,
 }
 
-#[test]
-fn a_version_1_state_cache_is_rescanned() {
-    let root = TempDir::new().unwrap();
-    let cache = TempDir::new().unwrap();
-    let url = "https://news.ycombinator.com/item?id=50251344";
-    let url_hash = sha256_hex(url.as_bytes());
-    let event = SummaryEvent {
-        event_id: uuid::Uuid::new_v4().to_string(),
-        artifact_id: crate::summary::web_page_artifact_id(url).unwrap(),
-        artifact_type: "web.page".into(),
-        url: url.into(),
-        title: "A good discussion".into(),
-        occurred_at: "2026-10-26T18:00:00Z".into(),
-        document_type: "discussion".into(),
-        category: "reading".into(),
-        importance: brauser_protocol::ImportanceLevel::High,
-        summary_path: "pages/hn-item.summary.md".into(),
-        record_key: crate::vault::url_record_key(url).unwrap(),
-        harness: brauser_protocol::HarnessId::Codex,
-    };
-    let payload = hex::encode(serde_json::to_vec(&event).unwrap());
-    let line = format!(
-        "<!-- brauser:visit id={} url={url_hash} at={} kind=summary data={payload} -->\n",
-        sha256_hex(event.event_id.as_bytes()),
-        event.occurred_at,
-    );
-    let dir = root.path().join("log/2026/10");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("2026-10-26.md"), format!("{LOG_HEADER}\n{line}")).unwrap();
-
-    // A cache written by a build that predates `EventData::Summary`
-    // (version 1) must never be trusted as-is: it cannot contain this
-    // summary, so loading it unchanged would hide it until a manual
-    // reindex. Write one by hand and confirm it is rescanned instead.
-    let stale_cache_dir = cache.path();
-    fs::create_dir_all(stale_cache_dir).unwrap();
-    let stale_state = serde_json::json!({
-        "version": 1,
-        "root": root.path().to_string_lossy(),
-        "root_identity": open_selected_root(root.path(), None).unwrap().1,
-        "log_dir": "log",
-        "artifacts_dir": "artifacts",
-        "events": {},
-        "dirty": [],
-    });
-    fs::write(
-        stale_cache_dir.join("index-state.json"),
-        serde_json::to_vec(&stale_state).unwrap(),
-    )
-    .unwrap();
-
-    let index = index(&root, &cache);
-    let report = index.regenerate_dirty().unwrap();
-    assert_eq!(
-        report.written, 1,
-        "a v1 cache must be rescanned, not trusted"
-    );
-    assert_eq!(artifact_files(root.path()).len(), 1);
-}
-
-#[test]
-fn a_version_5_state_cache_is_migrated() {
-    assert_eq!(STATE_VERSION, 8);
-    let root = TempDir::new().unwrap();
-    let cache = TempDir::new().unwrap();
-    let index = index(&root, &cache);
-    let event = activity(
-        "00000000-0000-4000-8000-000000000401",
-        "V5",
-        "Version five",
-        "2026-10-20T12:00:00Z",
-    );
-    let other = activity(
-        "00000000-0000-4000-8000-000000000402",
-        "V5B",
-        "Version five, rendered by a v5 build",
-        "2026-10-20T13:00:00Z",
-    );
-    write_log(root.path(), "2026-10-20.md", &[&event, &other]);
-    assert_eq!(index.reindex().unwrap().written, 2);
-    let mut files = artifact_files(root.path());
-    files.sort();
-    let current = files
-        .iter()
-        .map(|path| fs::read_to_string(path).unwrap())
-        .collect::<Vec<_>>();
-    let (stale_at, stale_text) = files
-        .iter()
-        .zip(&current)
-        .find(|(_, text)| text.contains("rendered by a v5 build"))
+impl V8 {
+    fn load() -> Self {
+        let fixture = fixtures_root().join("v8");
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        copy_tree(&fixture.join("log"), &root.path().join("log"));
+        copy_tree(&fixture.join("artifacts"), &root.path().join("artifacts"));
+        fs::copy(
+            fixture.join("cache/index.db"),
+            cache.path().join("index.db"),
+        )
         .unwrap();
-    // A file as a version 5 build rendered it: PR 4 changed how every
-    // artifact file escapes its title and Why line.
-    fs::write(
-        stale_at,
-        stale_text.replace("Version five, rendered", "Version five rendered"),
-    )
-    .unwrap();
-    // The clean cache a version 5 build left. It can hold no summary
-    // (#59 had no caller).
-    let mut state: serde_json::Value =
-        serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
-    state["version"] = 5.into();
-    fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
-
-    // Migration rechecks old logs for gaps; only the file whose
-    // rendering changed is rewritten.
-    LOG_BYTES_READ.with(|count| count.set(0));
-    let report = index.regenerate_dirty().unwrap();
-    assert_eq!((report.written, report.unchanged), (1, 1));
-    assert!(LOG_BYTES_READ.with(|count| count.get()) > 0);
-    for (path, text) in files.iter().zip(&current) {
-        assert_eq!(&fs::read_to_string(path).unwrap(), text);
+        let v8 = Self { root, cache };
+        fs::write(v8.state_path(), v8.legacy_state()).unwrap();
+        v8
     }
+
+    /// The fixture's `index-state.json`, moved to this root.
+    fn legacy_state(&self) -> Vec<u8> {
+        let fixture = fixtures_root().join("v8/cache/index-state.json");
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture).unwrap()).unwrap();
+        assert_eq!(state["version"], 8);
+        state["root"] = self.root.path().to_string_lossy().into_owned().into();
+        state["root_identity"] = open_selected_root(self.root.path(), None).unwrap().1.into();
+        serde_json::to_vec(&state).unwrap()
+    }
+
+    fn state_path(&self) -> PathBuf {
+        self.cache.path().join("index-state.json")
+    }
+
+    fn index(&self) -> ArtifactIndex {
+        index(&self.root, &self.cache).with_adapters(Some(&github_document(true)))
+    }
+
+    fn file(&self, relative: &str) -> PathBuf {
+        self.root.path().join(relative)
+    }
+
+    fn db(&self) -> PathBuf {
+        db::db_path(self.cache.path())
+    }
+
+    fn rows(&self, query: &str) -> Vec<Vec<sql::Value>> {
+        sql::sql_rows(&self.db(), query)
+    }
+
+    fn legacy_import(&self) -> Vec<Vec<sql::Value>> {
+        self.rows("SELECT value FROM brauser_meta WHERE key = 'legacy_import'")
+    }
+}
+
+fn text(value: &str) -> sql::Value {
+    sql::Value::Text(value.into())
+}
+
+fn dirty(v8: &V8) -> Vec<Vec<sql::Value>> {
+    v8.rows("SELECT artifact_id FROM dirty_artifacts ORDER BY artifact_id")
+}
+
+/// The canonical dump a fresh cache rebuilt from the same logs gives, in a
+/// scratch root so the fixture's own files are left alone.
+fn reindexed(v8: &V8) -> Vec<(&'static str, Vec<Vec<sql::Value>>)> {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    copy_tree(&v8.root.path().join("log"), &root.path().join("log"));
+    let fresh = index(&root, &cache).with_adapters(Some(&github_document(true)));
+    fresh.reindex().unwrap();
+    canonical(&fresh)
+}
+
+#[test]
+fn v8_import_keeps_dirty_set_container_files_and_user_edits() {
+    let v8 = V8::load();
+    let clean = fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap();
+    let edited = format!("{clean}\nA note of my own.\n");
+    fs::write(v8.file(V8_CLEAN_FILE), &edited).unwrap();
+    let index = v8.index();
+
+    // The first write-capable open migrates: the v8 dirty set is kept, and
+    // nothing the v8 cache had already written is marked again.
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(db::detect_legacy(&v8.db()).unwrap(), db::FileState::Ours);
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    assert_eq!(dirty(&v8), vec![vec![text(V8_DIRTY)]]);
+    // The container's file is where the v8 cache last wrote it, and each
+    // clean artifact's render is the one the v8 state derives.
     assert_eq!(
-        read_state(&index.state_path()).unwrap().unwrap().version,
-        STATE_VERSION
+        v8.rows(&format!(
+            "SELECT file_path FROM brauser_group_state WHERE artifact_id = '{GITHUB_REPO_ID}'"
+        )),
+        vec![vec![text(V8_REPO_FILE)]]
     );
-    assert!(index.artifact(&event.artifact_id).unwrap().is_some());
-    assert_eq!(index.regenerate_dirty().unwrap().written, 0);
+    assert_eq!(
+        v8.rows(&format!(
+            "SELECT render_sha256 FROM brauser_group_state WHERE artifact_id = '{V8_CLEAN}'"
+        )),
+        vec![vec![sql::Value::Blob(
+            Sha256::digest(clean.as_bytes()).to_vec()
+        )]]
+    );
+    assert_eq!(
+        v8.rows(&format!(
+            "SELECT render_sha256 FROM brauser_group_state WHERE artifact_id = '{V8_DIRTY}'"
+        )),
+        vec![vec![sql::Value::Null]]
+    );
+
+    let report = index.regenerate_dirty().unwrap();
+    assert_eq!(
+        (report.written, report.unchanged, report.conflicts),
+        (1, 0, 0),
+        "{report:?}"
+    );
+    assert_eq!(fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap(), edited);
+    assert_eq!(artifact_files(v8.root.path()).len(), 5);
+
+    // Without the container adapter the repo derives no record: its file,
+    // located through the imported `file_path`, is removed, and the seeded
+    // renders keep every unaffected file (and its edits) as it is.
+    let plain = super::index(&v8.root, &v8.cache);
+    let pr = fs::read_to_string(v8.file(V8_PR_FILE)).unwrap();
+    plain.reconcile_from_logs().unwrap();
+    assert_eq!(dirty(&v8), vec![vec![text(GITHUB_REPO_ID)]]);
+    let report = plain.regenerate_dirty().unwrap();
+    assert_eq!(
+        (report.written, report.conflicts, report.failed),
+        (0, 0, 0),
+        "{report:?}"
+    );
+    assert!(!v8.file(V8_REPO_FILE).exists());
+    assert_eq!(fs::read_to_string(v8.file(V8_PR_FILE)).unwrap(), pr);
+    assert_eq!(fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap(), edited);
+}
+
+#[test]
+fn v8_tables_equal_a_fresh_reindex() {
+    let v8 = V8::load();
+    let index = v8.index();
+    assert_eq!(index.regenerate_dirty().unwrap().written, 1);
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    let migrated = canonical(&index);
+    assert_eq!(migrated, reindexed(&v8));
+    index.reindex().unwrap();
+    assert_eq!(canonical(&index), migrated);
+}
+
+/// A JSON cache that is not format 8 (or not JSON) imports nothing: after
+/// the rebuild only artifacts whose file is missing are dirty, and every
+/// existing file, edited or stale, is kept until its next real change. The
+/// M1 visit still gains its open through the rebuild.
+#[test]
+fn unusable_json_dirties_only_missing_files() {
+    for unusable in [Some(4), Some(7), None] {
+        let v8 = V8::load();
+        match unusable {
+            Some(version) => {
+                let mut state: serde_json::Value =
+                    serde_json::from_slice(&fs::read(v8.state_path()).unwrap()).unwrap();
+                state["version"] = version.into();
+                fs::write(v8.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+            }
+            None => fs::write(v8.state_path(), b"{\"version\": 8, \"truncated").unwrap(),
+        }
+        let clean = fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap();
+        let edited = format!("{clean}\nA note of my own.\n");
+        fs::write(v8.file(V8_CLEAN_FILE), &edited).unwrap();
+        let index = v8.index();
+
+        let report = index.regenerate_dirty().unwrap();
+        assert_eq!(
+            (report.written, report.unchanged, report.conflicts),
+            (1, 0, 0),
+            "{unusable:?}: {report:?}"
+        );
+        assert_eq!(fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap(), edited);
+        assert_eq!(artifact_files(v8.root.path()).len(), 5);
+        assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+        assert_eq!(
+            v8.rows(&format!(
+                "SELECT render_sha256 FROM brauser_group_state WHERE artifact_id = '{V8_CLEAN}'"
+            )),
+            vec![vec![sql::Value::Null]]
+        );
+        let legacy = crate::summary::web_page_artifact_id(V8_LEGACY_URL).unwrap();
+        assert_eq!(index.artifact(&legacy).unwrap().unwrap().opens, 1);
+        assert_eq!(canonical(&index), reindexed(&v8));
+    }
+}
+
+#[test]
+fn stray_sidecars_are_removed_before_the_legacy_file() {
+    let v8 = V8::load();
+    let stray = vec![0xA5_u8; 8192];
+    for suffix in ["-wal", "-shm", "-journal"] {
+        fs::write(v8.cache.path().join(format!("index.db{suffix}")), &stray).unwrap();
+    }
+    let index = v8.index();
+    index.reconcile_from_logs().unwrap();
+    assert!(sql::integrity_ok(&v8.db()));
+    assert_eq!(db::detect_legacy(&v8.db()).unwrap(), db::FileState::Ours);
+    assert!(!v8.cache.path().join("index.db-journal").exists());
+    for suffix in ["-wal", "-shm"] {
+        let path = v8.cache.path().join(format!("index.db{suffix}"));
+        assert!(
+            fs::read(&path).map_or(true, |bytes| bytes != stray),
+            "{} kept the stray bytes",
+            path.display()
+        );
+    }
+    assert_eq!(dirty(&v8), vec![vec![text(V8_DIRTY)]]);
+    assert!(index.artifact(V8_CLEAN).unwrap().is_some());
+}
+
+/// The legacy JSON files outlive every pass of the migration's rebuild and
+/// are removed only once it commits. Each call advances one pass, as a
+/// rebuild split over passes always has.
+#[test]
+fn legacy_json_files_are_removed_after_commit() {
+    let v8 = V8::load();
+    let pending = v8.cache.path().join("index-catch-up.json");
+    fs::write(&pending, b"{\"rebuild\": true}").unwrap();
+    let legacy = fs::read(v8.state_path()).unwrap();
+    let index = v8.index();
+    SCAN_LIMIT.with(|limit| limit.set(1));
+    let mut passes = 0;
+    let outcome = loop {
+        passes += 1;
+        assert!(passes < 10, "the migration never finished");
+        match index.artifact(V8_DIRTY) {
+            Ok(found) => break found,
+            Err(error) => {
+                assert!(
+                    format!("{error:#}").contains(INCOMPLETE_CATCH_UP),
+                    "{error:#}"
+                );
+                assert_eq!(fs::read(v8.state_path()).unwrap(), legacy);
+                assert!(pending.exists());
+                assert_ne!(v8.legacy_import(), vec![vec![text("done")]]);
+            }
+        }
+    };
+    SCAN_LIMIT.with(|limit| limit.set(MAX_SCAN_BYTES));
+    assert!(passes >= 2, "{passes}");
+    assert!(outcome.is_some());
+    assert!(!pending.exists());
+    // Until plan T15 the host keeps its own JSON cache, rewritten from the
+    // store; it is never the legacy one again.
+    assert_ne!(fs::read(v8.state_path()).ok(), Some(legacy));
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    assert_eq!(dirty(&v8), vec![vec![text(V8_DIRTY)]]);
+}
+
+/// A pre-format-9 host that finds no cache it can use rebuilds from the
+/// logs and renames its snapshot over `index.db`. The next format 9 open
+/// sees the foreign file and migrates again; a delivery the orphaned store
+/// took is recovered from the authoritative log.
+#[test]
+fn an_old_host_rename_over_is_recovered() {
+    let v8 = V8::load();
+    let index = v8.index();
+    index.regenerate_dirty().unwrap();
+    let later = activity(
+        "00000000-0000-4000-8000-000000000804",
+        "C1",
+        "Gamma item",
+        "2026-10-17T09:00:00Z",
+    );
+    write_log(v8.root.path(), "2026-10-17.md", &[&later]);
+    index.record_activity(&later, &[]).unwrap();
+
+    let snapshot = v8.cache.path().join(".old-host-snapshot");
+    fs::copy(fixtures_root().join("v8/cache/index.db"), &snapshot).unwrap();
+    fs::rename(&snapshot, v8.db()).unwrap();
+    fs::write(v8.state_path(), v8.legacy_state()).unwrap();
+    assert_eq!(db::detect_legacy(&v8.db()).unwrap(), db::FileState::Legacy);
+
+    let found = index.artifact(&later.artifact_id).unwrap().unwrap();
+    assert_eq!(found.opens, 1);
+    assert_eq!(db::detect_legacy(&v8.db()).unwrap(), db::FileState::Ours);
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    // The old host's dirty set comes back with it; the recovered delivery
+    // is new to the store, so its artifact is dirty too.
+    assert_eq!(
+        dirty(&v8),
+        vec![vec![text(V8_DIRTY)], vec![text(&later.artifact_id)]]
+    );
+    assert_eq!(canonical(&index), reindexed(&v8));
+}
+
+/// Two hosts opening the same legacy cache at once converge on one store.
+#[test]
+fn two_first_opens_converge() {
+    let v8 = V8::load();
+    let barrier = Barrier::new(2);
+    let found = std::thread::scope(|scope| {
+        let hosts = (0..2)
+            .map(|_| {
+                let index = v8.index();
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    index.artifact(V8_DIRTY)
+                })
+            })
+            .collect::<Vec<_>>();
+        hosts
+            .into_iter()
+            .map(|host| host.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    for result in found {
+        assert!(result.unwrap().is_some());
+    }
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    assert_eq!(dirty(&v8), vec![vec![text(V8_DIRTY)]]);
+    assert_eq!(canonical(&v8.index()), reindexed(&v8));
 }
 
 #[test]
@@ -209,44 +387,4 @@ fn an_m1_legacy_visit_counts_one_open_with_a_dated_timeline_line() {
         sqlite_check(&index.database_path(), "select opens from visits"),
         "ok\n1\n"
     );
-}
-
-#[test]
-fn a_version_4_cache_migrates_so_existing_m1_artifact_files_gain_their_opens() {
-    let root = TempDir::new().unwrap();
-    let cache = TempDir::new().unwrap();
-    let index = index(&root, &cache);
-    let url = "https://example.org/legacy-page";
-    let url_hash = sha256_hex(url.as_bytes());
-    let dir = root.path().join("log/2026/10");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-            dir.join("2026-10-20.md"),
-            format!(
-                "{LOG_HEADER}\n\n- 2026-10-20T10:00:00Z — Legacy page — <{url}>\n{MARKER_PREFIX}{} url={url_hash} at=2026-10-20T10:00:00Z -->\n",
-                sha256_hex("legacy-marker-upgrade".as_bytes()),
-            ),
-        )
-        .unwrap();
-    index.reindex().unwrap();
-    // Simulate the file and clean cache a version 4 build left: legacy
-    // visits rendered no open and no Timeline line.
-    let path = artifact_files(root.path()).pop().unwrap();
-    let current = fs::read_to_string(&path).unwrap();
-    let old = current
-        .replace("  opens: 1\n", "  opens: 0\n")
-        .replace("- 2026-10-20 · opened 1×\n", "");
-    assert_ne!(old, current);
-    fs::write(&path, &old).unwrap();
-    let mut state: serde_json::Value =
-        serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
-    state["version"] = 4.into();
-    state["dirty"] = serde_json::json!([]);
-    fs::write(index.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
-
-    // The migration rechecks old checkpoints once for skipped gaps.
-    LOG_BYTES_READ.with(|count| count.set(0));
-    assert_eq!(index.regenerate_dirty().unwrap().written, 1);
-    assert!(LOG_BYTES_READ.with(|count| count.get()) > 0);
-    assert_eq!(fs::read_to_string(&path).unwrap(), current);
 }
