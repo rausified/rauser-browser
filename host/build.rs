@@ -6,7 +6,13 @@ use std::path::Path;
 mod build_id;
 
 fn main() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Read at run time, not with env!: a build script compiled for another
+    // checkout that shares this target directory would otherwise keep that
+    // checkout's path, fail its git calls once it is gone, and stamp
+    // "unknown" (2026-11-02, after a removed worktree's build script).
+    let manifest_dir =
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+    let dir = Path::new(&manifest_dir);
     println!(
         "cargo:rustc-env=BRAUSER_BUILD_ID={}",
         build_id::git_build_id(dir)

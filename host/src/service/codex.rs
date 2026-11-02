@@ -66,7 +66,7 @@ impl HarnessRunner for CodexRunner {
             .current_dir(&spec.cwd)
             .env_clear()
             .envs(spec.env.iter().map(|(name, value)| (name, value)));
-        let child = LineChild::spawn(slot, command)
+        let child = LineChild::spawn_as(slot, command, "codex")
             .map_err(|error| anyhow::anyhow!("starting {}: {error}", program.display()))?;
         let mut session = CodexSession {
             child: Some(child),
