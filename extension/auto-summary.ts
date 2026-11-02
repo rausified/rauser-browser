@@ -23,6 +23,8 @@ export interface AutoSummaryState {
   candidates: Record<string, AutoCandidate>;
   /** Artifacts already submitted this browser session, oldest first. */
   submitted: string[];
+  /** No attempt before this time (ms), after the host could not be reached. */
+  retry_after?: number;
 }
 
 /** How many submitted artifact IDs are remembered. */

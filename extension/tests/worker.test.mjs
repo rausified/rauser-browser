@@ -2919,3 +2919,184 @@ for (const [name, oldTitle, newTitle, oldRefs, newRefs, expected] of [
     assert.deepEqual(merged.refs, expected);
   });
 }
+
+// --- Auto-summary (plan 2026-11-02-auto-summary, Task 5) ---------------------
+
+const AUTO_KEY = storageKey("auto_summary_v1");
+const AUTO_ALARM = `${BINARY_NAME}-auto-summary`;
+const AUTO_ORIGIN = "https://auto.example";
+const AUTO_SETTLE_WAIT_MS = 700;
+
+function autoLease(auto = { enabled: true, dwell_secs: 0 }, extra = {}) {
+  return { ...lease(AUTO_ORIGIN), auto_summary: auto, ...extra };
+}
+
+/** The extractor reads `url`'s page, so readTab accepts it. */
+function readingAs(url) {
+  executeScript = async (injection) => injection.files ? [{ frameId: 0 }] : [{
+    frameId: 0, result: {
+      title: "Doc", content: "Doc body", selection: null, truncated: false, readable: true, href: url,
+    },
+  }];
+}
+
+/** A recognized cold open of `${AUTO_ORIGIN}/items/<name>` in `tabId`, loaded. */
+async function openArtifact(tabId, name, { origin = AUTO_ORIGIN, load = true } = {}) {
+  const url = `${origin}/items/${name}`;
+  tabs.set(tabId, { id: tabId, windowId: 1, url, title: "Doc", incognito: false, status: "complete" });
+  readingAs(url);
+  onCommitted({
+    tabId, frameId: 0, documentId: `auto-doc-${tabId}-${name}`, documentLifecycle: "active", url,
+    timeStamp: Date.now(), transitionType: "link", transitionQualifiers: [],
+  });
+  await flush();
+  if (load) onTabUpdated(tabId, { status: "complete" }, tabs.get(tabId));
+  return url;
+}
+
+const autoRequests = (after) => ports.slice(after)
+  .flatMap((port) => port.sent.filter((message) => message.type === "start_auto_summary")
+    .map((request) => ({ port, request })));
+
+async function autoRequest(after) {
+  return until(() => autoRequests(after)[0], "start_auto_summary");
+}
+
+async function noAutoRequest(after) {
+  await new Promise((resolve) => setTimeout(resolve, AUTO_SETTLE_WAIT_MS + 300));
+  await flush();
+  assert.deepEqual(autoRequests(after).map(({ request }) => request.url), []);
+}
+
+function resetAuto() {
+  sessionValues.delete(AUTO_KEY);
+  alarms.delete(AUTO_ALARM);
+}
+
+test("recognizedOpenAtDwellZeroSendsOneStartAutoSummary", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  const url = await openArtifact(201, "first");
+  const { port, request } = await autoRequest(before);
+  assert.equal(request.url, url);
+  assert.equal(request.title, "Doc");
+  assert.equal(request.content, "Doc body");
+  for (const key of ["record_key", "kind", "harness", "selection", "instruction"]) {
+    assert.equal(key in request, false, key);
+  }
+  assert.match(request.requested_at, /[+-]\d\d:\d\d$|Z$/);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: { ...SUMMARY_RUN, url, record_key: { kind: "artifact", value: "test:auto.example/first" } },
+    existing: false,
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/first"),
+    "the artifact recorded as submitted");
+  // Another load of the same tab asks nothing more.
+  const after = ports.length;
+  onTabUpdated(201, { status: "complete" }, tabs.get(201));
+  await noAutoRequest(after);
+  assert.equal(autoRequests(before).length, 1);
+});
+
+test("unrecognizedPagesSendNothing", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(202, "x", { origin: "https://other.example" });
+  await noAutoRequest(before);
+});
+
+test("pausedCaptureOrDisabledAutoSummarySendsNothing", async () => {
+  for (const policy of [
+    autoLease({ enabled: false, dwell_secs: 0 }),
+    autoLease({ enabled: true, dwell_secs: 0 }, { capture_enabled: false }),
+    lease(AUTO_ORIGIN),
+  ]) {
+    resetAuto();
+    values.set(storageKey("policy_v1"), policy);
+    const before = ports.length;
+    await openArtifact(203, `paused-${ports.length}`);
+    await noAutoRequest(before);
+  }
+});
+
+test("alreadySummarizedIsNotAskedAgainThisSession", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(204, "known");
+  const { port, request } = await autoRequest(before);
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "already_summarized",
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.submitted.includes("test:auto.example/known"),
+    "the summarized artifact recorded");
+  const again = ports.length;
+  await openArtifact(205, "known");
+  await noAutoRequest(again);
+});
+
+test("notSetUpLeavesTheArtifactEligible", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(206, "setup");
+  const { port, request } = await autoRequest(before);
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "not_set_up",
+  });
+  await until(() => sessionValues.get(AUTO_KEY) && !sessionValues.get(AUTO_KEY).candidates["206"],
+    "the candidate dropped");
+  assert.deepEqual(sessionValues.get(AUTO_KEY).submitted, []);
+  // A later open tries again.
+  const again = ports.length;
+  await openArtifact(207, "setup");
+  const retried = await autoRequest(again);
+  retried.port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
+    request_id: retried.request.request_id, reason: "already_summarized",
+  });
+  await until(() => retried.port.closed, "the retried port to close");
+});
+
+test("hostUnavailableKeepsTheCandidate", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  await openArtifact(208, "later");
+  const { port, request } = await autoRequest(before);
+  port.reply({
+    type: "error", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    code: "service_unavailable", message: "The Brauser service is not running.",
+  });
+  await until(() => port.closed, "the auto host port to close");
+  await flush();
+  const state = sessionValues.get(AUTO_KEY);
+  assert.equal(state.candidates["208"]?.artifact_id, "test:auto.example/later");
+  assert.deepEqual(state.submitted, []);
+  assert.ok(alarms.has(AUTO_ALARM), "a retry is scheduled");
+});
+
+test("dwellSurvivesWorkerRestart", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease({ enabled: true, dwell_secs: 1 }));
+  const before = ports.length;
+  onWindowFocusChanged(1);
+  await openArtifact(209, "dwell");
+  onTabActivated({ tabId: 209, windowId: 1 });
+  await flush();
+  // Focus is counted in session storage, so a restarted worker resumes it,
+  // and an alarm is set for the rest of the dwell.
+  const stored = sessionValues.get(AUTO_KEY).candidates["209"];
+  assert.equal(stored.loaded, true);
+  assert.equal(typeof stored.focused_since, "number");
+  assert.ok(alarms.has(AUTO_ALARM), "the dwell alarm is set");
+  await noAutoRequest(before).catch(() => {});
+  onAlarm({ name: AUTO_ALARM });
+  const { request } = await autoRequest(before);
+  assert.equal(request.url, `${AUTO_ORIGIN}/items/dwell`);
+});

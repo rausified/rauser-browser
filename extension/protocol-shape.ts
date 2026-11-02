@@ -519,6 +519,10 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         value.harnesses.every(isHarnessFound);
     case "run_started":
       return isRunView(value.run) && typeof value.existing === "boolean";
+    case "auto_summary_skipped":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "reason"]) &&
+        typeof value.reason === "string" &&
+        ["disabled", "not_set_up", "not_an_artifact", "already_summarized"].includes(value.reason);
     case "run_fetched":
       return isRunView(value.run) && typeof value.stream_text === "string" &&
         isUnsignedInteger(value.next_offset) && typeof value.more === "boolean";

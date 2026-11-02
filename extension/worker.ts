@@ -30,8 +30,12 @@ import { leaseFor, withConfigMutationLock } from "./settings.js";
 import { httpOrigin, inspectSitePatterns, prunePatternSamples, samplePattern } from "./site-patterns.js";
 import { pruneDraftHandoffs } from "./capture-site-handoff.js";
 import {
+  dropCandidate, dueTabs, emptyAutoSummaryState, markSubmitted, nextDueInMs, noteArtifact,
+  noteAttention, noteLoaded, type AutoSummaryState,
+} from "./auto-summary.js";
+import {
   NOT_A_WEB_PAGE_MESSAGE, SITE_ACCESS_NEEDED_MESSAGE, SUMMARIZE_MENU_ID, SUMMARIZE_MENU_TITLE,
-  summarizeFailureText, summarizeTab,
+  autoSummarizeTab, summarizeFailureText, summarizeTab,
 } from "./summarize.js";
 import {
   activateTab, createdNavigationTarget, emptyActivityState, focusWindow, freezeCompleted,
@@ -77,6 +81,17 @@ const SYNC_PERIOD_MINUTES = 5;
 // A one-shot sync soon after a capture. Chrome runs alarms no sooner than 30
 // seconds out, which also covers the title grace period.
 const DELIVER_ALARM = `${BINARY_NAME}-deliver`;
+// Auto-summary (DESIGN.md "Auto-summary"): candidates live in session
+// storage, so a restarted worker resumes a dwell; the alarm covers a dwell or
+// a retry the worker may not live to see.
+const AUTO_SUMMARY_KEY = storageKey("auto_summary_v1");
+const AUTO_SUMMARY_ALARM = `${BINARY_NAME}-auto-summary`;
+/** Pages keep rendering after they load; wait this long before reading one. */
+const AUTO_SETTLE_MS = 500;
+/** How long to wait after the host or service could not be reached. */
+const AUTO_RETRY_MS = 60_000;
+/** The most tabs one drain submits. */
+const AUTO_MAX_PER_DRAIN = 50;
 const DELIVER_DELAY_MINUTES = 0.5;
 const LEASE_RENEW_WINDOW_MS = 60 * 60_000;
 const encoder = new TextEncoder();
@@ -159,6 +174,163 @@ async function writeActivity(state: ActivityState): Promise<void> {
     chrome.storage.local.set({ [ACTIVITY_TOTALS_KEY]: { version: 1, totals } }),
     activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: context }),
   ]);
+  // Activity is the one record of which tabs show a recognized artifact and
+  // which tab has the user's attention, so auto-summary follows it.
+  await syncAutoSummary(state, Date.now()).catch((error: unknown) =>
+    diag.warn("auto summary state update skipped", { error }));
+}
+
+function isAutoSummaryState(value: unknown): value is AutoSummaryState {
+  if (typeof value !== "object" || value === null) return false;
+  const state = value as Record<string, unknown>;
+  return state.version === 1 && typeof state.candidates === "object" && state.candidates !== null &&
+    Array.isArray(state.submitted) && state.submitted.every((id) => typeof id === "string");
+}
+
+async function readAutoSummary(): Promise<AutoSummaryState> {
+  const stored = await chrome.storage.session.get(AUTO_SUMMARY_KEY);
+  const value = stored[AUTO_SUMMARY_KEY];
+  return isAutoSummaryState(value) ? value : emptyAutoSummaryState();
+}
+
+async function writeAutoSummary(state: AutoSummaryState): Promise<void> {
+  await chrome.storage.session.set({ [AUTO_SUMMARY_KEY]: state });
+}
+
+/** The tab that has the user's attention, as activity measures it. */
+function attendedTab(activity: ActivityState): number | null {
+  if (activity.idle || !activity.chrome_focused || activity.last_focused_window === null) return null;
+  return activity.active_by_window[String(activity.last_focused_window)] ?? null;
+}
+
+/** The auto-summary settings a lease allows now, or null when it is off. */
+function autoSummaryOn(lease: PolicyLease | null, now = Date.now()): { dwellMs: number } | null {
+  if (!lease || !leaseActive(lease, now) || !lease.auto_summary?.enabled) return null;
+  return { dwellMs: lease.auto_summary.dwell_secs * 1_000 };
+}
+
+/** Mirror activity's recognized tabs and attention into the candidates, then
+ * schedule the next look at them. */
+async function syncAutoSummary(activity: ActivityState, now: number): Promise<void> {
+  const state = await readAutoSummary();
+  for (const key of Object.keys(state.candidates)) {
+    if (!activity.tabs[key]) delete state.candidates[key];
+  }
+  for (const [key, tab] of Object.entries(activity.tabs)) {
+    noteArtifact(state, Number(key), { artifact_id: tab.artifact_id, url: tab.url, title: tab.title }, now);
+  }
+  noteAttention(state, attendedTab(activity), now);
+  await writeAutoSummary(state);
+  const on = autoSummaryOn(await readPolicy(), now);
+  if (on && Object.keys(state.candidates).length) {
+    scheduleAutoAlarm(state, on.dwellMs, now);
+    scheduleAutoDrain(AUTO_SETTLE_MS);
+  }
+}
+
+let autoTimer: ReturnType<typeof setTimeout> | undefined;
+let autoTimerAt = Infinity;
+
+/** Drain in `delayMs` while this worker lives, unless a drain is due sooner. */
+function scheduleAutoDrain(delayMs: number): void {
+  const at = Date.now() + delayMs;
+  if (autoTimer !== undefined && autoTimerAt <= at) return;
+  clearTimeout(autoTimer);
+  autoTimerAt = at;
+  autoTimer = setTimeout(() => {
+    autoTimer = undefined;
+    autoTimerAt = Infinity;
+    void runAutoDrain();
+  }, delayMs);
+}
+
+/** An alarm for the next dwell or retry, so a stopped worker comes back. */
+function scheduleAutoAlarm(state: AutoSummaryState, dwellMs: number, now: number): void {
+  const retry = state.retry_after !== undefined && state.retry_after > now ? state.retry_after - now : null;
+  const due = retry ?? nextDueInMs(state, now, dwellMs);
+  if (due === null || due === 0) return;
+  // Chrome runs alarms no sooner than 30 seconds out.
+  void chrome.alarms.create(AUTO_SUMMARY_ALARM, { delayInMinutes: Math.max(0.5, due / 60_000) });
+  if (due < 30_000) scheduleAutoDrain(due + 50);
+}
+
+type AutoAttempt = { tabId: number; artifactId: string };
+
+/** The oldest due tab, after marking loaded the candidates whose tab has
+ * finished loading (a single-page app's route change fires no load). */
+async function takeDueAuto(): Promise<AutoAttempt | null> {
+  const now = Date.now();
+  const on = autoSummaryOn(await activeLease(), now);
+  if (!on) return null;
+  const state = await readAutoSummary();
+  if (state.retry_after !== undefined && state.retry_after > now) return null;
+  for (const [key, candidate] of Object.entries(state.candidates)) {
+    if (candidate.loaded) continue;
+    const tab = await chrome.tabs.get(Number(key)).catch(() => null);
+    if (tab?.status === "complete") noteLoaded(state, Number(key));
+  }
+  await writeAutoSummary(state);
+  const [tabId] = dueTabs(state, now, on.dwellMs);
+  if (tabId === undefined) return null;
+  return { tabId, artifactId: state.candidates[String(tabId)]!.artifact_id };
+}
+
+/** Read the tab and ask the host; "deferred" when it could not be reached. */
+async function attemptAuto(attempt: AutoAttempt): Promise<string> {
+  const tab = await chrome.tabs.get(attempt.tabId).catch(() => null);
+  if (!tab?.url || tab.incognito !== false) return "gone";
+  const host = new HostClient();
+  try {
+    return await autoSummarizeTab(
+      { id: attempt.tabId, url: tab.url, title: tab.title ?? "" },
+      { scripting: chrome.scripting, host, storage: chrome.storage.local, now: () => new Date() },
+    );
+  } catch (error) {
+    diag.warn("auto summary deferred", { error });
+    return "deferred";
+  } finally {
+    host.disconnect();
+  }
+}
+
+async function settleAuto(attempt: AutoAttempt, outcome: string): Promise<void> {
+  const state = await readAutoSummary();
+  const current = state.candidates[String(attempt.tabId)];
+  if (current?.artifact_id === attempt.artifactId) {
+    if (outcome === "started" || outcome === "already_summarized") {
+      markSubmitted(state, attempt.tabId);
+    } else if (outcome === "deferred") {
+      state.retry_after = Date.now() + AUTO_RETRY_MS;
+    } else {
+      dropCandidate(state, attempt.tabId);
+    }
+  }
+  if (outcome !== "deferred") delete state.retry_after;
+  await writeAutoSummary(state);
+  const on = autoSummaryOn(await readPolicy());
+  if (on) scheduleAutoAlarm(state, on.dwellMs, Date.now());
+}
+
+let autoDraining = false;
+
+/** Submit due tabs one at a time, oldest first. Host calls run outside the
+ * serialized queue so capture never waits on them. */
+async function runAutoDrain(): Promise<void> {
+  if (autoDraining) return;
+  autoDraining = true;
+  try {
+    for (let count = 0; count < AUTO_MAX_PER_DRAIN; count += 1) {
+      const attempt = await serialize(takeDueAuto);
+      if (!attempt) break;
+      const outcome = await attemptAuto(attempt);
+      await serialize(() => settleAuto(attempt, outcome));
+      if (outcome === "deferred") break;
+    }
+  } catch (error) {
+    diag.warn("auto summary drain stopped", { error });
+  } finally {
+    autoDraining = false;
+  }
 }
 
 async function narrowActivity(lease: PolicyLease | null): Promise<void> {
@@ -1328,6 +1500,15 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(onHistoryStateUpdated);
 
 // Chrome reports a tab's title only for origins this extension was granted.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "complete") {
+    void serialize(async () => {
+      const state = await readAutoSummary();
+      if (!state.candidates[String(tabId)]) return;
+      noteLoaded(state, tabId);
+      await writeAutoSummary(state);
+      scheduleAutoDrain(AUTO_SETTLE_MS);
+    }).catch((error: unknown) => diag.warn("auto summary load update skipped", { error }));
+  }
   const title = changeInfo.title;
   if (title === undefined) return;
   void serialize(() => patchTitle(tabId, title)).catch((error: unknown) => {
@@ -1396,6 +1577,7 @@ function pruneCaptureSiteDrafts(): void {
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === AUTO_SUMMARY_ALARM) void runAutoDrain();
   if (alarm.name === SYNC_ALARM || alarm.name === DELIVER_ALARM) {
     void syncWithHost();
     void serialize(pruneCurrentSitePatterns).catch(patternFailure);
