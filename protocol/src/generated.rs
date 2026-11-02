@@ -544,6 +544,8 @@ pub struct ContainedArtifactView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SummaryView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
     pub summarized_at: String,
     pub document_type: String,
     pub category: String,
@@ -825,6 +827,8 @@ pub enum ImportanceLevel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunAnswer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
     pub document_type: String,
     pub category: String,
     pub importance: ImportanceLevel,

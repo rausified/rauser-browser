@@ -1865,6 +1865,7 @@ fn summary_view(event: &SummaryEvent) -> Option<SummaryView> {
     };
     Some(SummaryView {
         summarized_at,
+        overview: event.overview.clone(),
         document_type: event.document_type.clone(),
         category: event.category.clone(),
         importance: event.importance,
@@ -7468,6 +7469,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
 
     fn page_summary(url: &str, occurred_at: &str) -> crate::summary::PageSummary {
         crate::summary::PageSummary {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             url: url.into(),
             title: "A good discussion".into(),
@@ -7563,6 +7565,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         let url = "https://jira.example/browse/PROJ-1";
         let web = page_summary(url, &rfc3339_seconds_ago(5));
         let adapter = crate::summary::PageSummary {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             record_key: brauser_protocol::RecordKey {
                 kind: brauser_protocol::RecordKeyKind::Artifact,
@@ -7640,6 +7643,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         );
 
         let event = SummaryEvent {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: artifact_id.clone(),
             artifact_type: "web.page".into(),
@@ -7687,6 +7691,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         let url = "https://news.ycombinator.com/item?id=50251344";
         let url_hash = sha256_hex(url.as_bytes());
         let event = SummaryEvent {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id:
                 "web:evil.example/0000000000000000000000000000000000000000000000000000000000000000"
@@ -7719,6 +7724,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
 
     fn web_summary(url: &str, at: &str) -> SummaryEvent {
         SummaryEvent {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: crate::summary::web_page_artifact_id(url).unwrap(),
             artifact_type: "web.page".into(),
@@ -7736,6 +7742,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
 
     fn expected_view(event: &SummaryEvent) -> brauser_protocol::SummaryView {
         brauser_protocol::SummaryView {
+            overview: event.overview.clone(),
             summarized_at: event.occurred_at.clone(),
             document_type: event.document_type.clone(),
             category: event.category.clone(),
@@ -7772,6 +7779,52 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
             row.summary.as_ref().unwrap().importance,
             brauser_protocol::ImportanceLevel::High
         );
+    }
+
+    #[test]
+    fn old_and_new_summary_overviews_survive_cache_reopen_and_reindex() {
+        for overview in [None, Some("The release plan and its tradeoffs.".to_owned())] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let url = "https://news.ycombinator.com/item?id=50251344";
+            let mut event = web_summary(url, "2026-10-26T18:00:00Z");
+            event.overview = overview;
+            let dir = root.path().join("log/2026/10");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("2026-10-26.md"),
+                format!("{LOG_HEADER}\n{}", summary_marker(&event)),
+            )
+            .unwrap();
+            let first = index(&root, &cache);
+            first.reindex().unwrap();
+            let checkpoint = fs::read(cache.path().join("index-state.json")).unwrap();
+            // Absence produces the pre-overview v8 cache representation.
+            assert_eq!(
+                String::from_utf8_lossy(&checkpoint).contains("\"overview\""),
+                event.overview.is_some()
+            );
+            drop(first);
+            let reopened = index(&root, &cache);
+            assert_eq!(
+                reopened.summary_for(&event.artifact_id).unwrap(),
+                Some(expected_view(&event))
+            );
+            assert_eq!(
+                fs::read(cache.path().join("index-state.json")).unwrap(),
+                checkpoint,
+                "old checkpoints need no migration"
+            );
+            reopened.reindex().unwrap();
+            assert_eq!(
+                reopened.summary_for(&event.artifact_id).unwrap(),
+                Some(expected_view(&event))
+            );
+            assert_eq!(
+                reopened.recent(None, None, 32).unwrap().0[0].summary,
+                Some(expected_view(&event))
+            );
+        }
     }
 
     #[test]
@@ -7842,11 +7895,13 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         let url = "https://news.ycombinator.com/item?id=50251344";
         let at = "2026-10-16T08:00:00Z";
         let first = SummaryEvent {
+            overview: None,
             event_id: "ffffffff-ffff-4fff-bfff-ffffffffffff".into(),
             document_type: "first".into(),
             ..web_summary(url, at)
         };
         let second = SummaryEvent {
+            overview: None,
             event_id: "00000000-0000-4000-8000-000000000000".into(),
             document_type: "second".into(),
             ..web_summary(url, at)
@@ -8034,6 +8089,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         index.record_activity(&event, &[]).unwrap();
         index
             .record_summary(&SummaryEvent {
+                overview: None,
                 event_id: uuid::Uuid::new_v4().to_string(),
                 artifact_id: event.artifact_id.clone(),
                 artifact_type: event.artifact_type.clone(),
@@ -8076,6 +8132,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         let url = "https://news.ycombinator.com/item?id=50251344";
         let url_hash = sha256_hex(url.as_bytes());
         let event = SummaryEvent {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: crate::summary::web_page_artifact_id(url).unwrap(),
             artifact_type: "web.page".into(),
@@ -8138,6 +8195,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         at: &str,
     ) -> SummaryEvent {
         SummaryEvent {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: artifact_id.into(),
             artifact_type: artifact_type.into(),

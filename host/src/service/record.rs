@@ -264,6 +264,7 @@ impl RunStatusFile {
                 answer = result
                     .and_then(|value| SummaryAnswer::deserialize(value).ok())
                     .map(|answer| RunAnswer {
+                        overview: (!answer.overview.is_empty()).then_some(answer.overview),
                         document_type: answer.document_type,
                         category: answer.category,
                         importance: answer.importance.level,
@@ -1161,7 +1162,7 @@ mod tests {
         // A PR 2 result is not a summary answer, so it shows none.
         let old = serde_json::json!({"summary": "ok"});
         assert_eq!(status.view(0, Some(&old)).answer, None);
-        let answer = serde_json::json!({
+        let mut answer = serde_json::json!({
             "document_type": "report",
             "category": "news",
             "entities": {"technologies": [], "products": [], "people": [], "companies": []},
@@ -1173,11 +1174,22 @@ mod tests {
         assert_eq!(
             status.view(0, Some(&answer)).answer,
             Some(brauser_protocol::RunAnswer {
+                overview: None,
                 document_type: "report".into(),
                 category: "news".into(),
                 importance: brauser_protocol::ImportanceLevel::Low,
                 importance_reason: "r".into(),
             })
+        );
+        answer["overview"] = "A decision about the release.".into();
+        assert_eq!(
+            status
+                .view(0, Some(&answer))
+                .answer
+                .unwrap()
+                .overview
+                .as_deref(),
+            Some("A decision about the release.")
         );
     }
 

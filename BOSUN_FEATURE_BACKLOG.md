@@ -148,6 +148,7 @@ strip_params note-identity follow-up has shipped (see Shipped).
   intervening repository-only capture; never relax the freeze or infer a
   primary key from a canonical address.
 - [ ] `brwr-pgxz` **Explain blocked Re-learn reviews with actionable local evidence.** The brwr-eo7/brwr-r62 fixes refuse damaged owned markers and foreign-occupied record keys, but the report currently exposes issue codes for cross-origin conflicts and a CLI path/line for marker damage. Before the panel consumes these plans, show why approval is blocked and how… _(P3)_
+- [ ] `brwr-khqi` **Find saved summaries by their overview in Tasks history.** Summary overviews now reach RunAnswer and the Tasks detail view, but history search still matches only the page title and task instruction. Someone who remembers the decision or topic in a summary should be able to find the corresponding run without opening every detail. _(P3)_
 <!-- END GENERATED section=proposals -->
 
 ### Task bar follow-ups
@@ -178,11 +179,9 @@ queue".
 - [ ] `brwr-37ca` **Held PR #238: CI still red after 0 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/238 (branch cookie/cookie-overnight/cycle-2-8a8d351): checks green but still not merged after 2700s (is auto-merge on?). It stays open with the held label; nothing new is built on it. Fix it on its… _(P1; labels: human, pr-held)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
-- [ ] `brwr-tsh1` **Tasks page: keep the runs_may_exist hint while summary runs are retained.** Codex review of the one-summary-card PR (P2), extension/run-card.ts restoreRunCards and extension/tasks.ts open(). restoreRunCards clears runs_may_exist_v1 when no card is shown, even when list_runs returned retained summary runs that were only older than a day or dismissed.… _(P2; labels: tasks-page)_
 - [ ] `brwr-tp1` **adapter-templates: title captures consume token base64 padding.** Codex review of PRs #215/#219 (P2), adapter-templates/src/ctype.rs BaseType::in_alphabet and extension/adapter-templates.ts inTitleAlphabet. Path and query token captures now accept up to two trailing '=' (Miro board IDs such as uXjVM0uuBLo=), but title runs still stop at '='.… _(P2; labels: adapter-templates)_
 - [ ] `brwr-kpg` **(BUG) Process-group kill tests race under load.** service::child::tests::killed_slot_yields_closed and service::command_runner::tests::kill_ends_the_whole_process_group fail intermittently on origin/main (5be16d3) under machine load: run alone 8 times each at load average 19-31 on 2026-11-02, they failed 4/8 and 1/8. In the… _(P2)_
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2)_
-- [ ] `brwr-sm3` **Show the summary overview in the panel and Recent.** SUMMARY.md v2 adds a required one-sentence `overview` that the UI should show (John: mandatory UI fields are the overview, the type and more TBD). Today it reaches only the summary file. Carry it in the summary log event, SummaryView and RunAnswer (additive protocol change… _(P2)_
 - [ ] `brwr-sm5` **Tell the summary agent when Brauser's page capture was truncated.** Codex review of PR #236 (P2, SUMMARY.md read_scope): when content exceeds the extraction limits, extension `extractReadablePage` sets `truncated`, but `choosePage` and `readTab` (extension/summarize.ts) drop it, so page.md looks the same for a complete and a capped capture. An… _(P2)_
 - [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
@@ -228,6 +227,10 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Keep dismissed summary history reachable without a harness (2026-11-02).** Panel restore keeps the shared history hint for retained summary or task runs independently of visible cards, so Tasks can still list summaries after harness removal. Dismissed and older summaries stay hidden from panel cards without clearing retained history; empty-list timestamp protection remains. **Metrics:** Failing-before/passing-after panel-to-Tasks regression plus old-summary and fallback-task cases; 1,335 Rust-reported passes and all 40 extension files, full gate green (explicit sandbox skips retained).
+
+- **Category:** User Experience. **Show summary overviews before reopening a page (2026-11-02).** Panel saved-summary lines and Recent now show the validated one-sentence overview beside the document type; run results lead with it while retaining their classification. Optional event and wire fields preserve old wording and survive cache reopen/reindex. Host and extension deploy together; older hosts cannot replay the new event field. **Metrics:** 1,335 Rust-reported passes (+4 across this cycle), 40 extension test files, 4 new UI regressions across this cycle; complete required and README gates green with 92 explicit IPC and 36 browser sandbox skips.
+
 - **Category:** New Capability. **Preserve recorded incoming navigation in summaries (2026-11-02).** Summaries freeze up to five host-derived source/transition pairs and retain them through queueing, restart and Retry save. A bounded untrusted section gives the agent attributed context without source retrieval; the host renders an Incoming list with safe title links and last-recorded dates, omitted for absent/legacy context. Hostile text remains inert and Office/Miro retrieval keeps its boundaries. **Metrics:** 1,331 workspace Rust-reported outcomes (+10 tests; 92 IPC guard skips), 40 extension test files, both Clippy builds, 10,696 inert renderings; a11y 2 fixture passes and 36 explicit sandbox skips.
 
 - **Category:** Bug Fix. **Detect Re-learn key collisions across origins (2026-11-02).** All-origin log, owned-note/summary and verified implicit-container identities protect occupied sources and destinations, including HTTP/HTTPS keys sharing a host. Fresh approval refuses these conflicts; unrelated origins stay outside migration rows. All contracts used for occupancy bind the review revision. **Metrics:** 4 new regressions for this fix; 7 across the assigned pair, 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension files and both Clippy builds; 36 browser sandbox skips.
@@ -1809,3 +1812,33 @@ driver/operator resolves the held implementation. After a driver reset to
 main, check held-PR beads before trusting a closed prerequisite's narrative.
 With assigned work unavailable, brwr-sm1 was the selected ready P2 product
 capability. brwr-sm3 remains a valuable next UI task; reuse that existing bead.
+
+
+### Cycle observations (2026-11-02 — summary overviews and retained history)
+
+Started at f79dc0dc with a clean checkout and no quarantine report. The full
+required and README baseline gate passed before work. Assigned Re-learn
+items remain blocked on held PR #238 / brwr-37ca and brwr-dbp; their status
+and notes were left alone because nothing changed for those blockers.
+Selected ready P2 brwr-tsh1 and brwr-sm3: the former keeps retained summary
+history reachable after harness removal, and the latter exposes the existing
+validated overview on the actual surfaces where someone chooses a summary.
+
+Both now pass the full gate. Logs are under
+`target/overnight-health/summary-overview/`. The concrete history regression
+failed on the original extension and passes with the fix. Overview tests
+cover new and old event/wire shapes, cache checkpoints and reindex, ordinary
+and adapter pages, Recent, run results, hostile-looking text and Unicode.
+Deploy host and extension together. Downgrade after new summary events is
+unsupported; old hosts skip their unfamiliar field on replay. No cache
+version change is required. The active SQLite/index lane remains separate;
+the index change here only projects the optional summary field and tests it.
+
+Next useful work includes ready P2 brwr-sm2 (related open tabs) and brwr-sm5
+(explain truncated page capture), alongside the existing P2 bug queue. The
+new P3 brwr-khqi records a direct user-facing extension of this work: search
+Tasks history by summary overview. It is discovered-from brwr-sm3 and is not
+an assignment. Keep the human/platform acceptance gates open; this sandbox
+cannot prove Chrome or Unix-socket integration. Smoke steps and dialog count
+are unchanged. Publication and independent driver review remain outside this
+process; no git remote or live service was touched.
