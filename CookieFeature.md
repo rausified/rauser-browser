@@ -1276,3 +1276,30 @@ explicit browser skips; external driver/CI acceptance remains required. Sixteen
 new offline regressions and one new browser journey cover the cycle. The two
 feature beads are closed; the shared keyboard-entry helper's bead stays blocked
 for its explicit real-Chromium criterion.
+
+## 2026-11-02 — Run a task without attaching a browser page
+
+Brauser can now take a task such as “Organize my notes” from a new tab, browser
+settings or another non-web tab. On an ordinary web page, the new **Include this
+page** checkbox lets the user leave that page out while keeping their draft.
+The context line says “No page · Runs in your knowledge base”, so the instruction
+and its scope can be checked before Run. Ordinary page tasks keep their current
+behavior, including visible failures when a page cannot be read or changes
+while being extracted.
+
+This is an explicit task mode, rather than an empty page capture. The extension
+sends no page title, address or content; the host and service both check the
+shape, and the service creates no page.md. The agent still works in the
+configured knowledge-base folder under the existing task limits and file
+protections, but its prompt contains no page-reading exception or document
+retrieval section. History labels the task **No page** and leaves out Open page.
+**Reuse** carries that choice back to the bar without opening a tab or silently
+attaching the web page that happens to be active. Keyboard recall continues to
+reuse only instruction text under the currently visible scope.
+
+The complete local required and README gates pass, with eight new Rust/wire
+checks and seven extension regressions plus a new keyboard/axe journey. The
+Rust total is 1,382 reported outcomes (94 explicit IPC sandbox skips); all 44
+extension files pass. Real Chromium cannot launch here: two fixture checks pass
+and 40 browser cases explicitly skip, so the driver and platform CI still need
+to establish that acceptance before publication. No live service or API changed.

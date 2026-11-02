@@ -86,6 +86,25 @@ test("task Run, Tasks and Summarize activate without a mouse and expose failure 
   await audit(t, page, "panel/agent-start-error");
 });
 
+test("task page scope can be changed by keyboard without submitting or losing a draft", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.locator("#task-run:enabled").waitFor();
+  await activate(page, "#task-input", null);
+  await page.keyboard.type("Organize my notes");
+  await activate(page, "#task-use-page", "Space");
+  assert.equal(await page.locator("#task-use-page").isChecked(), false);
+  assert.equal(await page.locator("#task-input").inputValue(), "Organize my notes");
+  assert.equal(await page.locator("#task-context").textContent(), "No page · Runs in your knowledge base");
+  assert.equal(await page.evaluate(() => fixture.requests.some((request) => request.type === "start_task")), false);
+  await audit(t, page, "panel/task-without-page");
+  await activate(page, "#task-run");
+  await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_task"));
+  const request = await page.evaluate(() => fixture.requests.find((request) => request.type === "start_task"));
+  assert.equal(request.no_page, true);
+  for (const key of ["url", "title", "content", "capture_truncated"]) assert.equal(key in request, false, key);
+});
+
 test("task slash focus and history arrows preserve drafts and never submit implicitly", async (t) => {
   const full = "Review the complete instruction " + "x".repeat(350);
   const page = await browserFixture(t, "panel", "configured", { runs: [

@@ -1,7 +1,8 @@
 //! On-disk run records: one private directory per run under `<support>/runs/`.
 //!
 //! Each run directory (0700) holds `status.json`, `page.md`, `stream.txt`,
-//! `result.json` and `run.log`, every one of them 0600.
+//! `result.json` and `run.log`, every one of them 0600. Tasks without an
+//! attached page omit `page.md`.
 
 use std::fmt;
 use std::fmt::Write as _;
@@ -80,6 +81,33 @@ pub fn check_start_run(
     Ok(())
 }
 
+/// Internal marker only: never an attached/captured URL or a navigation target.
+pub const NO_PAGE_TASK: &str = "brauser:task-without-page";
+
+/// The exact host-built shape permitted to bypass normal page validation.
+pub fn check_no_page_task(
+    kind: RunKind,
+    url: &str,
+    title: &str,
+    content: &str,
+    selection: Option<&str>,
+    capture_truncated: bool,
+    key: &brauser_protocol::RecordKey,
+) -> Result<(), &'static str> {
+    if kind != RunKind::Task
+        || url != NO_PAGE_TASK
+        || !title.is_empty()
+        || !content.is_empty()
+        || selection.is_some()
+        || capture_truncated
+        || key.kind != brauser_protocol::RecordKeyKind::Url
+        || key.value != NO_PAGE_TASK
+    {
+        return Err("invalid task without a page");
+    }
+    Ok(())
+}
+
 /// The longest task-bar instruction, in characters, as the schema states.
 pub const MAX_TASK_INSTRUCTION_CHARS: usize = 4096;
 /// A task's instruction is cut to this many characters (plus "…") in
@@ -124,6 +152,9 @@ pub fn list_instruction(text: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskStatus {
+    /// Missing on legacy records, which always had a page.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_page: bool,
     pub instruction: String,
     pub protected: Vec<String>,
 }
@@ -302,6 +333,11 @@ impl RunStatusFile {
         }
         let summary = is_summary(&self.kind);
         RunView {
+            no_page: self
+                .task
+                .as_ref()
+                .filter(|_| self.kind == RunKind::Task)
+                .and_then(|task| task.no_page.then_some(true)),
             run_id: self.run_id.clone(),
             state: self.state,
             harness: self.harness,
@@ -441,7 +477,8 @@ impl RunStore {
         self.run_dir(id).join(PAGE_FILE)
     }
 
-    /// Create a new run directory holding `page.md` and `status.json`. An
+    /// Create a new run directory holding `status.json` and, unless this task
+    /// has no attached page, `page.md`. An
     /// existing directory for the same run is refused and left untouched.
     pub fn create(&self, status: &RunStatusFile, page_md: &str) -> Result<()> {
         let id = status.id()?;
@@ -450,10 +487,15 @@ impl RunStore {
             .mode(0o700)
             .create(&dir)
             .with_context(|| format!("creating run directory {}", dir.display()))?;
-        let result = self
-            .write_new(&dir.join(PAGE_FILE), page_md.as_bytes())
-            .context("writing page.md")
-            .and_then(|()| self.write_status(status));
+        let result = (|| {
+            if !(status.kind == RunKind::Task
+                && status.task.as_ref().is_some_and(|task| task.no_page))
+            {
+                self.write_new(&dir.join(PAGE_FILE), page_md.as_bytes())
+                    .context("writing page.md")?;
+            }
+            self.write_status(status)
+        })();
         if result.is_err() {
             let _ = fs::remove_dir_all(&dir);
         }
@@ -841,6 +883,79 @@ mod tests {
             kind: RunKind::Summary,
             task: None,
         }
+    }
+
+    #[test]
+    fn no_page_shape_refuses_any_page_or_other_run_kind() {
+        let key = brauser_protocol::RecordKey {
+            kind: brauser_protocol::RecordKeyKind::Url,
+            value: NO_PAGE_TASK.into(),
+        };
+        assert!(check_no_page_task(RunKind::Task, NO_PAGE_TASK, "", "", None, false, &key).is_ok());
+        for kind in [RunKind::Summary, RunKind::SiteDraft] {
+            assert!(check_no_page_task(kind, NO_PAGE_TASK, "", "", None, false, &key).is_err());
+        }
+        for (url, title, content, selection, truncated) in [
+            ("https://example.com/", "", "", None, false),
+            (NO_PAGE_TASK, "A page", "", None, false),
+            (NO_PAGE_TASK, "", "hostile page", None, false),
+            (NO_PAGE_TASK, "", "", Some(""), false),
+            (NO_PAGE_TASK, "", "", None, true),
+        ] {
+            assert!(
+                check_no_page_task(
+                    RunKind::Task,
+                    url,
+                    title,
+                    content,
+                    selection,
+                    truncated,
+                    &key
+                )
+                .is_err()
+            );
+        }
+        for key in [
+            brauser_protocol::RecordKey {
+                kind: brauser_protocol::RecordKeyKind::Artifact,
+                value: NO_PAGE_TASK.into(),
+            },
+            brauser_protocol::RecordKey {
+                kind: brauser_protocol::RecordKeyKind::Url,
+                value: "https://example.com/".into(),
+            },
+        ] {
+            assert!(
+                check_no_page_task(RunKind::Task, NO_PAGE_TASK, "", "", None, false, &key).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn no_page_scope_survives_storage_and_projects_only_for_tasks() {
+        let (_dir, store) = store();
+        let id = Uuid::new_v4();
+        let mut status = sample(id);
+        status.kind = RunKind::Task;
+        status.task = Some(TaskStatus {
+            no_page: true,
+            instruction: "Organize notes".into(),
+            protected: vec![],
+        });
+        store.create(&status, "ignored page").unwrap();
+        assert!(!store.page_path(id).exists());
+        let loaded = store.status(id).unwrap();
+        assert_eq!(loaded, status);
+        assert_eq!(loaded.view(0, None).no_page, Some(true));
+        status.kind = RunKind::Summary;
+        assert_eq!(status.view(0, None).no_page, None);
+        let mut legacy = serde_json::to_value(status.task.unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("no_page");
+        assert!(
+            !serde_json::from_value::<TaskStatus>(legacy)
+                .unwrap()
+                .no_page
+        );
     }
 
     #[test]
@@ -1300,6 +1415,7 @@ mod tests {
         let mut status = sample(Uuid::new_v4());
         status.kind = RunKind::Task;
         status.task = Some(TaskStatus {
+            no_page: false,
             instruction: instruction.into(),
             protected: vec!["/home/notes".into()],
         });

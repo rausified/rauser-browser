@@ -844,6 +844,13 @@ fn start_run(
             "kind is chosen by the host",
         );
     }
+    if value.no_page.is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "no_page is sent with start_task",
+        );
+    }
     if value.instruction.is_some() {
         return error(
             &value.request_id,
@@ -957,6 +964,7 @@ fn start_auto_summary(
         }
     }
     let request = brauser_protocol::StartRunRequest {
+        no_page: None,
         protocol_version: value.protocol_version,
         request_id: value.request_id.clone(),
         url: value.url,
@@ -1025,35 +1033,83 @@ fn start_task(
     config: &mut ConfigStore,
     service: Option<&ServiceLink>,
 ) -> Response {
+    let id = value.request_id.clone();
     if let Err(message) = crate::service::record::check_task_instruction(&value.instruction) {
         return error(&value.request_id, ErrorCode::InvalidRequest, message);
     }
-    let page = RunPage {
-        url: &value.url,
-        title: &value.title,
-        content: &value.content,
-        selection: value.selection.as_deref(),
-        requested_at: &value.requested_at,
+    let request = match task_request(value, config) {
+        Ok(request) => request,
+        Err((code, message)) => return error(&id, code, &message),
     };
-    let key = match page_record_key(page, config) {
-        Ok(key) => key,
-        Err((code, message)) => return error(&value.request_id, code, &message),
+    forward(&Request::StartRun(request), service)
+}
+
+/// Build the privileged service request without connecting or starting a harness.
+#[cfg(unix)]
+fn task_request(
+    value: brauser_protocol::StartTaskRequest,
+    config: &mut ConfigStore,
+) -> Result<brauser_protocol::StartRunRequest, Refusal> {
+    let no_page = value.no_page.unwrap_or(false);
+    let (url, title, content, selection, key) = if no_page {
+        if value.url.is_some()
+            || value.title.is_some()
+            || value.content.is_some()
+            || value.selection.is_some()
+            || value.capture_truncated.is_some()
+        {
+            return Err((
+                ErrorCode::InvalidRequest,
+                "a task without a page cannot carry page fields".into(),
+            ));
+        }
+        check_requested_at(&value.requested_at)?;
+        let marker = crate::service::record::NO_PAGE_TASK;
+        (
+            marker.into(),
+            String::new(),
+            String::new(),
+            None,
+            RecordKey {
+                kind: RecordKeyKind::Url,
+                value: marker.into(),
+            },
+        )
+    } else {
+        let (Some(url), Some(title), Some(content)) = (value.url, value.title, value.content)
+        else {
+            return Err((
+                ErrorCode::InvalidRequest,
+                "a page task needs url, title and content".into(),
+            ));
+        };
+        let key = page_record_key(
+            RunPage {
+                url: &url,
+                title: &title,
+                content: &content,
+                selection: value.selection.as_deref(),
+                requested_at: &value.requested_at,
+            },
+            config,
+        )?;
+        (url, title, content, value.selection, key)
     };
-    let request = brauser_protocol::StartRunRequest {
+    Ok(brauser_protocol::StartRunRequest {
+        no_page: no_page.then_some(true),
         protocol_version: value.protocol_version,
         request_id: value.request_id,
-        url: value.url,
-        title: value.title,
+        url,
+        title,
+        content,
+        selection,
         capture_truncated: value.capture_truncated,
-        content: value.content,
-        selection: value.selection,
         harness: value.harness,
         record_key: Some(key),
         requested_at: value.requested_at,
         kind: Some(brauser_protocol::RunKind::Task),
         instruction: Some(value.instruction),
-    };
-    forward(&Request::StartRun(request), service)
+    })
 }
 
 /// The page fields a summary or a task run starts from.
@@ -1086,7 +1142,12 @@ fn page_record_key(page: RunPage<'_>, config: &mut ConfigStore) -> Result<Record
 fn check_run_page(page: &RunPage<'_>) -> Result<(), Refusal> {
     crate::service::record::check_start_run(page.url, page.title, page.content, page.selection)
         .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
-    if crate::capture::parse_event_time(page.requested_at)
+    check_requested_at(page.requested_at)
+}
+
+#[cfg(unix)]
+fn check_requested_at(requested_at: &str) -> Result<(), Refusal> {
+    if crate::capture::parse_event_time(requested_at)
         .and_then(crate::capture::check_event_window)
         .is_err()
     {
@@ -9306,6 +9367,7 @@ title = "{title} - Jira"
 
         fn start_run(url: &str, record_key: Option<RecordKey>, requested_at: &str) -> Request {
             Request::StartRun(StartRunRequest {
+                no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "run-1".into(),
                 url: url.into(),
@@ -9883,12 +9945,13 @@ title = "{title} - Jira"
             requested_at: &str,
         ) -> StartTaskRequest {
             StartTaskRequest {
+                no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "task-1".into(),
-                url: url.into(),
-                title: "A page".into(),
+                url: Some(url.into()),
+                title: Some("A page".into()),
                 capture_truncated: None,
-                content: "Some text".into(),
+                content: Some("Some text".into()),
                 selection: Some("a selection".into()),
                 instruction: instruction.into(),
                 harness: Some(brauser_protocol::HarnessId::Claude),
@@ -9898,6 +9961,68 @@ title = "{title} - Jira"
 
         fn start_task(url: &str, instruction: &str, requested_at: &str) -> Request {
             Request::StartTask(start_task_request(url, instruction, requested_at))
+        }
+
+        fn no_page_request() -> StartTaskRequest {
+            StartTaskRequest {
+                no_page: Some(true),
+                url: None,
+                title: None,
+                content: None,
+                selection: None,
+                capture_truncated: None,
+                ..start_task_request("https://example.com/", TASK_INSTRUCTION, &now())
+            }
+        }
+
+        #[test]
+        fn task_without_a_page_is_built_by_the_host_and_carries_no_page_data() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let request = super::super::task_request(no_page_request(), &mut config).unwrap();
+            assert_eq!(request.kind, Some(brauser_protocol::RunKind::Task));
+            assert_eq!(request.no_page, Some(true));
+            assert_eq!(request.instruction.as_deref(), Some(TASK_INSTRUCTION));
+            assert_eq!(request.url, crate::service::record::NO_PAGE_TASK);
+            assert_eq!(request.record_key.as_ref().unwrap().value, request.url);
+            assert!(request.title.is_empty());
+            assert!(request.content.is_empty());
+            assert_eq!(request.selection, None);
+        }
+
+        #[test]
+        fn task_without_a_page_refuses_mixed_inputs_and_stale_requests_before_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            let changes: &[fn(&mut StartTaskRequest)] = &[
+                |r| r.url = Some("https://example.com/".into()),
+                |r| r.title = Some(String::new()),
+                |r| r.content = Some("page instruction".into()),
+                |r| r.selection = Some("selected".into()),
+                |r| r.capture_truncated = Some(false),
+                |r| r.requested_at = "2020-01-01T00:00:00Z".into(),
+                |r| r.instruction = String::new(),
+                |r| r.no_page = None,
+                |r| r.no_page = Some(false),
+            ];
+            for change in changes {
+                let mut request = no_page_request();
+                change(&mut request);
+                let response = call(&mut config, &link, Request::StartTask(request));
+                assert_eq!(
+                    refused(&response).0,
+                    ErrorCode::InvalidRequest,
+                    "{response:?}"
+                );
+            }
+            let mut request = super::super::task_request(no_page_request(), &mut config).unwrap();
+            request.kind = None;
+            request.instruction = None;
+            request.record_key = None;
+            let response = call(&mut config, &link, Request::StartRun(request));
+            assert_eq!(refused(&response).0, ErrorCode::InvalidRequest);
         }
 
         /// The host chooses the kind and the record key; the instruction and
@@ -9935,6 +10060,7 @@ title = "{title} - Jira"
             assert_eq!(
                 requests[1],
                 Request::StartRun(StartRunRequest {
+                    no_page: None,
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "task-1".into(),
                     url: url.into(),
@@ -10062,12 +10188,12 @@ title = "{title} - Jira"
                 Request::StartTask(value)
             };
             for request in [
-                oversized(&|value| value.title = "t".repeat(2049)),
+                oversized(&|value| value.title = Some("t".repeat(2049))),
                 oversized(&|value| {
-                    value.url = format!("https://example.com/{}", "a".repeat(8192));
+                    value.url = Some(format!("https://example.com/{}", "a".repeat(8192)));
                 }),
-                oversized(&|value| value.url = "https://example.com/\u{7}".into()),
-                oversized(&|value| value.content = "c".repeat(1024 * 1024 + 1)),
+                oversized(&|value| value.url = Some("https://example.com/\u{7}".into())),
+                oversized(&|value| value.content = Some("c".repeat(1024 * 1024 + 1))),
                 oversized(&|value| value.selection = Some("s".repeat(64 * 1024 + 1))),
             ] {
                 let response = call(&mut config, &link, request);
@@ -10083,12 +10209,13 @@ title = "{title} - Jira"
         /// and `key` set) serializes to `target` bytes.
         fn start_task_sized(url: &str, key: RecordKey, target: usize) -> StartTaskRequest {
             let mut value = start_task_request(url, TASK_INSTRUCTION, &now());
-            value.content = String::new();
+            value.content = Some(String::new());
             let forwarded = StartRunRequest {
+                no_page: None,
                 protocol_version: value.protocol_version,
                 request_id: value.request_id.clone(),
-                url: value.url.clone(),
-                title: value.title.clone(),
+                url: value.url.clone().unwrap(),
+                title: value.title.clone().unwrap(),
                 capture_truncated: None,
                 content: String::new(),
                 selection: value.selection.clone(),
@@ -10102,9 +10229,14 @@ title = "{title} - Jira"
                 .unwrap()
                 .len();
             let bytes = target - base;
-            value.content = format!("{}{}", "😀".repeat(bytes / 4), "x".repeat(bytes % 4));
+            value.content = Some(format!(
+                "{}{}",
+                "😀".repeat(bytes / 4),
+                "x".repeat(bytes % 4)
+            ));
             assert!(
-                value.content.chars().count() <= crate::service::record::MAX_CONTENT_CHARS,
+                value.content.as_ref().unwrap().chars().count()
+                    <= crate::service::record::MAX_CONTENT_CHARS,
                 "the content must pass check_start_run"
             );
             value
@@ -10236,8 +10368,8 @@ title = "{title} - Jira"
             let request = |id: &str, instruction: String| {
                 let mut value = start_task_request(&url, &instruction, &now());
                 value.request_id = id.into();
-                value.title = format!("Title {TITLE}");
-                value.content = format!("Content {CONTENT}");
+                value.title = Some(format!("Title {TITLE}"));
+                value.content = Some(format!("Content {CONTENT}"));
                 value.selection = Some(format!("Selected {CONTENT}"));
                 serde_json::to_vec(&Request::StartTask(value)).unwrap()
             };
@@ -10810,6 +10942,7 @@ id = "gdoc:{host}/{id}"
             crate::service::record::LIST_INSTRUCTION_CHARS + 1
         );
         let view = brauser_protocol::RunView {
+            no_page: None,
             run_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
             state: RunState::Succeeded,
             harness: HarnessId::Codex,

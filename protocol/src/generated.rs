@@ -850,6 +850,8 @@ pub enum AnswerAccess {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_page: Option<bool>,
     pub run_id: String,
     pub state: RunState,
     pub harness: HarnessId,
@@ -892,6 +894,8 @@ pub struct RunView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartRunRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_page: Option<bool>,
     pub protocol_version: u32,
     pub request_id: String,
     pub url: String,
@@ -1139,11 +1143,16 @@ pub struct AutoSummarySkippedResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartTaskRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_page: Option<bool>,
     pub protocol_version: u32,
     pub request_id: String,
-    pub url: String,
-    pub title: String,
-    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_truncated: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]

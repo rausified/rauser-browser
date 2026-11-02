@@ -580,7 +580,7 @@ export interface TaskDetailDeps extends RunProgressDeps {
   /** Puts the full instruction back in the panel's task bar and reopens the
    * run's own `url` (never a URL from agent text), so the instruction runs
    * against the page it was first given on. */
-  reuse(instruction: string, url: string): void;
+  reuse(instruction: string, url: string, noPage?: boolean): void;
   /** Opens the run's own `url` (never a URL from agent text). */
   openPage(url: string): void;
   /** The run was dismissed, and its id remembered. */
@@ -711,7 +711,7 @@ export class TaskDetail extends RunWatcher {
   private reuseButtons(): HTMLButtonElement[] {
     const instruction = this.fullInstruction;
     if (!isTerminal(this.view) || instruction === null) return [];
-    return [actionButton("Reuse", () => this.deps.reuse(instruction, this.view.url))];
+    return [actionButton("Reuse", () => this.deps.reuse(instruction, this.view.url, this.view.no_page === true))];
   }
 
   /** Whether this is a page summary's run rather than a task's. */
@@ -747,7 +747,7 @@ export class TaskDetail extends RunWatcher {
     const started = startedText(run);
     const elapsed = elapsedText(run, this.deps.now());
     this.metaLine.textContent = [
-      `on ${run.title || run.url}`, HARNESS_NAMES[run.harness], started === null ? "" : `started ${started}`,
+      run.no_page === true ? "No page" : `on ${run.title || run.url}`, HARNESS_NAMES[run.harness], started === null ? "" : `started ${started}`,
       stateText(run), elapsed,
     ].filter((part) => part !== "").join(" · ");
     this.problemLine.textContent = this.problem ?? "";
@@ -777,7 +777,7 @@ export class TaskDetail extends RunWatcher {
       ...this.cancelButtons(), ...this.openSummaryButtons(), ...(summary ? [] : this.copyReportButtons()),
       ...this.copyFailureButtons(),
       ...this.reuseButtons(), ...this.resumeButtons(),
-      actionButton("Open page", () => this.deps.openPage(this.view.url)),
+      ...(run.no_page === true ? [] : [actionButton("Open page", () => this.deps.openPage(this.view.url))]),
     ];
     if (isTerminal(run)) buttons.push(actionButton("Dismiss", () => this.dismiss()));
     for (const button of buttons) button.disabled = this.acting;

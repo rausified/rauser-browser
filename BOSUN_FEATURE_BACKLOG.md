@@ -156,6 +156,7 @@ strip_params note-identity follow-up has shipped (see Shipped).
 - [ ] `brwr-30xv` **Show summary reading scope beside saved summaries in Recent and This page.** Recent and This page show saved summaries with the overview and type but no reading scope. A reader choosing a remembered artifact should be able to spot a browser-viewer-only or partial summary before reopening it. Extend the saved-summary projection and shared summaryLine… _(P3)_
 - [ ] `brwr-p71k` **Page through selected-work choices beyond the response cap.** The selected-work preview (brwr-ppn) deliberately bounds a report to 200 artifact-day rows and 96 KiB serialized data. Shortening a week can expose omitted days, but a single busy day can still exceed those limits, leaving later entries unavailable for a concise update. Add… _(P3)_
 - [ ] `brwr-k6rg` **Show the original page while recalling an earlier task.** Keyboard recall intentionally reuses the stored instruction on the current page, while Tasks-page Reuse also reopens the original page. The context line names the current page but the recalled instruction has no visible source provenance; a person repeating a page-specific task… _(P3)_
+- [ ] `brwr-5xpb` **Name the task working folder in the context line.** Tasks without a page show No page and say they run in the knowledge base, but the bar does not name the configured folder. Someone with several note or project folders should know which one the agent will use before pressing Run. Show a compact, text-only folder cue from… _(P3)_
 <!-- END GENERATED section=proposals -->
 
 ### Task bar follow-ups
@@ -169,7 +170,6 @@ the plan work above.
 - [ ] `brwr-zla` **Tasks: choose the working folder per task.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). A task always runs in the knowledge base folder (task_setup in host/src/service/server.rs). Seam: an optional per-task cwd chosen by the host from a configured allowlist, never a path from the… _(P3; labels: task-bar)_
 - [ ] `brwr-bsx` **Tasks: save a task report as a page note.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). Brauser writes nothing for a task (TaskFinisher::save in host/src/service/finisher.rs is a no-op). Seam: a user action on a terminal task card that saves the report into the page note through… _(P3; labels: task-bar)_
 - [ ] `brwr-0yb` **Tasks: log a task event in the daily log.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decisions 8 and 26). TaskFinisher::save (host/src/service/finisher.rs) writes no daily-log event. Seam: an optional task event written by TaskFinisher::save, carrying only what decision 28 allows in records… _(P3; labels: task-bar)_
-- [ ] `brwr-qin` **Tasks without a page.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). start_task always carries the active tab's page (readTab in extension/summarize.ts, page.md in the run folder), so the bar is disabled on non-web tabs. Seam: make the page optional on… _(P3; labels: task-bar)_
 - [ ] `brwr-tm2` **Service queue: per-kind slot configuration.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 10). host/src/service/queue.rs hard-codes MAX_RUNNING = 2, MAX_RUNNING_TASKS = 1 and MAX_ACTIVE_TASKS = 4. Seam: a per-kind slot table in Scheduler (next_ready, submit) so each kind gets its own… _(P3; labels: task-bar)_
 <!-- END GENERATED section=task-bar -->
 
@@ -183,6 +183,7 @@ queue".
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
 - [ ] `brwr-37ca` **Held PR #238: CI still red after 0 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/238 (branch cookie/cookie-overnight/cycle-2-8a8d351): checks green but still not merged after 2700s (is auto-merge on?). It stays open with the held label; nothing new is built on it. Fix it on its… _(P1; labels: human, pr-held)_
 - [ ] `brwr-tcfc` **Held PR #249: CI still red after 1 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/249 (branch cookie/cookie-overnight/cycle-3-2912754): failed checks: Windows / Build and check (windows-latest); Build and check. It stays open with the held label; nothing new is built on it. Fix it on… _(P1; labels: human, pr-held)_
+- [ ] `brwr-6ede` **Held PR #255: CI still red after 1 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/255 (branch cookie/cookie-overnight/cycle-9-59c7612): failed checks: macOS / Build and check (macos-15); macOS fallback / Build and check (macos-15-intel); Build and check. It stays open with the held… _(P1; labels: human, pr-held)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2; blocked)_
@@ -191,7 +192,7 @@ queue".
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
 - [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
-- [ ] `brwr-ppn` **Curate a worklog before copying it.** Recent and the native worklog make captured work visible, but copying a day or week currently includes every recorded artifact. Let a person prepare a concise update by selecting the artifact-day rows they want to share and previewing the result, without altering measured… _(P3)_
+- [ ] `brwr-ppn` **Curate a worklog before copying it.** Recent and the native worklog make captured work visible, but copying a day or week currently includes every recorded artifact. Let a person prepare a concise update by selecting the artifact-day rows they want to share and previewing the result, without altering measured… _(P3; blocked)_
 - [ ] `brwr-dfd` **Container roll-up follow-ups (from PR #126 final review).** Deferred minors from the GitHub repo containers work (PR #126): (1) a rolled-up visit never advances a container row's latest_at (index.rs roll_up), a trap for future consumers; (2) a repos-only setup (no linked PR/issue rule) shows the latest sub-page title instead of… _(P3)_
 - [ ] `brwr-4ex` **Guard PR branches against concurrent pushes during review.** On PR #126, a second agent session pushed four fix commits to the branch and merged it while the opening session's codex exec review was still running. The merged head was never covered by the opener's final review. Options: a branch-claim convention (the Owner: line now exists… _(P3)_
 - [ ] `brwr-sm4` **User-editable summary instructions with a fixed core.** John is considering letting the user edit SUMMARY.md. Proposal: keep the compiled-in SUMMARY.md as the default; allow an optional user file in the home folder that replaces only a marked 'style' part (or adds guidance), while the safety rules (untrusted page, no file writes, no… _(P3)_
@@ -233,6 +234,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** New Capability. **Run tasks without attaching a browser page (2026-11-02).** The task bar works on non-web tabs and offers Include this page on web tabs. Host and service validate explicit scope, no page file or page-reading permission is created, and Tasks history/Reuse preserves the choice without navigation. Ordinary page extraction failures remain visible. **Metrics:** 8 new Rust/wire and 7 extension regressions; 1,382 Rust-reported outcomes (94 explicit IPC skips), all 44 extension files pass; 2 accessibility fixtures pass and 40 browser cases explicitly skip in sandbox.
+
 - **Category:** User Experience. **Reach the task bar from Chrome and the keyboard (2026-11-02).** Ctrl/Command+Shift+8 and Ask Brauser open and focus the task bar; panel-local slash focuses it outside editable controls. Drafts stay intact, fixed notices survive startup, and only Enter or Run starts a task. **Metrics:** 4 new offline gesture cases; all 44 extension files and required gate green, with 94 IPC and 39 browser sandbox skips.
 
 - **Category:** New Capability. **Recall full task instructions without losing a draft (2026-11-02).** ArrowUp and ArrowDown browse retained user instructions, preserve edits and restore the unsent draft. Lazy service reads use full records, keep cross-page chronology and discard late replacements after typing, Reuse, submission or teardown; no second persistent history is written. **Metrics:** 51 focused cases pass; 16 new offline cases across this cycle, all 44 extension files and required/README gates green with explicit sandbox skips.
@@ -1970,3 +1973,27 @@ open again rather than falsely shipped; brwr-p71k now has a real dependency on
 that implementation. brwr-sm2's existing unresolved window/tab-scope decisions
 remain blocked. A useful next task is recovery/integration of brwr-ppn, while
 brwr-k6rg proposes source-page context for recalled instructions before Run.
+
+### Cycle observations (2026-11-02 — tasks without a page)
+
+Clean baseline cd45b37e had no quarantine report and passed the required health
+gate before brwr-qin was claimed. The assigned Re-learn chain is still externally
+blocked and unchanged. No-page tasks are complete with explicit visible scope;
+page extraction failures never opt out implicitly, and Reuse preserves scope
+rather than silently attaching whichever tab is active. A read-only design
+challenge favored a checked internal marker over making every shared URL/key
+optional. Author diff review and one local Codex review found no actionable issue.
+
+All required and README gates pass: 1,382 Rust-reported outcomes include 94 IPC
+skips, all 44 extension files pass, and accessibility has two fixture passes and
+40 explicit browser sandbox skips. The added keyboard journey must still run in
+the driver's real Chromium gate. Logs are under target/overnight/no-page/. Smoke
+steps and native dialog counts are unchanged. The driver owns final external
+acceptance, independent review and publication; no live APIs/services were used.
+
+Queue audit identified why brwr-ppn's database closure was absent from this base:
+local merge 59c7612a contains its recovery but the driver holds it in PR #255
+(brwr-6ede) for macOS checks. It is now explicitly blocked on that hold, with its
+historical evidence retained; brwr-p71k cannot start until it integrates. Do not
+rebuild it on another branch. brwr-5xpb proposes naming the configured working
+folder beside task scope, to make the agent's destination visible before Run.
