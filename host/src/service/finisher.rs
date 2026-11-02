@@ -811,6 +811,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            capture_truncated: false,
             office_section: false,
             incoming: Vec::new(),
             kind: RunKind::Summary,

@@ -636,6 +636,7 @@ export interface StartRunRequest {
   url: string;
   title: string;
   content: string;
+  capture_truncated?: boolean;
   selection: string | null;
   harness: HarnessId | null;
   record_key: RecordKey | null;
@@ -808,6 +809,7 @@ export interface StartAutoSummaryRequest {
   url: string;
   title: string;
   content: string;
+  capture_truncated?: boolean;
   requested_at: string;
 }
 
@@ -827,6 +829,7 @@ export interface StartTaskRequest {
   url: string;
   title: string;
   content: string;
+  capture_truncated?: boolean;
   selection: string | null;
   instruction: string;
   harness: HarnessId | null;

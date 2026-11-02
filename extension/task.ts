@@ -131,6 +131,7 @@ export async function startTask(
     url: page.url,
     title: page.title,
     content: page.content,
+    ...(page.truncated ? { capture_truncated: true } : {}),
     selection: page.selection,
     instruction: cleaned,
     harness: null,

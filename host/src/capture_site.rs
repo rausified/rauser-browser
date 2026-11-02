@@ -933,6 +933,7 @@ pub fn start_site_draft(
         request_id: value.request_id.clone(),
         url: value.origin.clone(),
         title,
+        capture_truncated: None,
         content,
         selection: None,
         harness: value.harness,
