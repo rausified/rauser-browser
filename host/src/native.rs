@@ -7531,10 +7531,13 @@ id = "work:{host}/{id}"
             let second_bytes = std::fs::read(&second_path).unwrap();
             let cache = config.cache_dir().unwrap();
             let fault = if publication_failure {
-                std::fs::remove_file(cache.join("index-state.json")).unwrap();
+                // A directory planted at index.db while no host has it
+                // open; the next host's first open meets it.
+                drop(config);
                 let fault = cache.join("index.db");
                 std::fs::remove_file(&fault).unwrap();
                 std::fs::create_dir(&fault).unwrap();
+                config = loaded(&path);
                 fault
             } else {
                 let fault = root.join("logs/oversized.md");
@@ -7576,7 +7579,25 @@ id = "work:{host}/{id}"
             );
             assert_eq!(std::fs::read(first_path).unwrap(), first_bytes);
             assert_eq!(std::fs::read(second_path).unwrap(), second_bytes);
+            // The fault is real: history reads unavailable.
+            let Response::Error(unavailable) = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recent-unavailable".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            ) else {
+                panic!("history must read unavailable")
+            };
+            assert!(
+                unavailable.message.contains("history is unavailable"),
+                "{unavailable:?}"
+            );
             if publication_failure {
+                assert_eq!(std::fs::read_dir(&fault).unwrap().count(), 0);
                 std::fs::remove_dir(fault).unwrap();
             } else {
                 std::fs::remove_file(fault).unwrap();
@@ -7588,6 +7609,21 @@ id = "work:{host}/{id}"
             assert!(
                 matches!(note_save(&mut config, canonical, "Keep copy-out", &first_saved.revision, first.key),
                 Response::NoteConflict(NoteConflict { reason, .. }) if reason == "key_changed")
+            );
+            // With the fault gone, history reads again.
+            let recovered = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recent-recovered".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            );
+            assert!(
+                matches!(recovered, Response::ArtifactListResult(_)),
+                "{recovered:?}"
             );
         }
     }
@@ -7656,15 +7692,58 @@ id = "work:{host}/{id}"
                 };
                 deliver(&mut config, 1);
                 let cache = config.cache_dir().unwrap();
+                let db = cache.join("index.db");
                 let state_path = cache.join("index-state.json");
                 let old_state = std::fs::read(&state_path).unwrap();
-                let old_db = std::fs::read(cache.join("index.db")).unwrap();
+                let old_watermark = sql_rows(&db, "select * from brauser_logs");
                 deliver(&mut config, 2);
-                // The append is durable, but both published caches are from
-                // before it (interruption between append and index update).
-                std::fs::write(&state_path, &old_state).unwrap();
-                std::fs::write(cache.join("index.db"), &old_db).unwrap();
                 drop(config);
+                // The append is durable, but its index update never
+                // committed (an interruption between append and index
+                // update): take delivery 2's rows back out of index.db and
+                // put the log watermark back where delivery 1 left it. The
+                // JSON cache (until plan T15) is restored to match.
+                std::fs::write(&state_path, &old_state).unwrap();
+                {
+                    let conn = rusqlite::Connection::open(&db).unwrap();
+                    let lost = "work:work.example/2";
+                    conn.execute(
+                        "delete from brauser_events where event_id = ?1",
+                        ["00000000-0000-4000-8000-000000000002"],
+                    )
+                    .unwrap();
+                    for table in [
+                        "artifacts",
+                        "visits",
+                        "url_provenance",
+                        "dirty_artifacts",
+                        "brauser_artifact_days",
+                        "brauser_group_state",
+                    ] {
+                        conn.execute(
+                            &format!("delete from {table} where artifact_id = ?1"),
+                            [lost],
+                        )
+                        .unwrap();
+                    }
+                    conn.execute(
+                        "delete from edges where ?1 in (source_artifact_id, target_artifact_id)",
+                        [lost],
+                    )
+                    .unwrap();
+                    conn.execute("delete from brauser_logs", []).unwrap();
+                    for row in &old_watermark {
+                        conn.execute(
+                            "insert into brauser_logs values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                            rusqlite::params_from_iter(row),
+                        )
+                        .unwrap();
+                    }
+                }
+                assert_eq!(
+                    sql_rows(&db, "select count(*) from brauser_events"),
+                    [[SqlValue::Integer(1)]]
+                );
                 let mut config = loaded(&path);
                 if !query_first {
                     deliver(&mut config, 3);
@@ -7714,12 +7793,16 @@ id = "work:{host}/{id}"
                 };
                 assert_eq!(log.artifact_count as usize, expected);
                 assert!(log.text.contains("Issue 2"));
-                // Catch-up must persist its checkpoint and repair the public
-                // SQLite snapshot too, without waiting for another delivery.
-                assert_eq!(
-                    sql_rows(&cache.join("index.db"), "select count(*) from visits"),
-                    [[SqlValue::Integer(expected as i64)]]
-                );
+                // Catch-up must persist its checkpoint and repair index.db
+                // too, without waiting for another delivery or a replay.
+                for table in ["brauser_events", "visits", "artifacts"] {
+                    assert_eq!(
+                        sql_rows(&db, &format!("select count(*) from {table}")),
+                        [[SqlValue::Integer(expected as i64)]],
+                        "{table}, query_first={query_first}, batched={batched}"
+                    );
+                }
+                assert_ne!(sql_rows(&db, "select * from brauser_logs"), old_watermark);
             }
         }
     }
@@ -7773,6 +7856,15 @@ id = "work:{host}/{id}"
                 std::fs::create_dir(&fault).unwrap();
                 fault
             };
+            let listing = |cache: &std::path::Path| {
+                let mut names = std::fs::read_dir(cache)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect::<Vec<_>>();
+                names.sort();
+                names
+            };
+            let cache_before = listing(&cache);
             event.event_id = uuid::Uuid::new_v4().to_string();
             event.artifact_id = "work:work.example/2".into();
             event.url = "https://work.example/issues/2".into();
@@ -7821,6 +7913,16 @@ id = "work:{host}/{id}"
                 };
                 assert_eq!(reply.code, ErrorCode::Internal);
                 assert!(reply.message.contains("history is unavailable"));
+            }
+            // No side effect: the directory is untouched, and nothing (no
+            // SQLite sidecar, no published cache) appeared beside it.
+            assert_eq!(listing(&cache), cache_before);
+            if !oversized_log {
+                assert!(fault.is_dir());
+                assert_eq!(std::fs::read_dir(&fault).unwrap().count(), 0);
+                for sidecar in ["index.db-wal", "index.db-shm", "index.db-journal"] {
+                    assert!(!cache.join(sidecar).exists(), "{sidecar}");
+                }
             }
             if oversized_log {
                 std::fs::remove_file(fault).unwrap();
