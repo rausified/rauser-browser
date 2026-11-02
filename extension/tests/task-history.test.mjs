@@ -259,7 +259,7 @@ test("tasksPageUrl adds #run= only when a run id is given", () => {
   assert.equal(tasksPageUrl(uuid, getURL), `chrome-extension://abc/tasks.html#run=${uuid}`);
 });
 
-test("supersededSummaries marks the runs a newer succeeded run of the same file replaced", () => {
+test("supersededSummaries marks every writer of a file but the last to finish", () => {
   const summary = (n, overrides = {}) => taskRun(n, {
     kind: "summary", instruction: undefined, summary_path: "summaries/a.summary.md", ...overrides,
   });
@@ -281,4 +281,10 @@ test("supersededSummaries marks the runs a newer succeeded run of the same file 
   const newerWrite = summary(-2, { state: "failed", error_kind: "save_failed" });
   assert.ok(supersededSummaries([newest, newerWrite]).has(newest.run_id));
   assert.ok(!supersededSummaries([newest, newerWrite]).has(newerWrite.run_id));
+  // Overlapping runs (a record key changed mid-run): the older run finished
+  // last, so its answer is the file's and the newer run is superseded.
+  const at = (seconds) => new Date(BASE + seconds * 1000).toISOString();
+  const startedFirst = summary(20, { finished_at: at(90) });
+  const startedSecond = summary(10, { finished_at: at(60) });
+  assert.deepEqual([...supersededSummaries([startedSecond, startedFirst])], [startedSecond.run_id]);
 });
