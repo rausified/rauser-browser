@@ -42,6 +42,16 @@ To rehearse artifact identity changes offline, use
 It shows canonical groups and pending suggestions from supplied adapter
 documents and URL evidence, without opening your settings or vault. See the
 [JSON example and limits](docs/superpowers/plans/2026-10-28-capture-relearning.md#offline-command).
+
+To review the effect of a replacement policy on real recorded evidence, use
+`target/debug/brauser adapters relearn-plan < request.json`. It reports identity
+changes and existing notes/summaries with revision hashes, and applies nothing.
+An optional `--config /absolute/path/to/config.toml` selects an isolated config.
+See the [impact-plan interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#host-derived-impact-plan).
+`adapters relearn-record` can durably record a freshly revalidated approval or
+rejection, and `adapters relearn-journal` inspects and recovers those decisions.
+Both accept the same optional `--config` path. See the
+[decision journal interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#durable-decision-journal).
 Re-learn in the panel and applying migrations remain under development.
 
 ### Try the M1 development build

@@ -718,6 +718,26 @@ setup hint; on Windows the run messages answer `service_unavailable`.
 The service worker delivers buffered events and renews its policy lease itself, from `alarms` and at browser startup, so capture does not depend on opening the panel (DESIGN.md §3.1); the panel's Send pending visits asks the worker to sync now. The rest of the agent integration, search index, signed installers, Chrome Web Store listing, and public release do not exist yet.
 
 
+Capture re-learning impact review (`brwr-hq8`, 2026-10-28) is available as
+`brauser adapters relearn-plan` (`host/src/relearn.rs`), with an optional
+absolute `--config` path for isolated review. The host rescans authoritative
+logs without using or writing the cache, inventories owned-path notes and
+summaries, and reports splits, merges, unresolved evidence and simultaneous
+key reuse. It binds config/contracts/evidence/proposal revisions, preserves
+URL notes as separate copies and includes container roll-ups. Only lock files
+are created; the ID freeze and all note/recovery behavior remain unchanged.
+The interface and bounds are in
+`docs/superpowers/plans/2026-10-28-capture-relearning.md`. `brwr-wvi` adds
+`adapters relearn-record` and `adapters relearn-journal`: explicit host-only
+recording/inspection of revision-bound decisions in `rekey/decisions.jsonl`
+beside config.toml. Recovery verifies exact prepared append bytes and the prior
+prefix; approved/rejected reports retain the full mapping and never enter alias
+replay. Receipts always say `applied: false`. `brwr-dbp` owns config/file/index
+integration next; parent `brwr-6x2` still owns durable apply and panel Re-learn.
+The ID freeze remains enforced. (Moved here from Cookie's AGENTS.md as-built
+note when cycles 26–28 were integrated on 2026-11-01; John approved the
+Re-learn direction that day, as relayed by the Brauser coordinator in PR #203.)
+
 ## Development tooling — history
 
 2026-11-01 (`brwr-h7p`, `brwr-h7q`): PR hygiene runs Dev tools on edited

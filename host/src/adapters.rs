@@ -47,8 +47,34 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
             }
             aliases::preview_lines(io::stdin().lock(), io::stdout().lock())
         }
+        Some(command @ ("relearn-plan" | "relearn-record" | "relearn-journal")) => {
+            let config_path = match args.next().as_deref() {
+                None => None,
+                Some("--config") => {
+                    let path = std::path::PathBuf::from(
+                        args.next().context("--config needs an absolute path")?,
+                    );
+                    anyhow::ensure!(path.is_absolute(), "--config needs an absolute path");
+                    Some(path)
+                }
+                Some(_) => bail!("adapters {command} accepts only --config /absolute/path"),
+            };
+            anyhow::ensure!(args.next().is_none(), "unexpected {command} arguments");
+            if command == "relearn-plan" {
+                crate::relearn::run(config_path, io::stdin().lock(), io::stdout().lock())
+            } else {
+                crate::relearn::run_journal(
+                    config_path,
+                    command == "relearn-record",
+                    io::stdin().lock(),
+                    io::stdout().lock(),
+                )
+            }
+        }
         Some(other) => bail!("unknown adapters command: {other}"),
-        None => bail!("usage: adapters <eval|aliases-preview> < requests.jsonl"),
+        None => bail!(
+            "usage: adapters <eval|aliases-preview|relearn-plan|relearn-record|relearn-journal>"
+        ),
     }
 }
 
