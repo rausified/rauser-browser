@@ -2,7 +2,10 @@ import type { AdapterObject } from "./adapter-review.js";
 import { canonicalCapture, compileDocument } from "./adapter-templates.js";
 import { canonicalJson } from "./capture-site-handoff.js";
 
-export type StarterKind = "jira" | "sharepoint" | "github" | "miro";
+/** The starter family an origin belongs to. One family can offer several
+ * starters: an Atlassian Cloud site offers Jira issues and Confluence pages,
+ * GitHub offers pull requests, issues and repositories. */
+export type StarterKind = "atlassian" | "sharepoint" | "github" | "miro";
 
 export interface StarterOffer {
   key: string;
@@ -35,7 +38,7 @@ function secureHostname(origin: string): string | null {
 export function starterKind(origin: string): StarterKind | null {
   const host = secureHostname(origin);
   if (!host) return null;
-  if (host.endsWith(".atlassian.net") && host !== "atlassian.net") return "jira";
+  if (host.endsWith(".atlassian.net") && host !== "atlassian.net") return "atlassian";
   if (host.endsWith(".sharepoint.com") && host !== "sharepoint.com") return "sharepoint";
   if (origin === GITHUB_ORIGIN) return "github";
   if (origin === MIRO_ORIGIN) return "miro";
@@ -108,6 +111,29 @@ function jira(origin: string): AdapterObject {
     id: "jira:{host}/{key}",
     title: "[{key:jira_key}] {title} - Jira",
     alias: { from: "tab_title", capture: "key" },
+    refs: [{ type: "jira.issue", find: "jira_key" }],
+  };
+}
+
+/** Confluence Cloud pages (docs/adapters/confluence.page.md). The ID is the
+ * numeric page ID alone, never the space key, so a page moved to another
+ * space keeps its identity. The ID template is type-qualified so later
+ * Confluence starters (blog posts, whiteboards, databases) each get their
+ * own namespace. A page's version history counts toward the page, in view
+ * mode; the first title entry strips that view's "Version history - "
+ * prefix. */
+function confluencePage(origin: string): AdapterObject {
+  return {
+    type: "confluence.page",
+    origin,
+    match: [
+      { path: "/wiki/spaces/{_}/pages/{id:int}/{*}" },
+      { path: "/wiki/spaces/{_}/pages/edit-v2/{id:int}", mode: "edit" },
+      { path: "/wiki/spaces/{_}/history/{id:int}/{*}", mode: "view" },
+      { path: "/wiki/pages/viewpage.action", query: { pageId: "{id:int}" } },
+    ],
+    id: "confluence.page:{host}/{id}",
+    title: ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"],
     refs: [{ type: "jira.issue", find: "jira_key" }],
   };
 }
@@ -187,17 +213,31 @@ function githubRepository(organizations: string[]): AdapterObject {
  * adapter until `githubOrganizations` names at least one organization. */
 export function starterOffers(origin: string, githubOrganizations: string[]): StarterOffer[] {
   const kind = starterKind(origin);
-  if (kind === "jira") {
-    return [{
-      key: `jira:${origin}`,
-      kind,
-      artifact_type: "jira.issue",
-      label: "Jira issues",
-      description: "Issue pages and board modals become one artifact per Jira key.",
-      origin,
-      needs_scope: false,
-      adapter: jira(origin),
-    }];
+  if (kind === "atlassian") {
+    // Jira and Confluence share the site's origin; their routes (/browse and
+    // /jira against /wiki) never overlap, so either can be chosen alone.
+    return [
+      {
+        key: `jira:${origin}`,
+        kind,
+        artifact_type: "jira.issue",
+        label: "Jira issues",
+        description: "Issue pages and board modals become one artifact per Jira key.",
+        origin,
+        needs_scope: false,
+        adapter: jira(origin),
+      },
+      {
+        key: `confluence.page:${origin}`,
+        kind,
+        artifact_type: "confluence.page",
+        label: "Confluence pages",
+        description: "Each page becomes one artifact by its page ID, whether you view it, edit it, or open its version history.",
+        origin,
+        needs_scope: false,
+        adapter: confluencePage(origin),
+      },
+    ];
   }
   if (kind === "sharepoint") {
     return [{

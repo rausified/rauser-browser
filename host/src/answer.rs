@@ -115,6 +115,18 @@ impl ReadScope {
     }
 }
 
+/// Whether the agent could see the artifact, or met a wall instead. Anything
+/// but `Ok` means the run saves no summary (`finisher::SummaryFinisher`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Access {
+    #[default]
+    Ok,
+    SignIn,
+    Denied,
+    NotFound,
+}
+
 /// The validated answer. The fields added with the second `SUMMARY.md`
 /// shape default when missing, so a run record an older service wrote
 /// still deserializes; `parse_answer` requires them of a new answer.
@@ -137,6 +149,8 @@ pub struct SummaryAnswer {
     pub references: Vec<Reference>,
     #[serde(default)]
     pub read_scope: Option<ReadScope>,
+    #[serde(default)]
+    pub access: Access,
     pub importance: Importance,
     pub assessment: String,
     pub related_notes: Vec<String>,
@@ -189,6 +203,7 @@ pub fn parse_answer(final_text: &str, knowledge_base: &Path) -> Result<SummaryAn
     let metadata = metadata(object_field(&object, "metadata", "metadata")?)?;
     let references = references(&object)?;
     let read_scope = read_scope(&object)?;
+    let access = access(&object)?;
     let importance = object_field(&object, "importance", "importance")?;
     let importance = Importance {
         level: level(importance)?,
@@ -205,6 +220,7 @@ pub fn parse_answer(final_text: &str, knowledge_base: &Path) -> Result<SummaryAn
         metadata,
         references,
         read_scope: Some(read_scope),
+        access,
         importance,
         assessment: text_field(&object, "assessment", "assessment", MAX_ASSESSMENT_CHARS)?,
         related_notes: related_notes(&object, knowledge_base)?,
@@ -223,7 +239,7 @@ pub fn answer_schema() -> Value {
         "required": [
             "overview", "description", "key_points", "document_type",
             "category", "keywords", "entities", "metadata", "references",
-            "read_scope", "importance", "assessment", "related_notes"
+            "read_scope", "access", "importance", "assessment", "related_notes"
         ],
         "properties": {
             "overview": string(),
@@ -266,6 +282,7 @@ pub fn answer_schema() -> Value {
                 }
             },
             "read_scope": { "type": "string", "enum": ["whole", "partial", "page_only"] },
+            "access": { "type": "string", "enum": ["ok", "sign_in", "denied", "not_found"] },
             "importance": {
                 "type": "object",
                 "additionalProperties": false,
@@ -549,6 +566,20 @@ fn references(object: &Map<String, Value>) -> Result<Vec<Reference>, String> {
     Ok(kept)
 }
 
+fn access(object: &Map<String, Value>) -> Result<Access, String> {
+    let name = "access";
+    match string_field(object, name, name)?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "ok" => Ok(Access::Ok),
+        "sign_in" => Ok(Access::SignIn),
+        "denied" => Ok(Access::Denied),
+        "not_found" => Ok(Access::NotFound),
+        _ => Err(format!("{name} must be ok, sign_in, denied, or not_found")),
+    }
+}
+
 fn read_scope(object: &Map<String, Value>) -> Result<ReadScope, String> {
     let name = "read_scope";
     match string_field(object, name, name)?
@@ -600,7 +631,7 @@ fn related_notes(
 
 /// A valid one-line answer for tests that run a fake harness.
 #[cfg(test)]
-pub(crate) const TEST_ANSWER: &str = r#"{"overview":"A page about a thing.","description":"A page.","key_points":["It says one thing."],"document_type":"report","category":"news","keywords":["thing"],"entities":{"technologies":[],"products":[],"people":[],"companies":[]},"metadata":{"authors":[],"owner":"","status":"","created":"","updated":"","version":""},"references":[],"read_scope":"whole","importance":{"level":"high","reason":"It matters."},"assessment":"It adds to the notes.","related_notes":[]}"#;
+pub(crate) const TEST_ANSWER: &str = r#"{"overview":"A page about a thing.","description":"A page.","key_points":["It says one thing."],"document_type":"report","category":"news","keywords":["thing"],"entities":{"technologies":[],"products":[],"people":[],"companies":[]},"metadata":{"authors":[],"owner":"","status":"","created":"","updated":"","version":""},"references":[],"read_scope":"whole","access":"ok","importance":{"level":"high","reason":"It matters."},"assessment":"It adds to the notes.","related_notes":[]}"#;
 
 #[cfg(test)]
 mod tests {
@@ -631,6 +662,7 @@ mod tests {
             },
             "references": [{ "title": "Answer schema", "url": "https://example.com/schema" }],
             "read_scope": "whole",
+            "access": "ok",
             "entities": {
                 "technologies": ["Rust", "JSON"],
                 "products": ["Brauser"],
@@ -891,6 +923,54 @@ mod tests {
     }
 
     #[test]
+    fn access_is_required_and_matched_case_insensitively() {
+        let (_dir, kb) = knowledge_base();
+        let mut value = answer();
+        for (wire, access) in [
+            ("ok", Access::Ok),
+            ("SIGN_IN", Access::SignIn),
+            ("denied", Access::Denied),
+            ("Not_Found", Access::NotFound),
+        ] {
+            value["access"] = json!(wire);
+            assert_eq!(parse(&value, &kb).unwrap().access, access);
+        }
+        value["access"] = json!("blocked");
+        assert_eq!(
+            parse(&value, &kb).unwrap_err(),
+            "access must be ok, sign_in, denied, or not_found"
+        );
+        value.as_object_mut().unwrap().remove("access");
+        assert!(parse(&value, &kb).unwrap_err().contains("access"));
+        let schema = answer_schema();
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("access"))
+        );
+        assert_eq!(
+            schema["properties"]["access"]["enum"],
+            json!(["ok", "sign_in", "denied", "not_found"])
+        );
+    }
+
+    #[test]
+    fn an_old_record_reads_access_as_ok() {
+        let old = json!({
+            "document_type": "report",
+            "category": "news",
+            "entities": {"technologies": [], "products": [], "people": [], "companies": []},
+            "description": "d",
+            "importance": {"level": "low", "reason": "r"},
+            "assessment": "a",
+            "related_notes": []
+        });
+        let answer: SummaryAnswer = serde_json::from_value(old).unwrap();
+        assert_eq!(answer.access, Access::Ok);
+    }
+
+    #[test]
     fn a_record_from_before_the_new_fields_still_deserializes() {
         let old = json!({
             "document_type": "report",
@@ -967,6 +1047,7 @@ mod tests {
                 "metadata",
                 "references",
                 "read_scope",
+                "access",
                 "importance",
                 "assessment",
                 "related_notes"

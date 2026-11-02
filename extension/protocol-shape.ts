@@ -163,11 +163,23 @@ function isSiteDraftAnswer(value: unknown): boolean {
 
 const IMPORTANCE_LEVELS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 
-/** Exactly the v6 `RunAnswer` keys; the host bounds the strings. */
+const ANSWER_ACCESS: ReadonlySet<string> = new Set(["ok", "sign_in", "denied", "not_found"]);
+
+function isOverview(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0 && Array.from(value).length <= 300;
+}
+
+/** The `RunAnswer` keys: `overview` is optional for results retained from
+ * before SUMMARY.md v2, and the host sends `access` only for a wall the agent
+ * met (an older service never sends it). */
 function isRunAnswer(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const answer = value as Record<string, unknown>;
-  return Object.keys(answer).length === 4 &&
+  const hasOverview = Object.hasOwn(answer, "overview");
+  const hasAccess = Object.hasOwn(answer, "access");
+  return Object.keys(answer).length === 4 + Number(hasOverview) + Number(hasAccess) &&
+    (!hasOverview || isOverview(answer.overview)) &&
+    (!hasAccess || (typeof answer.access === "string" && ANSWER_ACCESS.has(answer.access))) &&
     typeof answer.document_type === "string" && typeof answer.category === "string" &&
     typeof answer.importance === "string" && IMPORTANCE_LEVELS.has(answer.importance) &&
     typeof answer.importance_reason === "string";
@@ -251,7 +263,7 @@ function isArtifact(value: unknown): boolean {
     artifact.incoming_trails.every(isIncomingTrail);
 }
 
-/** Exactly the v6 `SummaryView` keys; the host bounds the strings. */
+/** The required summary keys; older events carry no overview. */
 const SUMMARY_VIEW_KEYS: readonly string[] = [
   "summarized_at", "document_type", "category", "importance", "summary_path", "harness",
 ];
@@ -259,7 +271,9 @@ const SUMMARY_VIEW_KEYS: readonly string[] = [
 export function isSummaryView(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const summary = value as Record<string, unknown>;
-  return hasExactKeys(summary, SUMMARY_VIEW_KEYS) &&
+  const hasOverview = Object.hasOwn(summary, "overview");
+  return hasExactKeys(summary, hasOverview ? [...SUMMARY_VIEW_KEYS, "overview"] : SUMMARY_VIEW_KEYS) &&
+    (!hasOverview || isOverview(summary.overview)) &&
     typeof summary.summarized_at === "string" && typeof summary.document_type === "string" &&
     typeof summary.category === "string" &&
     typeof summary.importance === "string" && IMPORTANCE_LEVELS.has(summary.importance) &&
@@ -283,8 +297,18 @@ function isArtifactListItem(value: unknown): boolean {
 /** Exactly the v6 `ConfigSnapshot` keys: a retired key such as
  * `agent_denylist` or `sites` means the host speaks another shape. */
 const CONFIG_KEYS: readonly string[] = [
-  "storage", "capture_enabled", "strip_params", "agent", "summary_vocabulary", "adapters",
+  "storage", "capture_enabled", "strip_params", "agent", "summary_vocabulary", "auto_summary",
+  "adapters",
 ];
+
+/** `AutoSummaryConfig`: exactly its two keys, a dwell of 0–3600 whole seconds. */
+function isAutoSummary(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const auto = value as Record<string, unknown>;
+  return Object.keys(auto).length === 2 && typeof auto.enabled === "boolean" &&
+    Number.isInteger(auto.dwell_secs) && (auto.dwell_secs as number) >= 0 &&
+    (auto.dwell_secs as number) <= 3600;
+}
 
 /** The host validates entry lengths and duplicates; this checks the shape. */
 function isSummaryVocabulary(value: unknown): boolean {
@@ -310,7 +334,7 @@ export function isConfig(value: unknown): boolean {
   return typeof config.capture_enabled === "boolean" &&
     isStringArray(config.strip_params) &&
     isAgent(config.agent) && isSummaryVocabulary(config.summary_vocabulary) &&
-    isAdapterDocument(config.adapters);
+    isAutoSummary(config.auto_summary) && isAdapterDocument(config.adapters);
 }
 
 // --- Capture Site drafting (additive v7) ---------------------------------
@@ -502,6 +526,10 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         value.harnesses.every(isHarnessFound);
     case "run_started":
       return isRunView(value.run) && typeof value.existing === "boolean";
+    case "auto_summary_skipped":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "reason"]) &&
+        typeof value.reason === "string" &&
+        ["disabled", "not_set_up", "not_an_artifact", "already_summarized"].includes(value.reason);
     case "run_fetched":
       return isRunView(value.run) && typeof value.stream_text === "string" &&
         isUnsignedInteger(value.next_offset) && typeof value.more === "boolean";

@@ -13,6 +13,36 @@
       "shape": "/jira/software/projects/{slug}/boards/{num}?{param}={key}"
     },
     {
+      "note": "Confluence page (docs/adapters/confluence.page.md)",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan",
+      "shape": "/wiki/spaces/{slug}/pages/{num}/{slug}"
+    },
+    {
+      "note": "Confluence page without a slug (docs/adapters/confluence.page.md)",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000002",
+      "shape": "/wiki/spaces/{slug}/pages/{num}"
+    },
+    {
+      "note": "Confluence page in a personal space (docs/adapters/confluence.page.md)",
+      "url": "https://acme.atlassian.net/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1000003/Some+Page",
+      "shape": "/wiki/spaces/{slug}/pages/{num}/{slug}"
+    },
+    {
+      "note": "Confluence page version history (docs/adapters/confluence.page.md)",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/history/1000004/Release+Plan",
+      "shape": "/wiki/spaces/{slug}/history/{num}/{slug}"
+    },
+    {
+      "note": "Confluence page editor, a confluence.page starter rule the structural drafter does not draft: edit-v2 reads as an {id}",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/edit-v2/1000002",
+      "shape": "/wiki/spaces/{slug}/pages/{id}/{num}"
+    },
+    {
+      "note": "Confluence legacy page link, a confluence.page starter rule the structural drafter does not draft: the pageId key is a private {param}",
+      "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=1000001",
+      "shape": "/wiki/pages/{slug}?{param}={num}"
+    },
+    {
       "note": "Miro board (docs/adapters/miro.board.md)",
       "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
       "shape": "/app/board/{id}/"

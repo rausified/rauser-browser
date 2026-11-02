@@ -1,7 +1,7 @@
 // Summarize & log: reads a tab's main text and starts its summary run. The
 // panel button, the `summarize` shortcut, and the context menu all use
 // summarizeTab; the host and the service check every field again.
-import type { AgentStatus, RunView } from "../protocol/ts/generated.js";
+import type { AgentStatus, AutoSummarySkipReason, RunView } from "../protocol/ts/generated.js";
 import { canonicalCapture } from "./adapter-templates.js";
 import { serviceSetupText } from "./agent.js";
 import { APP_NAME, BINARY_NAME } from "./brand.js";
@@ -201,7 +201,7 @@ const encodedBytes = (value: string | null): number => new TextEncoder().encode(
  * blank; readTab decides whether that page is unreadable. */
 function choosePage(
   results: readonly { frameId: number; result?: unknown }[],
-): { top: ExtractedPage; content: string; selection: string | null; word: boolean } | undefined {
+): { top: ExtractedPage; content: string; selection: string | null; truncated: boolean; word: boolean } | undefined {
   let top: ExtractedPage | undefined;
   const pages: ExtractedPage[] = [];
   for (const entry of results) {
@@ -231,14 +231,17 @@ function choosePage(
   // The chosen frame's own selection fits its content by construction; one
   // borrowed from another frame travels only if both still fit the cap.
   let selection = chosen.selection;
+  let truncated = chosen.truncated === true;
   if (selection === null) {
-    const borrowed = pages.find((page) => page.selection !== null)?.selection ?? null;
+    const borrowedPage = pages.find((page) => page.selection !== null);
+    const borrowed = borrowedPage?.selection ?? null;
     if (borrowed !== null
       && encodedBytes(chosen.content) + encodedBytes(borrowed) <= EXTRACT_LIMITS.maxRequestBytes) {
       selection = borrowed;
+      truncated ||= borrowedPage?.truncated === true;
     }
   }
-  return { top, content: chosen.content, selection, word: chosen.word === true };
+  return { top, content: chosen.content, selection, truncated, word: chosen.word === true };
 }
 
 /** The page a run sends: what readTab read from a tab. */
@@ -246,6 +249,7 @@ export interface TabPage {
   url: string;
   title: string;
   content: string;
+  truncated: boolean;
   selection: string | null;
 }
 
@@ -307,6 +311,7 @@ export async function readTab(
   let page = await read(timeoutMs);
   if (!page) throw new HostError("unreadable", UNREADABLE_MESSAGE);
   let content = page.content;
+  let truncated = page.truncated;
   if (officeDocumentKind(tab.url) === "word" && !page.word) {
     // Word shows a splash before it renders the document; whatever a frame
     // reads meanwhile is not the document.
@@ -322,6 +327,8 @@ export async function readTab(
       if (next) page = next;
     }
     content = page.word ? page.content : "";
+    // Splash text is dropped whole, so nothing of it was cut.
+    truncated = page.word ? page.truncated : false;
   }
   if (content.trim().length === 0 && !isOfficeDocumentUrl(tab.url) && !isMiroBoardUrl(tab.url)) {
     throw new HostError("unreadable", UNREADABLE_MESSAGE);
@@ -335,6 +342,7 @@ export async function readTab(
     url: wellFormed(tab.url),
     title: wellFormed(cutTitle(page.top.title || tab.title)),
     content: wellFormed(content),
+    truncated,
     selection: page.selection === null ? null : wellFormed(page.selection),
   };
 }
@@ -353,6 +361,7 @@ export async function summarizeTab(
     url: page.url,
     title: page.title,
     content: page.content,
+    ...(page.truncated ? { capture_truncated: true } : {}),
     selection: page.selection,
     harness: null,
     record_key: null,
@@ -360,4 +369,39 @@ export async function summarizeTab(
   }, "run_started");
   await markRunsMayExist(deps.storage, deps.now().getTime());
   return { run: response.run, existing: response.existing };
+}
+
+/** What an automatic summary attempt came to: a run started (or joined), the
+ * host's reason for skipping it, or a page that could not be read. */
+export type AutoSummaryOutcome = "started" | AutoSummarySkipReason | "unreadable" | "page_changed";
+
+/** Reads `tab` (readTab) and asks the host to summarize it automatically
+ * (start_auto_summary). A failure to reach the host or the service throws, so
+ * the caller keeps the tab for a later try. */
+export async function autoSummarizeTab(
+  tab: { id: number; url: string; title: string },
+  deps: Omit<SummarizeDeps, "host"> & { host: Pick<HostClient, "callAny"> },
+): Promise<AutoSummaryOutcome> {
+  let page: TabPage;
+  try {
+    page = await readTab(tab, deps);
+  } catch (error) {
+    if (error instanceof HostError && (error.code === "unreadable" || error.code === "page_changed")) {
+      return error.code;
+    }
+    throw error;
+  }
+  const response = await deps.host.callAny({
+    type: "start_auto_summary",
+    protocol_version: PROTOCOL_VERSION,
+    request_id: newRequestId(),
+    url: page.url,
+    title: page.title,
+    content: page.content,
+    ...(page.truncated ? { capture_truncated: true } : {}),
+    requested_at: localTimestamp(deps.now()),
+  }, ["run_started", "auto_summary_skipped"]);
+  if (response.type === "auto_summary_skipped") return response.reason;
+  await markRunsMayExist(deps.storage, deps.now().getTime());
+  return "started";
 }

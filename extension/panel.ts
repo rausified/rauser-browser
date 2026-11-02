@@ -28,6 +28,9 @@ import {
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
+import {
+  artifactLook, capturePill, compactDuration, importanceLabel, importanceTone, pageLook, summaryTimeLabel,
+} from "./panel-look.js";
 import { NoteEditor } from "./note-editor.js";
 import { NoteRecovery, type RecoveryText } from "./note-recovery.js";
 import { chromeManifests, newerBuildOnDisk } from "./build-update.js";
@@ -71,6 +74,10 @@ const replayButton = element<HTMLButtonElement>("replay");
 const discardButton = element<HTMLButtonElement>("discard-pending");
 const captureStrip = element<HTMLDetailsElement>("capture-strip");
 const captureStripSummary = element<HTMLElement>("capture-strip-summary");
+const captureStripAction = element<HTMLButtonElement>("capture-strip-action");
+const capturePillElement = element<HTMLElement>("capture-pill");
+const capturePillLabel = element<HTMLElement>("capture-pill-label");
+const pageGlyph = element<HTMLElement>("page-glyph");
 
 const pageTitle = element<HTMLParagraphElement>("page-title");
 const pageUrl = element<HTMLParagraphElement>("page-url");
@@ -100,6 +107,10 @@ const artifactWithin = element<HTMLParagraphElement>("artifact-within");
 const artifactContained = element<HTMLDivElement>("artifact-contained");
 const artifactContainedList = element<HTMLUListElement>("artifact-contained-list");
 const artifactMode = element<HTMLSpanElement>("artifact-mode");
+const artifactKindLabel = element<HTMLSpanElement>("artifact-kind-label");
+const artifactMeasuresShort = element<HTMLSpanElement>("artifact-measures-short");
+const artifactDetails = element<HTMLDetailsElement>("artifact-details");
+const artifactIncomingCount = element<HTMLSpanElement>("artifact-incoming-count");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
 const whyPausedHint = element<HTMLParagraphElement>("why-paused-hint");
@@ -137,6 +148,8 @@ const runArea = element<HTMLDivElement>("run-area");
 const pageSummary = element<HTMLDivElement>("page-summary");
 const pageSummaryText = element<HTMLParagraphElement>("page-summary-text");
 const pageSummaryOpen = element<HTMLButtonElement>("page-summary-open");
+const pageSummaryTime = element<HTMLSpanElement>("page-summary-time");
+const pageSummaryChips = element<HTMLDivElement>("page-summary-chips");
 const taskBar = element<HTMLElement>("task-bar");
 const taskForm = element<HTMLFormElement>("task-form");
 const taskInput = element<HTMLTextAreaElement>("task-input");
@@ -282,7 +295,43 @@ function renderPageSummary(summary: SummaryView | null, pageUrl: string | null):
   summaryPageUrl = summary === null ? null : pageUrl;
   summaryPagePath = summary?.summary_path ?? null;
   pageSummary.hidden = summaryPageUrl === null;
-  pageSummaryText.textContent = summary !== null && summaryPageUrl !== null ? summaryLine(summary) : "";
+  const shown = summary !== null && summaryPageUrl !== null ? summary : null;
+  // A summary with an overview shows it as prose and its labels as chips;
+  // an older one keeps its one-line description.
+  pageSummaryText.textContent = shown === null ? "" : shown.overview ?? summaryLine(shown);
+  pageSummaryTime.textContent = shown === null ? "" : summaryTimeLabel(shown.summarized_at);
+  pageSummaryChips.replaceChildren();
+  if (shown?.overview) {
+    for (const [text, tone] of [
+      [shown.document_type, "plain"], [shown.category, "plain"],
+      [importanceLabel(shown.importance), importanceTone(shown.importance)],
+    ] as const) {
+      const chip = document.createElement("span");
+      chip.className = "tag";
+      chip.dataset.tone = tone;
+      chip.textContent = text;
+      pageSummaryChips.append(chip);
+    }
+  }
+  renderSummarizeLabel();
+}
+
+/** The one Summarize & log button reads as the design's action for the
+ * page: Save Page for a page no adapter recognizes, Summarize again once a
+ * summary exists. */
+function renderSummarizeLabel(): void {
+  const summarized = summaryPageUrl !== null;
+  const label = summarized ? "Summarize again" : artifactPageUrl === null ? "Save Page" : "Summarize & log";
+  summarizeButton.textContent = label;
+}
+
+/** The page tile: the artifact type's look when recognized, else the host's. */
+function renderPageGlyph(): void {
+  const look = currentArtifact !== null && artifactPageUrl !== null
+    ? artifactLook(currentArtifact.artifact_type)
+    : pageLook(currentPage?.url ?? null);
+  pageGlyph.textContent = look.glyph;
+  pageGlyph.dataset.hue = look.hue;
 }
 
 async function openPageSummary(): Promise<void> {
@@ -353,6 +402,7 @@ const NAVIGATION_LABELS: Readonly<Record<string, string>> = {
 };
 
 function renderIncoming(trails: ArtifactView["incoming_trails"]): void {
+  artifactIncomingCount.textContent = trails.length ? String(trails.length) : "";
   artifactIncomingList.replaceChildren();
   artifactIncomingList.hidden = trails.length === 0;
   artifactIncomingEmpty.hidden = trails.length !== 0;
@@ -376,6 +426,9 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
   artifactCard.hidden = artifact === null;
+  artifactDetails.hidden = artifact === null;
+  renderPageGlyph();
+  renderSummarizeLabel();
   artifactStatus.textContent = pageUrl === null ? "" : recognized ? "● Artifact recognized" : "○ Not an artifact";
   if (!artifact) {
     whyArtifactId = null;
@@ -390,6 +443,10 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   artifactIdentity.textContent = `${artifact.artifact_type} · ${artifact.artifact_id}`;
   artifactMode.textContent = artifact.last_mode ?? "";
   artifactMode.hidden = artifact.last_mode === null;
+  artifactKindLabel.textContent = artifactLook(artifact.artifact_type).label;
+  artifactMeasuresShort.textContent = !artifact.first_seen || noActivityMeasured(artifact)
+    ? ""
+    : `${compactDuration(artifact.focused_seconds)} focused · ${artifact.opens} open${artifact.opens === 1 ? "" : "s"}`;
   // A restored tab can deliver focused/background time with no cold open,
   // so days_opened alone cannot distinguish real delivered activity from
   // the no-record-yet placeholder; first_seen is empty only for that
@@ -427,6 +484,8 @@ function showArtifactUnavailable(page: { url: string }, reason: string): void {
     currentArtifact = null;
     artifactPageUrl = null;
     artifactCard.hidden = true;
+    artifactDetails.hidden = true;
+    renderPageGlyph();
   }
   if (summaryPageUrl !== page.url) renderPageSummary(null, null);
   artifactStatus.textContent = `Artifact status unavailable: ${reason}`;
@@ -825,6 +884,7 @@ function updateControls(): void {
   replayButton.disabled = !connected || changing() || repairing || config?.capture_enabled !== true ||
     state?.pause_pending === true || (state?.queued ?? 0) === 0;
   discardButton.disabled = changing() || (state?.queued ?? 0) === 0;
+  renderCaptureControls();
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
   saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
@@ -840,6 +900,42 @@ function updateControls(): void {
   if (paused !== null) whyPausedHint.textContent = paused;
 }
 
+/** Whether capture is switched on in a healthy host configuration. */
+function captureIsOn(): boolean {
+  return session.config?.capture_enabled === true && session.configIssue === null &&
+    session.adapterIssue === null && session.status?.pause_pending !== true;
+}
+
+/** The header pill and the strip's one quick action (DESIGN.md §5.7). The
+ * action is never the destructive pause: it sends pending records while
+ * capture is on, or opens settings to resume a paused capture. */
+function renderCaptureControls(): void {
+  const state = session.status;
+  const pill = capturePill({
+    captureOn: captureIsOn(),
+    queued: state?.queued ?? 0,
+    deliveryProblem: Boolean(state?.retry_error || state?.host_error || state?.last_error),
+  });
+  capturePillElement.dataset.tone = pill.tone;
+  capturePillElement.title = pill.detail;
+  capturePillLabel.textContent = pill.label;
+  const paused = session.connected && session.config !== null && session.config?.capture_enabled === false;
+  if (captureIsOn() && (state?.queued ?? 0) > 0) {
+    captureStripAction.hidden = false;
+    captureStripAction.dataset.action = "send";
+    captureStripAction.textContent = "Send now";
+    captureStripAction.disabled = replayButton.disabled;
+  } else if (paused) {
+    captureStripAction.hidden = false;
+    captureStripAction.dataset.action = "settings";
+    captureStripAction.textContent = "Resume in settings";
+    captureStripAction.disabled = false;
+  } else {
+    captureStripAction.hidden = true;
+    captureStripAction.dataset.action = "";
+  }
+}
+
 function renderSetupWarning(): void {
   const problem = setupProblem(session.config, session.configIssue ?? session.adapterIssue);
   setupWarning.hidden = problem === null;
@@ -850,9 +946,7 @@ function renderQueue(state: WorkerStatus): void {
   queueSummary.textContent =
     `${state.live_activity} live hour total${state.live_activity === 1 ? "" : "s"} · ` +
     `${state.queued} pending capture record${state.queued === 1 ? "" : "s"}.`;
-  const captureOn = session.config?.capture_enabled === true && session.configIssue === null &&
-    session.adapterIssue === null &&
-    state.pause_pending !== true;
+  const captureOn = captureIsOn();
   captureStripSummary.textContent =
     `${captureOn ? "●" : "○"} Capture ${captureOn ? "on" : "off"} · ` +
     `${state.live_activity} live · ${state.queued} pending`;
@@ -1541,6 +1635,12 @@ function worklogRange(): { start: string; end: string } {
 function recentRow(item: ArtifactListItem): HTMLElement {
   const row = document.createElement("div");
   row.className = "recent-row";
+  const look = artifactLook(item.artifact_type);
+  const glyph = document.createElement("span");
+  glyph.className = "glyph glyph-small";
+  glyph.dataset.hue = look.hue;
+  glyph.setAttribute("aria-hidden", "true");
+  glyph.textContent = look.glyph;
   const link = document.createElement("a");
   link.className = "recent-link";
   link.href = item.url;
@@ -1549,14 +1649,21 @@ function recentRow(item: ArtifactListItem): HTMLElement {
   const title = document.createElement("strong");
   title.textContent = item.title;
   const details = document.createElement("span");
-  details.textContent = `${item.artifact_type} · focused ${duration(item.focused_seconds)} · background ${duration(item.background_seconds)}${item.opens ? ` · opened ${item.opens}×` : ""}`;
+  details.className = "recent-sub";
+  details.textContent = `${look.label}${item.opens ? ` · opened ${item.opens}×` : ""}`;
+  // The full measures stay one hover away, as the row used to show them.
+  link.title = `${item.artifact_type} · focused ${duration(item.focused_seconds)} · background ${duration(item.background_seconds)}`;
   link.append(title, details);
+  const time = document.createElement("span");
+  time.className = "recent-time";
+  time.setAttribute("aria-hidden", "true");
+  time.textContent = compactDuration(item.focused_seconds);
   if (item.why) {
     const why = document.createElement("span");
     why.textContent = `Why: ${item.why}`;
     link.append(why);
   }
-  row.append(link);
+  row.append(glyph, link, time);
   if (item.summary) {
     const summarized = document.createElement("span");
     summarized.textContent = recentSummaryText(item.summary);
@@ -1762,6 +1869,7 @@ async function showNoPage(title: string, url: string, state: "none" | "unusable"
   void refreshArtifact();
   pageTitle.textContent = title;
   pageUrl.textContent = url;
+  renderPageGlyph();
   showPageArea(state);
   await notes.showPage(null);
 }
@@ -1805,6 +1913,7 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   const title = tab.title?.trim() || url.hostname;
   pageTitle.textContent = title;
   pageUrl.textContent = tab.url;
+  renderPageGlyph();
   showPageArea("note");
   if (currentPage?.url !== tab.url || currentPage.tabId !== tab.id) resetPreservedNotes();
   currentPage = { url: tab.url, title, tabId: tab.id };
@@ -1842,6 +1951,15 @@ dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
 saveWhyButton.addEventListener("click", () => void saveWhy());
+artifactWhy.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.isComposing) return;
+  event.preventDefault();
+  void saveWhy();
+});
+captureStripAction.addEventListener("click", () => {
+  if (captureStripAction.dataset.action === "send") void replayVisits();
+  else if (captureStripAction.dataset.action === "settings") openSettings();
+});
 artifactWhy.addEventListener("input", () => {
   whyEdited = true;
   updateControls();

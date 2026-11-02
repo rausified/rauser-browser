@@ -10,15 +10,15 @@ import { APP_NAME, storageKey } from "./brand.js";
 import {
   HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId, type HostClient,
 } from "./native.js";
-import { summaryLine } from "./summary-text.js";
+import { notSavedText, summaryLine } from "./summary-text.js";
 
 export const POLL_MS = 1000;
 export const RESTORE_FINISHED_WITHIN_MS = 24 * 60 * 60 * 1000;
 export const MAX_RESTORED_FINISHED = 5;
 const DISMISSED_RUNS_KEY = storageKey("dismissed_runs_v1");
 const MAX_DISMISSED_RUNS = 1000;
-// When a run was last started or shown, kept until a list_runs finds nothing
-// to restore. list_runs starts the on-demand service, so a panel with no
+// When a run was last started or shown, kept while list_runs finds history
+// the Tasks page can list. list_runs starts the on-demand service, so a panel with no
 // harness asks only while this says the service may still hold a run.
 const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
 // A shell word that needs no quoting.
@@ -96,8 +96,11 @@ export function stateText(run: RunView): string {
 }
 
 export function answerLine(answer: RunAnswer): string {
-  return `Type: ${answer.document_type} · Category: ${answer.category} · ` +
+  const wall = notSavedText(answer.access);
+  if (wall !== null) return wall;
+  const labels = `Type: ${answer.document_type} · Category: ${answer.category} · ` +
     `Importance: ${answer.importance} — ${answer.importance_reason}`;
+  return answer.overview ? `${answer.overview}\n${labels}` : labels;
 }
 
 function shellQuote(value: string): string {
@@ -534,6 +537,8 @@ class RunCard extends RunWatcher {
   protected render(): void {
     const run = this.view;
     this.titleLine.textContent = run.title || run.url;
+    // For the panel stylesheet's state indicator only.
+    this.element.dataset.state = run.state;
     this.stateLine.textContent = this.stateLineText();
     const answer = run.state === "succeeded" && run.answer ? answerLine(run.answer) : "";
     this.answerText.textContent = answer;
@@ -834,6 +839,7 @@ export class RunProgress extends RunWatcher {
   }
 
   protected render(): void {
+    this.element.dataset.state = this.view.state;
     this.stateLine.textContent = this.stateLineText();
     this.streamText.textContent = this.stream;
     this.streamText.hidden = this.stream === "";
@@ -924,8 +930,8 @@ export type RestoreDeps = Pick<RunCardDeps, "host" | "now" | "storage" | "openSe
  * Lists the summary runs and shows each card set the runs it should
  * (see {@link restorable}). A failed list shows one notice, in `noticeArea`;
  * a list that works clears it. The record that runs may exist is cleared
- * only when no set shows a card and the caller does not `keepRecord` (it
- * knows of an active task, say). An older host that explicitly refuses the
+ * only when no listed run belongs in Tasks history and the caller does not
+ * `keepRecord` (it knows of a task from a separate list, say). An older host that explicitly refuses the
  * kind field gets one legacy request; its mixed list has the old shared
  * limit, and restorable still excludes tasks and site drafts.
  */
@@ -955,9 +961,10 @@ export async function restoreRunCards(
   const dismissed = new Set(await dismissedIds(deps.storage));
   if (containers.some((cards) => cards.isDisposed)) return;
   clearNotice(noticeArea);
-  let shown = 0;
-  for (const cards of containers) shown += cards.restoreFrom(runs, dismissed);
-  if (shown === 0 && options.keepRecord !== true) await clearRunsMayExist(deps.storage, listedAt);
+  for (const cards of containers) cards.restoreFrom(runs, dismissed);
+  const hasHistory = runs.some((run) => (run.kind ?? "summary") === "summary" || run.kind === "task");
+  if (hasHistory) await markRunsMayExist(deps.storage, deps.now());
+  else if (options.keepRecord !== true) await clearRunsMayExist(deps.storage, listedAt);
 }
 
 /** The summary run cards in `container`, which they share with other

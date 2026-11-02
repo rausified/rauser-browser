@@ -164,6 +164,23 @@ external rerun; sandbox skips are still explicit and never count as passes.
 
 *Side panel states, the row for a non-artifact page on an enabled origin, before Capture Site was built:* No artifact card; chip `○ Not an artifact · Create adapter`. When unrecognized pages recur, a hint also offers to draft one from them (Tier 2, §5.1). **As built (2026-10-27, `brwr-t40`):** the chip reads `○ Not an artifact`.
 
+**Side panel redesign (2026-11-02).** John supplied the "Brauser Sidebar"
+dark-glass design and decided three things before the build: the page card
+shows the title and URL again (superseding the same day's status-only page
+area, PR #231), a light variant follows the system theme, and the full
+design is built, including pieces the panel lacked. A design challenge before
+task 1 kept one Summarize & log button (relabelled Save Page and Summarize
+again rather than a second control), kept the capture strip's smoke-tested
+wording, kept the destructive pause out of the strip's one-click action,
+limited the header pill to global capture, kept the native worklog select,
+and required solid surfaces so axe measures contrast instead of reporting it
+incomplete. The first light build failed the gate at 4.05:1 (white on the
+accent) and on a removed focus outline; both were fixed. The design's
+monospace and sans faces map to system stacks because the CSP sets
+`font-src 'none'`. The design's arrow-only Run button keeps its "Run" text,
+which the task bar sets as it starts. Plan:
+[2026-11-02-sidebar-redesign](superpowers/plans/2026-11-02-sidebar-redesign.md).
+
 ## §6.1 Folder layout — history
 
 **Moving an older layout (2026-10-27).** The rule this record introduced is now stated in DESIGN.md §6.1, “Moving an older layout”.
@@ -214,9 +231,26 @@ external rerun; sandbox skips are still explicit and never count as passes.
 
 **As built (protocol v6, 2026-10-26).** The rule this record introduced is now stated in DESIGN.md §7.2, “Protocol v6 changes”.
 
+**Token title padding (2026-11-02, `brwr-tp1`).** Both title engines now
+consume `=` in their longest token runs before validating the complete value.
+Forward and backward captures can clean padded board titles and produce
+padded tab-title aliases. Internal padding, more than two `=`, padding alone
+and length overflow still reject that entry; the usual ordered-title fallback
+applies.
+Custom templates using `=` as the bounding delimiter now fail
+`title_capture_swallows`; no shipped starter uses token title captures.
+Shared vectors cover both directions and the existing whole-token oracle
+continues to reject malformed URL values. The pre-implementation reviewer
+kept the existing matcher rather than adding a padding-specific scanner;
+see [the plan](superpowers/plans/2026-11-02-token-title-padding.md).
+
 ## §8 Extension Permissions — history
 
 Protocol v6 (2026-10-26) replaced the earlier permission model. Before it, the manifest declared broad *optional* HTTP(S) patterns and Chrome granted only the exact origin the user enabled, wrote a first note on, or drafted an adapter for; `webNavigation` was optional; `activeTab`, a `note` command, and the toolbar action granted temporary access to one tab; and settings and the worker reconciled revoked grants.
+
+## §11 Distribution — history
+
+**Self-registering app replaces the installer package (2026-11-02).** John chose to ship the native host as a self-registering app instead of a signed `.pkg`. The earlier rule was a signed and notarized per-user `.pkg` for macOS 15 and later, with the app signed by a Developer ID Application identity and the package by a Developer ID Installer identity, and installers in `/installers` owning registration and uninstallation. Brauser cannot avoid a second download (a Chrome extension cannot install or start a local program, and the host owns vault writes, the agent service and the index), but the installer could go: on macOS a notarized `Brauser.app` in a `.dmg` registers itself with Chrome and the service LaunchAgent when first opened, needs one signing identity, and repairs its registration after a move or update; Windows uses the same pattern with a per-user `Brauser.exe` and the `HKCU` registry key. Install, repair (`brauser register`) and update are one code path, and settings gains a removal action. Nothing is built yet; this changes §9's `/installers` to `/packaging`, §11, the M5 row of §12 and §13's Windows wording.
 
 ## §12 Build Order — history
 
@@ -979,6 +1013,81 @@ The full fresh diff was reviewed manually, then the single local Codex
 reviewer pass found no P1–P3 issues. No external harness/API review was run;
 the driver retains its independent gate and publication review. The plan,
 feature briefing and pending documentation record the final contract.
+
+## 2026-11-02 — Summary overviews in the panel and retained history
+
+Cookie implemented brwr-sm3: the existing validated overview now travels in
+`PageSummary`, the optional `SummaryEvent.overview`, `SummaryView` and
+`RunAnswer`. The native host rechecks the 300-character, single-line bound
+on log replay; protocol runtime guards count Unicode characters, including
+astral characters. The saved-summary line and Recent show overview plus type;
+run results lead with overview and retain their classification. Old events
+and run results omit the field and keep their previous wording. Format-8
+cache reopen and log rebuild preserve both shapes without migration. Deploy
+host and extension together; older hosts cannot replay the new event field.
+
+Cookie also repaired brwr-tsh1: summary restore retains `runs_may_exist_v1`
+for any retained summary/task even when no panel card qualifies. A dismissed
+summary remains reachable on Tasks after the harness is removed. The empty
+list's existing timestamp guard still protects a concurrently started run.
+
+## 2026-11-02 — Preserve interrupted summary appends across the overview upgrade
+
+Independent review found that Retry save added `overview` to an older run's
+journaled event, so the exact payload check refused to complete it. Summary
+recording now tries the pre-overview payload after that mismatch, retaining
+all existing replay checks and returning the original event for indexing.
+Regressions cover rolled-back, partially written and complete old entries,
+byte-identical recovery after reopening the store, changed paths, and refusal
+to alter an overview already bound by a newer intent.
+
+Review also covered profiles where the old restore bug had already erased
+the history hint. A successful list of retained summaries now recreates that
+hint even when every card is dismissed or too old. The panel-to-Tasks
+regression exercises both an existing hint and an absent one before removing
+the harness.
+
+
+## 2026-11-02 — Automatic summary eligibility follows current capture rules
+
+`brwr-sm7`: `start_auto_summary` holds one configuration lock while refreshing
+settings, checking setup, resolving the page key and matching the original URL
+against the current adapter document. An artifact key from a retired note
+contract alone no longer authorizes a run. The host releases the lock before
+service IPC. Manual runs and note identity retain their existing resolver.
+The regression saves a real artifact note, removes or narrows the adapter,
+and checks the preserved note plus automatic refusal and manual forwarding.
+
+`brwr-sm9`: the session state's existing bounded `submitted` array gains an
+optional `submitted_day`, using the shared offset-qualified local timestamp
+formatter's calendar date. Candidate synchronization and submission rotate
+that cache on a different date; old undated caches expire once. Candidate
+attention, skips and retry state are retained. Reconsideration occurs on the
+next activity synchronization, with the ordinary load/dwell rules, and the
+host still decides whether the saved summary blocks. No wire or disk-summary
+format change is needed. Pure tests run in UTC and America/Los_Angeles, and a
+worker test keeps the browser session and tab open across the date boundary.
+
+A delayed already-summarized reply that crosses midnight does not mark the
+new day: the worker retains the local day of the actual request timestamp,
+and lets the next activity update ask the host for a current-day decision.
+A failing-first worker regression covers the delayed reply.
+
+
+## 2026-11-02 — Capped browser capture provenance (brwr-sm5)
+
+Recovered the isolated implementation in 2cf67c46 and task wording correction
+5fa32bac onto the current base, then extended it to automatic summaries and
+corrected both Office/Miro SUMMARY.md paragraphs. The chosen frame's existing
+combined truncation flag reaches all three request paths; status.json retains
+it for queued recovery. page.md discloses the cut before its untrusted content,
+and fixed prompt notices come from status, so forged page warnings do not
+activate them. Missing/false keeps the prior page file. The summary agent must
+retrieve the full artifact or report partial/page_only; the task notice adds no
+authority. DESIGN.md §4.5 and protocol/README.md record coordinated deployment
+and idle-only rollback; no event, summary, note or cache format changes.
+
+Validation: 1,374 Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension test files, both Clippy configurations, 2 accessibility fixture passes with 36 explicit browser sandbox skips. Twelve new regressions cover this change. The supplementary README checks and fresh full-diff review passed; real browser, IPC and platform acceptance remain external.
 
 ### 2026-11-02 — Wait for Word's paragraphs instead of reading its splash
 

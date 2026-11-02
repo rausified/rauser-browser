@@ -16,6 +16,7 @@ host/tests/fixtures/** -text
 BOSUN_FEATURE_BACKLOG.md merge=bosun-backlog
 PENDING_AMOS_DOC_UPDATES.md merge=union
 CookieFeature.md merge=union
+BRAUSER_IMPROVEMENT_FEED.md merge=union
 
 # SUMMARY.md is compiled into the host as the summary prompt; its template
 # delimiters are LF-only, so never let a checkout convert it to CRLF.

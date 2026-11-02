@@ -290,6 +290,8 @@ A title template has exactly one `{title}` placeholder, which splits it into a p
 
 Validation requires a literal between any two captures or skips, and between a capture or skip and `{title}`, so every capture is bounded by a literal. The literal that bounds a typed capture must not be swallowed by it: in `P`, the literal after a capture must start with a character outside the capture type's alphabet, and in `Q`, the literal before a capture must end with such a character. For example, `{key:jira_key}-…` is invalid, because `-` is in the `jira_key` alphabet.
 
+A `token` title capture's alphabet includes `=` in both directions. The whole run must still satisfy §7.1: a nonempty body followed by at most two `=`, with padding included in the length bounds. Malformed padding makes the title entry fail; the matcher never shortens the run to recover a valid prefix or suffix. Because `=` belongs to this alphabet, it cannot bound a token capture (for example, `{board:token}= {title}` and `{title} ={board:token}` are invalid).
+
 `title` is one template or an ordered list of at most 4, each at most 512 scalar values long. Each entry is validated on its own, and the first entry that matches is used. If none matches, Brauser records the whole tab title, as today. A typed capture with the same name as a path or query capture must use the same type, and it is canonicalized with that capture's bounds and case modifier (so a title `{owner:name}` is lowercased when the path has `{owner:name|lower}`). The two values must then agree; if they do not, the template counts as not matching, except when an `alias` rule names that capture (§9.3). Title captures with any other name are validation errors: use `{~}` to skip text you do not need.
 
 Title preparation removes nothing from the tab title. A tool that varies its titles, for example by adding an unread-count prefix such as `(3) ` while notifications are pending, is handled by that tool's adapter, which lists the varied form first:
@@ -388,16 +390,22 @@ title  = "[{key:jira_key}] {title} - Jira"
 alias  = { from = "tab_title", capture = "key" }
 refs   = [{ type = "jira.issue", find = "jira_key" }]
 
-# Confluence Cloud: title slug after the ID; edit path; space name skipped in the title.
+# Confluence Cloud: title slug after the ID; edit path; version history and the
+# legacy viewpage.action link name the same page; space name skipped in the
+# title, with a prefix entry for the version-history view (§9.1). The shipped
+# starter, on the same origin as Jira. See docs/adapters/confluence.page.md.
 [[artifacts]]
 type   = "confluence.page"
 origin = "https://<your-site>.atlassian.net"
 match  = [
   { path = "/wiki/spaces/{_}/pages/{id:int}/{*}" },
   { path = "/wiki/spaces/{_}/pages/edit-v2/{id:int}", mode = "edit" },
+  { path = "/wiki/spaces/{_}/history/{id:int}/{*}", mode = "view" },
+  { path = "/wiki/pages/viewpage.action", query = { pageId = "{id:int}" } },
 ]
-id     = "confluence:{host}/{id}"
-title  = "{title} - {~} - Confluence"
+id     = "confluence.page:{host}/{id}"
+title  = ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"]
+refs   = [{ type = "jira.issue", find = "jira_key" }]
 
 # Google Docs: shared origin with no tenant in the URL; optional mode. No rest, so /copy and /export are not opens.
 [[artifacts]]
@@ -472,7 +480,7 @@ id     = "miro.board:{host}/{board}"
 title  = "{title} - Miro"
 ```
 
-Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; Google Docs cannot be scoped by URL; and a scope miss is terminal rather than falling through to a container, so a pull request outside `github.pr`'s scope but inside `github.repo`'s is dropped, not recorded as a repository visit.
+Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; a Confluence space name containing ` - ` leaves its first part in the extracted title, and the version-history entry also drops a `Version history - ` that begins a page's own title; Google Docs cannot be scoped by URL; and a scope miss is terminal rather than falling through to a container, so a pull request outside `github.pr`'s scope but inside `github.repo`'s is dropped, not recorded as a repository visit.
 
 ### 11.1 Adapter documentation
 

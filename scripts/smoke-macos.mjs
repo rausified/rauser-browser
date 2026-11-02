@@ -266,6 +266,7 @@ const FAKE_ANSWER = {
   metadata: { authors: [], owner: "", status: "", created: "", updated: "", version: "" },
   references: [],
   read_scope: "whole",
+  access: "ok",
   document_type: "article", category: "news",
   entities: { technologies: ["Smoke"], products: [], people: [], companies: [] },
   description: "A smoke article the fake agent read.",
@@ -284,6 +285,7 @@ const FIXTURE_SUMMARY_ANSWER = {
   metadata: { authors: [], owner: "", status: "", created: "", updated: "", version: "" },
   references: [],
   read_scope: "whole",
+  access: "ok",
   document_type: "specification", category: "technical specification",
   entities: { technologies: [FIXTURE_ENTITY], products: [], people: [], companies: [] },
   description: [
@@ -820,7 +822,7 @@ function fixtureServer(caseId) {
   const server = createServer((request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
     const known = new Set(["/", "/allowed/page", "/blocked/page", "/allowed/while-paused", "/allowed/after-resume",
-      "/allowed/after-removal", "/fresh/page", "/article", "/summary/page"]);
+      "/allowed/after-removal", "/allowed/auto", "/fresh/page", "/article", "/summary/page"]);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     for (const [base, pattern] of WIKI_BASES) {
@@ -1313,6 +1315,28 @@ async function run() {
     return onSettings((page) => page.text("#status"));
   }
 
+  // Set automatic summaries in the settings page and wait for the host to
+  // hold exactly that setting.
+  async function setAutoSummary(enabled, dwellSecs = 0) {
+    await openSettingsTab();
+    await settingsConnected();
+    await inSettings((page) => page.evaluate(`(() => {
+      const box = document.getElementById("auto-summary-enabled");
+      if (box.checked !== ${enabled}) box.click();
+      const dwell = document.getElementById("auto-summary-dwell");
+      dwell.value = "${dwellSecs}";
+      dwell.dispatchEvent(new Event("input"));
+      document.getElementById("status").textContent = "";
+      document.getElementById("save-auto-summary").click();
+    })()`));
+    await waitUntil("the settings page to save automatic summaries", settingsStatus,
+      (status) => status === "Automatic summaries saved.", { timeout: 15_000 });
+    const reply = await hostConfig(wrapper);
+    requireCondition(reply.config.auto_summary.enabled === enabled &&
+      reply.config.auto_summary.dwell_secs === dwellSecs,
+    `The host's automatic summaries: ${JSON.stringify(reply.config.auto_summary)}`);
+  }
+
   // --headless: every Chrome and host process must stay invisible, with no
   // on-screen window (menu-bar items included) and no Dock presence.
   async function nothingOnScreen() {
@@ -1425,6 +1449,7 @@ async function run() {
     const whilePaused = `${origin}/allowed/while-paused?case=${caseId}`;
     const afterResume = `${origin}/allowed/after-resume?case=${caseId}`;
     const afterRemoval = `${origin}/allowed/after-removal?case=${caseId}`;
+    const autoPage = `${origin}/allowed/auto?case=${caseId}`;
     const freshPage = `${origin}/fresh/page?case=${caseId}`;
     const freshTitle = `${APP_NAME} smoke /fresh/page`;
     // The panel titles a page note from the tab, so this is the fixture page title.
@@ -2330,6 +2355,16 @@ async function run() {
         }, { timeout: 15_000, interval: 200, signal: abort.signal });
       });
 
+      // Every later summary step counts its own runs, so automatic summaries
+      // stay off until the step that checks them (it turns them back on).
+      await step("Automatic summaries turn off from settings", async () => {
+        const before = await hostConfig(wrapper);
+        requireCondition(before.config.auto_summary.enabled === true &&
+          before.config.auto_summary.dwell_secs === 0,
+        `A new install's automatic summaries: ${JSON.stringify(before.config.auto_summary)}`);
+        await setAutoSummary(false);
+      });
+
       await step("Harness setup in settings", async () => {
         await openSettingsTab();
         await settingsConnected();
@@ -2932,10 +2967,14 @@ async function run() {
         await panelOnPage(summaryPage);
         const shown = await waitUntil("the panel's summary line", () => onPanel(async (page) => ({
           hidden: await page.hidden("#page-summary"), text: await page.text("#page-summary-text"),
+          chips: await page.text("#page-summary-chips"),
           open: await page.enabled("#page-summary-open"),
         })), (state) => state.hidden === false && state.open, { timeout: 20_000, signal: abort.signal });
-        requireCondition(shown.text === "specification · technical specification · high importance",
-          `The panel's summary line: ${JSON.stringify(shown)}`);
+        // The Summary card shows the overview as prose and the type as its
+        // first chip (DESIGN.md §5.7).
+        requireCondition(shown.text === FIXTURE_SUMMARY_ANSWER.overview &&
+          (shown.chips ?? "").startsWith(FIXTURE_SUMMARY_ANSWER.document_type),
+          `The panel's summary card: ${JSON.stringify(shown)}`);
         const openedLines = async () => (await readFile(openLog, "utf8").catch(() => "")).split("\n").filter(Boolean);
         const before = (await openedLines()).length;
         await onPanel((page) => page.click("#page-summary-open"));
@@ -2943,6 +2982,25 @@ async function run() {
         const expected = `-- ${path.join(root, ...summaryRuns.page.summary_path.split("/"))}`;
         await waitUntil(`open.log to name ${expected}`, async () => (await openedLines()).slice(before),
           (lines) => lines.includes(expected), { timeout: 15_000, signal: abort.signal });
+      });
+
+      await step("An automatic summary runs once for a recognized artifact with none", async () => {
+        await setAgentMode("ok");
+        await setAutoSummary(true, 0);
+        await workerHoldsHostPolicy();
+        await navigate(origin, autoPage);
+        const events = await waitUntil("the automatic summary event", () => summaryEventsFor(autoPage),
+          (found) => found.length > 0, { timeout: 60_000, signal: abort.signal });
+        requireCondition(events.length === 1 && events[0].payload.artifact_type === "smoke.page" &&
+          events[0].payload.record_key?.kind === "artifact",
+        `The automatic summary events: ${JSON.stringify(events)}`);
+        // Opening it again asks nothing more: it has a summary now.
+        await navigate(origin, article);
+        await navigate(origin, autoPage);
+        await delay(5_000);
+        const again = await summaryEventsFor(autoPage);
+        requireCondition(again.length === 1, `Reopening summarized it again: ${JSON.stringify(again)}`);
+        await setAutoSummary(false);
       });
     }
 

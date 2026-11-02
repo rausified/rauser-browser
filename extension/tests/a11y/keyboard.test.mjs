@@ -37,7 +37,19 @@ test("Capture Site and Page patterns open by keyboard, escape and return focus",
   await page.keyboard.press("Escape");
   assert.equal(await page.locator("#capture-site-review").isVisible(), false);
   await focused(page, "#capture-site");
-  await activate(page, page.locator("#site-pattern-area > summary"));
+  await activate(page, page.locator("#site-pattern-area > summary"), null);
+  // A clipping ancestor would hide an outward ring, so it must draw inward.
+  const ring = await page.locator("#site-pattern-area > summary").evaluate((element) => {
+    let clipped = false;
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      if (getComputedStyle(node).overflow !== "visible") clipped = true;
+      if (node === document.body) break;
+    }
+    const style = getComputedStyle(element);
+    return { clipped, offset: parseFloat(style.outlineOffset), width: parseFloat(style.outlineWidth) };
+  });
+  assert.ok(!ring.clipped || ring.offset <= -ring.width, `focus ring is clipped: ${JSON.stringify(ring)}`);
+  await page.keyboard.press("Enter");
   await activate(page, "#site-pattern-review");
   await focused(page, "#site-pattern-close");
   await page.locator("#site-pattern-message").filter({ hasText: "Review only" }).waitFor();

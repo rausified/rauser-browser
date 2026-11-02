@@ -15,7 +15,9 @@ use std::thread;
 use std::time::Duration;
 
 use brauser_protocol::HarnessId;
-use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
+use rustix::process::{
+    Pid, Signal, WaitId, WaitIdOptions, kill_process, kill_process_group, waitid,
+};
 use uuid::Uuid;
 
 use super::claude::ClaudeRunner;
@@ -162,10 +164,20 @@ impl ProcessSlot {
     }
 
     /// Mark the slot killed and send SIGKILL to the recorded process group.
+    ///
+    /// The leader is signalled on its own first. On macOS a group SIGKILL
+    /// can end a background child before it reaches the leader, and a
+    /// leader woken by that child's exit (as a shell blocked in `wait` is)
+    /// runs on and can exit normally before its own SIGKILL takes effect,
+    /// so a stopped run would report success. A leader signalled while
+    /// still blocked dies at once; the group signal then ends the rest.
     pub fn kill(&self) {
         let mut state = self.lock();
         state.killed = true;
         if let Some(pid) = state.group.and_then(Pid::from_raw) {
+            // The leader is unreaped while its group is recorded, so its id
+            // cannot have been reused.
+            let _ = kill_process(pid, Signal::KILL);
             let _ = kill_process_group(pid, Signal::KILL);
         }
     }
@@ -580,5 +592,38 @@ mod tests {
             codex.contains("codex is not on the service's PATH"),
             "{codex}"
         );
+    }
+
+    /// A kill ends a leader blocked waiting on its own background child.
+    /// On macOS a group SIGKILL that reaches the child first wakes the
+    /// leader, which can then run on and exit normally before its own
+    /// signal takes effect, so the kill must reach the leader directly.
+    /// One pass rarely shows the race on an idle machine; twenty make it
+    /// near certain under load.
+    #[test]
+    fn kill_ends_a_leader_waiting_on_its_child() {
+        use std::io::{BufRead, BufReader, Read};
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::Stdio;
+        for _ in 0..20 {
+            let slot = ProcessSlot::default();
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", "sleep 30 & echo started; wait; echo late"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            let mut child = slot.spawn(&mut command).unwrap();
+            let mut stdout = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            stdout.read_line(&mut line).unwrap();
+            assert_eq!(line, "started\n");
+            slot.kill();
+            let status = slot.reap(&mut child).unwrap();
+            let mut rest = String::new();
+            stdout.read_to_string(&mut rest).unwrap();
+            assert_eq!(status.signal(), Some(Signal::KILL.as_raw()), "{status:?}");
+            assert_eq!(rest, "");
+        }
     }
 }

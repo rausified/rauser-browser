@@ -49,6 +49,7 @@ pub const MAX_SUMMARY_PATH_BYTES: usize = 1024;
 /// supply one.
 #[derive(Clone, Debug)]
 pub struct PageSummary {
+    pub overview: Option<String>,
     pub event_id: String,
     pub url: String,
     pub title: String,
@@ -65,11 +66,13 @@ pub struct PageSummary {
 /// The durable, indexed form of a `PageSummary`: the marker payload stored in
 /// the daily log and replayed by `ArtifactIndex`. `url` and `artifact_id`
 /// hold the normalized URL and the identity derived from it, not whatever a
-/// caller originally supplied. Every field is required: no caller wrote a
-/// summary event before `record_key` and `harness` existed.
+/// caller originally supplied. `overview` is absent on older events.
+/// No caller wrote a summary event before `record_key` and `harness` existed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SummaryEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
     pub event_id: String,
     pub artifact_id: String,
     pub artifact_type: String,
@@ -92,6 +95,13 @@ pub const MAX_ARTIFACT_TYPE_BYTES: usize = 64;
 pub const MAX_ARTIFACT_KEY_BYTES: usize = 512;
 
 pub(crate) fn validate_page_summary(summary: &PageSummary) -> Result<(), &'static str> {
+    if summary.overview.as_ref().is_some_and(|value| {
+        value.trim().is_empty()
+            || value.chars().count() > MAX_OVERVIEW_CHARS
+            || value.chars().any(char::is_control)
+    }) {
+        return Err("invalid_summary_overview");
+    }
     if summary.title.trim().is_empty() || summary.title.len() > MAX_TITLE_BYTES {
         return Err("invalid_summary_title");
     }
@@ -178,6 +188,7 @@ pub(crate) fn check_summary_path(path: &str) -> Result<(), &'static str> {
 /// own `url`.
 pub(crate) fn validate_summary_event(event: &SummaryEvent) -> bool {
     let as_summary = PageSummary {
+        overview: event.overview.clone(),
         event_id: event.event_id.clone(),
         url: event.url.clone(),
         title: event.title.clone(),
@@ -228,6 +239,27 @@ pub fn owned_summary(bytes: &[u8], key: &RecordKey) -> bool {
         RecordKeyKind::Artifact => ("artifact_id", "url_id"),
     };
     owned_frontmatter(bytes, "summary", &[(id, key.value.as_str())], &[forbidden])
+}
+
+/// The `read_scope` a summary file of `key` records in its leading
+/// frontmatter, or `None` for a file `owned_summary` does not accept, an
+/// older file without one, or an unknown value.
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
+pub fn recorded_read_scope(file: &[u8], key: &RecordKey) -> Option<ReadScope> {
+    if !owned_summary(file, key) {
+        return None;
+    }
+    let text = std::str::from_utf8(file).ok()?;
+    let (frontmatter, _) = text.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let value = frontmatter
+        .lines()
+        .find_map(|line| line.strip_prefix("read_scope: "))?;
+    match value {
+        "whole" => Some(ReadScope::Whole),
+        "partial" => Some(ReadScope::Partial),
+        "page_only" => Some(ReadScope::PageOnly),
+        _ => None,
+    }
 }
 
 /// The record and canonical URL a summary file's `brauser:` block names
@@ -665,6 +697,7 @@ mod tests {
 
     fn summary() -> PageSummary {
         PageSummary {
+            overview: None,
             event_id: "11111111-1111-1111-1111-111111111111".into(),
             url: HN_URL.into(),
             title: "A good discussion".into(),
@@ -683,6 +716,7 @@ mod tests {
     fn event() -> SummaryEvent {
         let s = summary();
         SummaryEvent {
+            overview: None,
             event_id: s.event_id,
             artifact_id: web_page_artifact_id(HN_URL).unwrap(),
             artifact_type: s.artifact_type,
@@ -778,6 +812,38 @@ mod tests {
             validate_page_summary(&long),
             Err("invalid_summary_category")
         );
+    }
+
+    #[test]
+    fn overview_round_trips_and_old_events_still_validate() {
+        let mut event = event();
+        let old = serde_json::to_value(&event).unwrap();
+        assert!(old.get("overview").is_none());
+        assert!(validate_summary_event(
+            &serde_json::from_value(old).unwrap()
+        ));
+        event.overview = Some("A decision about the next release.".into());
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: SummaryEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, event);
+        assert!(validate_summary_event(&decoded));
+    }
+
+    #[test]
+    fn replay_rejects_invalid_overviews_but_accepts_the_unicode_bound() {
+        let mut event = event();
+        for value in [
+            "".into(),
+            "  ".into(),
+            "two\nlines".into(),
+            "a\0b".into(),
+            "x".repeat(MAX_OVERVIEW_CHARS + 1),
+        ] {
+            event.overview = Some(value);
+            assert!(!validate_summary_event(&event));
+        }
+        event.overview = Some("日".repeat(MAX_OVERVIEW_CHARS));
+        assert!(validate_summary_event(&event));
     }
 
     #[test]
@@ -1336,6 +1402,7 @@ mod tests {
                 },
             ],
             read_scope: Some(ReadScope::Whole),
+            access: crate::answer::Access::Ok,
             document_type: "specification".into(),
             category: "technical specification".into(),
             entities: Entities {
@@ -1434,6 +1501,46 @@ mod tests {
                 serde_json::Value::from(importance_str(level))
             );
         }
+    }
+
+    #[test]
+    fn recorded_read_scope_reads_owned_files_only() {
+        let (_root, vault) = fixed_vault();
+        let key = url_record_key(PAGE_URL).unwrap();
+        let other = url_record_key("https://e.example/other").unwrap();
+        let note_link = vault
+            .note_link(&key, PAGE_URL, LinkStyle::Relative)
+            .unwrap();
+        for scope in [ReadScope::Whole, ReadScope::Partial, ReadScope::PageOnly] {
+            let mut answer = answer();
+            answer.read_scope = Some(scope);
+            let file = render_summary(
+                &document(&key, &answer, note_link.clone()),
+                LinkStyle::Relative,
+            );
+            assert_eq!(recorded_read_scope(file.as_bytes(), &key), Some(scope));
+            // Another record's file is not read.
+            assert_eq!(recorded_read_scope(file.as_bytes(), &other), None);
+        }
+        let mut old = answer();
+        old.read_scope = None;
+        let file = render_summary(
+            &document(&key, &old, note_link.clone()),
+            LinkStyle::Relative,
+        );
+        assert_eq!(recorded_read_scope(file.as_bytes(), &key), None);
+        // A body line is not frontmatter, and an unknown value is not a scope.
+        let mut forged = answer();
+        forged.read_scope = Some(ReadScope::Whole);
+        forged.description = "read_scope: page_only".into();
+        let file = render_summary(&document(&key, &forged, note_link), LinkStyle::Relative);
+        assert_eq!(
+            recorded_read_scope(file.as_bytes(), &key),
+            Some(ReadScope::Whole)
+        );
+        let odd = file.replace("read_scope: whole", "read_scope: most");
+        assert_eq!(recorded_read_scope(odd.as_bytes(), &key), None);
+        assert_eq!(recorded_read_scope(b"not a summary", &key), None);
     }
 
     #[test]

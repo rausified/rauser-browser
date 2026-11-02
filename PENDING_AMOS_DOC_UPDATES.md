@@ -293,3 +293,37 @@
 
 
 - **Brauser — Preserve recorded incoming navigation in summaries (2026-11-02):** Summary runs freeze up to five host-derived incoming source/transition pairs, share that bounded untrusted context with the agent, and host-render a measured Incoming list with safe title links and last-recorded dates. The snapshot survives queueing, restart and Retry save; absent/legacy context adds nothing and grants no source retrieval. Ten new offline tests and the complete required/README gate pass (1,331 Rust-reported outcomes, including 92 IPC guard skips; 40 extension test files; both Clippy builds; 10,696 inert renderings). New nonempty run snapshots require the newer service. Assigned Re-learn work remains blocked on held PR #238, not included in this cycle.
+
+- Brauser (2026-11-02, brwr-sm3): panel saved summaries and Recent now show
+  the one-sentence overview with the document type, and summary run results
+  lead with it. Older records retain their labels; the optional overview
+  survives cache reopen/reindex. Deploy host and extension together; host
+  downgrade after new summary events is unsupported.
+- Brauser (2026-11-02, brwr-tsh1): retained summary history remains reachable
+  after panel restore and harness removal, including dismissed summaries and
+  summaries too old for panel cards. Tasks can still reveal dismissed runs.
+
+- 2026-11-02 — Brauser (`brwr-tp1`): custom title capture rules and
+  tab-title alias suggestions now retain up to two trailing base64 `=` in
+  identifiers, matching URL behavior in both engines. Malformed padding and
+  length overflow still reject the title entry; `=` is no longer a valid token
+  delimiter. Added 26 shared vectors and verified 2,024 offline comparisons;
+  full local gate passed with explicit sandbox skips. Fuzz compilation needs
+  its uncached dependency and platform/browser evidence remains CI/human work.
+
+
+- 2026-11-02 — Brauser (`brwr-sm7`): automatic summaries require the original
+  page URL to match a current adapter, checked under the native configuration
+  lock. Removed/narrowed rules still preserve existing notes and explicit
+  summaries. An offline saved-note regression covers both changes.
+- 2026-11-02 — Brauser (`brwr-sm9`): already-summarized suppression now expires
+  by local calendar day, so viewer-only summaries can retry while Chrome stays
+  open. Same-day suppression, pending dwell and retry state remain intact;
+  the host continues deciding which saved summaries block another run.
+
+- 2026-11-02 — Brauser (`brwr-sm5`): summary and task agents now learn when
+  browser page text or selection was capped, including automatic summaries and
+  queued recovery. Summaries must retrieve the full artifact or report partial/
+  viewer-only reading; a page cannot forge the stored provenance. Host and
+  extension deploy together, and service rollback requires no queued/running
+  runs because older services reject the new true status flag.
