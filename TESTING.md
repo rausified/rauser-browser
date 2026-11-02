@@ -1402,11 +1402,23 @@ cleanup; on Windows an open handle makes the cleanup fail.
   test process's environment is never changed, and `mp_child` is a no-op
   without the variable. Children share one root and cache, start together
   on a barrier file, never take `.config.lock`, and each writes one JSON
-  result (errors plus a regeneration trace) under `<dir>/results`. *The
-  harness is still `#[ignore]`d until the multi-process acceptance test
-  lands; until then run it with
-  `cargo test --locked -p brauser --lib mp_ -- --ignored`.* These use local
-  temporary folders only; no browser, dialog or service is involved.
+  result (errors, busy count and a regeneration trace) under
+  `<dir>/results`. `mp_deliver_read_and_regenerate_share_one_cache` runs
+  deliverers (with retried batches), readers and regenerators at once and
+  requires no error and no surfaced busy in any process, no lost or
+  duplicated event, visit or provenance row, totals equal to the logged
+  sums, no overlapping writes of one artifact, no (artifact, generation)
+  written twice, no lost dirty mark, and an equal dump after `reindex`.
+  `mp_killing_the_regenerator_hands_over_the_lock_and_keeps_its_mark` kills
+  the lock holder mid-pass. Run them with
+  `cargo test --locked -p brauser --lib mp_`. A test that drives several
+  real `brauser` host processes over native messaging (plan T20(b)) is not
+  written yet; those hosts still take `.config.lock` around index calls.
+  Single-process tests stand in for the interleavings a run may not hit:
+  the `AFTER_STAT`, `AFTER_NEEDS_REBUILD` and `BETWEEN_STAGE_TRANSACTIONS`
+  hooks run another process's step (an append, a finished rebuild) at the
+  exact point it would race. These use local temporary folders only; no
+  browser, dialog or service is involved.
 
 ## Worklog capture gaps
 

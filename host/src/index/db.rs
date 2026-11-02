@@ -30,6 +30,8 @@ use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavio
 pub(crate) const DB_FILE: &str = "index.db";
 /// `PRAGMA application_id`: 'brwr'.
 pub(crate) const APPLICATION_ID: u32 = 0x6272_7772;
+/// The format 8 snapshot writer's `application_id`: 'BRWR'.
+pub(crate) const LEGACY_APPLICATION_ID: u32 = 0x4252_5752;
 /// `PRAGMA user_version`: the cache format, 9.
 pub(crate) const SCHEMA_VERSION: i64 = super::STATE_VERSION as i64;
 /// How long one statement waits for another connection's lock.
@@ -219,7 +221,8 @@ pub(crate) enum FileState {
     NotRegular,
     /// SQLite with this cache's `application_id`.
     Ours,
-    /// Not ours and not in WAL mode: safe to remove with its sidecars.
+    /// Not ours and either not in WAL mode or the format 8 writer's own
+    /// ('BRWR'): safe to remove with its sidecars.
     Legacy,
     /// Another application's WAL-mode database: never touched.
     ForeignWal,
@@ -294,12 +297,17 @@ fn open_with(
                 // (SQLITE_IOERR_DELETE_NOENT), and two must not both switch
                 // a new file to WAL, which SQLite answers with an immediate
                 // SQLITE_BUSY. A current file never waits.
+                //
+                // Under the lock the main file's header alone decides: every
+                // format 9 host writes its schema and `application_id` in
+                // rollback mode before switching to WAL, all while holding
+                // this lock, so a header that is not ours is never a fresh
+                // schema in flight. No SQLite connection is opened first: it
+                // would replay a stale `-wal` left beside a file renamed over
+                // ours (a pre-format-9 host's snapshot), read our page 1 from
+                // it, and never clear the file.
                 replacing = Some(open_lock(cache_dir)?);
                 let state = detect_legacy(&path).map_err(|error| unavailable(&path, error))?;
-                let state = match state {
-                    FileState::Legacy => confirm_legacy(&path)?,
-                    state => state,
-                };
                 match state {
                     FileState::Legacy => {
                         if clear_legacy(&path, remove)? == Cleared::Removed {
@@ -482,7 +490,7 @@ fn ensure_schema(conn: &mut Connection) -> Result<()> {
 }
 
 /// Classifies the file at `path` from its first 100 bytes, with no SQLite
-/// connection open (so a foreign file's stale WAL frames are never replayed).
+/// connection open (so stale WAL frames beside it are never replayed).
 pub(crate) fn detect_legacy(path: &Path) -> io::Result<FileState> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -508,30 +516,16 @@ pub(crate) fn detect_legacy(path: &Path) -> io::Result<FileState> {
     if application_id == APPLICATION_ID {
         return Ok(FileState::Ours);
     }
+    // The format 8 snapshot writer's own file, even if an external SQL
+    // consumer switched it to WAL: this cache's to replace.
+    if application_id == LEGACY_APPLICATION_ID {
+        return Ok(FileState::Legacy);
+    }
     // Bytes 18-19 are the write and read format versions: 2 means WAL.
     if header[18] == 2 || header[19] == 2 {
         return Ok(FileState::ForeignWal);
     }
     Ok(FileState::Legacy)
-}
-
-/// Re-reads a rollback-mode legacy header under SQLite's shared lock, so a
-/// host committing a fresh schema at that moment is never mistaken for a
-/// legacy file. Closed again before anything is removed.
-fn confirm_legacy(path: &Path) -> Result<FileState> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let Ok(conn) = Connection::open_with_flags(path, flags) else {
-        return Ok(FileState::Legacy);
-    };
-    conn.busy_timeout(busy_timeout()).map_err(sqlite)?;
-    let application_id =
-        conn.pragma_query_value(None, "application_id", |row| row.get::<_, i64>(0));
-    drop(conn);
-    match application_id {
-        Ok(id) if id == i64::from(APPLICATION_ID) => Ok(FileState::Ours),
-        Err(error) if is_busy(&error) => Err(busy()),
-        _ => Ok(FileState::Legacy),
-    }
 }
 
 fn sidecar(path: &Path, suffix: &str) -> PathBuf {
@@ -669,6 +663,39 @@ pub(crate) fn read_txn<T>(
     let value = result.map_err(map_busy)?;
     reset?;
     Ok(value)
+}
+
+/// Whether SQLite reported the database itself as damaged anywhere in
+/// `error`'s chain (`SQLITE_CORRUPT`, `SQLITE_NOTADB`).
+pub(crate) fn is_corrupt(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<rusqlite::Error>()
+            .and_then(rusqlite::Error::sqlite_error_code)
+            .is_some_and(|code| {
+                matches!(code, ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase)
+            })
+    })
+}
+
+/// Delete a damaged `index.db` and its sidecars (sidecars first), under the
+/// lock that serializes creating and replacing it, so the next
+/// write-capable open creates a fresh one. Where the file cannot be deleted
+/// (Windows: another host holds it), its tables are dropped in place, which
+/// a badly damaged file may refuse; history then stays unavailable.
+pub(crate) fn discard(cache_dir: &Path) -> Result<()> {
+    let _replacing = open_lock(cache_dir)?;
+    let path = db_path(cache_dir);
+    match detect_legacy(&path).map_err(|error| unavailable(&path, error))? {
+        FileState::Ours | FileState::Legacy | FileState::Empty => {
+            clear_legacy(&path, &mut |target| fs::remove_file(target))?;
+            Ok(())
+        }
+        FileState::Missing => Ok(()),
+        FileState::Directory | FileState::NotRegular | FileState::ForeignWal => Err(
+            DbError::Unavailable(format!("{} is not this cache's database", path.display())).into(),
+        ),
+    }
 }
 
 /// True for SQLite's busy and locked codes.
@@ -1242,6 +1269,89 @@ mod tests {
             assert_eq!(fs::read(&path).unwrap(), before);
             assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
         }
+    }
+
+    /// A format 8 snapshot as its hand-written writer left it: 64 KiB
+    /// pages, application_id 'BRWR', a rollback journal.
+    fn write_v8_snapshot(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "PRAGMA page_size = 65536;
+             PRAGMA application_id = 1112692562;
+             CREATE TABLE artifacts(artifact_id TEXT, legacy TEXT);
+             INSERT INTO artifacts VALUES ('a', 'old');",
+        )
+        .unwrap();
+        drop(conn);
+        let header = fs::read(path).unwrap();
+        assert_eq!((header[18], header[19]), (1, 1));
+        assert_eq!(&header[68..72], b"BRWR");
+    }
+
+    #[test]
+    fn a_stale_wal_beside_a_snapshot_renamed_over_ours_is_never_replayed() {
+        let dir = TempDir::new().unwrap();
+        let path = db_path(dir.path());
+        // A format 9 host killed with uncheckpointed frames, page 1 among
+        // them (a schema change rewrites it).
+        let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        conn.execute_batch("CREATE TABLE stale_frames(x); INSERT INTO stale_frames VALUES (1);")
+            .unwrap();
+        let wal = fs::read(sidecar(&path, "-wal")).unwrap();
+        let shm = fs::read(sidecar(&path, "-shm")).unwrap();
+        assert!(!wal.is_empty());
+        drop(conn);
+        // A pre-format-9 host then renames its snapshot over index.db,
+        // leaving the old sidecars beside it.
+        for suffix in SIDECARS {
+            let _ = fs::remove_file(sidecar(&path, suffix));
+        }
+        fs::remove_file(&path).unwrap();
+        write_v8_snapshot(&path);
+        fs::write(sidecar(&path, "-wal"), &wal).unwrap();
+        fs::write(sidecar(&path, "-shm"), &shm).unwrap();
+        assert_eq!(detect_legacy(&path).unwrap(), FileState::Legacy);
+
+        let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let check: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(check, "ok");
+        assert_eq!(pragma_i64(&conn, "application_id"), 0x6272_7772);
+        assert_eq!(pragma_i64(&conn, "page_size"), 4096);
+        let stale: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'stale_frames'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0);
+        assert!(!columns(&conn, "artifacts").contains(&"legacy".to_string()));
+    }
+
+    #[test]
+    fn a_format_8_snapshot_switched_to_wal_is_still_replaced() {
+        let dir = TempDir::new().unwrap();
+        let path = db_path(dir.path());
+        write_v8_snapshot(&path);
+        // An external SQL consumer turned on WAL.
+        let consumer = Connection::open(&path).unwrap();
+        let mode: String = consumer
+            .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        drop(consumer);
+        let header = fs::read(&path).unwrap();
+        assert_eq!((header[18], header[19]), (2, 2));
+        assert_eq!(detect_legacy(&path).unwrap(), FileState::Legacy);
+
+        let error = open(dir.path(), Mode::IfExists).unwrap_err();
+        assert!(matches!(db_error(&error), DbError::Legacy), "{error:#}");
+        let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        assert_eq!(pragma_i64(&conn, "application_id"), 0x6272_7772);
+        assert_eq!(pragma_i64(&conn, "user_version"), 9);
+        assert!(!columns(&conn, "artifacts").contains(&"legacy".to_string()));
     }
 
     #[test]

@@ -73,6 +73,27 @@ const DERIVED_TABLES: [&str; 5] = [
     "brauser_artifact_days",
 ];
 
+/// When [`ArtifactIndex::staged_pass`] may begin a rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Begin {
+    /// `brauser reindex`: resume one in progress, else begin one.
+    Always,
+    /// A catch-up: resume one in progress, else begin one only for a store
+    /// whose location does not match.
+    IfNeeded,
+    /// A migration: resume one in progress, never begin one.
+    ResumeOnly,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once, between the next staged pass's first transaction and its
+    /// finalize on this thread: a test's stand-in for another host process
+    /// acting in that gap.
+    pub(super) static BETWEEN_STAGE_TRANSACTIONS: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// What a finished rebuild marks dirty.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Finish {
@@ -303,6 +324,28 @@ pub(super) fn finalize(
     known_files: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
     let artifacts_dir = &location.storage.artifacts_dir;
+    // The files regeneration wrote, and their digests, describe the folder
+    // they were written in. Under another home folder or artifacts folder
+    // they say nothing about the files there, so they are dropped and every
+    // artifact is written again, as a store built from nothing would be.
+    // (A new log folder alone leaves the files where they were.)
+    let mut moved = false;
+    for (key, value) in [
+        ("root", location.storage.root.as_str()),
+        ("root_identity", location.root_identity),
+        ("artifacts_dir", artifacts_dir.as_str()),
+    ] {
+        moved |= store::meta(tx, key)?.is_some_and(|stored| stored != value);
+    }
+    let finish = if moved {
+        tx.execute(
+            "UPDATE brauser_group_state SET file_path = NULL, render_sha256 = NULL",
+            [],
+        )?;
+        Finish::All
+    } else {
+        finish
+    };
     let root = match finish {
         Finish::Missing => Some(
             open_selected_root(
@@ -580,16 +623,25 @@ impl ArtifactIndex {
     /// the rebuild finished. The roll-up file scan runs between the two
     /// transactions, never inside one.
     pub(super) fn rebuild_pass(&self, finish: Finish) -> Result<bool> {
-        self.staged_pass(finish, false)
+        self.staged_pass(finish, Begin::Always)
+    }
+
+    /// [`Self::rebuild_pass`] when the store still needs one, decided inside
+    /// the pass's write transaction: a rebuild in progress resumes, and one
+    /// begins only for a store that describes another folder or layout (or
+    /// none). A caller that saw a stale answer outside the transaction
+    /// (another host finished the rebuild since) begins no second one.
+    pub(super) fn rebuild_if_needed(&self, finish: Finish) -> Result<bool> {
+        self.staged_pass(finish, Begin::IfNeeded)
     }
 
     /// [`Self::rebuild_pass`] for a rebuild already in progress: when none
     /// is (another host finished it), nothing begins and it reports done.
     pub(super) fn resume_rebuild_pass(&self, finish: Finish) -> Result<bool> {
-        self.staged_pass(finish, true)
+        self.staged_pass(finish, Begin::ResumeOnly)
     }
 
-    fn staged_pass(&self, finish: Finish, resume_only: bool) -> Result<bool> {
+    fn staged_pass(&self, finish: Finish, begin: Begin) -> Result<bool> {
         let adapters = self.adapters.as_deref();
         let fingerprint = self.adapters_fingerprint();
         // Passes touch only the stage tables, so they skip the derived-rows
@@ -597,7 +649,12 @@ impl ArtifactIndex {
         // derived under an earlier adapter document until then).
         let mut conn = store::open(&self.cache_dir)?;
         let staged = db::write_txn(&mut conn, |tx| {
-            if resume_only && !catchup::rebuilding(tx)? {
+            let skip = match begin {
+                Begin::Always => false,
+                Begin::IfNeeded => !catchup::rebuilding(tx)? && self.location_matches(tx)?,
+                Begin::ResumeOnly => !catchup::rebuilding(tx)?,
+            };
+            if skip {
                 return Ok(None);
             }
             pass(tx, &self.storage, &self.root_identity).map(Some)
@@ -606,6 +663,10 @@ impl ArtifactIndex {
             None => return Ok(true),
             Some(false) => return Ok(false),
             Some(true) => {}
+        }
+        #[cfg(test)]
+        if let Some(hook) = BETWEEN_STAGE_TRANSACTIONS.with(std::cell::Cell::take) {
+            hook();
         }
         let known = self.owned_rollup_files();
         db::write_txn(&mut conn, |tx| {
@@ -621,6 +682,20 @@ impl ArtifactIndex {
             #[cfg(test)]
             store::oracle::check(tx, adapters)?;
             Ok(true)
+        })
+    }
+
+    /// Mark every artifact with a record dirty that is not already (the
+    /// reindex tail, which rewrites every file).
+    pub(super) fn mark_every_artifact_dirty(&self) -> Result<()> {
+        let mut conn = store::open(&self.cache_dir)?;
+        db::write_txn(&mut conn, |tx| {
+            let unmarked = ids(
+                tx,
+                "SELECT artifact_id FROM artifacts
+                 WHERE artifact_id NOT IN (SELECT artifact_id FROM dirty_artifacts)",
+            )?;
+            store::mark_dirty(tx, &unmarked)
         })
     }
 

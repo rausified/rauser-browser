@@ -516,3 +516,98 @@ fn a_valid_stale_cache_catches_up_events_appended_by_another_path() {
     let restarted = ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap();
     assert!(restarted.artifact(&b.artifact_id).unwrap().is_some());
 }
+
+/// Another process appending to a log between a pass's stat and its read
+/// (a concurrent capture) is not a changed log: the pass ingests what it
+/// stat'ed, and the next pass reads the rest. Covers a staged rebuild's
+/// pass, the whole read of a new log and the tail read of a grown one.
+#[test]
+fn an_append_during_catch_up_is_read_by_the_next_pass_not_an_error() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let event = |n: u32| {
+        activity(
+            &format!("00000000-0000-4000-8000-00000000000{n}"),
+            &format!("RACE{n}"),
+            "Race",
+            &format!("2026-10-15T12:0{n}:00Z"),
+        )
+    };
+    let events = (1..=6).map(event).collect::<Vec<_>>();
+    let append = |path: &Path, event: &ActivityEvent| {
+        let path = path.to_path_buf();
+        let marker = activity_marker(event);
+        Box::new(move || {
+            StdOpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .write_all(marker.as_bytes())
+                .unwrap();
+        }) as Box<dyn FnOnce()>
+    };
+    let hook = |hook: Box<dyn FnOnce()>| catchup::AFTER_STAT.with(|cell| cell.set(Some(hook)));
+    let fired = || catchup::AFTER_STAT.with(std::cell::Cell::take).is_none();
+
+    // The staged rebuild of a new cache.
+    let one = write_log(root.path(), "2026-10-15.md", &[&events[0]]);
+    hook(append(&one, &events[1]));
+    assert!(index.artifact(&events[0].artifact_id).unwrap().is_some());
+    assert!(fired());
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(stored_events(&index).len(), 2);
+
+    // The whole read of a log never read before, during a delivery.
+    let two = write_log(root.path(), "2026-10-16.md", &[&events[2]]);
+    hook(append(&two, &events[3]));
+    index.record_activity(&events[2], &[]).unwrap();
+    assert!(fired());
+    assert_eq!(
+        stored_events(&index).len(),
+        3,
+        "the append came after the stat"
+    );
+
+    // The tail read of a grown log, during a read.
+    append(&one, &events[4])();
+    hook(append(&one, &events[5]));
+    assert!(index.artifact(&events[4].artifact_id).unwrap().is_some());
+    assert!(fired());
+
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(stored_events(&index).len(), 6);
+    for event in &events {
+        assert_eq!(
+            index.artifact(&event.artifact_id).unwrap().unwrap().opens,
+            1
+        );
+    }
+}
+
+/// A log that shrinks between the stat and the read is not an append: the
+/// pass refuses it rather than ingesting a cut it never saw whole.
+#[test]
+fn a_log_that_shrinks_during_catch_up_still_fails_the_pass() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let first = activity(
+        "00000000-0000-4000-8000-000000000001",
+        "SHRINK",
+        "Shrink",
+        "2026-10-15T12:00:00Z",
+    );
+    let path = write_log(root.path(), "2026-10-15.md", &[&first]);
+    let cut = path.clone();
+    catchup::AFTER_STAT.with(|hook| {
+        hook.set(Some(Box::new(move || {
+            fs::write(&cut, format!("{LOG_HEADER}\n")).unwrap();
+        })));
+    });
+    let error = index.reconcile_from_logs().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("the log changed during catch-up"),
+        "{error:#}"
+    );
+}

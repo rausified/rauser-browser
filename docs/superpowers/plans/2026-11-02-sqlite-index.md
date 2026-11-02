@@ -380,7 +380,7 @@ This replaces `adapter_dependent_files` and `dirty_containers`. If T17 shows it 
 
 This runs on the first write-capable open by a format-9 host, and only when there is something to index. Read-only and discovery paths never create the file (native test 4101 and relearn test 728).
 
-1. **Detect.** With no connection open, read the first 100 bytes of `index.db` if it exists. A file that is not SQLite, has `application_id != 'brwr'` or has `user_version != 9` is legacy or foreign. The hand-written writer's file has application_id 0.
+1. **Detect.** With no connection open, read the first 100 bytes of `index.db` if it exists. A file that is not SQLite, has `application_id != 'brwr'` or has `user_version != 9` is legacy or foreign. The hand-written writer's file has application_id 0x42525752 ('BRWR'), which counts as legacy even when its header is in WAL mode.
 2. **Clear it safely.** Delete `index.db-wal` and `index.db-shm` first, so stale frames can never be replayed into a foreign file, then delete `index.db`, and do all of this only after header bytes 18-19 show the file is not WAL-mode.
    - A directory at `index.db` means "artifact history is unavailable", with capture durable and the path untouched (native test 7770).
    - If the delete fails on Windows because a pre-upgrade host holds the file, open it in rollback mode and DROP the legacy tables in place. Until that succeeds, reads stay "unavailable", and the next open retries.

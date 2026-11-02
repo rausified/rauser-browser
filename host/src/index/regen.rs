@@ -244,7 +244,16 @@ impl ArtifactIndex {
                     let relative = artifact_path(&self.storage.artifacts_dir, artifact);
                     let shown = || relative.to_string_lossy().into_owned();
                     let rendered = render_artifact(&self.storage.artifacts_dir, artifact);
-                    match replace_artifact(root, &self.storage.artifacts_dir, artifact, &rendered) {
+                    let written = {
+                        // The multi-process harness's regeneration trace (7vf).
+                        #[cfg(test)]
+                        let _span = tests::mp_harness::SpanGuard::start(
+                            id,
+                            u64::try_from(mark.generation).ok(),
+                        );
+                        replace_artifact(root, &self.storage.artifacts_dir, artifact, &rendered)
+                    };
+                    match written {
                         // A warning is post-publication work (temporary
                         // cleanup, directory sync); the file is in place, so
                         // it is written and not retried, as for page notes.
@@ -339,9 +348,6 @@ pub(super) fn replace_artifact(
     artifact: &ArtifactRow,
     contents: &str,
 ) -> Result<OwnedWrite> {
-    // The multi-process harness's regeneration trace (7vf).
-    #[cfg(test)]
-    let _span = tests::mp_harness::SpanGuard::start(&artifact.artifact_id, None);
     replace_owned_file(
         root,
         &artifact_path(artifacts_dir, artifact),

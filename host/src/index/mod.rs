@@ -101,6 +101,11 @@ thread_local! {
     /// Rows inserted, updated or deleted by committed `db::write_txn`s.
     static ROWS_WRITTEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static SCAN_LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(MAX_SCAN_BYTES) };
+    /// Runs once, right after the next catch-up on this thread finds the
+    /// store needs a rebuild: a test's stand-in for another host process
+    /// finishing that rebuild in between.
+    static AFTER_NEEDS_REBUILD: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// The changed-file read bound for one catch-up pass. Tests lower it so a
@@ -526,8 +531,16 @@ impl ArtifactIndex {
         // A catch-up that finds a shrunk or removed log commits the rebuild
         // request, which the next round's staged pass then serves.
         for _ in 0..2 {
-            if self.needs_rebuild()? && !self.rebuild_pass(rebuild::Finish::Changed)? {
-                bail!(INCOMPLETE_CATCH_UP);
+            // The stat-free check keeps a normal delivery to one write
+            // transaction; the pass decides again under the write lock.
+            if self.needs_rebuild()? {
+                #[cfg(test)]
+                if let Some(hook) = AFTER_NEEDS_REBUILD.with(std::cell::Cell::take) {
+                    hook();
+                }
+                if !self.rebuild_if_needed(rebuild::Finish::Changed)? {
+                    bail!(INCOMPLETE_CATCH_UP);
+                }
             }
             let mut conn = store::open(&self.cache_dir)?;
             let outcome = store::write(&mut conn, adapters, |tx| {
@@ -630,7 +643,31 @@ impl ArtifactIndex {
     /// than one pass's read bound is read in several bounded passes, each
     /// committing its progress, within this one call; a rebuild already in
     /// progress (another call, or a host that stopped mid-pass) resumes.
+    ///
+    /// A database SQLite reports as damaged (`SQLITE_CORRUPT`,
+    /// `SQLITE_NOTADB`), even one whose header still reads as this cache's,
+    /// is deleted with its sidecars and rebuilt from the logs.
     pub fn reindex(&self) -> Result<RegenerationReport> {
+        match self.rebuild_for_reindex() {
+            Err(error) if db::is_corrupt(&error) => {
+                tracing::warn!(
+                    error = format!("{error:#}"),
+                    "index.db is damaged; replacing it with one rebuilt from the logs"
+                );
+                db::discard(&self.cache_dir)?;
+                self.rebuild_for_reindex()?;
+            }
+            result => result?,
+        }
+        // Vanished container files were adopted from the store and from the
+        // owned roll-up files on disk; a replaced file is not Brauser's.
+        let report = self.regenerate_with(|_, _| {});
+        self.checkpoint_wal();
+        report
+    }
+
+    /// The reindex's rebuild, with every artifact marked dirty after it.
+    fn rebuild_for_reindex(&self) -> Result<()> {
         // A legacy cache's import still supplies the previous winners; the
         // reindex then finishes its rebuild and its cleanup.
         let migrating = self.legacy_step()? != Legacy::None;
@@ -638,11 +675,9 @@ impl ArtifactIndex {
         if migrating {
             self.finish_legacy()?;
         }
-        // Vanished container files were adopted from the store and from the
-        // owned roll-up files on disk; a replaced file is not Brauser's.
-        let report = self.regenerate_with(|_, _| {});
-        self.checkpoint_wal();
-        report
+        // Another host may have finalized this rebuild's stage first, with
+        // its own (narrower) marking, so the forced rewrite is marked here.
+        self.mark_every_artifact_dirty()
     }
 
     /// Best-effort lifecycle pass used at native-host connection boundaries.

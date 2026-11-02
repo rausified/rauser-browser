@@ -35,6 +35,10 @@ pub(crate) enum Role {
     Read,
     Regenerate,
     Reindex,
+    /// Start a regeneration pass and stop for good inside it, holding
+    /// `index-regen.lock`, after its first file is written and before that
+    /// file's clear commits; the parent kills it there.
+    HoldRegen,
 }
 
 impl Role {
@@ -44,13 +48,20 @@ impl Role {
             Role::Read => "read",
             Role::Regenerate => "regenerate",
             Role::Reindex => "reindex",
+            Role::HoldRegen => "holdregen",
         }
     }
 
     fn parse(value: &str) -> Option<Self> {
-        [Role::Deliver, Role::Read, Role::Regenerate, Role::Reindex]
-            .into_iter()
-            .find(|role| role.name() == value)
+        [
+            Role::Deliver,
+            Role::Read,
+            Role::Regenerate,
+            Role::Reindex,
+            Role::HoldRegen,
+        ]
+        .into_iter()
+        .find(|role| role.name() == value)
     }
 }
 
@@ -93,8 +104,7 @@ impl ChildSpec {
 pub(crate) struct RegenSpan {
     pub(crate) pid: u32,
     pub(crate) artifact: String,
-    /// The dirty generation being cleared; `None` until the SQL store
-    /// gives markers generations.
+    /// The dirty generation the pass snapshotted for it.
     pub(crate) generation: Option<u64>,
     pub(crate) start_ns: u64,
     pub(crate) end_ns: u64,
@@ -174,6 +184,8 @@ pub(crate) struct ChildResult {
     /// Event IDs this child made durable in the log (deliverers only).
     pub(crate) delivered: Vec<String>,
     pub(crate) trace: Vec<RegenSpan>,
+    /// Busy errors that outlasted every wait and retry (`BUSY_SURFACED`).
+    pub(crate) busy_surfaced: u64,
 }
 
 /// The shared layout every child of one run opens.
@@ -194,6 +206,11 @@ impl Layout {
             results: dir.join("results"),
             barrier: dir.join("barrier"),
         }
+    }
+
+    /// Written by a [`Role::HoldRegen`] child once it holds the lock.
+    fn held(&self) -> PathBuf {
+        self.results.join("held")
     }
 
     /// Create the directories a run needs; the barrier stays closed.
@@ -311,17 +328,41 @@ fn run_child(spec: &ChildSpec) -> ChildResult {
         errors: Vec::new(),
         delivered: Vec::new(),
         trace: Vec::new(),
+        busy_surfaced: 0,
     };
     wait_for_barrier(&layout);
+    let busy_before = BUSY_SURFACED.with(std::cell::Cell::get);
     let ((), trace) = traced(|| match spec.role {
         Role::Deliver => deliver(&layout, &index, spec.seed, &mut result),
         Role::Read => read(&index, &mut result),
+        // The explicit refresh (waits for the lock) alternating with the
+        // connection-close pass (skips while another process holds it).
         Role::Regenerate => {
-            for _ in 0..BATCHES {
+            for n in 0..BATCHES {
                 result.ops += 1;
-                if let Err(error) = index.regenerate_dirty() {
+                let pass = if n % 2 == 0 {
+                    index.regenerate_dirty().map(drop)
+                } else {
+                    index.regenerate_dirty_unless_busy().map(drop)
+                };
+                if let Err(error) = pass {
                     result.errors.push(format!("{error:#}"));
                 }
+            }
+        }
+        Role::HoldRegen => {
+            result.ops += 1;
+            let held = layout.held();
+            let pass = index.regenerate_with(|step, _| {
+                if step == RegenStep::Written {
+                    fs::write(&held, b"held").unwrap();
+                    loop {
+                        std::thread::sleep(Duration::from_secs(1));
+                    }
+                }
+            });
+            if let Err(error) = pass {
+                result.errors.push(format!("{error:#}"));
             }
         }
         Role::Reindex => {
@@ -332,6 +373,7 @@ fn run_child(spec: &ChildSpec) -> ChildResult {
         }
     });
     result.trace = trace;
+    result.busy_surfaced = BUSY_SURFACED.with(std::cell::Cell::get) - busy_before;
     result
 }
 
@@ -367,6 +409,13 @@ fn deliver(layout: &Layout, index: &ArtifactIndex, seed: u64, result: &mut Child
         result.ops += 1;
         if let Err(error) = index.record_activities(&events, &strip_params) {
             result.errors.push(format!("{error:#}"));
+        }
+        // The extension retries a batch whose acknowledgement it missed:
+        // the same IDs and bodies again, already logged and indexed.
+        if batch % 4 == 3
+            && let Err(error) = index.record_activities(&events, &strip_params)
+        {
+            result.errors.push(format!("retry: {error:#}"));
         }
     }
 }
@@ -412,7 +461,13 @@ fn child_spec_round_trips_paths_with_colons() {
         "/tmp/a:b",
         "/tmp/plain",
     ] {
-        for role in [Role::Deliver, Role::Read, Role::Regenerate, Role::Reindex] {
+        for role in [
+            Role::Deliver,
+            Role::Read,
+            Role::Regenerate,
+            Role::Reindex,
+            Role::HoldRegen,
+        ] {
             let spec = ChildSpec {
                 role,
                 dir: PathBuf::from(dir),
@@ -459,7 +514,7 @@ fn replace_artifact_records_a_span_only_while_tracing() {
     let span = &spans[0];
     assert_eq!(span.artifact, "work:example.com/traced");
     assert_eq!(span.pid, std::process::id());
-    assert_eq!(span.generation, None);
+    assert!(span.generation.is_some());
     assert!(before <= span.start_ns && span.start_ns <= span.end_ns);
 
     // Off by default: an untraced pass records nothing anywhere.
@@ -475,47 +530,172 @@ fn replace_artifact_records_a_span_only_while_tracing() {
     assert!(TRACE.with(|trace| trace.borrow().is_none()));
 }
 
-/// The skeleton run against today's index: two deliverers and two readers
-/// share one root and cache with no config lock. 7vf (T20) removes the
-/// `ignore` and adds the regenerate and reindex roles and its assertions.
+fn count(index: &ArtifactIndex, query: &str) -> i64 {
+    match sql::sql_rows(&index.database_path(), query).as_slice() {
+        [row] => match row.as_slice() {
+            [sql::Value::Integer(value)] => *value,
+            other => panic!("{query}: {other:?}"),
+        },
+        other => panic!("{query}: {other:?}"),
+    }
+}
+
+/// The multi-process acceptance (7vf, plan T20(a)): deliverers (with
+/// retried batches), readers and regenerators (the waiting refresh and the
+/// skipping connection-close pass) share one root and cache at once, with
+/// no config lock.
 #[test]
-#[ignore = "multi-process skeleton; T20 turns it into the acceptance test"]
-fn mp_deliver_and_read_share_one_cache() {
+fn mp_deliver_read_and_regenerate_share_one_cache() {
+    const DELIVERERS: u64 = 3;
     let dir = tempfile::tempdir().unwrap();
     let layout = Layout::prepare(dir.path());
-    let mut children = spawn_children(Role::Deliver, 2, dir.path(), 0);
+    let mut children = spawn_children(Role::Deliver, DELIVERERS, dir.path(), 0);
     children.extend(spawn_children(Role::Read, 2, dir.path(), 100));
+    children.extend(spawn_children(Role::Regenerate, 2, dir.path(), 200));
     release(dir.path());
     let results = collect(children, dir.path());
 
-    assert_eq!(results.len(), 4);
+    assert_eq!(results.len() as u64, DELIVERERS + 4);
+    // Every operation in every process succeeded, and no busy error
+    // outlasted its waits.
     for result in &results {
+        assert!(
+            result.errors.is_empty(),
+            "{:?} {}: {:#?}",
+            result.role,
+            result.seed,
+            result.errors
+        );
+        assert_eq!(result.busy_surfaced, 0, "{:?} {}", result.role, result.seed);
         assert_eq!(
             result.ops,
             BATCHES * if result.role == Role::Read { 2 } else { 1 }
         );
-        assert!(result.trace.is_empty(), "no role here regenerates");
+        if result.role != Role::Regenerate {
+            assert!(result.trace.is_empty(), "only regenerators write files");
+        }
     }
     let delivered = results
         .iter()
         .flat_map(|result| result.delivered.iter().cloned())
         .collect::<BTreeSet<_>>();
-    assert_eq!(delivered.len() as u64, 2 * BATCHES * BATCH_SIZE);
-    let errors = results
+    let total = DELIVERERS * BATCHES * BATCH_SIZE;
+    assert_eq!(delivered.len() as u64, total);
+
+    // One regenerator at a time: no two writes of one artifact overlap,
+    // and no (artifact, generation) is written twice.
+    let mut spans = results
         .iter()
-        .flat_map(|result| result.errors.iter())
+        .flat_map(|result| result.trace.iter().cloned())
         .collect::<Vec<_>>();
-    eprintln!("errors against today's index: {}", errors.len());
-    for error in errors.iter().take(10) {
-        eprintln!("  {error}");
+    spans.sort_by_key(|span| (span.artifact.clone(), span.start_ns));
+    for pair in spans.windows(2) {
+        if pair[0].artifact == pair[1].artifact {
+            assert!(pair[0].end_ns <= pair[1].start_ns, "{pair:?}");
+        }
+    }
+    let mut written = BTreeSet::new();
+    for span in &spans {
+        let generation = span.generation.expect("every write has a generation");
+        assert!(
+            written.insert((span.artifact.clone(), generation)),
+            "{span:?} written twice"
+        );
     }
 
-    // Every logged event is indexed once the logs are reconciled.
+    // Nothing is lost or duplicated, and the totals are the logged sums.
     let index = layout.index();
     index.reconcile_from_logs().unwrap();
-    let opens = (0..ARTIFACTS)
-        .filter_map(|n| index.artifact(&format!("work:example.com/mp{n}")).unwrap())
-        .map(|view| u64::from(view.opens))
-        .sum::<u64>();
-    assert_eq!(opens, 2 * BATCHES * BATCH_SIZE);
+    let total = i64::try_from(total).unwrap();
+    assert_eq!(count(&index, "SELECT count(*) FROM brauser_events"), total);
+    assert_eq!(count(&index, "SELECT count(*) FROM visits"), total);
+    assert_eq!(
+        count(
+            &index,
+            "SELECT count(DISTINCT event_id) FROM url_provenance"
+        ),
+        total
+    );
+    let ids = sql::sql_rows(
+        &index.database_path(),
+        "SELECT event_id FROM brauser_events",
+    )
+    .into_iter()
+    .map(|row| match &row[0] {
+        sql::Value::Text(id) => id.clone(),
+        other => panic!("{other:?}"),
+    })
+    .collect::<BTreeSet<_>>();
+    assert_eq!(ids, delivered);
+    assert_eq!(count(&index, "SELECT sum(opens) FROM artifacts"), total);
+    assert_eq!(
+        count(&index, "SELECT sum(focused_secs) FROM artifacts"),
+        125 * total
+    );
+
+    // One final pass empties the dirty set, and every file is then
+    // current: a mark lost during a pass would leave a stale file.
+    index.regenerate_dirty().unwrap();
+    assert!(dirty_set(&index).is_empty());
+    index.mark_every_artifact_dirty().unwrap();
+    let report = index.regenerate_dirty().unwrap();
+    assert_eq!(report.written, 0, "{report:?}");
+    assert_eq!(report.unchanged as u64, ARTIFACTS, "{report:?}");
+
+    // A reindex reproduces the same tables, and the WAL stays bounded.
+    let caught_up = super::rebuild::canonical(&index);
+    index.reindex().unwrap();
+    assert_eq!(super::rebuild::canonical(&index), caught_up);
+    let wal = fs::metadata(layout.cache.join("index.db-wal")).map_or(0, |meta| meta.len());
+    assert!(wal <= 16 * 1024 * 1024, "index.db-wal is {wal} bytes");
+}
+
+/// Killing the process that holds `index-regen.lock` mid-pass hands the
+/// lock over at once, and the mark it had not cleared survives (7vf, plan
+/// T20(c)).
+#[test]
+fn mp_killing_the_regenerator_hands_over_the_lock_and_keeps_its_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = Layout::prepare(dir.path());
+    let event = activity(
+        "33333333-3333-4333-8333-333333333333",
+        "killed",
+        "Killed",
+        "2026-04-01T10:00:00Z",
+    );
+    write_log(&layout.root, "2026-04-01.md", &[&event]);
+    let index = layout.index();
+    index.record_activity(&event, &[]).unwrap();
+    assert!(dirty_set(&index).contains(&event.artifact_id));
+
+    let mut holder = spawn_children(Role::HoldRegen, 1, dir.path(), 300)
+        .pop()
+        .unwrap();
+    release(dir.path());
+    let started = Instant::now();
+    while !layout.held().exists() {
+        assert!(
+            started.elapsed() < BARRIER_TIMEOUT,
+            "the regenerator never reached its first file"
+        );
+        assert!(holder.try_wait().unwrap().is_none(), "the holder exited");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The holder wrote the file but has not cleared its mark.
+    assert!(index.regenerate_dirty_unless_busy().unwrap().is_none());
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+
+    let handed_over = Instant::now();
+    assert!(
+        dirty_set(&index).contains(&event.artifact_id),
+        "the mark survives"
+    );
+    let report = index
+        .regenerate_dirty_unless_busy()
+        .unwrap()
+        .expect("the lock is free once its holder is gone");
+    assert!(handed_over.elapsed() < Duration::from_secs(5));
+    assert_eq!(report.written + report.unchanged, 1, "{report:?}");
+    assert!(dirty_set(&index).is_empty());
 }

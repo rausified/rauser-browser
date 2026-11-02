@@ -381,3 +381,145 @@ fn the_rebuild_records_where_its_rows_came_from() {
     assert_eq!(meta(&cache, "rebuild"), text("none"));
     assert_eq!(meta(&cache, "rebuild_id").len(), 1);
 }
+
+/// Overwrite every page after the first of `index.db` with garbage, as an
+/// interrupted copy or a bad sector would: the header (page 1, with
+/// `application_id` and `user_version`) still reads as this cache's.
+fn damage_all_but_the_header(index: &ArtifactIndex) {
+    index.checkpoint_wal();
+    let path = index.database_path();
+    let mut bytes = fs::read(&path).unwrap();
+    assert!(bytes.len() > 4096, "more than one page");
+    assert_eq!(&bytes[68..72], b"brwr");
+    for byte in &mut bytes[4096..] {
+        *byte = 0x5a;
+    }
+    fs::write(&path, bytes).unwrap();
+    assert_eq!(
+        db::detect_legacy(&path).unwrap(),
+        db::FileState::Ours,
+        "the damage is past the header"
+    );
+}
+
+#[test]
+fn reindex_replaces_a_damaged_database_whose_header_is_still_ours() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let (events, _) = three_logs(&root);
+    assert_eq!(index.regenerate_dirty().unwrap().written, 3);
+    damage_all_but_the_header(&index);
+    let error = index.artifact(&events[0].artifact_id).unwrap_err();
+    assert!(db::is_corrupt(&error), "{error:#}");
+
+    let report = index.reindex().unwrap();
+    assert_eq!(report.written + report.unchanged, 3, "{report:?}");
+    assert_eq!(
+        sqlite_check(&index.database_path(), "SELECT count(*) FROM artifacts"),
+        "ok\n3\n"
+    );
+    for event in &events {
+        assert_eq!(
+            index.artifact(&event.artifact_id).unwrap().unwrap().opens,
+            1
+        );
+    }
+}
+
+/// A host that found the store needing a rebuild, and then lost the race
+/// to another host that finished it, begins no second full rebuild.
+#[test]
+fn a_rebuild_another_host_finished_meanwhile_is_not_begun_again() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (events, _) = three_logs(&root);
+    let late = index(&root, &cache);
+    let other = index(&root, &cache);
+    FULL_DERIVES.with(|count| count.set(0));
+    AFTER_NEEDS_REBUILD.with(|hook| {
+        hook.set(Some(Box::new(move || other.reconcile_from_logs().unwrap())));
+    });
+    late.reconcile_from_logs().unwrap();
+    assert!(AFTER_NEEDS_REBUILD.with(std::cell::Cell::take).is_none());
+    assert_eq!(FULL_DERIVES.with(std::cell::Cell::get), 1, "one rebuild");
+    assert_eq!(meta(&cache, "rebuild"), text("none"));
+    assert_eq!(
+        late.artifact(&events[0].artifact_id)
+            .unwrap()
+            .unwrap()
+            .opens,
+        1
+    );
+}
+
+/// `brauser reindex` rewrites every owned file even when a delivery host
+/// finalizes its stage (with the narrower marking of an ordinary rebuild)
+/// between the reindex's two transactions.
+#[test]
+fn reindex_still_rewrites_every_file_when_another_host_finalizes_its_stage() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let reindexer = index(&root, &cache);
+    three_logs(&root);
+    assert_eq!(reindexer.regenerate_dirty().unwrap().written, 3);
+    let files = artifact_files(root.path());
+    let edited = format!("{}\nMy notes.\n", fs::read_to_string(&files[1]).unwrap());
+    fs::write(&files[1], &edited).unwrap();
+
+    let deliverer = index(&root, &cache);
+    crate::index::rebuild::BETWEEN_STAGE_TRANSACTIONS.with(|hook| {
+        hook.set(Some(Box::new(move || {
+            deliverer.reconcile_from_logs().unwrap();
+        })));
+    });
+    let report = reindexer.reindex().unwrap();
+    assert!(
+        crate::index::rebuild::BETWEEN_STAGE_TRANSACTIONS
+            .with(std::cell::Cell::take)
+            .is_none()
+    );
+    assert_eq!(report.written, 1, "{report:?}");
+    assert_ne!(fs::read_to_string(&files[1]).unwrap(), edited);
+    assert!(dirty_ids(&cache).is_empty());
+}
+
+/// After the home folder or the artifacts folder changes, the new folder's
+/// files are written, even where the logs (and so the renders) are the same
+/// as in the old folder.
+#[test]
+fn a_new_home_or_artifacts_folder_gets_every_file_written() {
+    let cache = TempDir::new().unwrap();
+    let event = activity(
+        "00000000-0000-4000-8000-000000000001",
+        "MOVED",
+        "Moved",
+        "2026-10-15T12:00:00Z",
+    );
+    let first = TempDir::new().unwrap();
+    let second = TempDir::new().unwrap();
+    for root in [&first, &second] {
+        write_log(root.path(), "2026-10-15.md", &[&event]);
+    }
+    let old = index(&first, &cache);
+    assert_eq!(old.regenerate_dirty().unwrap().written, 1);
+
+    // Another home folder with the same log.
+    let moved = index(&second, &cache);
+    assert!(moved.artifact(&event.artifact_id).unwrap().is_some());
+    assert_eq!(moved.regenerate_dirty().unwrap().written, 1);
+    assert_eq!(artifact_files(second.path()).len(), 1);
+
+    // The same home folder with another artifacts folder.
+    let mut relaid = storage(second.path());
+    relaid.artifacts_dir = "notes".into();
+    let relaid = ArtifactIndex::open_in(&relaid, None, cache.path()).unwrap();
+    assert!(relaid.artifact(&event.artifact_id).unwrap().is_some());
+    assert_eq!(relaid.regenerate_dirty().unwrap().written, 1);
+    assert!(second.path().join("notes").exists());
+
+    // Back in the first folder, whose file is still current.
+    let report = old.regenerate_dirty().unwrap();
+    assert_eq!(report.written + report.unchanged, 1, "{report:?}");
+    assert_eq!(report.conflicts, 0, "{report:?}");
+}

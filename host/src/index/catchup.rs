@@ -36,6 +36,14 @@ pub(super) const TAIL_WINDOW: u64 = 4096;
 /// `brauser_logs.purpose` of the watermark this module keeps.
 const EVENTS: &str = "events";
 
+#[cfg(test)]
+thread_local! {
+    /// Runs once, right after the next pass on this thread stats the logs:
+    /// a test's stand-in for another process appending at that moment.
+    pub(super) static AFTER_STAT: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// Which watermark and gap tables a pass reads and advances: the live ones,
 /// or the staged rebuild's (`rebuild.rs`), which are read the same way into
 /// `brauser_stage_*` while the live ones keep serving.
@@ -157,6 +165,10 @@ pub(super) fn catch_up_into(
             complete: true,
         });
     };
+    #[cfg(test)]
+    if let Some(hook) = AFTER_STAT.with(std::cell::Cell::take) {
+        hook();
+    }
     // A removed or truncated log invalidates what was ingested from it.
     // Rebuild from the remaining logs instead of keeping ghosts.
     let current = stats
@@ -382,19 +394,14 @@ fn stat_logs(
     Ok(Some((logs, log_dir, stats)))
 }
 
-/// Read `len` bytes at `offset`. With `to_end`, also fail if the file
-/// holds more than that from there (it grew since it was stat'ed).
-fn read_exact_range(
-    file: &mut cap_std::fs::File,
-    offset: u64,
-    len: u64,
-    to_end: bool,
-) -> Result<Vec<u8>> {
+/// Read `len` bytes at `offset`, failing if the file no longer holds them
+/// (it shrank since it was stat'ed). Bytes appended since are not read:
+/// the logs are append-only, so the stat'ed prefix is a consistent cut, and
+/// the watermark records the stat'ed size, so the next pass reads the rest.
+fn read_exact_range(file: &mut cap_std::fs::File, offset: u64, len: u64) -> Result<Vec<u8>> {
     file.seek(SeekFrom::Start(offset))?;
     let mut bytes = Vec::new();
-    Read::by_ref(file)
-        .take(len + u64::from(to_end))
-        .read_to_end(&mut bytes)?;
+    Read::by_ref(file).take(len).read_to_end(&mut bytes)?;
     #[cfg(test)]
     LOG_BYTES_READ.with(|count| count.set(count.get() + bytes.len() as u64));
     if bytes.len() as u64 != len {
@@ -411,7 +418,7 @@ fn read_log(logs: &Dir, stat: &Stat, tail: Option<&Watermark>) -> Result<LogRead
     let mut read = None;
     if let Some(mark) = tail {
         let base = mark.parsed_bytes - mark.parsed_bytes.min(TAIL_WINDOW);
-        let bytes = read_exact_range(&mut file, base, size - base, true)?;
+        let bytes = read_exact_range(&mut file, base, size - base)?;
         let window = &bytes[..(mark.parsed_bytes - base) as usize];
         let guarded = window.last() == Some(&b'\n')
             && Sha256::digest(window).as_slice() == mark.tail_sha256.as_slice();
@@ -433,7 +440,7 @@ fn read_log(logs: &Dir, stat: &Stat, tail: Option<&Watermark>) -> Result<LogRead
             // Any doubt rereads the whole log: read the prefix the tail
             // read skipped, so the log is still read only once.
             None => {
-                let mut whole = read_exact_range(&mut file, 0, base, false)?;
+                let mut whole = read_exact_range(&mut file, 0, base)?;
                 whole.extend_from_slice(&bytes);
                 LogRead {
                     bytes: whole,
@@ -448,14 +455,17 @@ fn read_log(logs: &Dir, stat: &Stat, tail: Option<&Watermark>) -> Result<LogRead
     let read = match read {
         Some(read) => read,
         None => LogRead {
-            bytes: read_exact_range(&mut file, 0, size, true)?,
+            bytes: read_exact_range(&mut file, 0, size)?,
             base: 0,
             start: 0,
             first_line: 0,
             previous: String::new(),
         },
     };
-    if LogCheckpoint::read(&file.metadata()?)? != stat.checkpoint {
+    // Another process appending meanwhile (a concurrent capture) is normal
+    // and only grows the log past what was read. A log that shrank is not
+    // an append, so what was read may be gone.
+    if LogCheckpoint::read(&file.metadata()?)?.bytes < size {
         bail!("artifact history is unavailable: the log changed during catch-up");
     }
     Ok(read)
