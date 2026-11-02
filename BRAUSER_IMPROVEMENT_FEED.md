@@ -119,6 +119,26 @@ HTTP/HTTPS merge. Approval now refuses both, but issue codes alone do not tell
 a person how to proceed. Where: host/src/relearn.rs, its strict index scan,
 and the future panel Re-learn review under brwr-6x2. Tracked as brwr-pgxz
 (discovered from both fixes); preserve read-only review and separate recovery.
+## 2026-11-02 — A `brauser summary-check` command for iterating on SUMMARY.md
+
+What: add a developer command (host CLI, beside `brauser adapters relearn-plan`) that renders `SUMMARY.md` for a given `page.md` and knowledge base (`--print-prompt`), runs the configured harness once on it without the service, and validates the final answer with `answer::parse_answer`, printing the rendered summary file. Optionally `--compare` runs both harnesses.
+
+Why: testing the SUMMARY.md v2 rewrite against real pages (a Jira ticket and a GitHub PR from earlier runs' `page.md`) meant adding a throwaway ignored test to render the prompt and parse the answer, then removing it before commit. The live runs found a real wording bug (a two-sentence `overview`) that no unit test can catch. John plans to keep evolving SUMMARY.md and may make it user-editable (brwr-sm4), so this loop will recur.
+
+Where: `host/src/main.rs` (CLI), `host/src/service/prompt.rs` `summary_prompt`, `host/src/answer.rs` `parse_answer`, `host/src/summary.rs` `render_summary`; document it in TESTING.md.
+
+
+## 2026-11-02 — Show summary overviews where people choose what to reopen
+
+Change: finish brwr-sm3 by carrying SUMMARY.md's overview into run answers and
+saved-summary views, then show it in the run card, artifact card and Recent,
+with today's wording for older records. Why: brwr-sm1 now preserves the
+recorded path into an artifact in its saved summary, but the person deciding
+which summary to reopen still sees only its type and importance. The existing
+one-sentence overview is the useful decision aid at that point. Where:
+protocol/schema.json, host/src/summary.rs and service/record.rs,
+extension/summary-text.ts, extension/run-card.ts and the panel. Use the
+existing brwr-sm3 rather than create another proposal for the same work.
 
 
 ## 2026-11-02 — Offer a configured site's missing sibling starter in the panel

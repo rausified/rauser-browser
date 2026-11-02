@@ -20,6 +20,22 @@ pub const MAX_ENTITY_CHARS: usize = 128;
 pub const MAX_DESCRIPTION_CHARS: usize = 2000;
 pub const MAX_REASON_CHARS: usize = 300;
 pub const MAX_ASSESSMENT_CHARS: usize = 4000;
+/// Bounds on the one-sentence overview, in characters.
+pub const MAX_OVERVIEW_CHARS: usize = 300;
+/// The most key points kept; later ones are dropped.
+pub const MAX_KEY_POINTS: usize = 10;
+/// Bounds on one key point, in characters.
+pub const MAX_KEY_POINT_CHARS: usize = 500;
+/// The most keywords kept; later ones are dropped.
+pub const MAX_KEYWORDS: usize = 20;
+/// Bounds on one metadata value (and one author), in characters.
+pub const MAX_METADATA_CHARS: usize = 200;
+/// The most references kept; later ones are dropped.
+pub const MAX_REFERENCES: usize = 20;
+/// Bounds on a reference title, in characters.
+pub const MAX_REFERENCE_TITLE_CHARS: usize = 300;
+/// The longest reference address kept, in characters.
+pub const MAX_REFERENCE_URL_CHARS: usize = 2048;
 /// The most related notes kept; later ones are dropped.
 pub const MAX_RELATED_NOTES: usize = 32;
 /// The most `related_notes` entries looked at, kept or not; later ones are
@@ -43,13 +59,84 @@ pub struct Importance {
     pub reason: String,
 }
 
+/// What the artifact itself states about itself; `""` (or no authors) for
+/// a value it does not state.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Metadata {
+    pub authors: Vec<String>,
+    pub owner: String,
+    pub status: String,
+    pub created: String,
+    pub updated: String,
+    pub version: String,
+}
+
+impl Metadata {
+    /// The non-empty single values, in answer order, with their names.
+    pub fn values(&self) -> impl Iterator<Item = (&'static str, &str)> {
+        [
+            ("owner", self.owner.as_str()),
+            ("status", self.status.as_str()),
+            ("created", self.created.as_str()),
+            ("updated", self.updated.as_str()),
+            ("version", self.version.as_str()),
+        ]
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+    }
+}
+
+/// Something the artifact cites or depends on (an outgoing source). `url`
+/// is an `http`/`https` address or `""`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Reference {
+    pub title: String,
+    pub url: String,
+}
+
+/// How much of the artifact the agent read.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadScope {
+    Whole,
+    Partial,
+    PageOnly,
+}
+
+impl ReadScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReadScope::Whole => "whole",
+            ReadScope::Partial => "partial",
+            ReadScope::PageOnly => "page_only",
+        }
+    }
+}
+
+/// The validated answer. The fields added with the second `SUMMARY.md`
+/// shape default when missing, so a run record an older service wrote
+/// still deserializes; `parse_answer` requires them of a new answer.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SummaryAnswer {
+    #[serde(default)]
+    pub overview: String,
+    pub description: String,
+    #[serde(default)]
+    pub key_points: Vec<String>,
     pub document_type: String,
     pub category: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
     pub entities: Entities,
-    pub description: String,
+    #[serde(default)]
+    pub metadata: Metadata,
+    #[serde(default)]
+    pub references: Vec<Reference>,
+    #[serde(default)]
+    pub read_scope: Option<ReadScope>,
     pub importance: Importance,
     pub assessment: String,
     pub related_notes: Vec<String>,
@@ -59,9 +146,12 @@ pub struct SummaryAnswer {
 /// at fault and carries nothing from the answer, so it can go back to the
 /// agent in the repair prompt and be shown as the run's error.
 ///
-/// Unknown keys are ignored. Strings are trimmed; entity lists drop blanks
-/// and case-insensitive duplicates; `related_notes` silently drops entries
-/// that are not existing regular files inside `knowledge_base`.
+/// Unknown keys are ignored. Strings are trimmed; entity, keyword and
+/// author lists drop blanks and case-insensitive duplicates; key points,
+/// keywords and references past their limits are dropped, as is a
+/// reference address that is not `http`/`https`; `related_notes` silently
+/// drops entries that are not existing regular files inside
+/// `knowledge_base`.
 pub fn parse_answer(final_text: &str, knowledge_base: &Path) -> Result<SummaryAnswer, String> {
     if final_text.len() > MAX_ANSWER_BYTES {
         return Err("the answer is too large".to_string());
@@ -75,9 +165,20 @@ pub fn parse_answer(final_text: &str, knowledge_base: &Path) -> Result<SummaryAn
     let Value::Object(object) = value else {
         return Err("the answer is not a JSON object".to_string());
     };
-    // Fields are checked in §6.4 order, so the first error is predictable.
+    // Fields are checked in SUMMARY.md order, so the first error is
+    // predictable.
+    let overview = line(&object, "overview", "overview", MAX_OVERVIEW_CHARS)?;
+    let description = text_field(&object, "description", "description", MAX_DESCRIPTION_CHARS)?;
+    let key_points = key_points(&object)?;
     let document_type = label(&object, "document_type")?;
     let category = label(&object, "category")?;
+    let keywords = distinct_lines(
+        string_list(&object, "keywords", "keywords")?,
+        "keywords",
+        MAX_KEYWORDS,
+        MAX_LABEL_CHARS,
+        Overflow::Drop,
+    )?;
     let entities = object_field(&object, "entities", "entities")?;
     let entities = Entities {
         technologies: entity_list(entities, "technologies")?,
@@ -85,17 +186,25 @@ pub fn parse_answer(final_text: &str, knowledge_base: &Path) -> Result<SummaryAn
         people: entity_list(entities, "people")?,
         companies: entity_list(entities, "companies")?,
     };
-    let description = text_field(&object, "description", "description", MAX_DESCRIPTION_CHARS)?;
+    let metadata = metadata(object_field(&object, "metadata", "metadata")?)?;
+    let references = references(&object)?;
+    let read_scope = read_scope(&object)?;
     let importance = object_field(&object, "importance", "importance")?;
     let importance = Importance {
         level: level(importance)?,
         reason: line(importance, "reason", "importance.reason", MAX_REASON_CHARS)?,
     };
     Ok(SummaryAnswer {
+        overview,
+        description,
+        key_points,
         document_type,
         category,
+        keywords,
         entities,
-        description,
+        metadata,
+        references,
+        read_scope: Some(read_scope),
         importance,
         assessment: text_field(&object, "assessment", "assessment", MAX_ASSESSMENT_CHARS)?,
         related_notes: related_notes(&object, knowledge_base)?,
@@ -112,12 +221,17 @@ pub fn answer_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "document_type", "category", "entities", "description",
-            "importance", "assessment", "related_notes"
+            "overview", "description", "key_points", "document_type",
+            "category", "keywords", "entities", "metadata", "references",
+            "read_scope", "importance", "assessment", "related_notes"
         ],
         "properties": {
+            "overview": string(),
+            "description": string(),
+            "key_points": strings(),
             "document_type": string(),
             "category": string(),
+            "keywords": strings(),
             "entities": {
                 "type": "object",
                 "additionalProperties": false,
@@ -129,7 +243,29 @@ pub fn answer_schema() -> Value {
                     "companies": strings()
                 }
             },
-            "description": string(),
+            "metadata": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["authors", "owner", "status", "created", "updated", "version"],
+                "properties": {
+                    "authors": strings(),
+                    "owner": string(),
+                    "status": string(),
+                    "created": string(),
+                    "updated": string(),
+                    "version": string()
+                }
+            },
+            "references": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["title", "url"],
+                    "properties": { "title": string(), "url": string() }
+                }
+            },
+            "read_scope": { "type": "string", "enum": ["whole", "partial", "page_only"] },
             "importance": {
                 "type": "object",
                 "additionalProperties": false,
@@ -258,13 +394,29 @@ fn string_list<'a>(
     }
 }
 
-fn entity_list(entities: &Map<String, Value>, key: &str) -> Result<Vec<String>, String> {
-    let name = format!("entities.{key}");
+/// What a list does with an item past its limit.
+#[derive(Clone, Copy)]
+enum Overflow {
+    /// The answer is invalid.
+    Fail,
+    /// The item and the rest are dropped.
+    Drop,
+}
+
+/// `items` without blanks and case-insensitive duplicates, each a single
+/// line of at most `max_chars`, at most `limit` of them.
+fn distinct_lines(
+    items: Vec<&str>,
+    name: &str,
+    limit: usize,
+    max_chars: usize,
+    overflow: Overflow,
+) -> Result<Vec<String>, String> {
     let mut kept: Vec<String> = Vec::new();
     // Lowercased beside `kept`, and the walk stops past the limit, so an
-    // untrusted answer's long list costs at most MAX_ENTITIES per item.
+    // untrusted answer's long list costs at most `limit` per item.
     let mut seen: Vec<String> = Vec::new();
-    for item in string_list(entities, key, &name)? {
+    for item in items {
         if item.is_empty() {
             continue;
         }
@@ -272,15 +424,142 @@ fn entity_list(entities: &Map<String, Value>, key: &str) -> Result<Vec<String>, 
         if seen.contains(&lower) {
             continue;
         }
-        if kept.len() == MAX_ENTITIES {
-            return Err(format!("{name} has more than {MAX_ENTITIES} items"));
+        if kept.len() == limit {
+            return match overflow {
+                Overflow::Fail => Err(format!("{name} has more than {limit} items")),
+                Overflow::Drop => Ok(kept),
+            };
         }
-        bounded(item, &name, MAX_ENTITY_CHARS)?;
-        no_controls(item, &name)?;
+        bounded(item, name, max_chars)?;
+        no_controls(item, name)?;
         kept.push(item.to_string());
         seen.push(lower);
     }
     Ok(kept)
+}
+
+fn entity_list(entities: &Map<String, Value>, key: &str) -> Result<Vec<String>, String> {
+    let name = format!("entities.{key}");
+    distinct_lines(
+        string_list(entities, key, &name)?,
+        &name,
+        MAX_ENTITIES,
+        MAX_ENTITY_CHARS,
+        Overflow::Fail,
+    )
+}
+
+/// One to [`MAX_KEY_POINTS`] single-line points; later ones are dropped.
+fn key_points(object: &Map<String, Value>) -> Result<Vec<String>, String> {
+    let name = "key_points";
+    let points = distinct_lines(
+        string_list(object, name, name)?,
+        name,
+        MAX_KEY_POINTS,
+        MAX_KEY_POINT_CHARS,
+        Overflow::Drop,
+    )?;
+    if points.is_empty() {
+        return Err(format!("{name} is empty"));
+    }
+    Ok(points)
+}
+
+/// A single line of at most `max` characters, or `""`.
+fn optional_line(
+    object: &Map<String, Value>,
+    key: &str,
+    name: &str,
+    max: usize,
+) -> Result<String, String> {
+    let value = string_field(object, key, name)?;
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    bounded(value, name, max)?;
+    no_controls(value, name)?;
+    Ok(value.to_string())
+}
+
+fn metadata(object: &Map<String, Value>) -> Result<Metadata, String> {
+    let value =
+        |key: &str| optional_line(object, key, &format!("metadata.{key}"), MAX_METADATA_CHARS);
+    Ok(Metadata {
+        authors: distinct_lines(
+            string_list(object, "authors", "metadata.authors")?,
+            "metadata.authors",
+            MAX_ENTITIES,
+            MAX_METADATA_CHARS,
+            Overflow::Drop,
+        )?,
+        owner: value("owner")?,
+        status: value("status")?,
+        created: value("created")?,
+        updated: value("updated")?,
+        version: value("version")?,
+    })
+}
+
+/// An `http`/`https` address with no whitespace or control characters,
+/// else `""`. The address is the agent's; it is only ever written as a
+/// link destination (`summary::render_summary`).
+fn reference_url(url: &str) -> String {
+    let lower = url.to_ascii_lowercase();
+    let web = (lower.starts_with("https://") && url.len() > "https://".len())
+        || (lower.starts_with("http://") && url.len() > "http://".len());
+    if web
+        && url.chars().count() <= MAX_REFERENCE_URL_CHARS
+        && !url.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        url.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// At most [`MAX_REFERENCES`] references with a title; untitled entries
+/// and later ones are dropped, and so is an address that is not a web one.
+fn references(object: &Map<String, Value>) -> Result<Vec<Reference>, String> {
+    let name = "references";
+    let items = match object.get(name) {
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(format!("{name} must be a list")),
+        None => return Err(format!("{name} is missing")),
+    };
+    let mut kept: Vec<Reference> = Vec::new();
+    for item in items {
+        let Value::Object(reference) = item else {
+            return Err(format!("{name} must contain only objects"));
+        };
+        let title = optional_line(
+            reference,
+            "title",
+            "references.title",
+            MAX_REFERENCE_TITLE_CHARS,
+        )?;
+        let url = reference_url(string_field(reference, "url", "references.url")?);
+        if title.is_empty() {
+            continue;
+        }
+        kept.push(Reference { title, url });
+        if kept.len() == MAX_REFERENCES {
+            break;
+        }
+    }
+    Ok(kept)
+}
+
+fn read_scope(object: &Map<String, Value>) -> Result<ReadScope, String> {
+    let name = "read_scope";
+    match string_field(object, name, name)?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "whole" => Ok(ReadScope::Whole),
+        "partial" => Ok(ReadScope::Partial),
+        "page_only" => Ok(ReadScope::PageOnly),
+        _ => Err(format!("{name} must be whole, partial, or page_only")),
+    }
 }
 
 /// The listed notes that are existing regular files inside the knowledge
@@ -321,7 +600,7 @@ fn related_notes(
 
 /// A valid one-line answer for tests that run a fake harness.
 #[cfg(test)]
-pub(crate) const TEST_ANSWER: &str = r#"{"document_type":"report","category":"news","entities":{"technologies":[],"products":[],"people":[],"companies":[]},"description":"A page.","importance":{"level":"high","reason":"It matters."},"assessment":"It adds to the notes.","related_notes":[]}"#;
+pub(crate) const TEST_ANSWER: &str = r#"{"overview":"A page about a thing.","description":"A page.","key_points":["It says one thing."],"document_type":"report","category":"news","keywords":["thing"],"entities":{"technologies":[],"products":[],"people":[],"companies":[]},"metadata":{"authors":[],"owner":"","status":"","created":"","updated":"","version":""},"references":[],"read_scope":"whole","importance":{"level":"high","reason":"It matters."},"assessment":"It adds to the notes.","related_notes":[]}"#;
 
 #[cfg(test)]
 mod tests {
@@ -340,15 +619,24 @@ mod tests {
 
     fn answer() -> Value {
         json!({
+            "overview": "The summary feature's spec, which fixes the answer format.",
+            "description": "A spec for a summary feature.",
+            "key_points": ["Answers are JSON.", "Every field is validated."],
             "document_type": "specification",
             "category": "technical specification",
+            "keywords": ["summary", "answer format"],
+            "metadata": {
+                "authors": ["Ann Lee"], "owner": "", "status": "draft",
+                "created": "", "updated": "2026-10-01", "version": ""
+            },
+            "references": [{ "title": "Answer schema", "url": "https://example.com/schema" }],
+            "read_scope": "whole",
             "entities": {
                 "technologies": ["Rust", "JSON"],
                 "products": ["Brauser"],
                 "people": [],
                 "companies": ["Example Co"]
             },
-            "description": "A spec for a summary feature.",
             "importance": { "level": "HIGH", "reason": "It extends the notes on agents." },
             "assessment": "It adds the answer format the notes lack.",
             "related_notes": ["notes/a.md"]
@@ -482,7 +770,21 @@ mod tests {
     #[test]
     fn every_field_is_checked_and_named() {
         let (_dir, kb) = knowledge_base();
-        let cases: [(&str, Value, &str); 12] = [
+        let cases: [(&str, Value, &str); 23] = [
+            ("/overview", json!(""), "overview"),
+            ("/overview", json!("a\nb"), "overview"),
+            (
+                "/overview",
+                json!("o".repeat(MAX_OVERVIEW_CHARS + 1)),
+                "overview",
+            ),
+            ("/key_points", json!([]), "key_points"),
+            ("/key_points", json!([" "]), "key_points"),
+            ("/key_points", json!(["a\u{7}b"]), "key_points"),
+            ("/keywords", json!("k"), "keywords"),
+            ("/metadata", json!([]), "metadata"),
+            ("/metadata/status", json!(null), "metadata.status"),
+            ("/references", json!([{ "title": "t" }]), "references.url"),
             ("/document_type", json!(""), "document_type"),
             ("/document_type", json!("a\u{7}b"), "document_type"),
             (
@@ -515,6 +817,7 @@ mod tests {
                 "assessment",
             ),
             ("/related_notes", json!("b.md"), "related_notes"),
+            ("/read_scope", json!("most"), "read_scope"),
         ];
         for (pointer, replacement, field) in cases {
             let mut value = answer();
@@ -525,6 +828,84 @@ mod tests {
         let mut value = answer();
         value.as_object_mut().unwrap().remove("assessment");
         assert!(parse(&value, &kb).unwrap_err().contains("assessment"));
+    }
+
+    #[test]
+    fn new_fields_are_normalized() {
+        let (_dir, kb) = knowledge_base();
+        let mut value = answer();
+        value["read_scope"] = json!("PAGE_ONLY");
+        value["keywords"] = json!(["Rust", "rust", " ", "JSON"]);
+        value["metadata"]["authors"] = json!(["Ann", "ann", ""]);
+        value["metadata"]["owner"] = json!("  ");
+        value["references"] = json!([
+            { "title": "Kept", "url": "https://example.com/a" },
+            { "title": "", "url": "https://example.com/untitled" },
+            { "title": "Local path", "url": "file:///etc/passwd" },
+            { "title": "Script", "url": "javascript:alert(1)" },
+            { "title": "Spaced", "url": "https://example.com/a b" },
+            { "title": "No address", "url": "" }
+        ]);
+        let parsed = parse(&value, &kb).unwrap();
+        assert_eq!(parsed.read_scope, Some(ReadScope::PageOnly));
+        assert_eq!(parsed.keywords, ["Rust", "JSON"]);
+        assert_eq!(parsed.metadata.authors, ["Ann"]);
+        assert_eq!(parsed.metadata.owner, "");
+        assert_eq!(
+            parsed.metadata.values().collect::<Vec<_>>(),
+            [("status", "draft"), ("updated", "2026-10-01")]
+        );
+        let references: Vec<(&str, &str)> = parsed
+            .references
+            .iter()
+            .map(|reference| (reference.title.as_str(), reference.url.as_str()))
+            .collect();
+        assert_eq!(
+            references,
+            [
+                ("Kept", "https://example.com/a"),
+                ("Local path", ""),
+                ("Script", ""),
+                ("Spaced", ""),
+                ("No address", "")
+            ]
+        );
+    }
+
+    #[test]
+    fn long_optional_lists_are_cut_not_failed() {
+        let (_dir, kb) = knowledge_base();
+        let mut value = answer();
+        value["key_points"] = json!((0..50).map(|i| format!("Point {i}.")).collect::<Vec<_>>());
+        value["keywords"] = json!((0..50).map(|i| format!("k{i}")).collect::<Vec<_>>());
+        value["references"] = json!(
+            (0..50)
+                .map(|i| json!({ "title": format!("r{i}"), "url": "" }))
+                .collect::<Vec<_>>()
+        );
+        let parsed = parse(&value, &kb).unwrap();
+        assert_eq!(parsed.key_points.len(), MAX_KEY_POINTS);
+        assert_eq!(parsed.keywords.len(), MAX_KEYWORDS);
+        assert_eq!(parsed.references.len(), MAX_REFERENCES);
+        assert_eq!(parsed.references[0].title, "r0");
+    }
+
+    #[test]
+    fn a_record_from_before_the_new_fields_still_deserializes() {
+        let old = json!({
+            "document_type": "report",
+            "category": "news",
+            "entities": {"technologies": [], "products": [], "people": [], "companies": []},
+            "description": "d",
+            "importance": {"level": "low", "reason": "r"},
+            "assessment": "a",
+            "related_notes": []
+        });
+        let answer: SummaryAnswer = serde_json::from_value(old).unwrap();
+        assert_eq!(answer.overview, "");
+        assert!(answer.key_points.is_empty() && answer.references.is_empty());
+        assert_eq!(answer.metadata, Metadata::default());
+        assert_eq!(answer.read_scope, None);
     }
 
     #[test]
@@ -576,14 +957,37 @@ mod tests {
         assert_eq!(
             required,
             [
+                "overview",
+                "description",
+                "key_points",
                 "document_type",
                 "category",
+                "keywords",
                 "entities",
-                "description",
+                "metadata",
+                "references",
+                "read_scope",
                 "importance",
                 "assessment",
                 "related_notes"
             ]
+        );
+        // Every property is required, as strict structured-output modes need.
+        let properties: Vec<&String> = schema["properties"].as_object().unwrap().keys().collect();
+        assert_eq!(properties.len(), required.len());
+        assert_eq!(
+            schema["properties"]["read_scope"]["enum"],
+            json!(["whole", "partial", "page_only"])
+        );
+        assert_eq!(
+            schema["properties"]["metadata"]["required"],
+            json!([
+                "authors", "owner", "status", "created", "updated", "version"
+            ])
+        );
+        assert_eq!(
+            schema["properties"]["references"]["items"]["required"],
+            json!(["title", "url"])
         );
         assert_eq!(
             schema["properties"]["importance"]["properties"]["level"]["enum"],

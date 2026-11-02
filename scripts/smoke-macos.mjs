@@ -260,6 +260,12 @@ async function choosePickerFolder(folder) {
 const FAKE_SESSION = "fake-session-1";
 const FAKE_THREAD = "fake-thread-1";
 const FAKE_ANSWER = {
+  overview: "A smoke article.",
+  key_points: ["The smoke run reads it."],
+  keywords: ["smoke"],
+  metadata: { authors: [], owner: "", status: "", created: "", updated: "", version: "" },
+  references: [],
+  read_scope: "whole",
   document_type: "article", category: "news",
   entities: { technologies: ["Smoke"], products: [], people: [], companies: [] },
   description: "A smoke article the fake agent read.",
@@ -272,6 +278,12 @@ const FAKE_ANSWER = {
 // (DESIGN.md §5.2 step 6).
 const FIXTURE_ENTITY = "<img src=https://evil.example/x.png>";
 const FIXTURE_SUMMARY_ANSWER = {
+  overview: "The fixture specification.",
+  key_points: ["It specifies the fixture."],
+  keywords: ["smoke"],
+  metadata: { authors: [], owner: "", status: "", created: "", updated: "", version: "" },
+  references: [],
+  read_scope: "whole",
   document_type: "specification", category: "technical specification",
   entities: { technologies: [FIXTURE_ENTITY], products: [], people: [], companies: [] },
   description: [

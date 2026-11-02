@@ -23,10 +23,15 @@ use sha2::{Digest, Sha256};
 use std::path::{Component, Path};
 use url::Url;
 
-use crate::answer::{MAX_ENTITY_CHARS, MAX_LABEL_CHARS, MAX_REASON_CHARS, SummaryAnswer};
+use crate::answer::{
+    MAX_ENTITY_CHARS, MAX_KEY_POINT_CHARS, MAX_LABEL_CHARS, MAX_METADATA_CHARS, MAX_OVERVIEW_CHARS,
+    MAX_REASON_CHARS, MAX_REFERENCE_TITLE_CHARS, ReadScope, SummaryAnswer,
+};
 use crate::markdown::{LinkStyle, inline, neutralize_remote, wikilink, yaml_string};
 use crate::presentation::plain_line;
 use crate::vault::{note_filename, owned_frontmatter};
+
+pub(crate) mod incoming;
 
 pub const MAX_TITLE_BYTES: usize = 2048;
 /// The most characters (not bytes) of a summary's document type and
@@ -308,6 +313,8 @@ pub struct SummaryDocument<'a> {
     pub session: SessionLink,
     pub note_link: String,
     pub answer: &'a SummaryAnswer,
+    /// The host's frozen queue-time navigation snapshot, never agent output.
+    pub incoming: &'a [brauser_protocol::IncomingTrailView],
 }
 
 /// The importance level's wire name, as `ImportanceLevel` serializes.
@@ -316,6 +323,26 @@ pub fn importance_str(level: ImportanceLevel) -> &'static str {
         ImportanceLevel::High => "high",
         ImportanceLevel::Medium => "medium",
         ImportanceLevel::Low => "low",
+    }
+}
+
+/// The summary body's words for how much of the artifact the agent read.
+fn read_scope_label(scope: ReadScope) -> &'static str {
+    match scope {
+        ReadScope::Whole => "whole artifact",
+        ReadScope::Partial => "part of the artifact",
+        ReadScope::PageOnly => "page only",
+    }
+}
+
+/// The summary body's label for a `Metadata::values` name.
+fn metadata_label(key: &str) -> &'static str {
+    match key {
+        "owner" => "Owner",
+        "status" => "Status",
+        "created" => "Created",
+        "updated" => "Updated",
+        _ => "Version",
     }
 }
 
@@ -469,6 +496,9 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
         "summarized_at: {}\n",
         yaml_text(doc.summarized_at)
     ));
+    if !answer.overview.is_empty() {
+        out.push_str(&format!("overview: {}\n", yaml_text(&answer.overview)));
+    }
     out.push_str(&format!(
         "document_type: {}\n",
         yaml_text(&answer.document_type)
@@ -478,9 +508,23 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
         "importance: {}\n",
         importance_str(answer.importance.level)
     ));
+    out.push_str(&format!("keywords: {}\n", yaml_list(&answer.keywords)));
     out.push_str("entities:\n");
     for (key, _, items) in &groups {
         out.push_str(&format!("  {key}: {}\n", yaml_list(items)));
+    }
+    let metadata = &answer.metadata;
+    if !metadata.authors.is_empty() || metadata.values().next().is_some() {
+        out.push_str("metadata:\n");
+        if !metadata.authors.is_empty() {
+            out.push_str(&format!("  authors: {}\n", yaml_list(&metadata.authors)));
+        }
+        for (key, value) in metadata.values() {
+            out.push_str(&format!("  {key}: {}\n", yaml_text(value)));
+        }
+    }
+    if let Some(scope) = answer.read_scope {
+        out.push_str(&format!("read_scope: {}\n", scope.as_str()));
     }
     out.push_str(&format!("harness: {}\n", harness_str(doc.harness)));
     match &doc.session {
@@ -500,8 +544,18 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
         page_destination(doc.canonical_url),
         doc.note_link
     ));
+    if !answer.overview.is_empty() {
+        out.push_str(&format!(
+            "> {}\n\n",
+            inline(&answer.overview, MAX_OVERVIEW_CHARS)
+        ));
+    }
+    let read = match answer.read_scope {
+        Some(scope) => format!(" · **Read:** {}", read_scope_label(scope)),
+        None => String::new(),
+    };
     out.push_str(&format!(
-        "**Type:** {} · **Category:** {} · **Importance:** {} — {}\n\n",
+        "**Type:** {} · **Category:** {} · **Importance:** {} — {}{read}\n\n",
         inline(&answer.document_type, MAX_LABEL_CHARS),
         inline(&answer.category, MAX_LABEL_CHARS),
         importance_str(answer.importance.level),
@@ -522,13 +576,66 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
     if !lines.is_empty() {
         out.push_str(&format!("**Entities:** {}\n\n", lines.join(" · ")));
     }
+    if !answer.keywords.is_empty() {
+        let keywords: Vec<String> = answer
+            .keywords
+            .iter()
+            .map(|keyword| inline(keyword, MAX_LABEL_CHARS))
+            .collect();
+        out.push_str(&format!("**Keywords:** {}\n\n", keywords.join(", ")));
+    }
+    let mut facts: Vec<String> = Vec::new();
+    if !metadata.authors.is_empty() {
+        let authors: Vec<String> = metadata
+            .authors
+            .iter()
+            .map(|author| inline(author, MAX_METADATA_CHARS))
+            .collect();
+        facts.push(format!("Authors: {}", authors.join(", ")));
+    }
+    for (key, value) in metadata.values() {
+        facts.push(format!(
+            "{}: {}",
+            metadata_label(key),
+            inline(value, MAX_METADATA_CHARS)
+        ));
+    }
+    if !facts.is_empty() {
+        out.push_str(&format!("**Details:** {}\n\n", facts.join(" · ")));
+    }
     // Each neutralized text starts a line after a host newline, never after
     // host text ending in a space (DESIGN.md §5.2 step 6's joining rule).
     out.push_str("## Summary\n");
     out.push_str(&neutralize_remote(&answer.description));
-    out.push_str("\n\n## Assessment\n");
+    out.push('\n');
+    if !answer.key_points.is_empty() {
+        out.push_str("\n## Key points\n");
+        for point in &answer.key_points {
+            out.push_str(&format!("- {}\n", inline(point, MAX_KEY_POINT_CHARS)));
+        }
+    }
+    out.push_str("\n## Assessment\n");
     out.push_str(&neutralize_remote(&answer.assessment));
     out.push('\n');
+    let incoming = incoming::list(doc.incoming);
+    if !incoming.is_empty() {
+        out.push_str("\n## Incoming\n\nRecorded navigation when this summary was requested.\n\n");
+        out.push_str(&incoming);
+    }
+    if !answer.references.is_empty() {
+        out.push_str("\n## References\n");
+        for reference in &answer.references {
+            let title = inline(&reference.title, MAX_REFERENCE_TITLE_CHARS);
+            if reference.url.is_empty() {
+                out.push_str(&format!("- {title}\n"));
+            } else {
+                out.push_str(&format!(
+                    "- [{title}](<{}>)\n",
+                    page_destination(&reference.url)
+                ));
+            }
+        }
+    }
     if !answer.related_notes.is_empty() {
         let related: Vec<String> = answer
             .related_notes
@@ -1203,12 +1310,32 @@ mod tests {
         assert_eq!(vault.sweep_stale_temporaries().unwrap(), 0);
     }
 
-    use crate::answer::{Entities, Importance, SummaryAnswer};
+    use crate::answer::{Entities, Importance, Metadata, ReadScope, Reference, SummaryAnswer};
     use crate::markdown::{neutralize_remote, yaml_string};
     use brauser_protocol::{HarnessId, ImportanceLevel};
 
     fn answer() -> SummaryAnswer {
         SummaryAnswer {
+            overview: "The widget API spec, which fixes the v2 wire format.".into(),
+            key_points: vec!["Widgets use v2.".into(), "v1 is retired in May.".into()],
+            keywords: vec!["widget api".into(), "wire format".into()],
+            metadata: Metadata {
+                authors: vec!["Ann Lee".into()],
+                status: "approved".into(),
+                updated: "2026-10-01".into(),
+                ..Metadata::default()
+            },
+            references: vec![
+                Reference {
+                    title: "Widget v1 spec".into(),
+                    url: "https://example.com/v1".into(),
+                },
+                Reference {
+                    title: "Ops runbook".into(),
+                    url: String::new(),
+                },
+            ],
+            read_scope: Some(ReadScope::Whole),
             document_type: "specification".into(),
             category: "technical specification".into(),
             entities: Entities {
@@ -1242,7 +1369,26 @@ mod tests {
             session: SessionLink::CodexThread("t-1".into()),
             note_link,
             answer,
+            incoming: &[],
         }
+    }
+
+    #[test]
+    fn summary_incoming_navigation_is_host_rendered_and_absent_without_observations() {
+        let key = url_record_key(PAGE_URL).unwrap();
+        let answer = answer();
+        let mut doc = document(&key, &answer, "Page note".into());
+        let plain = render_summary(&doc, LinkStyle::Relative);
+        assert!(!plain.contains("## Incoming"));
+        let incoming = [incoming::example()];
+        doc.incoming = &incoming;
+        let rendered = render_summary(&doc, LinkStyle::Relative);
+        assert!(
+            rendered.contains("## Incoming\n\nRecorded navigation when this summary was requested")
+        );
+        assert!(rendered.contains("Link navigation from [Planning ticket](<https://example.com/items/1>) · last recorded 2026-11-02"));
+        assert!(rendered.contains("## References"));
+        assert_eq!(frontmatter(&rendered), frontmatter(&plain));
     }
 
     /// The leading frontmatter of a rendered summary, without its fences.
@@ -1306,24 +1452,42 @@ mod tests {
              canonical_url: \"{PAGE_URL}\"\n\
              title: \"Widget spec\"\n\
              summarized_at: \"2026-10-26T14:05:00-07:00\"\n\
+             overview: \"The widget API spec, which fixes the v2 wire format.\"\n\
              document_type: \"specification\"\n\
              category: \"technical specification\"\n\
              importance: high\n\
+             keywords: [\"widget api\", \"wire format\"]\n\
              entities:\n  technologies: [\"Rust\", \"SQLite\"]\n  products: [\"Widget\"]\n  people: []\n  companies: [\"Acme\"]\n\
+             metadata:\n  authors: [\"Ann Lee\"]\n  status: \"approved\"\n  updated: \"2026-10-01\"\n\
+             read_scope: whole\n\
              harness: codex\n\
              thread: \"codex://threads/t-1\"\n\
              ---\n\
              [Page](<{PAGE_URL}>) · [Page note](../{notes}/{note})\n\
              \n\
-             **Type:** specification · **Category:** technical specification · **Importance:** high — It defines the widget API.\n\
+             > The widget API spec, which fixes the v2 wire format.\n\
+             \n\
+             **Type:** specification · **Category:** technical specification · **Importance:** high — It defines the widget API. · **Read:** whole artifact\n\
              \n\
              **Entities:** Technologies: Rust, SQLite · Products: Widget · Companies: Acme\n\
+             \n\
+             **Keywords:** widget api, wire format\n\
+             \n\
+             **Details:** Authors: Ann Lee · Status: approved · Updated: 2026-10-01\n\
              \n\
              ## Summary\n\
              A spec for widgets.\n\
              \n\
+             ## Key points\n\
+             - Widgets use v2.\n\
+             - v1 is retired in May.\n\
+             \n\
              ## Assessment\n\
              Fills a gap in the widget notes.\n\
+             \n\
+             ## References\n\
+             - [Widget v1 spec](<https://example.com/v1>)\n\
+             - Ops runbook\n\
              \n\
              Related: projects/widget.md\n",
             id = key.value,
@@ -1352,12 +1516,51 @@ mod tests {
 
         answer.entities.products.clear();
         answer.related_notes.clear();
+        answer.keywords.clear();
+        answer.metadata = Metadata::default();
+        answer.references.clear();
         let rendered = render_summary(&document(&key, &answer, note_link), LinkStyle::Relative);
-        assert!(!rendered.contains("**Entities:**"), "{rendered}");
-        assert!(!rendered.contains("Related:"), "{rendered}");
+        for absent in [
+            "**Entities:**",
+            "Related:",
+            "**Keywords:**",
+            "**Details:**",
+            "## References",
+            "\nmetadata:",
+        ] {
+            assert!(!rendered.contains(absent), "{absent}: {rendered}");
+        }
+        assert!(rendered.contains("\nkeywords: []\n"), "{rendered}");
         assert!(rendered.ends_with(
-            "**Importance:** high — It defines the widget API.\n\n## Summary\nA spec for widgets.\n\n## Assessment\nFills a gap in the widget notes.\n"
+            "**Importance:** high — It defines the widget API. · **Read:** whole artifact\n\n## Summary\nA spec for widgets.\n\n## Key points\n- Widgets use v2.\n- v1 is retired in May.\n\n## Assessment\nFills a gap in the widget notes.\n"
         ), "{rendered}");
+    }
+
+    #[test]
+    fn an_answer_from_before_the_new_fields_renders_without_them() {
+        let (_root, vault) = fixed_vault();
+        let key = url_record_key(PAGE_URL).unwrap();
+        let mut answer = answer();
+        answer.overview.clear();
+        answer.key_points.clear();
+        answer.keywords.clear();
+        answer.metadata = Metadata::default();
+        answer.references.clear();
+        answer.read_scope = None;
+        let note_link = vault
+            .note_link(&key, PAGE_URL, LinkStyle::Relative)
+            .unwrap();
+        let rendered = render_summary(&document(&key, &answer, note_link), LinkStyle::Relative);
+        for absent in [
+            "overview:",
+            "read_scope:",
+            "\n> ",
+            "**Read:**",
+            "## Key points",
+        ] {
+            assert!(!rendered.contains(absent), "{absent}: {rendered}");
+        }
+        assert!(owned_summary(rendered.as_bytes(), &key));
     }
 
     #[test]
@@ -1466,9 +1669,8 @@ mod tests {
         let description = neutralize_remote(&answer.description);
         let assessment = neutralize_remote(&answer.assessment);
         assert!(
-            rendered.contains(&format!(
-                "\n## Summary\n{description}\n\n## Assessment\n{assessment}\n"
-            )),
+            rendered.contains(&format!("\n## Summary\n{description}\n\n## Key points\n"))
+                && rendered.contains(&format!("\n\n## Assessment\n{assessment}\n")),
             "{rendered}"
         );
         // Every line of agent prose begins a line of the file.
@@ -1559,6 +1761,24 @@ mod tests {
         answer.description = format!("{forged_block}{remote}");
         answer.assessment = format!("{remote}{forged_block}");
         answer.related_notes = vec![remote.into()];
+        answer.overview = format!("{remote}{forged_block}");
+        answer.key_points = vec![remote.into(), forged_block.clone()];
+        answer.keywords = vec![remote.into(), forged_block.clone()];
+        answer.metadata.authors = vec![remote.into()];
+        answer.metadata.status = format!("x\"\n{forged_block}");
+        answer.metadata.version = remote.into();
+        // A reference address passes `answer::reference_url` (no
+        // whitespace), so it is hostile only in its other characters.
+        answer.references = vec![
+            Reference {
+                title: remote.into(),
+                url: "https://e.example/<img>![x](y)`$x$`>".into(),
+            },
+            Reference {
+                title: forged_block.clone(),
+                url: String::new(),
+            },
+        ];
         let mut doc = document(
             &key,
             &answer,
@@ -1581,7 +1801,7 @@ mod tests {
             );
             assert_eq!(
                 front.lines().filter(|line| !line.starts_with(' ')).count(),
-                10,
+                14,
                 "{front}"
             );
             // No remote resource can load from the body: no `<` but the
@@ -1590,8 +1810,10 @@ mod tests {
             let body = body(&rendered);
             let after_page_link = body.split_once('\n').unwrap().1;
             for (at, _) in after_page_link.match_indices('<') {
+                // A reference's link destination is the host's `](<`.
+                let destination = after_page_link[..at].ends_with("](");
                 assert!(
-                    backslash_escaped(after_page_link, at),
+                    destination || backslash_escaped(after_page_link, at),
                     "unescaped < in {after_page_link}"
                 );
             }
