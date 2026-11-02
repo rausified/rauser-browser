@@ -200,6 +200,7 @@ fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
             url: format!("https://e.example/{input}"),
         }],
         read_scope: Some(ReadScope::Partial),
+        access: crate::answer::Access::Ok,
         document_type: input.into(),
         category: input.into(),
         entities: Entities {

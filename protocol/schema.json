@@ -81,6 +81,7 @@
         { "$ref": "#/$defs/DraftSiteRequest" },
         { "$ref": "#/$defs/StartSiteDraftRequest" },
         { "$ref": "#/$defs/StartTaskRequest" },
+        { "$ref": "#/$defs/StartAutoSummaryRequest" },
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
         { "$ref": "#/$defs/WorklogReportRequest" },
         { "$ref": "#/$defs/CheckCaptureSiteRequest" },
@@ -141,6 +142,7 @@
           "$ref": "#/$defs/HarnessesDiscovered"
         },
         { "$ref": "#/$defs/RunStarted" },
+        { "$ref": "#/$defs/AutoSummarySkippedResponse" },
         { "$ref": "#/$defs/RunFetched" },
         { "$ref": "#/$defs/RunsListed" },
         { "$ref": "#/$defs/RunUpdated" },
@@ -533,6 +535,7 @@
         "strip_params",
         "agent",
         "summary_vocabulary",
+        "auto_summary",
         "adapters"
       ],
       "properties": {
@@ -570,6 +573,9 @@
         },
         "summary_vocabulary": {
           "$ref": "#/$defs/SummaryVocabulary"
+        },
+        "auto_summary": {
+          "$ref": "#/$defs/AutoSummaryConfig"
         },
         "adapters": {
           "$ref": "#/$defs/AdapterDocument"
@@ -1994,8 +2000,14 @@
         "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
         "category": { "type": "string", "minLength": 1, "maxLength": 64 },
         "importance": { "$ref": "#/$defs/ImportanceLevel" },
-        "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 }
+        "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "access": { "description": "Optional; missing means ok (an older service's answer). Anything but ok means the agent met a wall and the run saved no summary.", "$ref": "#/$defs/AnswerAccess" }
       }
+    },
+    "AnswerAccess": {
+      "type": "string",
+      "description": "Whether the summary agent could see the artifact, or met a sign-in, no-access or not-found wall instead.",
+      "enum": ["ok", "sign_in", "denied", "not_found"]
     },
     "RunView": {
       "type": "object",
@@ -2306,6 +2318,48 @@
         "links": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/ShapeCount" } },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
         "requested_at": { "description": "The user's local click time with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
+      }
+    },
+    "AutoSummaryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Automatic summaries of recognized artifacts. When enabled, the extension sends start_auto_summary for an artifact once its page has loaded and its tab has been focused for dwell_secs in total (0: as soon as it loads, in the background too).",
+      "required": ["enabled", "dwell_secs"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "dwell_secs": { "type": "integer", "minimum": 0, "maximum": 3600 }
+      }
+    },
+    "StartAutoSummaryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start the automatic summary of a recognized artifact. The host refuses it with auto_summary_skipped, before contacting the service, when auto_summary is off, no harness is set up, the page is not an artifact, or the artifact already has a summary (one recording read_scope page_only from an earlier local day does not count); otherwise it forwards a summary start_run with the record key it resolves. Answers run_started or auto_summary_skipped.",
+      "required": ["type", "protocol_version", "request_id", "url", "title", "content", "requested_at"],
+      "properties": {
+        "type": { "const": "start_auto_summary" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "content": { "type": "string", "maxLength": 1048576 },
+        "requested_at": { "description": "When the artifact became due, with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
+      }
+    },
+    "AutoSummarySkipReason": {
+      "type": "string",
+      "description": "Why the host did not start an automatic summary.",
+      "enum": ["disabled", "not_set_up", "not_an_artifact", "already_summarized"]
+    },
+    "AutoSummarySkippedResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "start_auto_summary was refused before anything was sent to the service.",
+      "required": ["type", "protocol_version", "request_id", "reason"],
+      "properties": {
+        "type": { "const": "auto_summary_skipped" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reason": { "$ref": "#/$defs/AutoSummarySkipReason" }
       }
     },
     "StartTaskRequest": {

@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, AdapterDocument, OverflowMarker, VisitEvent, VisitOutcome,
+  ActivityEvent, AdapterDocument, AutoSummaryConfig, OverflowMarker, VisitEvent, VisitOutcome,
 } from "../protocol/ts/generated.js";
 import {
   compileDocument,
@@ -56,6 +56,8 @@ export interface PolicyLease {
   capture_enabled: boolean;
   // Capture origins are the adapter origins; a v5 lease's `sites` is ignored.
   adapters: AdapterDocument;
+  // Missing in a lease stored before auto-summary: off until it is renewed.
+  auto_summary?: AutoSummaryConfig;
 }
 
 export interface QueuedVisit {
