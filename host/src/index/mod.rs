@@ -518,6 +518,16 @@ struct Derived {
     artifacts: BTreeMap<String, ArtifactRow>,
     visits: Vec<VisitRow>,
     edges: Vec<EdgeRow>,
+    /// The instant of each row's `why`, for rows that have one, so a later
+    /// fold can be seeded with it (`Fold::seeded`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "brauser_group_state.why_at (plan T8) is its first reader"
+        )
+    )]
+    why_at: BTreeMap<String, OffsetDateTime>,
 }
 
 #[derive(Default)]
