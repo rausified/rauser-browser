@@ -119,6 +119,7 @@ test("Capture Site offers Miro boards as a starter, keyed by the padded board ID
   const url = "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990";
   const page = await captureReview(url);
   assert.equal(page.el("capture-site-github").hidden, true);
+  assert.equal(page.el("capture-site-atlassian").hidden, true);
   const preview = page.el("capture-site-preview").textContent;
   assert.match(preview, /Miro boards/);
   assert.match(preview, /every Miro account signed in to this Chrome profile/);
@@ -131,9 +132,55 @@ test("Capture Site offers Miro boards as a starter, keyed by the padded board ID
   assert.equal(saved.unscoped, undefined);
 });
 
+const CONFLUENCE_URL = "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan?atl_f=PAGETREE";
+
+test("Capture Site offers Jira issues and Confluence pages on an Atlassian site, both chosen", async () => {
+  const page = await captureReview(CONFLUENCE_URL);
+  assert.equal(page.el("capture-site-atlassian").hidden, false);
+  assert.equal(page.el("capture-site-github").hidden, true);
+  assert.equal(page.el("capture-site-jira").checked, true);
+  assert.equal(page.el("capture-site-confluence").checked, true);
+  const preview = page.el("capture-site-preview").textContent;
+  assert.match(preview, /Remember: Jira issues and Confluence pages\./);
+  assert.match(preview, /one artifact by its page ID/);
+  assert.match(preview, /This page: will be captured/);
+  assert.doesNotMatch(preview, /"match"|"id"/);
+  await saveCapture(page);
+  const saved = updates(page)[0].config.adapters.artifacts;
+  assert.deepEqual(saved.map((artifact) => [artifact.type, artifact.id]),
+    [["jira.issue", "jira:{host}/{key}"], ["confluence.page", "confluence.page:{host}/{id}"]]);
+  assert.ok(saved.every((artifact) => artifact.origin === "https://acme.atlassian.net" && artifact.scope === undefined));
+});
+
+test("Capture Site saves only the Atlassian kind left checked", async () => {
+  const page = await captureReview(CONFLUENCE_URL);
+  page.el("capture-site-jira").checked = false;
+  page.el("capture-site-jira").dispatch("input");
+  assert.match(page.el("capture-site-preview").textContent, /Remember: Confluence pages\./);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((artifact) => artifact.type), ["confluence.page"]);
+});
+
+test("unchecking both Atlassian kinds disables save; a Jira-only choice warns on a Confluence page", async () => {
+  const page = await captureReview(CONFLUENCE_URL);
+  for (const id of ["capture-site-jira", "capture-site-confluence"]) {
+    page.el(id).checked = false;
+    page.el(id).dispatch("input");
+  }
+  assert.equal(page.el("capture-site-save").disabled, true);
+  assert.match(page.el("capture-site-message").textContent, /Choose Jira issues, Confluence pages, or both\./);
+  page.el("capture-site-jira").checked = true;
+  page.el("capture-site-jira").dispatch("input");
+  await until(() => !page.el("capture-site-save").disabled, "the Jira-only preflight");
+  assert.match(page.el("capture-site-preview").textContent, /This page: will not be captured/);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((artifact) => artifact.type), ["jira.issue"]);
+});
+
 test("Capture Site pre-fills the organization from the current GitHub page", async () => {
   const page = await captureReview(GITHUB_URL);
   assert.equal(page.el("capture-site-github").hidden, false);
+  assert.equal(page.el("capture-site-atlassian").hidden, true);
   assert.equal(page.el("capture-site-orgs").value, "acme-corp");
   assert.equal(page.el("capture-site-repos").checked, true);
   assert.equal(page.el("capture-site-prs").checked, true);
@@ -278,8 +325,9 @@ test("adding another site leaves global capture paused", async () => {
   assert.match(page.el("capture-site-save").textContent, /keep capture paused/);
   await saveCapture(page);
   assert.equal(updates(page)[0].config.capture_enabled, false);
-  assert.equal(updates(page)[0].config.adapters.artifacts.length, 2);
-  assert.deepEqual(updates(page)[0].config.adapters.artifacts[0], config.adapters.artifacts[0]);
+  // The first site's Jira and Confluence starters stay, then this site's two.
+  assert.equal(updates(page)[0].config.adapters.artifacts.length, 4);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts.slice(0, 2), config.adapters.artifacts);
 });
 
 test("configured sites, missing folders, and invalid policies cannot use Capture Site", async () => {

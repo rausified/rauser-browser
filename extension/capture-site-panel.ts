@@ -161,6 +161,9 @@ export class CaptureSitePanel {
   private readonly hint = element<HTMLElement>("capture-site-hint");
   private readonly review = element<HTMLElement>("capture-site-review");
   private readonly heading = element<HTMLElement>("capture-site-heading");
+  private readonly atlassian = element<HTMLElement>("capture-site-atlassian");
+  private readonly jira = element<HTMLInputElement>("capture-site-jira");
+  private readonly confluence = element<HTMLInputElement>("capture-site-confluence");
   private readonly github = element<HTMLElement>("capture-site-github");
   private readonly repos = element<HTMLInputElement>("capture-site-repos");
   private readonly prs = element<HTMLInputElement>("capture-site-prs");
@@ -237,7 +240,7 @@ export class CaptureSitePanel {
       cancel();
     });
     this.save.addEventListener("click", () => void this.commit());
-    for (const input of [this.repos, this.prs, this.issues, this.orgs]) {
+    for (const input of [this.jira, this.confluence, this.repos, this.prs, this.issues, this.orgs]) {
       input.addEventListener("input", () => this.updatePreview());
     }
     this.scoped.addEventListener("input", () => {
@@ -359,6 +362,9 @@ export class CaptureSitePanel {
     this.recurringStart.hidden = true;
     this.heading.textContent = `Capture work on ${new URL(origin).host}`;
     this.source.textContent = mode === "draft" ? DRAFT_SOURCE : STARTER_SOURCE;
+    this.atlassian.hidden = mode !== "starter" || starterKind(origin) !== "atlassian";
+    this.jira.checked = true;
+    this.confluence.checked = true;
     this.github.hidden = mode !== "starter" || starterKind(origin) !== "github";
     this.repos.checked = true;
     this.prs.checked = true;
@@ -397,6 +403,7 @@ export class CaptureSitePanel {
       this.restorePlan = { origin: target.origin, document, startsCapture: this.session.config!.capture_enabled };
       this.heading.textContent = `Restore capture on ${new URL(target.origin).host}`;
       this.source.textContent = "Recorded capture rules · existing notes keep their identity. Title cleanup and reference extraction can be adjusted in settings.";
+      this.atlassian.hidden = true;
       this.github.hidden = true;
       this.preview.replaceChildren();
       for (const adapter of recorded.artifacts) {
@@ -737,7 +744,9 @@ export class CaptureSitePanel {
     this.message.textContent = problem ?? this.previewMessage;
     this.save.disabled = busy || !plan || !!problem || !this.session.connected;
     this.cancel.disabled = this.saving;
-    for (const input of [this.repos, this.prs, this.issues, this.orgs]) input.disabled = this.saving || stale;
+    for (const input of [this.jira, this.confluence, this.repos, this.prs, this.issues, this.orgs]) {
+      input.disabled = this.saving || stale;
+    }
     this.orgs.disabled ||= !this.repos.checked && !this.prs.checked && !this.issues.checked;
     const draftInputs = [
       ...this.draftViews.flatMap((view) => [view.type, ...view.rules]), this.scoped, this.unscoped, this.titleSuffix,
@@ -890,6 +899,8 @@ export class CaptureSitePanel {
       repositories: this.repos.checked,
       pullRequests: this.prs.checked,
       issues: this.issues.checked,
+      jiraIssues: this.jira.checked,
+      confluencePages: this.confluence.checked,
     });
     const target = this.target;
     const check = ++this.starterCheck;

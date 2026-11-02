@@ -455,7 +455,7 @@ function renderStarterGallery(): void {
   const compatible = origins.flatMap((origin) => starterOffers(origin, githubScope())
     .map((offer) => ({ origin, offer })));
   if (!compatible.length) {
-    addText(starterGallery, "p", "Enter a Jira Cloud, SharePoint/OneDrive, or GitHub site address above to see starter drafts.");
+    addText(starterGallery, "p", "Enter an Atlassian Cloud (Jira or Confluence), SharePoint/OneDrive, GitHub, or Miro site address above to see starter drafts.");
     return;
   }
   let githubScopeRendered = false;

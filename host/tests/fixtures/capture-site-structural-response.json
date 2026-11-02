@@ -419,6 +419,7 @@
   "request_id": "draft-1",
   "revision": "<revision>",
   "taken_types": [
+    "confluence.page",
     "github.issue",
     "github.pr",
     "github.repo",

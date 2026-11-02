@@ -25,6 +25,9 @@ export interface CaptureChoice {
   repositories: boolean;
   pullRequests: boolean;
   issues: boolean;
+  /** The Atlassian Cloud starters: either or both may be chosen. */
+  jiraIssues: boolean;
+  confluencePages: boolean;
 }
 
 export interface CapturePlan {
@@ -81,6 +84,12 @@ export function planCaptureSite(
       if (!checked) continue;
       offers.push(allOffers.find((offer) => offer.artifact_type === type)!);
     }
+  } else if (starterKind(origin) === "atlassian") {
+    const checked = new Set<string>();
+    if (choice.jiraIssues) checked.add("jira.issue");
+    if (choice.confluencePages) checked.add("confluence.page");
+    if (!checked.size) return { ok: false, message: "Choose Jira issues, Confluence pages, or both." };
+    offers.push(...starterOffers(origin, []).filter((offer) => checked.has(offer.artifact_type)));
   } else {
     offers.push(...starterOffers(origin, []));
   }

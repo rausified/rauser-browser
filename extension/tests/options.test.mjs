@@ -839,6 +839,37 @@ test("a Jira starter resolves the typed site address and enters preview before s
   assert.match(nodeText(env.elements.get("starter-gallery")), /Already configured/);
 });
 
+test("an Atlassian site offers Jira issues and Confluence pages, each once", async () => {
+  const jira = {
+    type: "jira.issue", origin: "https://acme.atlassian.net",
+    match: [{ path: "/browse/{key:jira_key}" }], id: "jira:{host}/{key}",
+  };
+  const state = install({ adapters: [jira] });
+  await openSettings();
+  const gallery = env.elements.get("starter-gallery");
+  const cards = gallery.querySelectorAll("button");
+  assert.match(nodeText(gallery), /Jira issues/);
+  assert.match(nodeText(gallery), /Confluence pages/);
+  const [jiraButton, confluenceButton] = cards;
+  assert.equal(jiraButton.dataset.starterKey, "jira:https://acme.atlassian.net");
+  assert.equal(jiraButton.textContent, "Already configured");
+  assert.equal(jiraButton.disabled, true);
+  assert.equal(confluenceButton.dataset.starterKey, "confluence.page:https://acme.atlassian.net");
+  assert.equal(confluenceButton.textContent, "Review starter…");
+  assert.equal(confluenceButton.disabled, false);
+
+  confluenceButton.click();
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.equal(draft.type, "confluence.page");
+  assert.equal(draft.origin, "https://acme.atlassian.net");
+  assert.equal(draft.id, "confluence.page:{host}/{id}");
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 2 && idle(), "the Confluence starter save");
+  assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.type), ["jira.issue", "confluence.page"]);
+  const after = env.elements.get("starter-gallery").querySelectorAll("button");
+  assert.deepEqual(after.map((button) => button.textContent), ["Already configured", "Already configured"]);
+});
+
 test("GitHub starters stay disabled until an explicit valid organization scope", async () => {
   install();
   await openSettings();
