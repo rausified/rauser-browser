@@ -9,6 +9,9 @@ pub(super) fn replace_artifact(
     artifact: &ArtifactRow,
     contents: &str,
 ) -> Result<OwnedWrite> {
+    // The multi-process harness's regeneration trace (7vf).
+    #[cfg(test)]
+    let _span = tests::mp_harness::SpanGuard::start(&artifact.artifact_id, None);
     replace_owned_file(
         root,
         &artifact_path(artifacts_dir, artifact),

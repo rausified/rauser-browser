@@ -12,6 +12,7 @@ mod database;
 mod gaps;
 mod identity;
 mod migration;
+pub(super) mod mp_harness;
 mod ordering;
 mod presentation;
 mod regeneration;
