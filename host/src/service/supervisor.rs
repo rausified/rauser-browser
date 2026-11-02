@@ -631,8 +631,11 @@ impl Supervisor {
             // From the page's address only, and only for a page run; the
             // document identity goes to `page.md` (and to a suspect
             // capture's warning), not to the routine `run queued` line.
+            let no_page =
+                req.kind == RunKind::Task && req.task.as_ref().is_some_and(|task| task.no_page);
             let section = match req.kind {
-                RunKind::Summary | RunKind::Task => PageSection::for_url(&req.url),
+                RunKind::Summary | RunKind::Task if !no_page => PageSection::for_url(&req.url),
+                RunKind::Summary | RunKind::Task => None,
                 RunKind::SiteDraft => None,
             };
             let incoming = if req.kind == RunKind::Summary {
@@ -642,7 +645,7 @@ impl Supervisor {
             };
             // Measured now, before a site draft's content moves into its page.
             let suspect = match req.kind {
-                RunKind::Summary | RunKind::Task => capture_quality::assess(
+                RunKind::Summary | RunKind::Task if !no_page => capture_quality::assess(
                     &req.content,
                     section
                         .as_ref()
@@ -650,9 +653,10 @@ impl Supervisor {
                         .map(|doc| doc.kind),
                 )
                 .map(|found| (found, capture_quality::excerpt(&req.content))),
-                RunKind::SiteDraft => None,
+                RunKind::Summary | RunKind::Task | RunKind::SiteDraft => None,
             };
             let (cwd, page) = match req.kind {
+                RunKind::Task if no_page => (req.cwd, String::new()),
                 RunKind::Summary | RunKind::Task => (
                     req.cwd,
                     page_markdown_with_incoming(
@@ -1328,7 +1332,7 @@ impl Inner {
                 (
                     task_prompt(
                         &task.instruction,
-                        &page_path,
+                        (!task.no_page).then_some(page_path.as_path()),
                         &launch.cwd,
                         self.store.support_dir(),
                         &task.protected,
@@ -3505,6 +3509,7 @@ mod tests {
 
     fn sentinel_task() -> TaskStatus {
         TaskStatus {
+            no_page: false,
             instruction: "Do it".into(),
             protected: Vec::new(),
         }
@@ -5273,6 +5278,7 @@ mod tests {
                 incoming: Vec::new(),
                 kind: RunKind::Task,
                 task: Some(TaskStatus {
+                    no_page: false,
                     instruction: instruction.to_string(),
                     protected: self.protected(),
                 }),
@@ -5305,6 +5311,51 @@ mod tests {
         status.task = task;
         store.write_status(&status).unwrap();
         id
+    }
+
+    #[test]
+    fn tasks_without_a_page_run_independently_with_no_page_file_or_prompt() {
+        let (fixture, seen) = recording(&["Organized the notes."]);
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let mut request = fixture.task_request("unused", INSTRUCTION);
+            request.task.as_mut().unwrap().no_page = true;
+            request.url = super::super::record::NO_PAGE_TASK.into();
+            request.record_key.value = request.url.clone();
+            request.title.clear();
+            request.content.clear();
+            request.selection = None;
+            let (view, existing) = fixture.supervisor.start_run(request).unwrap();
+            assert!(!existing);
+            assert_eq!(view.no_page, Some(true));
+            let id = Uuid::parse_str(&view.run_id).unwrap();
+            let view = fixture.wait_finished(id);
+            assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+            assert_eq!(view.task_report.as_deref(), Some("Organized the notes."));
+            assert!(!fixture.supervisor.store().page_path(id).exists());
+            assert!(
+                fixture
+                    .supervisor
+                    .store()
+                    .status(id)
+                    .unwrap()
+                    .task
+                    .unwrap()
+                    .no_page
+            );
+            ids.push(id);
+        }
+        assert_ne!(ids[0], ids[1]);
+        let seen = seen.lock().unwrap();
+        for ((spec, page), prompt) in seen.starts.iter().zip(&seen.prompts) {
+            assert_eq!(spec.cwd, fixture.dir.path());
+            assert!(page.is_empty());
+            assert!(!prompt.contains(&spec.page_path.display().to_string()));
+            assert!(!prompt.contains("page.md"));
+            assert!(prompt.contains(INSTRUCTION));
+            assert_eq!(spec.output_schema, OutputSchema::Omit);
+        }
+        assert_eq!(fixture.saves.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -5352,7 +5403,7 @@ mod tests {
             prompt,
             &task_prompt(
                 INSTRUCTION,
-                &spec.page_path,
+                Some(&spec.page_path),
                 &spec.cwd,
                 fixture.dir.path(),
                 &fixture.protected(),
@@ -5400,6 +5451,7 @@ mod tests {
         assert_eq!(
             status.task,
             Some(TaskStatus {
+                no_page: false,
                 instruction: INSTRUCTION.to_string(),
                 protected: fixture.protected(),
             })
@@ -5497,7 +5549,7 @@ mod tests {
             prompt,
             &task_prompt(
                 INSTRUCTION,
-                &spec.page_path,
+                Some(&spec.page_path),
                 &spec.cwd,
                 fixture.dir.path(),
                 &fixture.protected(),
@@ -5755,6 +5807,7 @@ mod tests {
                 RunState::Queued,
                 "2026-10-26T09:00:00.000000000Z",
                 Some(TaskStatus {
+                    no_page: false,
                     instruction: INSTRUCTION.to_string(),
                     protected: vec![cwd.join("home/notes").display().to_string()],
                 }),

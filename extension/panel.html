@@ -136,9 +136,10 @@
           <label for="task-input" class="visually-hidden">Task for the agent</label>
           <textarea id="task-input" rows="1" maxlength="4000" autocomplete="off" spellcheck="true"
             title="Enter to run; Shift+Enter for a new line. ArrowUp at the start recalls earlier instructions; ArrowDown at the end returns to your draft. Press / outside a text field to focus here."
-            placeholder="Tell the agent what to do with this page…"></textarea>
+            placeholder="Tell the agent what to do…"></textarea>
           <button id="task-run" type="submit" class="run-button" aria-label="Run task">Run</button>
         </form>
+        <label class="task-page-choice"><input id="task-use-page" type="checkbox" checked> Include this page</label>
         <div class="task-meta">
           <p id="task-context" class="task-context"></p>
           <button id="task-open" type="button" class="secondary compact">Tasks ↗</button>

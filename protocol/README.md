@@ -562,7 +562,7 @@ the panel cannot copy a stale report after that refusal.
 ### Agent tasks (added within version 8)
 
 The side panel's task bar runs the configured harness on the user's typed
-instruction, with the open page as untrusted context. All of it is additive.
+instruction, with optional open-page context. All of it is additive.
 
 - `start_task` carries `url`, `title`, `content`, `selection` (the same bounds
   as `start_run`), `instruction` (1 to 4,096 characters), the nullable
@@ -595,6 +595,24 @@ A version 8 host built before these additions answers `invalid_request`
 asks for a host rebuild. An extension built before them rejects a
 `runs_listed` or `run_fetched` that holds a task view, so the extension and
 the host deploy together.
+
+A task can omit its page by sending `no_page: true`, `selection: null`, and
+no `url`, `title`, `content` or `capture_truncated`. Missing/false `no_page`
+keeps the existing complete page-task shape; missing page fields then fail the
+native semantic check. Mixed page/no-page payloads are refused. Instruction and
+click-time validation still apply. The host forwards `no_page: true` with the
+reserved `brauser:task-without-page` URL and URL key, empty title/content, and no
+selection; the service accepts that exact shape only for tasks, before the
+ordinary task setup. The extension cannot send this flag through `start_run`.
+No page is inferred from a URL alone, and a failed extraction never falls back.
+
+Only no-page tasks project `RunView.no_page: true`, from the stored TaskStatus
+scope. They create no `page.md`, grant no page-reading/retrieval paragraph, and
+keep normal task cwd, protected paths, limits, report and restart behavior.
+History and Reuse preserve this explicit scope and never open the internal
+marker. Older services cannot read records containing the new scope field;
+leave no active tasks before rollback. Older hosts reject the new start-task
+shape and older extensions reject its new view field: deploy both together.
 
 ### Auto-summary (added within version 8)
 

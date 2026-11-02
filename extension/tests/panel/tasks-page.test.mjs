@@ -811,6 +811,20 @@ test("arrow keys move the selection", async () => {
   assert.deepEqual(page.selected(), [runId(3)]);
 });
 
+test("a task without a page labels its scope, omits Open page and reuses without navigation", async () => {
+  const run = task(1, { no_page: true, url: "brauser:task-without-page", title: "" });
+  const page = await openTasks({ runs: [run], windowId: 9 });
+  await listed(page);
+  await until(() => buttonIn(page.el("tasks-detail"), "Reuse"), "Reuse button");
+  assert.match(page.el("tasks-detail").textContent, /No page/);
+  assert.equal(buttonIn(page.el("tasks-detail"), "Open page"), null);
+  buttonIn(page.el("tasks-detail"), "Reuse").click();
+  await until(() => page.state.session.get(storageKey("task_reuse_v1")), "Reuse handoff");
+  assert.equal(page.state.session.get(storageKey("task_reuse_v1")).no_page, true);
+  assert.deepEqual(page.state.created, []);
+  assert.deepEqual(page.state.sidePanelOpens, [{ windowId: 9 }]);
+});
+
 test("Open page opens the task's own URL and Reuse opens the side panel and hands off the instruction", async () => {
   const page = await openTasks({ windowId: 9 });
   await listed(page);
