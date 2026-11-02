@@ -413,6 +413,7 @@ export interface ContainedArtifactView {
 }
 
 export interface SummaryView {
+  overview?: string;
   summarized_at: string;
   document_type: string;
   category: string;
@@ -591,6 +592,7 @@ export type RunErrorKind = "harness_failed" | "timed_out" | "canceled" | "servic
 export type ImportanceLevel = "high" | "medium" | "low";
 
 export interface RunAnswer {
+  overview?: string;
   document_type: string;
   category: string;
   importance: ImportanceLevel;

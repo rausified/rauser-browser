@@ -165,7 +165,11 @@ test("artifact_result requires summary", () => {
   const { summary: _omitted, ...missing } = result;
   assert.equal(isResponseShape(missing), false);
   assert.equal(isSummaryView(SUMMARY_VIEW), true);
+  assert.equal(isSummaryView({ ...SUMMARY_VIEW, overview: "A decision about the release." }), true);
+  assert.equal(isSummaryView({ ...SUMMARY_VIEW, overview: "日".repeat(300) }), true);
+  assert.equal(isSummaryView({ ...SUMMARY_VIEW, overview: "😀".repeat(300) }), true);
   for (const bad of [
+    ...[null, 7, "", "a".repeat(301)].map((overview) => ({ ...SUMMARY_VIEW, overview })),
     { ...SUMMARY_VIEW, importance: "critical" },
     { ...SUMMARY_VIEW, harness: "claude_code" },
     { ...SUMMARY_VIEW, summary_path: 7 },
@@ -233,6 +237,10 @@ test("isRunView requires answer and rejects an unknown importance", () => {
   };
   const updated = (run) => isResponseShape({ type: "run_updated", run });
   assert.equal(updated(view), true);
+  assert.equal(updated({ ...view, answer: { ...view.answer, overview: "A decision about the release." } }), true);
+  for (const overview of [null, 7, "", "a".repeat(301)]) {
+    assert.equal(updated({ ...view, answer: { ...view.answer, overview } }), false);
+  }
   assert.equal(updated({ ...view, answer: null }), true);
   const { answer: _omitted, ...missing } = view;
   assert.equal(updated(missing), false);

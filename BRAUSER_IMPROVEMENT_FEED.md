@@ -139,3 +139,24 @@ one-sentence overview is the useful decision aid at that point. Where:
 protocol/schema.json, host/src/summary.rs and service/record.rs,
 extension/summary-text.ts, extension/run-card.ts and the panel. Use the
 existing brwr-sm3 rather than create another proposal for the same work.
+
+- Done 2026-11-02: brwr-sm3 carries overview through events, views and run answers; panel, Recent and run cards show it with legacy fallbacks.
+
+## 2026-11-02 — Search the topic a summary actually describes
+
+Change: extend Tasks history search to match a summary's overview as well as
+its page title, keeping existing matches for older results. Why: brwr-sm3
+now delivers the useful one-sentence description to each retained run, but
+`filterTasks` still searches only the title and task instruction; remembering
+a decision described by the summary does not find its run. Where:
+`extension/task-history.ts`, `extension/tasks.ts`, their tests, and brwr-khqi
+(discovered from brwr-sm3).
+
+## 2026-11-02 — Exercise upgrade retries when extending durable event payloads
+
+Change: keep a pre-change journal fixture and replay it with the new caller
+payload whenever adding a summary event field. Why: the overview tests covered
+old log reading and cache reopen, but an older interrupted append failed Retry
+save because its payload hash lacked the new field. The review regression in
+`host/src/capture.rs` now covers this transition; apply the same check to future
+event extensions alongside the frozen single-event recovery tests.

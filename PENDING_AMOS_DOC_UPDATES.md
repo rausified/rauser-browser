@@ -293,3 +293,12 @@
 
 
 - **Brauser — Preserve recorded incoming navigation in summaries (2026-11-02):** Summary runs freeze up to five host-derived incoming source/transition pairs, share that bounded untrusted context with the agent, and host-render a measured Incoming list with safe title links and last-recorded dates. The snapshot survives queueing, restart and Retry save; absent/legacy context adds nothing and grants no source retrieval. Ten new offline tests and the complete required/README gate pass (1,331 Rust-reported outcomes, including 92 IPC guard skips; 40 extension test files; both Clippy builds; 10,696 inert renderings). New nonempty run snapshots require the newer service. Assigned Re-learn work remains blocked on held PR #238, not included in this cycle.
+
+- Brauser (2026-11-02, brwr-sm3): panel saved summaries and Recent now show
+  the one-sentence overview with the document type, and summary run results
+  lead with it. Older records retain their labels; the optional overview
+  survives cache reopen/reindex. Deploy host and extension together; host
+  downgrade after new summary events is unsupported.
+- Brauser (2026-11-02, brwr-tsh1): retained summary history remains reachable
+  after panel restore and harness removal, including dismissed summaries and
+  summaries too old for panel cards. Tasks can still reveal dismissed runs.

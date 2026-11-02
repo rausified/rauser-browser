@@ -1,8 +1,37 @@
 use brauser_protocol::{Request, Response};
 
+mod common;
+
 const SUMMARY_VIEW: &str = r#"{"summarized_at":"2026-10-26T14:05:00-07:00","document_type":"specification","category":"technical specification","importance":"high","summary_path":"summaries/a.summary.md","harness":"codex"}"#;
 
 const LIST_ITEM: &str = r#"{"local_date":"2026-10-26","artifact_id":"web:a.example/x","artifact_type":"web.page","title":"T","url":"https://a.example/x","focused_seconds":0,"background_seconds":0,"opens":0,"why":null,"summary":null}"#;
+
+#[test]
+fn summary_overview_is_optional_bounded_and_round_trips() {
+    use common::schema_subset;
+    use serde_json::json;
+    let old: serde_json::Value = serde_json::from_str(SUMMARY_VIEW).unwrap();
+    for overview in [None, Some("A decision about the next release.")] {
+        let mut summary = old.clone();
+        if let Some(text) = overview {
+            summary["overview"] = text.into();
+        }
+        let response = json!({"type":"artifact_result", "protocol_version":8, "request_id":"r", "recognized":false, "artifact":null, "summary":summary});
+        common::assert_response_round_trips("ArtifactResult", &response);
+        let mut answer = json!({"document_type":"report", "category":"news", "importance":"high", "importance_reason":"Relevant."});
+        if let Some(text) = overview {
+            answer["overview"] = text.into();
+        }
+        assert!(schema_subset::valid("RunAnswer", &answer));
+        let decoded: brauser_protocol::RunAnswer = serde_json::from_value(answer.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), answer);
+    }
+    for value in [json!(""), json!("x".repeat(301)), json!(null), json!(12)] {
+        let mut summary = old.clone();
+        summary["overview"] = value;
+        assert!(!schema_subset::valid("SummaryView", &summary));
+    }
+}
 
 fn listed(item: &str) -> String {
     format!(
