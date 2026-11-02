@@ -1571,6 +1571,17 @@ test("a new run for a page replaces that page's older card without dismissing it
   page.runCards.restoreFrom([older], new Set());
   await settle();
   assert.deepEqual(cards(page.container).map((card) => card.dataset.runId).sort(), [newer.run_id, other.run_id].sort());
+
+  // Nor after the newer run's card is dismissed.
+  runs[1] = { ...newer, state: "succeeded", answer: ANSWER, finished_at: "2026-10-27T15:59:00Z" };
+  await tick();
+  await settle();
+  const newerCard = cards(page.container).find((card) => card.dataset.runId === newer.run_id);
+  button(newerCard, "Dismiss").click();
+  await settle();
+  page.runCards.restoreFrom([older], new Set());
+  await settle();
+  assert.deepEqual(cards(page.container).map((card) => card.dataset.runId), [other.run_id]);
   page.runCards.dispose();
 });
 

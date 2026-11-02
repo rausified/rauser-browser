@@ -932,3 +932,27 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   page.el("tasks-search").dispatch("input", {});
   await until(() => page.rows().length === 3, "the three summaries");
 });
+
+test("a selected summary whose save was retried elsewhere shows its new state on refresh", async () => {
+  const { instruction: _instruction, task_report: _report, ...failed } = task(1, {
+    kind: "summary", state: "failed", title: "User story mapping.docx", url: "https://work.example/doc",
+    error: "The notes folder is not mounted.", error_kind: "save_failed", can_retry_save: true,
+  });
+  const page = await openTasks({ runs: [failed] });
+  await until(() => page.detailId() === runId(1), "the failed summary's detail");
+  const detail = page.el("tasks-detail");
+  await until(() => /Failed/.test(detail.textContent), "the failed state");
+  assert.equal(buttonIn(detail, "Open summary"), null);
+
+  // The panel's Retry save succeeded; the next refresh (on show) has it.
+  page.state.runs[0] = {
+    ...failed, state: "succeeded", error: null, error_kind: null, can_retry_save: false,
+    summary_path: "Summaries/doc.summary.md",
+    answer: { document_type: "specification", category: "project plan", importance: "low", importance_reason: "Known." },
+  };
+  page.setHidden(true);
+  page.setHidden(false);
+  await until(() => buttonIn(page.el("tasks-detail"), "Open summary"), "Open summary after the retried save");
+  assert.match(page.el("tasks-detail").textContent, /Importance: low — Known\./);
+  assert.equal(page.detailId(), runId(1));
+});

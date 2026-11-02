@@ -928,6 +928,9 @@ export async function restoreRunCards(
  * panel content; they add and remove only their own elements. */
 export class RunCards {
   private readonly cards = new Map<string, RunCard>();
+  // Each page's newest run seen, kept after its card is dismissed, so a
+  // restore answered late cannot bring back an older run's card.
+  private readonly newest = new Map<string, RunView>();
   private disposed = false;
   // The page the panel follows: only its cards show. Undefined until the
   // panel first follows a tab, when every card shows; null for no web page.
@@ -985,9 +988,11 @@ export class RunCards {
     // or a newer restored one replaces the page's other card, which is not
     // dismissed, so the Tasks page still lists it; an older restored run (a
     // list answered after a run was started) shows none.
-    const samePageCards = [...this.cards.values()].filter((other) => samePage(other.url, run.url));
-    if (!atTop && samePageCards.some((other) => newerRun(other.run, run))) return;
-    for (const older of samePageCards) this.remove(older);
+    const page = run.url.split("#")[0]!;
+    const newest = this.newest.get(page);
+    if (!atTop && newest && newest.run_id !== run.run_id && newerRun(newest, run)) return;
+    this.newest.set(page, run);
+    for (const older of [...this.cards.values()].filter((other) => samePage(other.url, run.url))) this.remove(older);
     const card = new RunCard(run, this.deps, (dismissed) => void this.dismiss(dismissed));
     this.place(card);
     const cardElements = new Set<Element>(Array.from(this.cards.values(), (other) => other.element));

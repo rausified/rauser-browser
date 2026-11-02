@@ -280,6 +280,12 @@ function markSelected(): void {
   }
 }
 
+/** Drops the detail but keeps the selection, so `select` builds it again. */
+function clearDetailOnly(): void {
+  detail?.dispose();
+  detail = null;
+}
+
 function clearDetail(): void {
   detail?.dispose();
   detail = null;
@@ -469,6 +475,15 @@ async function refreshOnce(): Promise<void> {
     runs = mergeRuns(runs.filter((run) => !gone.has(run.run_id)), fresh);
     if (listErrorShown) showStatus(null);
     renderList();
+    // A finished run's detail stops polling, so one that changed since (a
+    // summary whose save the panel retried) is shown again from the list.
+    const shown = detail?.run;
+    const current = runs.find((run) => run.run_id === selectedId);
+    if (shown && current && isTerminal(shown)
+      && (current.state !== shown.state || current.summary_path !== shown.summary_path)) {
+      clearDetailOnly();
+      select(current.run_id);
+    }
     // An intermediate list may lack the requested run. With no selection
     // yet, falling back would rewrite its hash before the queued read.
     if (!refreshAgain) syncSelectionToHash();
