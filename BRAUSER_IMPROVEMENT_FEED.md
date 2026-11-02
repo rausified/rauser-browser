@@ -119,3 +119,16 @@ HTTP/HTTPS merge. Approval now refuses both, but issue codes alone do not tell
 a person how to proceed. Where: host/src/relearn.rs, its strict index scan,
 and the future panel Re-learn review under brwr-6x2. Tracked as brwr-pgxz
 (discovered from both fixes); preserve read-only review and separate recovery.
+
+## 2026-11-02 — Bind the physical note location into Re-learn save revisions
+
+Change: give an alias-resolved note an internal logical key, physical ownership
+key and selected file location, and bind a save's revision check to that
+selection. Why: brwr-ruwj now projects one corrected artifact while retaining
+both original summary paths and raw ownership keys; the migration design
+challenge found that passing a corrected key to the existing note-save API
+would create another file instead of updating the note the person loaded.
+Where: host/src/native.rs note context, host/src/note.rs load/save and the
+remaining brwr-dbp apply integration. Test stale saves across a move and a
+move back, both-side notes and URL copies; preserve copy-out-only browser
+recovery. This belongs to the assigned brwr-dbp work.

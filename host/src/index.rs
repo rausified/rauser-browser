@@ -37,6 +37,7 @@ use crate::capture::{
     trail_transition_is_valid,
 };
 use crate::markdown::{self, yaml_string};
+use crate::relearn::aliases::Resolution;
 use crate::summary::SummaryEvent;
 use crate::url_provenance::{StoredUrl, UrlProvenance};
 use crate::vault::{
@@ -486,7 +487,7 @@ struct VisitRow {
     contained: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct EdgeRow {
     source: String,
     target: String,
@@ -499,6 +500,28 @@ struct Derived {
     artifacts: BTreeMap<String, ArtifactRow>,
     visits: Vec<VisitRow>,
     edges: Vec<EdgeRow>,
+}
+
+/// Strict, cache-independent preview of the same derivation the app uses.
+/// Summary views retain their original checked paths and ownership keys.
+#[derive(Serialize)]
+pub(crate) struct RekeyProjection {
+    artifacts: Vec<ArtifactView>,
+    summaries: BTreeMap<String, Vec<SummaryView>>,
+    edges: Vec<EdgeRow>,
+    recent: Vec<ArtifactListItem>,
+    recent_truncated: bool,
+    worklog: Option<ProjectedWorklog>,
+}
+
+#[derive(Serialize)]
+struct ProjectedWorklog {
+    start: String,
+    end: String,
+    text: String,
+    artifact_count: usize,
+    capture_gaps: Vec<OverflowMarker>,
+    capture_gaps_truncated: bool,
 }
 
 #[derive(Default)]
@@ -1519,10 +1542,8 @@ impl ArtifactIndex {
             .collect())
     }
 
-    /// Fresh authoritative evidence for impact review. No cache is trusted,
-    /// published or resumed. Oversized/inconsistent history refuses the plan.
-    /// Caller holds the config and capture locks, in that order.
-    pub(crate) fn relearn_evidence(&self) -> Result<(String, Vec<(RecordKey, StoredUrl)>)> {
+    /// No checkpoint is trusted, published, regenerated or resumed here.
+    fn relearn_state(&self) -> Result<IndexState> {
         let mut state = self.empty_state();
         let pass = self.catch_up_logs(&mut state, true, true)?;
         anyhow::ensure!(
@@ -1533,7 +1554,71 @@ impl ArtifactIndex {
             state.conflicts.is_empty(),
             "conflicting recorded event IDs prevent re-learning review"
         );
-        let revision = sha256_hex(&serde_json::to_vec(&state.events)?);
+        Ok(state)
+    }
+
+    pub(crate) fn relearn_projection(
+        &self,
+        resolution: &Resolution,
+        expected_log_revision: &str,
+    ) -> Result<RekeyProjection> {
+        let state = self.relearn_state()?;
+        anyhow::ensure!(
+            relearn_snapshot_revision(&state)? == expected_log_revision,
+            "log evidence changed during projection; review a fresh plan"
+        );
+        let derived = derive_resolved(&state, self.adapters.as_deref(), resolution);
+        let artifacts = derived
+            .artifacts
+            .values()
+            .map(|row| artifact_view(row, &derived))
+            .collect();
+        let summaries = derived
+            .artifacts
+            .iter()
+            .filter_map(|(id, row)| {
+                let summaries: Vec<_> = row.summaries.iter().filter_map(summary_view).collect();
+                (!summaries.is_empty()).then(|| (id.clone(), summaries))
+            })
+            .collect();
+        let (recent, _, recent_truncated) = recent_derived(&derived, None, None, 64)?;
+        let dates: BTreeSet<_> = derived
+            .visits
+            .iter()
+            .filter_map(|v| parse_date(&v.local_date).ok())
+            .collect();
+        let worklog = match (dates.first(), dates.last()) {
+            (Some(start), Some(end)) => {
+                let (gaps, truncated) = worklog_gaps(&state, *start, *end);
+                let (text, artifact_count, capture_gaps, capture_gaps_truncated) =
+                    worklog_derived(&derived, *start, *end, gaps, truncated)?;
+                Some(ProjectedWorklog {
+                    start: start.to_string(),
+                    end: end.to_string(),
+                    text,
+                    artifact_count,
+                    capture_gaps,
+                    capture_gaps_truncated,
+                })
+            }
+            _ => None,
+        };
+        Ok(RekeyProjection {
+            artifacts,
+            summaries,
+            edges: derived.edges,
+            recent,
+            recent_truncated,
+            worklog,
+        })
+    }
+
+    /// Fresh authoritative evidence for impact review. No cache is trusted,
+    /// published or resumed. Oversized/inconsistent history refuses the plan.
+    /// Caller holds the config and capture locks, in that order.
+    pub(crate) fn relearn_evidence(&self) -> Result<(String, Vec<(RecordKey, StoredUrl)>)> {
+        let state = self.relearn_state()?;
+        let revision = relearn_snapshot_revision(&state)?;
         let evidence = state
             .events
             .values()
@@ -1576,68 +1661,7 @@ impl ArtifactIndex {
         limit: usize,
     ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
         let derived = self.derive(&self.load_or_rebuild()?);
-        let types = derived
-            .artifacts
-            .values()
-            .map(|row| row.artifact_type.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .take(64)
-            .collect::<Vec<_>>();
-        let query = title_query.map(str::trim).filter(|value| !value.is_empty());
-        let query = query.map(|value| value.to_lowercase());
-        let mut grouped = BTreeMap::<(String, String), ArtifactListItem>::new();
-        for visit in &derived.visits {
-            let Some(artifact) = derived.artifacts.get(&visit.artifact_id) else {
-                continue;
-            };
-            if artifact_type.is_some_and(|wanted| wanted != artifact.artifact_type) {
-                continue;
-            }
-            if query
-                .as_ref()
-                .is_some_and(|wanted| !artifact.title.to_lowercase().contains(wanted))
-            {
-                continue;
-            }
-            let row = grouped
-                .entry((visit.local_date.clone(), visit.artifact_id.clone()))
-                .or_insert_with(|| ArtifactListItem {
-                    local_date: visit.local_date.clone(),
-                    artifact_id: visit.artifact_id.clone(),
-                    artifact_type: artifact.artifact_type.clone(),
-                    title: artifact.title.clone(),
-                    url: artifact.url.clone(),
-                    focused_seconds: 0,
-                    background_seconds: 0,
-                    opens: 0,
-                    why: artifact.why.clone(),
-                    summary: None,
-                });
-            // Visits are in time order, so the day's latest summary that
-            // renders wins.
-            if let Some(view) = visit.summary.as_ref().and_then(summary_view) {
-                row.summary = Some(view);
-            }
-            row.focused_seconds =
-                saturating_u32(u64::from(row.focused_seconds).saturating_add(visit.focused_secs));
-            row.background_seconds = saturating_u32(
-                u64::from(row.background_seconds).saturating_add(visit.background_secs),
-            );
-            row.opens = saturating_u32(u64::from(row.opens).saturating_add(visit.opens));
-        }
-        let mut items = grouped.into_values().collect::<Vec<_>>();
-        items.sort_by(|left, right| {
-            right
-                .local_date
-                .cmp(&left.local_date)
-                .then(right.focused_seconds.cmp(&left.focused_seconds))
-                .then(left.title.cmp(&right.title))
-                .then(left.artifact_id.cmp(&right.artifact_id))
-        });
-        let truncated = items.len() > limit;
-        items.truncate(limit);
-        Ok((items, types, truncated))
+        recent_derived(&derived, artifact_type, title_query, limit)
     }
 
     /// Render a measured, agent-free summary for an inclusive range of local
@@ -1655,115 +1679,7 @@ impl ArtifactIndex {
         let state = self.load_or_rebuild()?;
         let (gaps, gaps_truncated) = worklog_gaps(&state, start, end);
         let derived = self.derive(&state);
-        let mut rows = BTreeMap::<String, WorklogRow>::new();
-        for visit in &derived.visits {
-            let Ok(date) = parse_date(&visit.local_date) else {
-                continue;
-            };
-            if date < start || date > end {
-                continue;
-            }
-            let row = rows.entry(visit.artifact_id.clone()).or_default();
-            row.focused = row.focused.saturating_add(visit.focused_secs);
-            row.background = row.background.saturating_add(visit.background_secs);
-            row.opens = row.opens.saturating_add(visit.opens);
-            if !visit.contained {
-                row.own_focused = row.own_focused.saturating_add(visit.focused_secs);
-                row.own_opens = row.own_opens.saturating_add(visit.opens);
-            }
-            if let Some(summary) = &visit.summary
-                && row.summary.as_ref().is_none_or(|current| {
-                    timestamp_order(&summary.occurred_at, &current.occurred_at).is_ge()
-                })
-            {
-                row.summary = Some(summary.clone());
-            }
-        }
-        // A container is still listed with its rolled-up measures, but the
-        // range's totals count each visit once, by its own artifact. A
-        // summary is not measured activity: it is counted on its own and
-        // never as an open.
-        let opened = rows.values().filter(|row| row.own_opens > 0).count();
-        let carried = rows
-            .values()
-            .filter(|row| row.own_opens == 0 && row.own_focused > 0)
-            .count();
-        let summarized = rows.values().filter(|row| row.summary.is_some()).count();
-        let plural = |count: usize| if count == 1 { "" } else { "s" };
-        let mut text = if summarized > 0 {
-            format!(
-                "Opened {opened} artifact{}, focused on {carried} left open from an earlier day, and summarized {summarized} page{}.",
-                plural(opened),
-                plural(summarized)
-            )
-        } else {
-            format!(
-                "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
-                plural(opened)
-            )
-        };
-        let mut ordered = rows.into_iter().collect::<Vec<_>>();
-        ordered.sort_by(|left, right| {
-            right
-                .1
-                .focused
-                .cmp(&left.1.focused)
-                .then(right.1.opens.cmp(&left.1.opens))
-                .then(left.0.cmp(&right.0))
-        });
-        let mut shown = 0usize;
-        for (id, row) in &ordered {
-            let Some(artifact) = derived.artifacts.get(id) else {
-                continue;
-            };
-            let mut line = if let Some(summary) = &row.summary {
-                let mut line = format!(
-                    "Summarized: {} — {}, {} importance",
-                    plain_text(&summary.title),
-                    plain_text(&summary.document_type),
-                    crate::summary::importance_str(summary.importance)
-                );
-                // A future adapter-attached summary (spec §7.2's "the
-                // adapter does recognize the page" branch) can land on an
-                // artifact that also has real measured activity; keep both
-                // instead of silently dropping the measures.
-                if row.focused > 0 || row.background > 0 || row.opens > 0 {
-                    line.push_str(&format!(
-                        " — {}",
-                        measures(row.focused, row.background, row.opens)
-                    ));
-                }
-                line
-            } else {
-                let mut line = format!(
-                    "{} {}: {}",
-                    artifact.artifact_type,
-                    id,
-                    plain_text(&artifact.title)
-                );
-                line.push_str(&format!(
-                    " — {}",
-                    measures(row.focused, row.background, row.opens)
-                ));
-                line
-            };
-            if let Some(why) = &artifact.why {
-                line.push_str(&format!(". Why: {}", plain_text(why)));
-            }
-            if text.len().saturating_add(line.len()).saturating_add(1) > MAX_WORKLOG_BYTES {
-                break;
-            }
-            text.push('\n');
-            text.push_str(&line);
-            shown += 1;
-        }
-        if shown < ordered.len() {
-            text.push_str(&format!(
-                "\n… {} more artifacts omitted.",
-                ordered.len() - shown
-            ));
-        }
-        Ok((text, ordered.len(), gaps, gaps_truncated))
+        worklog_derived(&derived, start, end, gaps, gaps_truncated)
     }
 
     fn state_path(&self) -> PathBuf {
@@ -1773,6 +1689,203 @@ impl ArtifactIndex {
     pub fn database_path(&self) -> PathBuf {
         self.cache_dir.join("index.db")
     }
+}
+
+/// Projection depends on durable tie order and gap notices as well as event
+/// bodies. Keep one fingerprint for both review and the projection recheck.
+fn relearn_snapshot_revision(state: &IndexState) -> Result<String> {
+    Ok(sha256_hex(&serde_json::to_vec(&(
+        &state.events,
+        &state.positions,
+        &state.gaps,
+    ))?))
+}
+
+fn recent_derived(
+    derived: &Derived,
+    artifact_type: Option<&str>,
+    title_query: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
+    let types = derived
+        .artifacts
+        .values()
+        .map(|row| row.artifact_type.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(64)
+        .collect::<Vec<_>>();
+    let query = title_query.map(str::trim).filter(|value| !value.is_empty());
+    let query = query.map(|value| value.to_lowercase());
+    let mut grouped = BTreeMap::<(String, String), ArtifactListItem>::new();
+    for visit in &derived.visits {
+        let Some(artifact) = derived.artifacts.get(&visit.artifact_id) else {
+            continue;
+        };
+        if artifact_type.is_some_and(|wanted| wanted != artifact.artifact_type) {
+            continue;
+        }
+        if query
+            .as_ref()
+            .is_some_and(|wanted| !artifact.title.to_lowercase().contains(wanted))
+        {
+            continue;
+        }
+        let row = grouped
+            .entry((visit.local_date.clone(), visit.artifact_id.clone()))
+            .or_insert_with(|| ArtifactListItem {
+                local_date: visit.local_date.clone(),
+                artifact_id: visit.artifact_id.clone(),
+                artifact_type: artifact.artifact_type.clone(),
+                title: artifact.title.clone(),
+                url: artifact.url.clone(),
+                focused_seconds: 0,
+                background_seconds: 0,
+                opens: 0,
+                why: artifact.why.clone(),
+                summary: None,
+            });
+        // Visits are in time order, so the day's latest summary that
+        // renders wins.
+        if let Some(view) = visit.summary.as_ref().and_then(summary_view) {
+            row.summary = Some(view);
+        }
+        row.focused_seconds =
+            saturating_u32(u64::from(row.focused_seconds).saturating_add(visit.focused_secs));
+        row.background_seconds =
+            saturating_u32(u64::from(row.background_seconds).saturating_add(visit.background_secs));
+        row.opens = saturating_u32(u64::from(row.opens).saturating_add(visit.opens));
+    }
+    let mut items = grouped.into_values().collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        right
+            .local_date
+            .cmp(&left.local_date)
+            .then(right.focused_seconds.cmp(&left.focused_seconds))
+            .then(left.title.cmp(&right.title))
+            .then(left.artifact_id.cmp(&right.artifact_id))
+    });
+    let truncated = items.len() > limit;
+    items.truncate(limit);
+    Ok((items, types, truncated))
+}
+
+fn worklog_derived(
+    derived: &Derived,
+    start: Date,
+    end: Date,
+    gaps: Vec<OverflowMarker>,
+    gaps_truncated: bool,
+) -> Result<(String, usize, Vec<OverflowMarker>, bool)> {
+    let mut rows = BTreeMap::<String, WorklogRow>::new();
+    for visit in &derived.visits {
+        let Ok(date) = parse_date(&visit.local_date) else {
+            continue;
+        };
+        if date < start || date > end {
+            continue;
+        }
+        let row = rows.entry(visit.artifact_id.clone()).or_default();
+        row.focused = row.focused.saturating_add(visit.focused_secs);
+        row.background = row.background.saturating_add(visit.background_secs);
+        row.opens = row.opens.saturating_add(visit.opens);
+        if !visit.contained {
+            row.own_focused = row.own_focused.saturating_add(visit.focused_secs);
+            row.own_opens = row.own_opens.saturating_add(visit.opens);
+        }
+        if let Some(summary) = &visit.summary
+            && row.summary.as_ref().is_none_or(|current| {
+                timestamp_order(&summary.occurred_at, &current.occurred_at).is_ge()
+            })
+        {
+            row.summary = Some(summary.clone());
+        }
+    }
+    // A container is still listed with its rolled-up measures, but the
+    // range's totals count each visit once, by its own artifact. A
+    // summary is not measured activity: it is counted on its own and
+    // never as an open.
+    let opened = rows.values().filter(|row| row.own_opens > 0).count();
+    let carried = rows
+        .values()
+        .filter(|row| row.own_opens == 0 && row.own_focused > 0)
+        .count();
+    let summarized = rows.values().filter(|row| row.summary.is_some()).count();
+    let plural = |count: usize| if count == 1 { "" } else { "s" };
+    let mut text = if summarized > 0 {
+        format!(
+            "Opened {opened} artifact{}, focused on {carried} left open from an earlier day, and summarized {summarized} page{}.",
+            plural(opened),
+            plural(summarized)
+        )
+    } else {
+        format!(
+            "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
+            plural(opened)
+        )
+    };
+    let mut ordered = rows.into_iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        right
+            .1
+            .focused
+            .cmp(&left.1.focused)
+            .then(right.1.opens.cmp(&left.1.opens))
+            .then(left.0.cmp(&right.0))
+    });
+    let mut shown = 0usize;
+    for (id, row) in &ordered {
+        let Some(artifact) = derived.artifacts.get(id) else {
+            continue;
+        };
+        let mut line = if let Some(summary) = &row.summary {
+            let mut line = format!(
+                "Summarized: {} — {}, {} importance",
+                plain_text(&summary.title),
+                plain_text(&summary.document_type),
+                crate::summary::importance_str(summary.importance)
+            );
+            // A future adapter-attached summary (spec §7.2's "the
+            // adapter does recognize the page" branch) can land on an
+            // artifact that also has real measured activity; keep both
+            // instead of silently dropping the measures.
+            if row.focused > 0 || row.background > 0 || row.opens > 0 {
+                line.push_str(&format!(
+                    " — {}",
+                    measures(row.focused, row.background, row.opens)
+                ));
+            }
+            line
+        } else {
+            let mut line = format!(
+                "{} {}: {}",
+                artifact.artifact_type,
+                id,
+                plain_text(&artifact.title)
+            );
+            line.push_str(&format!(
+                " — {}",
+                measures(row.focused, row.background, row.opens)
+            ));
+            line
+        };
+        if let Some(why) = &artifact.why {
+            line.push_str(&format!(". Why: {}", plain_text(why)));
+        }
+        if text.len().saturating_add(line.len()).saturating_add(1) > MAX_WORKLOG_BYTES {
+            break;
+        }
+        text.push('\n');
+        text.push_str(&line);
+        shown += 1;
+    }
+    if shown < ordered.len() {
+        text.push_str(&format!(
+            "\n… {} more artifacts omitted.",
+            ordered.len() - shown
+        ));
+    }
+    Ok((text, ordered.len(), gaps, gaps_truncated))
 }
 
 /// Bring a cache (or saved catch-up progress) of an older format up to
@@ -2079,12 +2192,29 @@ fn ordered_events(state: &IndexState) -> Vec<&CachedEvent> {
 }
 
 fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
+    derive_resolved(state, adapters, &Resolution::default())
+}
+
+/// Project identity at read time. Cached events (including summary ownership
+/// keys/paths and stripped-parameter evidence) are never rewritten.
+fn derive_resolved(
+    state: &IndexState,
+    adapters: Option<&Document>,
+    resolution: &Resolution,
+) -> Derived {
     let mut artifacts = BTreeMap::<String, ArtifactRow>::new();
     let mut visits = Vec::new();
     let mut edges = BTreeMap::<(String, String, String), EdgeRow>::new();
     let mut whys = BTreeMap::<String, (OffsetDateTime, String)>::new();
     let mut containers = Containers::new(adapters);
     for event in ordered_events(state) {
+        let artifact_id = if matches!(&event.data, EventData::Summary(summary)
+            if summary.record_key.kind == RecordKeyKind::Url)
+        {
+            event.artifact_id().to_owned()
+        } else {
+            resolution.canonical(event.artifact_id()).to_owned()
+        };
         match &event.data {
             EventData::Activity(event) => {
                 let at = parsed_timestamp(&event.occurred_at).unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -2095,9 +2225,9 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     .unwrap_or_default();
                 let title = event.title.clone().unwrap_or_else(|| "Untitled".into());
                 let row = artifacts
-                    .entry(event.artifact_id.clone())
+                    .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
-                        artifact_id: event.artifact_id.clone(),
+                        artifact_id: artifact_id.clone(),
                         artifact_type: event.artifact_type.clone(),
                         site,
                         title: title.clone(),
@@ -2145,7 +2275,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                 row.activities.push(event.clone());
                 visits.push(VisitRow {
                     event_id: event.event_id.clone(),
-                    artifact_id: event.artifact_id.clone(),
+                    artifact_id: artifact_id.clone(),
                     occurred_at: event.occurred_at.clone(),
                     local_date: day.clone(),
                     focused_secs: u64::from(event.focused_seconds),
@@ -2160,11 +2290,12 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                 for trail in &event.trails {
                     if trail_transition_is_valid(&trail.transition)
                         && let Some(source) = &trail.from_artifact_id
+                        && resolution.canonical(source) != artifact_id
                     {
                         add_edge(
                             &mut edges,
-                            source,
-                            &event.artifact_id,
+                            resolution.canonical(source),
+                            &artifact_id,
                             &trail.transition,
                             &day,
                         );
@@ -2189,27 +2320,30 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     let target = resolved
                         .as_ref()
                         .and_then(|resolved| resolved.get(index))
-                        .and_then(|found| found.artifact_id.clone())
+                        .and_then(|found| found.artifact_id.as_deref())
+                        .map(|id| resolution.canonical(id).to_owned())
                         .unwrap_or_else(|| {
                             format!("{}:{}", reference.artifact_type, reference.value)
                         });
                     // The host checks each ref but not uniqueness; one event
                     // is one mention of each target.
-                    if target != event.artifact_id {
+                    if target != artifact_id {
                         targets.insert(target);
                     }
                 }
                 for target in targets {
-                    add_edge(&mut edges, &event.artifact_id, &target, "mentions", &day);
+                    add_edge(&mut edges, &artifact_id, &target, "mentions", &day);
                 }
-                if let Some(container) = containers.of(&event.url, &event.artifact_id) {
+                if let Some(container) =
+                    containers.of_resolved(&event.url, &artifact_id, resolution)
+                {
                     roll_up(
                         &mut artifacts,
                         &mut visits,
                         &mut edges,
                         container,
                         ContainedVisit {
-                            child: &event.artifact_id,
+                            child: &artifact_id,
                             event_id: &event.event_id,
                             occurred_at: &event.occurred_at,
                             at,
@@ -2228,10 +2362,10 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     event.text.clone(),
                 );
                 if whys
-                    .get(&event.artifact_id)
+                    .get(&artifact_id)
                     .is_none_or(|current| candidate.0 >= current.0)
                 {
-                    whys.insert(event.artifact_id.clone(), candidate);
+                    whys.insert(artifact_id.clone(), candidate);
                 }
             }
             EventData::Legacy(event) => {
@@ -2242,9 +2376,9 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_default();
                 let row = artifacts
-                    .entry(event.artifact_id.clone())
+                    .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
-                        artifact_id: event.artifact_id.clone(),
+                        artifact_id: artifact_id.clone(),
                         artifact_type: "web.page".into(),
                         site,
                         title: event.title.clone(),
@@ -2281,7 +2415,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                 }
                 visits.push(VisitRow {
                     event_id: event.marker_id.clone(),
-                    artifact_id: event.artifact_id.clone(),
+                    artifact_id: artifact_id.clone(),
                     occurred_at: event.occurred_at.clone(),
                     local_date: day.clone(),
                     focused_secs: 0,
@@ -2293,14 +2427,16 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     summary: None,
                     contained: false,
                 });
-                if let Some(container) = containers.of(&event.url, &event.artifact_id) {
+                if let Some(container) =
+                    containers.of_resolved(&event.url, &artifact_id, resolution)
+                {
                     roll_up(
                         &mut artifacts,
                         &mut visits,
                         &mut edges,
                         container,
                         ContainedVisit {
-                            child: &event.artifact_id,
+                            child: &artifact_id,
                             event_id: &event.marker_id,
                             occurred_at: &event.occurred_at,
                             at,
@@ -2321,9 +2457,9 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                     .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_default();
                 let row = artifacts
-                    .entry(event.artifact_id.clone())
+                    .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
-                        artifact_id: event.artifact_id.clone(),
+                        artifact_id: artifact_id.clone(),
                         artifact_type: event.artifact_type.clone(),
                         site,
                         title: event.title.clone(),
@@ -2358,7 +2494,7 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
                 row.summaries.push(event.clone());
                 visits.push(VisitRow {
                     event_id: event.event_id.clone(),
-                    artifact_id: event.artifact_id.clone(),
+                    artifact_id: artifact_id.clone(),
                     occurred_at: event.occurred_at.clone(),
                     local_date: day,
                     focused_secs: 0,
@@ -2406,22 +2542,24 @@ fn derive(state: &IndexState, adapters: Option<&Document>) -> Derived {
 /// The container (type, ID, adapter origin) a logged visit rolls up into:
 /// only when the current document still recognizes the visit's URL as the
 /// same artifact it was logged as, and that adapter declares `within`.
-fn container_for(
+fn container_for_resolved(
     adapters: Option<&Document>,
     url: &str,
     artifact_id: &str,
+    resolution: &Resolution,
 ) -> Option<(String, String, String)> {
     let document = adapters?;
     let found = document.evaluate(url, None).ok()?;
-    if found.artifact_id != artifact_id {
+    if resolution.canonical(&found.artifact_id) != artifact_id {
         return None;
     }
     let within = found.within?;
-    if within.artifact_id == artifact_id {
+    let container_id = resolution.canonical(&within.artifact_id).to_owned();
+    if container_id == artifact_id {
         return None;
     }
     let origin = document.adapters().get(found.adapter)?.origin().to_owned();
-    Some((within.artifact_type, within.artifact_id, origin))
+    Some((within.artifact_type, container_id, origin))
 }
 
 /// A container ID's native part, after `<scheme>:<host>/`: for GitHub,
@@ -2507,13 +2645,22 @@ impl<'a> Containers<'a> {
     }
 
     fn of(&mut self, url: &str, artifact_id: &str) -> Option<ContainerRef> {
+        self.of_resolved(url, artifact_id, &Resolution::default())
+    }
+
+    fn of_resolved(
+        &mut self,
+        url: &str,
+        artifact_id: &str,
+        resolution: &Resolution,
+    ) -> Option<ContainerRef> {
         if self.types.is_empty() {
             return None;
         }
         let adapters = self.adapters;
         self.found
             .entry((url.to_owned(), artifact_id.to_owned()))
-            .or_insert_with(|| container_for(adapters, url, artifact_id))
+            .or_insert_with(|| container_for_resolved(adapters, url, artifact_id, resolution))
             .clone()
     }
 }
@@ -3872,7 +4019,7 @@ mod tests {
         }
     }
 
-    fn activity(id: &str, native_id: &str, title: &str, at: &str) -> ActivityEvent {
+    pub(super) fn activity(id: &str, native_id: &str, title: &str, at: &str) -> ActivityEvent {
         ActivityEvent {
             event_id: id.into(),
             artifact_id: format!("work:example.com/{native_id}"),
@@ -3893,11 +4040,11 @@ mod tests {
         }
     }
 
-    fn index(root: &TempDir, cache: &TempDir) -> ArtifactIndex {
+    pub(super) fn index(root: &TempDir, cache: &TempDir) -> ArtifactIndex {
         ArtifactIndex::open_in(&storage(root.path()), None, cache.path()).unwrap()
     }
 
-    fn overflow_line(id: &str, marker: &OverflowMarker) -> String {
+    pub(super) fn overflow_line(id: &str, marker: &OverflowMarker) -> String {
         format!(
             "{MARKER_PREFIX}{} url={} at={} kind=overflow data={} -->\n",
             sha256_hex(id.as_bytes()),
@@ -5685,7 +5832,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         assert!(parse_log(&marker(&malformed)).is_empty());
     }
 
-    fn activity_marker(event: &ActivityEvent) -> String {
+    pub(super) fn activity_marker(event: &ActivityEvent) -> String {
         format!(
             "{MARKER_PREFIX}{} url={} at={} kind=activity data={} -->\n",
             sha256_hex(event.event_id.as_bytes()),
@@ -6567,7 +6714,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
     /// Ruling 1: the PR and issue starters inside the repo, then the repo
     /// catch-all, all scoped to one owner. `within` is optional so a test
     /// can index under the document before containers existed.
-    fn github_document(within: bool) -> adapter_templates::Document {
+    pub(super) fn github_document(within: bool) -> adapter_templates::Document {
         scoped_github_document(within, &["acme-corp"])
     }
 
@@ -6628,7 +6775,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         event
     }
 
-    fn github_pr(n: u32, number: u32, at: &str) -> ActivityEvent {
+    pub(super) fn github_pr(n: u32, number: u32, at: &str) -> ActivityEvent {
         github_activity(
             n,
             (
@@ -8131,7 +8278,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
 
     /// A summary attached to an adapter artifact, as `CaptureStore::record_summary`
     /// writes it for an `Artifact` record key.
-    fn adapter_summary(
+    pub(super) fn adapter_summary(
         artifact_id: &str,
         artifact_type: &str,
         url: &str,
@@ -8156,7 +8303,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         }
     }
 
-    fn summary_marker(event: &SummaryEvent) -> String {
+    pub(super) fn summary_marker(event: &SummaryEvent) -> String {
         format!(
             "<!-- brauser:visit id={} url={} at={} kind=summary data={} -->\n",
             sha256_hex(event.event_id.as_bytes()),
@@ -8905,3 +9052,7 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
         output
     }
 }
+
+#[cfg(test)]
+#[path = "index_rekey_tests.rs"]
+mod rekey_tests;

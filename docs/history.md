@@ -931,3 +931,44 @@ checks and explicitly skips 36 sandbox-blocked browser cases. Fresh manual
 diff review and one local Codex reviewer pass found no remaining issues;
 external harness/API review was not invoked. Durable apply brwr-dbp, then
 panel Re-learn under brwr-6x2, remain next; no migration acceptance is claimed.
+
+## 2026-11-02 — Project reviewed re-key history through shared alias resolution
+
+Assigned apply work brwr-dbp received its migration design challenge before
+implementation. The reviewer recommended original-file preservation and a
+shared identity resolver before config replacement. Added prerequisite
+brwr-ruwj: extracted the existing pairwise rehearsal replay to
+host/src/relearn/aliases.rs, retained chains/latest-target move-back/unalias
+semantics and refused raw keys shared by different artifact types.
+
+The host-only `adapters relearn-preview` accepts a normal impact request and
+returns the fresh plan plus projected artifact views, original summary views,
+edges, up to 64 Recent rows and the observed-range worklog. The index resolves
+identities at read time while retaining raw event payloads and physical
+summary keys/paths. Container matching and refs/trail sources use the same
+resolver; collapsed self-links are omitted and worklog totals count visits
+once. A reopened config must match the plan revision. Projection's shared
+hash of events, durable ordering positions and gaps must match the reviewed
+log snapshot, and a final plan recomputation refuses
+external content/evidence edits. The strict scan publishes no checkpoints,
+caches, generated files, decisions or config.
+
+Thirteen new regressions pass, including real CLI byte-preservation/refusal
+checks and projection after cache corruption/deletion. The full required and
+README gate passes with 1,327 workspace Rust-reported outcomes, 40 extension
+test files, both Clippy configurations, 10,696 inert Markdown renderings,
+eight script test files and 221 Python tests (92 platform skips). A11y passes
+two fixture tests and explicitly skips 36 sandbox-blocked browser cases.
+The first final-gate run found a missing scope declaration in a new GitHub
+fixture; it was corrected and all product gates rerun. The queue check then
+identified its stale generated backlog; regeneration and queue/dev-tool
+reruns passed. Durable apply, note storage selection, artifact stubs and
+rebuild from applied home history remain on brwr-dbp, followed by panel review
+on brwr-6x2. Ordinary config saves retain ID freezing and note recovery stays
+copy-out only.
+
+The single local Codex review found one P2: event bodies alone did not bind
+same-time tie order or capture gaps. A new regression failed on reordered,
+unchanged payloads before the fix; one shared fingerprint now covers events,
+durable positions and gaps in both planning and projection. The corrected
+stage has thirteen new tests. No P1 findings or external review/API calls.

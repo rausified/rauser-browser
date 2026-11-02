@@ -103,12 +103,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
 <!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.**
-  Next prerequisite of `brwr-6x2`, after the completed decision journal:
-  revalidate the review at apply, integrate crash-safe config/content changes,
-  preserve both-side notes/summaries and URL copies, and rebuild the same keys
-  from authoritative history. Ordinary config saves keep the ID freeze.
-  Panel review remains a subsequent parent stage.
 <!-- END GENERATED section=plan -->
 
 ### Gated plan work (do not start yet)
@@ -198,13 +192,7 @@ queue".
 ## In Progress / This Iteration
 
 <!-- BEGIN GENERATED section=in-progress: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.**
-  John approved the Re-learn direction on 2026-11-01 (append-only alias/re-key
-  migration replaces the ID freeze, pulling forward M1.5b step 7.2). The
-  [staged plan](docs/superpowers/plans/2026-10-28-capture-relearning.md) has
-  shipped offline alias rehearsal (`brwr-sq9`), impact review (`brwr-hq8`) and
-  the decision journal (`brwr-wvi`); next is vault/index apply (`brwr-dbp`),
-  then the panel review. No migration is enabled yet and the ID freeze stays enforced.
+- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.** John approved the append-only re-key direction on 2026-11-01. The staged plan has shipped alias rehearsal, impact review, the decision journal and shared projected-history preview (`brwr-ruwj`). Durable vault/config/index apply (`brwr-dbp`) remains in progress, followed by panel review. No migration is enabled and the ID freeze stays enforced.
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   **Blocked on platform execution; implementation complete.** The built-page
   smoke covers artifact/context interactions, Recent filters, worklog Copy,
@@ -225,6 +213,7 @@ queue".
   action is to record current Windows and macOS green CI against a named
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
+- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** Shared alias replay and read-only history projection are complete in `brwr-ruwj`. Next: physical note selection/revision, authoritative applied home history, exact config preparation and universal recovery/refusal, alias-aware access, old-path stubs and crash/reindex acceptance. Ordinary config saves keep the ID freeze. Panel review remains the next parent stage.
 <!-- END GENERATED section=in-progress -->
 
 
@@ -233,6 +222,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** New Capability. **Preview corrected capture history before applying Re-learn (2026-11-02).** Added host-only relearn-preview with shared alias replay and the real artifact/Recent/worklog derivation. Corrected totals, refs, trails and container roll-ups retain raw event evidence and original summary ownership/paths. Fresh review, full snapshot hashes (events, durable order and gaps) and final evidence revalidation refuse stale or ambiguous mappings without publishing state. Durable apply and panel Re-learn remain unfinished. **Metrics:** 1,327 workspace Rust-reported outcomes (+13 new; 92 explicit IPC guards), 40 extension test files, both Clippy configurations; two a11y fixtures pass and 36 browser cases explicitly skip in sandbox.
+
 - **Category:** Bug Fix. **Detect Re-learn key collisions across origins (2026-11-02).** All-origin log, owned-note/summary and verified implicit-container identities protect occupied sources and destinations, including HTTP/HTTPS keys sharing a host. Fresh approval refuses these conflicts; unrelated origins stay outside migration rows. All contracts used for occupancy bind the review revision. **Metrics:** 4 new regressions for this fix; 7 across the assigned pair, 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension files and both Clippy builds; 36 browser sandbox skips.
 
 - **Category:** Bug Fix. **Refuse damaged owned markers in Re-learn review (2026-11-02).** Strict review rejects recognizable invalid or joined daily-log markers with a path and line instead of silently approving incomplete history. Existing event/overflow parsers retain legacy compatibility; ordinary indexing and capture recovery stay tolerant. Planning and recording refuse without content, cache or journal writes. **Metrics:** 3 new regressions for this fix; 7 across the assigned pair, 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension files and full required/README gate green; 36 browser sandbox skips.
@@ -1797,3 +1788,26 @@ queue consistency and renderer freshness checks passed. Full diff reviewed
 locally; logs are in `target/overnight-health/assignment-mirror-repair/`.
 No new feature shipped, so no feature-briefing or product-design change was
 needed. Independent review and publication remain with the driver.
+
+### Re-learning projection handoff (2026-11-02 — brwr-ruwj)
+
+The assigned apply work now has one shared identity resolver and a real
+read-only projected-history command. Thirteen regressions and the full local
+required/README gate pass. `adapters relearn-preview` takes a normal impact
+request, shows corrected artifact/Recent/worklog views, and preserves original
+summary ownership and file locations without publishing anything. Its log
+snapshot must match the plan, and the final plan check catches owned-file
+edits. Tests cover chains, move-back, unalias, refs/trails, implicit containers,
+URL-summary separation and deleted/corrupt disposable caches.
+
+Continue assigned brwr-dbp, which remains in progress: settle the physical-note
+selection/revision and universal prepared-transaction recovery rules in the
+staged plan before building the write path. A loaded logical key must never
+be passed to the existing note save API as a physical ownership key. Then add
+authoritative home history, exact before/after config preparation, ordinary
+access recovery/refusal, alias-aware note/summary access, old-path stubs and
+cache/reindex/crash tests. Preserve the original decision journal. The parent
+brwr-6x2 still needs panel review after host apply; brwr-7lq follows the P2
+assigned tier. Avoid adding another preview stage instead of these remaining
+integration steps. No new human ask was introduced. The improvement feed
+records the physical-note revision contract with its evidence from this cycle.
