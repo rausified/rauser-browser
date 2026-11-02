@@ -333,7 +333,34 @@ fn list_runs_with_kind_and_cursor_round_trips() {
     // An unknown kind is rejected at the schema layer, as RunKind elsewhere.
     let mut unknown_kind = value.clone();
     unknown_kind["kind"] = json!("chat");
+    assert!(!schema_subset::valid("ListRunsRequest", &unknown_kind));
     assert!(serde_json::from_value::<Request>(unknown_kind).is_err());
+}
+
+#[test]
+fn run_cursor_timestamp_bounds_match_run_view() {
+    let schema = schema_subset::schema();
+    let timestamps = &schema["$defs"]["RunView"]["properties"]["created_at"];
+    let cursor = &schema["$defs"]["RunCursor"]["properties"]["created_at"];
+    for bound in ["minLength", "maxLength"] {
+        assert_eq!(cursor[bound], timestamps[bound], "{bound}");
+    }
+    // Length validation only; these bounds do not validate timestamp syntax.
+    for (length, valid) in [(19, false), (20, true), (64, true), (65, false)] {
+        let value = json!({
+            "type": "list_runs", "protocol_version": 8, "request_id": "r",
+            "kind": "task",
+            "before": {
+                "created_at": "0".repeat(length),
+                "run_id": "00000000-0000-4000-8000-000000000001",
+            },
+        });
+        assert_eq!(
+            schema_subset::valid("ListRunsRequest", &value),
+            valid,
+            "{length}"
+        );
+    }
 }
 
 #[test]
