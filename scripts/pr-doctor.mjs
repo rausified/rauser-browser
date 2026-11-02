@@ -19,7 +19,7 @@
 //   whose `origin` is GitHub; GH_TOKEN and GITHUB_REPOSITORY must be set.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -45,15 +45,26 @@ export function resolveAppendOnly(text) {
       continue;
     }
     const ours = [], base = [], theirs = [];
-    let part = ours, j = i + 1, closed = false, hasBase = false;
+    // A hunk is exactly ours, one base line, ours/theirs separator, theirs.
+    // Any extra or nested marker-like line (say a Markdown setext underline,
+    // "=======", inside a side) makes the split ambiguous, so it is left to
+    // a person rather than guessed.
+    let part = ours, j = i + 1, closed = false, hasBase = false, ambiguous = false, separated = false;
     for (; j < lines.length; j++) {
       const line = lines[j];
-      if (line.startsWith("||||||| ") || line === "|||||||\n") { part = base; hasBase = true; continue; }
-      if (line === "=======\n" || line === "=======") { part = theirs; continue; }
+      if (line.startsWith("<<<<<<< ")) { ambiguous = true; part.push(line); continue; }
+      if (line.startsWith("||||||| ") || line === "|||||||\n") {
+        if (hasBase || separated) ambiguous = true;
+        part = base; hasBase = true; continue;
+      }
+      if (line === "=======\n" || line === "=======") {
+        if (separated || !hasBase) ambiguous = true;
+        part = theirs; separated = true; continue;
+      }
       if (line.startsWith(">>>>>>> ")) { closed = true; break; }
       part.push(line);
     }
-    if (!closed || !hasBase || base.length > 0) {
+    if (!closed || !hasBase || ambiguous || base.length > 0) {
       remaining++;
       out.push(...lines.slice(i, j + 1));
     } else {
@@ -202,6 +213,7 @@ function tryRepair(pr, tools) {
       else git(["add", "--", file]);
       if (!unmerged().includes(file)) resolved.push(file);
     }
+    rmSync(tmp, { recursive: true, force: true });
     const left = unmerged();
     if (left.length > 0) {
       git(["merge", "--abort"], { check: false });

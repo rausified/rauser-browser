@@ -114,3 +114,30 @@ test("a repaired comment names the merge commit and the auto-resolved files", ()
   assert.match(body, /abc1234/);
   assert.match(body, /docs\/history\.md/);
 });
+
+// --- Fail-closed edge cases (review of #258) ---------------------------------
+
+test("CRLF marker lines are never half-resolved: the file stays unresolved and unchanged", () => {
+  const text = "<<<<<<< ours\r\nx\r\n||||||| base\r\n=======\r\ny\r\n>>>>>>> theirs\r\n";
+  const result = resolveAppendOnly(text);
+  if (result.resolved) {
+    assert.doesNotMatch(result.text, /^(<{7}|={7}|>{7}|\|{7})/m, "a resolution never keeps markers");
+  } else {
+    assert.equal(result.text, text);
+  }
+});
+
+test("a final hunk with no trailing newline still resolves both sides", () => {
+  const text = "<<<<<<< ours\nB\n||||||| base\n=======\nA\n>>>>>>> theirs";
+  const result = resolveAppendOnly(text);
+  assert.equal(result.resolved, true);
+  assert.equal(result.text, "A\nB\n");
+});
+
+test("marker-looking text inside a side leaves the hunk to a person", () => {
+  const nested = "<<<<<<< ours\n<<<<<<< not really\n||||||| base\n=======\ny\n>>>>>>> theirs\n";
+  assert.equal(resolveAppendOnly(nested).resolved, false);
+  // A Markdown setext heading underline inside a side looks like a separator.
+  const setext = "<<<<<<< ours\nTitle\n||||||| base\n=======\nOther\n=======\n>>>>>>> theirs\n";
+  assert.equal(resolveAppendOnly(setext).resolved, false);
+});
