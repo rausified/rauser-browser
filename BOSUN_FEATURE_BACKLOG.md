@@ -196,6 +196,7 @@ queue".
 - [ ] `brwr-4ex` **Guard PR branches against concurrent pushes during review.** On PR #126, a second agent session pushed four fix commits to the branch and merged it while the opening session's codex exec review was still running. The merged head was never covered by the opener's final review. Options: a branch-claim convention (the Owner: line now exists… _(P3)_
 - [ ] `brwr-sm4` **User-editable summary instructions with a fixed core.** John is considering letting the user edit SUMMARY.md. Proposal: keep the compiled-in SUMMARY.md as the default; allow an optional user file in the home folder that replaces only a marked 'style' part (or adds guidance), while the safety rules (untrusted page, no file writes, no… _(P3)_
 - [ ] `brwr-lp4` **(BUG) Large-prompt echo test times out in full parallel runs under load.** service::command_runner::tests::a_large_prompt_to_an_echoing_harness_is_answered (host/src/service/command_runner.rs) asserts the 30,000-line echo turn finishes within 4 s. On 2026-11-02 it failed 2 of 4 full `cargo test --locked --workspace` runs at load average 18-22 (panic at… _(P3)_
+- [ ] `brwr-nre` **Check note recovery edge cases from the dropped fix/note-routing-on-main branch.** John dropped branch fix/note-routing-on-main on 2026-11-02 (4 commits from 2026-10-26, ff708e0..9155589, +1006/-34 mostly host/src/native.rs note_context tests). It was an earlier, competing fix for the strip_params note collision (bare Jira board reading/autosaving an issue… _(P3)_
 <!-- END GENERATED section=new -->
 
 ## In Progress / This Iteration
