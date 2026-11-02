@@ -179,8 +179,6 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
-- [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2)_
-- [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
 - [ ] `brwr-tsh1` **Tasks page: keep the runs_may_exist hint while summary runs are retained.** Codex review of the one-summary-card PR (P2), extension/run-card.ts restoreRunCards and extension/tasks.ts open(). restoreRunCards clears runs_may_exist_v1 when no card is shown, even when list_runs returned retained summary runs that were only older than a day or dismissed.… _(P2; labels: tasks-page)_
@@ -230,6 +228,8 @@ queue".
   action is to record current Windows and macOS green CI against a named
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
+- [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2; assignee: john-index-lane)_
+- [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2; assignee: john-index-lane)_
 <!-- END GENERATED section=in-progress -->
 
 
