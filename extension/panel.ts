@@ -1882,9 +1882,18 @@ async function checkForUpdate(): Promise<void> {
 async function reloadForUpdate(): Promise<void> {
   updateReloadButton.disabled = true;
   updateMessage.textContent = "Saving your note…";
+  const copies = notes.copyOutCount;
   await notes.flush();
-  if (notes.hasUnsavedEdit) {
-    updateMessage.textContent = "Your note is not saved, so Brauser was not reloaded. Copy the note or fix the save problem, then reload.";
+  const refusal = notes.hasUnsavedEdit
+    ? "Your note is not saved, so Brauser was not reloaded. Copy the note or fix the save problem, then reload."
+    // A conflict keeps the edit in the copy-out box instead of saving it.
+    : notes.copyOutCount > copies
+      ? "Your note changed elsewhere, so your edit was not saved. It is kept in the note area; copy it if you need it, then reload."
+      : notes.recoveryAtRisk
+        ? "A local copy of your unsaved text could not be kept, so Brauser was not reloaded. Copy the text, then reload."
+        : null;
+  if (refusal !== null) {
+    updateMessage.textContent = refusal;
     updateReloadButton.disabled = false;
     return;
   }

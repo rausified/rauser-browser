@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  CAPTURING, JIRA_URL, artifact, editNote, install, noteLoaded,
+  CAPTURING, JIRA_URL, artifact, editNote, install, memoryStorage, noteLoaded,
   outageWithDraft, recognized, settle, starterOffersFor, typeWhy, until,
   withStoredWhy,
 } from "./harness.mjs";
@@ -212,6 +212,47 @@ test("Reload waits for the note: a failed save keeps the panel and says why", as
   editNote(page, "Unsaved thought");
   page.el("update-reload").click();
   await until(() => /note is not saved/.test(page.el("update-message").textContent), "the refusal");
+  assert.equal(page.calls("runtime.reload"), 0);
+});
+
+const CONFLICT = {
+  type: "note_conflict", revision: "other-r2", body: "another window's note", exists: true, title: "Issue",
+  key: { kind: "url", value: JIRA_URL }, reason: "stale",
+};
+
+test("Reload stops on the click whose save conflicts, then reloads once the copy is kept", async () => {
+  const page = await install({
+    tab: { id: 1, url: JIRA_URL, title: "Issue" },
+    loadedBuild: "0.1.0 (33a108070e87)", diskManifest: { version_name: "0.1.0 (029a398fa684)" },
+    intercept: (request) => request.type === "save_note" ? CONFLICT : undefined,
+  });
+  await until(() => !page.el("update-warning").hidden, "the update notice");
+  await noteLoaded(page);
+  editNote(page, "Unsaved thought");
+  page.el("update-reload").click();
+  await until(() => /changed elsewhere/.test(page.el("update-message").textContent), "the conflict refusal");
+  assert.equal(page.calls("runtime.reload"), 0);
+  assert.ok(page.state.localStorage.length > 0, "the conflict copy is kept locally");
+  // Kept locally, the copy reappears after the reload, so a second click goes ahead.
+  page.el("update-reload").click();
+  await until(() => page.calls("runtime.reload") === 1, "the reload");
+});
+
+test("Reload never runs while a conflict copy exists only in this panel", async () => {
+  const localStorage = memoryStorage();
+  const page = await install({
+    tab: { id: 1, url: JIRA_URL, title: "Issue" }, localStorage,
+    loadedBuild: "0.1.0 (33a108070e87)", diskManifest: { version_name: "0.1.0 (029a398fa684)" },
+    intercept: (request) => request.type === "save_note" ? CONFLICT : undefined,
+  });
+  await until(() => !page.el("update-warning").hidden, "the update notice");
+  await noteLoaded(page);
+  localStorage.setItem = () => { throw new Error("quota full"); };
+  editNote(page, "Unsaved thought");
+  page.el("update-reload").click();
+  await until(() => /changed elsewhere/.test(page.el("update-message").textContent), "the conflict refusal");
+  page.el("update-reload").click();
+  await until(() => /could not be kept/.test(page.el("update-message").textContent), "the recovery refusal");
   assert.equal(page.calls("runtime.reload"), 0);
 });
 

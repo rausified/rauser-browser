@@ -75,6 +75,7 @@ export class NoteEditor {
   private loaded = false;
   private loadFailed = false;
   private dirty = false;
+  private recoveryWriteFailed = false;
   private saveError = "";
   private draft: RecoveryText | null = null;
 
@@ -114,6 +115,17 @@ export class NoteEditor {
   /** Whether an edit has not been saved yet, such as after a failed save. */
   get hasUnsavedEdit(): boolean {
     return this.dirty;
+  }
+
+  /** How many unsaved copies (conflicts, failed saves) the copy-out box holds. */
+  get copyOutCount(): number {
+    return this.unsaved.length;
+  }
+
+  /** Whether text this panel holds may exist nowhere else: the last local
+   * recovery write failed while an edit or a copy-out is still held. */
+  get recoveryAtRisk(): boolean {
+    return this.recoveryWriteFailed && (this.dirty || this.unsaved.length > 0);
   }
 
   /** Saves pending edits now, after any load or save already running. */
@@ -182,6 +194,7 @@ export class NoteEditor {
   }
 
   private recoveryFailed(error: unknown): void {
+    this.recoveryWriteFailed = true;
     this.view.setRecoveryWarning?.(`Could not keep or clear a local recovery copy: ${this.describe(error)}. Keep this panel open until your note is saved.`);
   }
 
@@ -193,6 +206,7 @@ export class NoteEditor {
       // Publish the new copy before retiring the previous one. Distinct keys
       // avoid cross-panel read/remove races; a failed write leaves old bytes.
       if (previous) this.recovery.remove(previous);
+      this.recoveryWriteFailed = false;
       this.view.setRecoveryWarning?.("");
     } catch (error) {
       this.recoveryFailed(error);
