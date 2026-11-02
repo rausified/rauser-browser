@@ -460,6 +460,16 @@ match     = [
   { path = "/personal/{_}/_layouts/15/Doc.aspx",                                 query = { sourcedoc = "{doc:uuid}" } },
 ]
 id        = "sharepoint:{host}/{doc}"
+
+# Miro: one origin for every account, no account in the URL; a 12-character
+# board ID ending in base64 padding (§7.1). Query parameters such as
+# share_link_id never change the ID. See docs/adapters/miro.board.md.
+[[artifacts]]
+type   = "miro.board"
+origin = "https://miro.com"
+match  = [{ path = "/app/board/{board:token(12)}" }]
+id     = "miro.board:{host}/{board}"
+title  = "{title} - Miro"
 ```
 
 Known limits these examples show: Notion URLs with no workspace segment do not match a scoped Notion adapter; the Jira board-modal rule matches any Jira page carrying `selectedIssue`; Google Docs cannot be scoped by URL; and a scope miss is terminal rather than falling through to a container, so a pull request outside `github.pr`'s scope but inside `github.repo`'s is dropped, not recorded as a repository visit.

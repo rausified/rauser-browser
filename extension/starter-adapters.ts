@@ -2,7 +2,7 @@ import type { AdapterObject } from "./adapter-review.js";
 import { canonicalCapture, compileDocument } from "./adapter-templates.js";
 import { canonicalJson } from "./capture-site-handoff.js";
 
-export type StarterKind = "jira" | "sharepoint" | "github";
+export type StarterKind = "jira" | "sharepoint" | "github" | "miro";
 
 export interface StarterOffer {
   key: string;
@@ -16,6 +16,7 @@ export interface StarterOffer {
 }
 
 const GITHUB_ORIGIN = "https://github.com";
+const MIRO_ORIGIN = "https://miro.com";
 const GITHUB_REPOSITORY = "github.repo";
 // Frozen with the PR and issue IDs (adapter-templates.md §8.2, §8.3).
 const GITHUB_REPOSITORY_WITHIN = { type: GITHUB_REPOSITORY, id: "github.repo:{host}/{owner}/{repo}" };
@@ -37,6 +38,7 @@ export function starterKind(origin: string): StarterKind | null {
   if (host.endsWith(".atlassian.net") && host !== "atlassian.net") return "jira";
   if (host.endsWith(".sharepoint.com") && host !== "sharepoint.com") return "sharepoint";
   if (origin === GITHUB_ORIGIN) return "github";
+  if (origin === MIRO_ORIGIN) return "miro";
   return null;
 }
 
@@ -124,6 +126,20 @@ function sharepoint(origin: string): AdapterObject {
   };
 }
 
+/** Miro boards (docs/adapters/miro.board.md). Board IDs are 12 characters
+ * ending in base64 padding, such as `uXjVM0uuBLo=`. miro.com serves every
+ * Miro account from one origin and its board URLs name no account, so the
+ * review says the starter records boards from every account. */
+function miro(): AdapterObject {
+  return {
+    type: "miro.board",
+    origin: MIRO_ORIGIN,
+    match: [{ path: "/app/board/{board:token(12)}" }],
+    id: "miro.board:{host}/{board}",
+    title: "{title} - Miro",
+  };
+}
+
 function githubPullRequest(organizations: string[]): AdapterObject {
   return {
     type: "github.pr",
@@ -195,6 +211,18 @@ export function starterOffers(origin: string, githubOrganizations: string[]): St
       origin,
       needs_scope: false,
       adapter: sharepoint(origin),
+    }];
+  }
+  if (kind === "miro") {
+    return [{
+      key: "miro.board",
+      kind,
+      artifact_type: "miro.board",
+      label: "Miro boards",
+      description: "Each board becomes one artifact, however it was opened. Records boards from every Miro account signed in to this Chrome profile.",
+      origin,
+      needs_scope: false,
+      adapter: miro(),
     }];
   }
   if (kind === "github") {
