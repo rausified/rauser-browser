@@ -763,7 +763,7 @@ function renderCaptureExplanation(): void {
         case "out_of_scope": {
           const sentence = coverage && coverageSentence(coverage, "out_of_scope");
           reason = sentence
-            ? `${sentence} Review this site's scope in settings.`
+            ? `${sentence} If it should be, review this site's scope in settings.`
             : "This page is outside the workspaces or accounts chosen for capture. Review this site's scope in settings.";
           break;
         }
@@ -774,21 +774,25 @@ function renderCaptureExplanation(): void {
           captureExplanationAction.disabled ||= element<HTMLButtonElement>("capture-site").disabled;
           break;
         case "no_rule": {
-          const sentence = coverage
-            ? coverageSentence(coverage, "no_rule")
-            : "This page does not match this site's capture rules.";
           const miss = nearMiss(lease.adapters.artifacts, currentPage.url);
           const adapter = miss && lease.adapters.artifacts[miss.adapter];
           const identity = adapter && typeof adapter.origin === "string" && typeof adapter.type === "string" &&
             typeof adapter.id === "string"
             ? [adapter.origin, adapter.type, adapter.id] as [string, string, string]
             : null;
+          // An offered near-miss is close to a captured type, so its sentence
+          // names the missing rule instead of saying the page is not one.
+          const sentence = coverage
+            ? coverageSentence(coverage, miss && identity ? "near_miss" : "no_rule")
+            : "This page does not match this site's capture rules.";
           if (miss?.kind === "starter_rule" && identity) {
             reason = `${sentence} The current ${miss.label} starter has a rule for pages like this one.`;
             pendingAdapterReview = { adapter: identity, rule: miss.rule };
             captureExplanationAction.textContent = "Review rule";
           } else if (miss?.kind === "identifier" && identity) {
-            reason = `${sentence} This page has a ${miss.label} ID (${miss.key}), but its address is not one of the routes the rules cover.`;
+            // The ID's rule may cover this route and fail on another
+            // condition, so the line does not say which part is missing.
+            reason = `${sentence} The address carries an ID Brauser recognizes, so a rule could cover it.`;
             pendingAdapterReview = { adapter: identity, rule: null };
             captureExplanationAction.textContent = "Edit rules";
           } else {

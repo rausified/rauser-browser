@@ -17,7 +17,7 @@ const LIVE_POLICY = { policy_expires_at: Date.now() + 86_400_000 };
 
 for (const [name, url, options, expected] of [
   ["outside scope", "https://github.com/personal/repo/pull/12", {},
-    /^github\.com captures repositories, pull requests and issues for acme; this page belongs to another account\. Review this site's scope in settings\.$/],
+    /^github\.com captures repositories, pull requests and issues for acme; this page isn't one of them\. If it should be, review this site's scope in settings\.$/],
   ["unmatched page", "https://github.com/search?q=work", {},
     /^github\.com captures repositories, pull requests and issues for acme; this page isn't one of them\. Only matching pages are remembered\.$/],
   ["host pause", "https://github.com/acme/repo/pull/12", { config: { ...GITHUB_SCOPED, capture_enabled: false } }, /Capture is paused\. Resume/],
@@ -45,6 +45,26 @@ for (const [name, url, options, expected] of [
     assert.equal(page.sent("draft_site").length, 0);
   });
 }
+
+// GitHub puts /orgs/..., /settings/... in the owner slot, so these pages are
+// out_of_scope; the line must not claim they belong to another account.
+for (const url of ["https://github.com/orgs/acme/repositories", "https://github.com/settings/profile"]) {
+  test(`an out-of-scope verdict on a non-account route (${new URL(url).pathname}) names no other account`, async () => {
+    const page = await explained(url, GITHUB_SCOPED);
+    assert.equal(page.el("capture-explanation-text").textContent,
+      "github.com captures repositories, pull requests and issues for acme; this page isn't one of them. " +
+      "If it should be, review this site's scope in settings.");
+    assert.equal(page.el("capture-explanation-action").textContent, "Open settings");
+  });
+}
+
+test("adapters scoped to different accounts name none of them", async () => {
+  const [pr, issue, repo] = starterOffersFor("https://github.com", ["acme"]).map((offer) => offer.adapter);
+  const page = await explained("https://github.com/beta/web/pull/12",
+    withAdapters([pr, { ...issue, scope: { owner: ["beta"] } }, repo]));
+  assert.equal(page.el("capture-explanation-text").textContent,
+    "This page is outside the workspaces or accounts chosen for capture. Review this site's scope in settings.");
+});
 
 async function explained(url, config, title = "Page") {
   const page = await install({ tab: { id: 1, url, title }, config, workerStatus: LIVE_POLICY });
@@ -106,8 +126,10 @@ function reviewOpened(page) {
   const { url } = page.created[0];
   const prefix = "chrome-extension://test-id/options.html#adapter-review=";
   assert.ok(url.startsWith(prefix), url);
-  assert.equal(url.toLowerCase().includes(GUID.toLowerCase()), false, "no document ID in the hand-off");
-  assert.equal(url.includes("/u/"), false, "no page path in the hand-off");
+  // The payload is URI-encoded, so check the decoded hand-off.
+  const decoded = decodeURIComponent(url);
+  assert.equal(decoded.toLowerCase().includes(GUID.toLowerCase()), false, "no document ID in the hand-off");
+  assert.equal(decoded.includes("/u/"), false, "no page path in the hand-off");
   assert.equal(page.calls("openOptionsPage"), 0);
   assert.equal(updates(page).length, 0, "the panel never saves rules");
   assert.equal(page.sent("save_config").length, 0);
@@ -119,7 +141,7 @@ test("a stale OneDrive starter offers the current rule for review in settings", 
   const page = await explained(
     `https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc={${GUID}}`, withAdapters([adapter]));
   assert.equal(page.el("capture-explanation-text").textContent,
-    "acme-my.sharepoint.com captures OneDrive for work documents; this page isn't one of them. " +
+    "acme-my.sharepoint.com captures OneDrive for work documents, but none of this site's saved rules covers this address. " +
     "The current OneDrive for work documents starter has a rule for pages like this one.");
   assert.equal(page.el("capture-explanation-action").textContent, "Review rule");
   page.el("capture-explanation-action").click();
@@ -131,8 +153,9 @@ test("a hand-narrowed SharePoint adapter is offered only the starter rule for th
   const narrowed = { ...staleOneDrive(), origin: "https://acme.sharepoint.com", match: [staleOneDrive().match[0]] };
   const page = await explained(
     `https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc={${GUID}}`, withAdapters([narrowed]));
-  assert.match(page.el("capture-explanation-text").textContent,
-    / The current SharePoint documents starter has a rule for pages like this one\.$/);
+  assert.equal(page.el("capture-explanation-text").textContent,
+    "acme.sharepoint.com captures SharePoint documents, but none of this site's saved rules covers this address. " +
+    "The current SharePoint documents starter has a rule for pages like this one.");
   page.el("capture-explanation-action").click();
   await until(() => page.created.length > 0, "the settings tab");
   assert.deepEqual(reviewOpened(page).rule, PERSONAL_RULE);
@@ -142,25 +165,42 @@ test("a query identifier on an uncovered route is explained and opens Edit rules
   const custom = { type: "example.doc", origin: "https://docs.example", match: [{ path: "/a/Doc.aspx", query: SOURCEDOC }], id: "example.doc:{host}/{doc}" };
   const page = await explained(`https://docs.example/b/Doc.aspx?sourcedoc={${GUID}}`, withAdapters([custom]));
   assert.equal(page.el("capture-explanation-text").textContent,
-    "docs.example captures example.doc; this page isn't one of them. " +
-    "This page has a example.doc ID (sourcedoc), but its address is not one of the routes the rules cover.");
+    "docs.example captures example.doc, but none of this site's saved rules covers this address. " +
+    "The address carries an ID Brauser recognizes, so a rule could cover it.");
   assert.equal(page.el("capture-explanation-action").textContent, "Edit rules");
   page.el("capture-explanation-action").click();
   await until(() => page.created.length > 0, "the settings tab");
   assert.deepEqual(reviewOpened(page), { adapter: [custom.origin, custom.type, custom.id], rule: null });
 });
 
-for (const [name, url, config] of [
-  ["Doc.aspx with no sourcedoc", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx", null],
-  ["a non-GUID sourcedoc", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=nope", null],
-  ["a file=-only link", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?file=x.docx", null],
-  ["two sourcedoc values", `https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc={${GUID}}&sourcedoc={${GUID}}`, null],
-  ["a single-segment GitHub page", "https://github.com/search?q=work", GITHUB_SCOPED],
-  ["a GitHub repository outside scope", "https://github.com/personal/repo", GITHUB_SCOPED],
+test("an identifier on a covered route blocked by another condition does not blame the route", async () => {
+  for (const rule of [
+    { path: "/doc", query: { ...SOURCEDOC, view: "full" } },
+    { path: "/doc", query: SOURCEDOC, absent: ["preview"] },
+  ]) {
+    const custom = { type: "example.doc", origin: "https://docs.example", match: [rule], id: "example.doc:{host}/{doc}" };
+    const page = await explained(`https://docs.example/doc?sourcedoc={${GUID}}&view=compact&preview=1`, withAdapters([custom]));
+    assert.equal(page.el("capture-explanation-text").textContent,
+      "docs.example captures example.doc, but none of this site's saved rules covers this address. " +
+      "The address carries an ID Brauser recognizes, so a rule could cover it.");
+    assert.equal(page.el("capture-explanation-action").textContent, "Edit rules");
+  }
+});
+
+const ONEDRIVE_PLAIN = "acme-my.sharepoint.com captures OneDrive for work documents; this page isn't one of them. Only matching pages are remembered.";
+const GITHUB_PLAIN = "github.com captures repositories, pull requests and issues for acme; this page isn't one of them. Only matching pages are remembered.";
+for (const [name, url, config, expected] of [
+  ["Doc.aspx with no sourcedoc", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx", null, ONEDRIVE_PLAIN],
+  ["a non-GUID sourcedoc", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=nope", null, ONEDRIVE_PLAIN],
+  ["a file=-only link", "https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?file=x.docx", null, ONEDRIVE_PLAIN],
+  ["two sourcedoc values", `https://acme-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc={${GUID}}&sourcedoc={${GUID}}`, null, ONEDRIVE_PLAIN],
+  ["a single-segment GitHub page", "https://github.com/search?q=work", GITHUB_SCOPED, GITHUB_PLAIN],
+  ["a GitHub repository outside scope", "https://github.com/personal/repo", GITHUB_SCOPED,
+    "github.com captures repositories, pull requests and issues for acme; this page isn't one of them. If it should be, review this site's scope in settings."],
 ]) {
   test(`${name} is not a near-miss and keeps Open settings`, async () => {
     const page = await explained(url, config ?? withAdapters([staleOneDrive()]));
-    assert.doesNotMatch(page.el("capture-explanation-text").textContent, /starter has a rule|ID \(/);
+    assert.equal(page.el("capture-explanation-text").textContent, expected);
     assert.equal(page.el("capture-explanation-action").textContent, "Open settings");
     page.el("capture-explanation-action").click();
     assert.equal(page.calls("openOptionsPage"), 1);
@@ -203,7 +243,7 @@ test("capture explanation follows navigation and the latest policy revision and 
     config: GITHUB_SCOPED, workerStatus: LIVE_POLICY,
   });
   await noteLoaded(page);
-  assert.match(page.el("capture-explanation-text").textContent, /for acme; this page belongs to another account/);
+  assert.match(page.el("capture-explanation-text").textContent, /for acme; this page isn't one of them\. If it should be, review/);
   page.state.config.adapters = {
     format: 1, artifacts: starterOffersFor("https://github.com", ["personal"]).map((offer) => offer.adapter),
   };
@@ -212,7 +252,7 @@ test("capture explanation follows navigation and the latest policy revision and 
   await until(() => page.el("capture-explanation").hidden, "new scope recognizes the current page");
   page.navigate("https://github.com/acme/repo/pull/12");
   await until(() => !page.el("capture-explanation").hidden, "the formerly included workspace is excluded");
-  assert.match(page.el("capture-explanation-text").textContent, /for personal; this page belongs to another account/);
+  assert.match(page.el("capture-explanation-text").textContent, /for personal; this page isn't one of them\. If it should be, review/);
   page.navigate("chrome://settings/");
   await until(() => !page.el("page-unusable").hidden, "a non-web tab");
   assert.equal(page.el("capture-explanation").hidden, true);

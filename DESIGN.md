@@ -815,16 +815,23 @@ example "github.com captures repositories, pull requests and issues for
 acme; this page isn't one of them." (`extension/site-coverage.ts`
 `siteCoverage`, `coverageSentence`). Types are GitHub record labels, a
 starter's label, or a custom adapter's `type`; accounts are named only when
-every adapter on the origin is scoped, at most three and then "and N more".
+every adapter on the origin is scoped to the same accounts, at most three and
+then "and N more". An out-of-scope page reads "this page isn't one of them.
+If it should be, review this site's scope in settings.", never "belongs to
+another account": a host matcher also reads non-account routes such as
+GitHub's `/orgs/…` or `/settings/…` as an owner.
 After a `no_rule` verdict, `nearMiss` looks for a near-miss, with no
-hard-coded site list. When the adapter's current starter (the starter
-catalog) has a rule the adapter lacks that alone would match the page under
-the adapter's own scope, the line adds "The current <label> starter has a
-rule for pages like this one." and the button reads **Review rule**. When the
-page carries exactly one valid value for a rule's fixed-shape query capture
-(`uuid`, or `hex` of a fixed length of 32 or more) on a route no rule covers,
-the line adds "This page has a <label> ID (<key>), but its address is not one
-of the routes the rules cover." and the button reads **Edit rules**. Either
+hard-coded site list. A near-miss replaces "this page isn't one of them"
+with ", but none of this site's saved rules covers this address." When the
+adapter's current starter (the starter catalog) has a rule the adapter lacks
+that alone would match the page under the adapter's own scope, the line adds
+"The current <label> starter has a rule for pages like this one." and the
+button reads **Review rule**. When the page carries exactly one valid value
+for a rule's fixed-shape query capture (`uuid`, or `hex` of a fixed length of
+32 or more) that no rule accepted, the line adds "The address carries an ID
+Brauser recognizes, so a rule could cover it." and the button reads **Edit
+rules**; it does not say whether the route or another condition (a literal
+query value, an `absent` key) failed. Either
 button opens `options.html#adapter-review=` in a new tab carrying only the
 adapter identity (`[origin, type, id]`) and the starter rule or `null`, never
 the page's address, path, query value or title. Settings re-reads the

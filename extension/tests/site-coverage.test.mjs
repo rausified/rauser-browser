@@ -23,8 +23,13 @@ test("GitHub coverage names the record types in record order and the scoped acco
   });
   assert.equal(coverageSentence(coverage, "no_rule"),
     "github.com captures repositories, pull requests and issues for acme; this page isn't one of them.");
+  // An out-of-scope verdict also covers non-account routes (/orgs/…,
+  // /settings/…), so it never claims the page belongs to another account.
   assert.equal(coverageSentence(coverage, "out_of_scope"),
-    "github.com captures repositories, pull requests and issues for acme; this page belongs to another account.");
+    "github.com captures repositories, pull requests and issues for acme; this page isn't one of them.");
+  // A near-miss names the gap instead of saying the page is not one.
+  assert.equal(coverageSentence(coverage, "near_miss"),
+    "github.com captures repositories, pull requests and issues for acme, but none of this site's saved rules covers this address.");
   // Only the adapters present are named.
   const prOnly = siteCoverage(GITHUB.filter((adapter) => adapter.type === "github.pr"), "https://github.com/");
   assert.deepEqual(prOnly.types, ["pull requests"]);
@@ -66,10 +71,15 @@ test("more than three accounts show the first three and a count", () => {
     "github.com captures repositories, pull requests and issues for a, b, c and 2 more; this page isn't one of them.");
 });
 
-test("accounts union across scoped adapters and are dropped when any adapter is unscoped", () => {
+test("accounts are named only when every adapter is scoped to the same accounts", () => {
   const [pr, issue, repo] = GITHUB;
-  const union = siteCoverage([pr, { ...issue, scope: { owner: ["Beta", "ACME"] } }, repo], "https://github.com/");
-  assert.deepEqual(union.accounts, ["acme", "beta"]);
+  const same = siteCoverage([pr, { ...issue, scope: { owner: ["ACME"] } }, repo], "https://github.com/");
+  assert.deepEqual(same.accounts, ["acme"], "case-insensitive");
+  // Per-adapter scopes: naming the merged list would claim pull requests for
+  // beta are captured when only issues are.
+  const differing = siteCoverage([pr, { ...issue, scope: { owner: ["Beta", "ACME"] } }, repo], "https://github.com/");
+  assert.deepEqual(differing.accounts, []);
+  assert.equal(coverageSentence(differing, "out_of_scope"), null);
   const mixed = [pr, { ...issue, scope: undefined, unscoped: "acknowledged" }, repo];
   const coverage = siteCoverage(mixed, "https://github.com/");
   assert.deepEqual(coverage.accounts, []);

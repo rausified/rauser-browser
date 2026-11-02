@@ -67,6 +67,20 @@ function scopeTable(adapter: AdapterObject): Record<string, unknown> | null {
   return scope && typeof scope === "object" && !Array.isArray(scope) ? scope as Record<string, unknown> : null;
 }
 
+/** One scope table's string values, lowercased and deduplicated, in order. */
+function scopeValues(scope: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  for (const entry of Object.values(scope)) {
+    if (!Array.isArray(entry)) continue;
+    for (const value of entry) {
+      if (typeof value !== "string") continue;
+      const lower = value.toLowerCase();
+      if (!values.includes(lower)) values.push(lower);
+    }
+  }
+  return values;
+}
+
 /** What `url`'s origin captures, or `null` when no adapter there has a type. */
 export function siteCoverage(artifacts: readonly AdapterObject[], url: string): Coverage | null {
   const parsed = pageOrigin(url);
@@ -83,21 +97,15 @@ export function siteCoverage(artifacts: readonly AdapterObject[], url: string): 
     for (const noun of nouns) if (noun !== null && !types.includes(noun)) types.push(noun);
   }
   if (!types.length) return null;
-  // Naming accounts that some of the origin's rules ignore would mislead, so
-  // they are listed only when every adapter there is scoped.
+  // Naming accounts that some of the origin's rules ignore, or that only some
+  // of its adapters cover, would mislead, so they are listed only when every
+  // adapter there is scoped to the same accounts.
   const scopes = adapters.map(scopeTable);
-  const values: string[] = [];
+  let values: string[] = [];
   if (scopes.every((scope) => scope !== null)) {
-    for (const scope of scopes) {
-      for (const entry of Object.values(scope!)) {
-        if (!Array.isArray(entry)) continue;
-        for (const value of entry) {
-          if (typeof value !== "string") continue;
-          const lower = value.toLowerCase();
-          if (!values.includes(lower)) values.push(lower);
-        }
-      }
-    }
+    const sets = scopes.map(scopeValues);
+    const key = (list: readonly string[]) => [...list].sort().join("\n");
+    if (sets.every((set) => key(set) === key(sets[0]!))) values = sets[0]!;
   }
   return {
     host: parsed.host,
@@ -108,21 +116,26 @@ export function siteCoverage(artifacts: readonly AdapterObject[], url: string): 
 }
 
 /** The exact coverage sentence for a page the rules did not match, or `null`
- * for an out-of-scope page on an origin with no accounts to name. */
-export function coverageSentence(coverage: Coverage, reason: "no_rule" | "out_of_scope"): string | null {
+ * for an out-of-scope page on an origin with no accounts to name. An
+ * out-of-scope verdict also covers routes that are not accounts at all (a
+ * host matcher reads GitHub's `/orgs/…` or `/settings/…` as an owner), so it
+ * never claims the page belongs to another account. A near-miss names the
+ * gap rather than saying the page is not one of the captured types. */
+export function coverageSentence(coverage: Coverage, reason: "no_rule" | "out_of_scope" | "near_miss"): string | null {
   const accounts = coverage.moreAccounts
     ? [...coverage.accounts, `${coverage.moreAccounts} more`]
     : coverage.accounts;
   const forAccounts = accounts.length ? ` for ${joinRecordedTypes(accounts)}` : "";
   const captures = `${coverage.host} captures ${joinRecordedTypes(coverage.types)}${forAccounts}`;
+  if (reason === "near_miss") return `${captures}, but none of this site's saved rules covers this address.`;
   if (reason === "no_rule") return `${captures}; this page isn't one of them.`;
-  return accounts.length ? `${captures}; this page belongs to another account.` : null;
+  return accounts.length ? `${captures}; this page isn't one of them.` : null;
 }
 
 /** Why a page the rules missed is close to an artifact: the adapter's
  * current starter has a rule that would match it (offered for review), or
- * the page carries a rule's fixed-shape query identifier on a route no rule
- * covers (explained only). `adapter` indexes the lease's adapters. */
+ * the page carries a rule's fixed-shape query identifier that no rule
+ * accepted, whether its route or another condition failed (explained only). `adapter` indexes the lease's adapters. */
 export type NearMiss =
   | { kind: "starter_rule"; adapter: number; label: string; rule: AdapterRule }
   | { kind: "identifier"; adapter: number; label: string; key: string };
