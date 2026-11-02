@@ -269,6 +269,12 @@ test("isRunView requires answer and rejects an unknown importance", () => {
   const updated = (run) => isResponseShape({ type: "run_updated", run });
   assert.equal(updated(view), true);
   assert.equal(updated({ ...view, answer: { ...view.answer, overview: "A decision about the release." } }), true);
+  for (const read_scope of ["whole", "partial", "page_only"]) {
+    assert.equal(updated({ ...view, answer: { ...view.answer, read_scope } }), true);
+  }
+  for (const read_scope of [null, 7, "", "Whole", "most", {}]) {
+    assert.equal(updated({ ...view, answer: { ...view.answer, read_scope } }), false);
+  }
   for (const overview of [null, 7, "", "a".repeat(301)]) {
     assert.equal(updated({ ...view, answer: { ...view.answer, overview } }), false);
   }

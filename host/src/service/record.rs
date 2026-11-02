@@ -18,10 +18,10 @@ use brauser_protocol::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::answer::{Access, SummaryAnswer};
+use crate::answer::{Access, ReadScope, SummaryAnswer};
 use crate::presentation::plain_line;
 use crate::service::section::PageSection;
-use brauser_protocol::AnswerAccess;
+use brauser_protocol::{AnswerAccess, AnswerReadScope};
 
 /// The largest `stream.txt`; text past it is dropped.
 pub const STREAM_CAP: usize = 4 * 1024 * 1024;
@@ -266,8 +266,13 @@ impl RunStatusFile {
                     .and_then(|value| SummaryAnswer::deserialize(value).ok())
                     .map(|answer| RunAnswer {
                         overview: (!answer.overview.is_empty()).then_some(answer.overview),
-                        // Only a wall is shown, so an ordinary run's view is
-                        // what an older extension already reads.
+                        read_scope: answer.read_scope.map(|scope| match scope {
+                            ReadScope::Whole => AnswerReadScope::Whole,
+                            ReadScope::Partial => AnswerReadScope::Partial,
+                            ReadScope::PageOnly => AnswerReadScope::PageOnly,
+                        }),
+                        // Ordinary answers omit access; only a wall needs a
+                        // not-saved message in the run card.
                         access: match answer.access {
                             Access::Ok => None,
                             Access::SignIn => Some(AnswerAccess::SignIn),
@@ -1165,6 +1170,28 @@ mod tests {
     }
 
     #[test]
+    fn run_view_answer_projects_validated_read_scope_and_preserves_legacy_absence() {
+        let status = sample(Uuid::new_v4());
+        let mut answer: serde_json::Value =
+            serde_json::from_str(crate::answer::TEST_ANSWER).unwrap();
+        for scope in ["whole", "partial", "page_only"] {
+            answer["read_scope"] = serde_json::json!(scope);
+            let view = serde_json::to_value(status.view(0, Some(&answer))).unwrap();
+            assert_eq!(view["answer"]["read_scope"], scope);
+        }
+        answer.as_object_mut().unwrap().remove("read_scope");
+        let view = serde_json::to_value(status.view(0, Some(&answer))).unwrap();
+        assert!(
+            !view["answer"]
+                .as_object()
+                .unwrap()
+                .contains_key("read_scope")
+        );
+        answer["read_scope"] = serde_json::json!("untrusted scope");
+        assert_eq!(status.view(0, Some(&answer)).answer, None);
+    }
+
+    #[test]
     fn run_view_answer_carries_access_only_for_a_wall() {
         let mut status = sample(Uuid::new_v4());
         status.state = RunState::Succeeded;
@@ -1205,6 +1232,7 @@ mod tests {
             status.view(0, Some(&answer)).answer,
             Some(brauser_protocol::RunAnswer {
                 overview: None,
+                read_scope: None,
                 document_type: "report".into(),
                 category: "news".into(),
                 importance: brauser_protocol::ImportanceLevel::Low,

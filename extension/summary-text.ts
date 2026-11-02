@@ -1,7 +1,21 @@
 // One-line descriptions of a page's saved summary (DESIGN.md §5.7). The
 // fields come from the agent's answer, so callers set these strings only
 // through textContent.
-import type { SummaryView } from "../protocol/ts/generated.js";
+import type { AnswerReadScope, SummaryView } from "../protocol/ts/generated.js";
+
+/** Agent-reported reading coverage; legacy answers make no completeness claim. */
+export function readScopeText(scope: AnswerReadScope | undefined): string | null {
+  switch (scope) {
+    case "whole":
+      return "Agent read: whole artifact";
+    case "partial":
+      return "Agent read: part of the artifact";
+    case "page_only":
+      return "Agent read: browser page only";
+    default:
+      return null;
+  }
+}
 
 /** New summaries lead with their overview; older ones keep their labels. */
 export function summaryLine(s: SummaryView): string {

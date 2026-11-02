@@ -523,6 +523,24 @@ in its run directory; and that the same Save writes the draft. This proves
 the real Chrome, host and service path with a fake agent; it does not judge
 a real agent's drafts.
 
+## Summary reading scope
+
+`service::record::tests::run_view_answer_projects_validated_read_scope_and_preserves_legacy_absence`
+checks all three scopes, omission for legacy results and refusal of a result
+with an invalid scope. `protocol/tests/wire_runs.rs` checks optional scope,
+round trips and unknown-value rejection; `extension/tests/agent.test.mjs`
+checks the exact-key response validator including null and invalid types.
+Built `panel/run-cards.test.mjs` and `panel/tasks-page.test.mjs` exercise each
+scope and legacy absence through real controllers and host-response checking.
+The card keeps hostile-looking overview text inert; `run-card.test.mjs`
+checks that access-wall messages still take precedence. Run these files
+separately if using `--test-isolation=none`: their global mock timers are
+intentionally local to each test process. Actual Chrome layout and screen
+reader checks remain external; no smoke steps or dialog counts changed.
+The card's `.run-card-answer` uses `white-space: pre-wrap`, as Tasks detail
+does, so Chrome preserves the formatter's overview/scope/metadata lines.
+The fake DOM's text assertions do not prove that CSS layout.
+
 ## Auto-summary
 
 - Pure candidate logic: `extension/tests/auto-summary.test.mjs` (dwell 0 and
@@ -539,7 +557,9 @@ a real agent's drafts.
   kept candidate and a retry alarm after `service_unavailable`, and focus kept
   in session storage with a dwell alarm. Each test answers every request it causes: the worker runs one
   drain at a time, so an unanswered request stalls the next test's drain.
-- Host: `native::tests::run_proxy` (each skip reason before connecting, the
+- Host: `native::tests::run_proxy` (each skip reason before connecting,
+  including capture pause loaded before the request or refreshed from disk over
+  an enabled in-memory policy, with manual summaries still reaching forwarding; the
   forwarded summary `start_run`, manual Summarize ignoring an existing summary,
   `summary_blocks_auto` dates and read scopes), `service::queue`
   (`auto_runs_queue_in_arrival_order`), `service::finisher`

@@ -953,6 +953,28 @@ test("a dismissed-list read failure still shows the tasks", async () => {
   assert.deepEqual(page.selected(), [runId(1)]);
 });
 
+for (const [scope, label] of [
+  ["whole", "Agent read: whole artifact"],
+  ["partial", "Agent read: part of the artifact"],
+  ["page_only", "Agent read: browser page only"],
+  [undefined, null],
+]) {
+  test(`Tasks summary detail discloses read scope: ${scope ?? "legacy"}`, async () => {
+    const { instruction: _instruction, task_report: _report, ...run } = task(1, {
+      kind: "summary", answer: {
+        overview: "The release is ready.", document_type: "report", category: "news",
+        importance: "high", importance_reason: "Ships Friday.", ...(scope ? { read_scope: scope } : {}),
+      },
+    });
+    const page = await openTasks({ runs: [run] });
+    await until(() => page.el("tasks-detail").textContent.includes("The release is ready."), "the summary detail");
+    const text = page.el("tasks-detail").textContent;
+    if (label) assert.ok(text.includes(`The release is ready.\n${label}`), text);
+    else assert.doesNotMatch(text, /Agent read:/);
+    assert.ok(text.includes("Type: report"));
+  });
+}
+
 test("summary runs are listed beside tasks and their detail offers Open summary", async () => {
   const answer = {
     document_type: "specification", category: "project plan", importance: "medium",

@@ -1207,3 +1207,32 @@ IPC sandbox skips), all 41 extension test files, both Clippy configurations,
 regressions and one enhanced case cover the changed behavior. The browser
 accessibility command passes its two fixtures and explicitly skips 36 real
 browser checks in this sandbox; external driver/CI evidence is still needed.
+
+
+## 2026-11-02 — Pause automatic summaries at host admission (brwr-q0i4)
+
+Pausing capture now stops an automatic-summary request that arrives after the
+page was already being read. The native host refreshes settings under its
+existing configuration lock and answers disabled before contacting the
+service if capture is paused, even if its in-memory settings still said on.
+Explicit Summarize & log remains available, so someone can still deliberately
+summarize a page while automatic capture is paused. This check governs
+admission: it does not cancel summaries already queued or running. The
+regression demonstrated the unwanted service attempt before the fix and
+covers both a freshly loaded pause and a pause superseding cached settings.
+
+## 2026-11-02 — Show what the summary agent actually read (brwr-rr93)
+
+Summary run cards and the Tasks page's summary detail now put a short reading
+label directly after the overview: Agent read: whole artifact, part of the
+artifact, or browser page only. This makes a polished overview of a viewer
+page distinguishable from an answer based on the actual document. The label
+reports the agent's validated scope; it does not independently certify that
+the document was complete. Older answers without scope retain their current
+text, and sign-in/no-access/not-found answers still lead with why nothing was
+saved. One shared text-only formatter serves both views. The service projects
+information already in the saved answer through an optional protocol enum,
+so no stored summary, note, or retrieval permission changes. Rebuild host and
+extension together because older extensions reject the extra answer field.
+Tests cover all three scopes, legacy absence, invalid wire values, wall
+precedence, and hostile-looking overview text remaining inert.

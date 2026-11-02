@@ -220,6 +220,8 @@ would help a person judge the overview and understand a later retry. Where:
 and the built run-card/Tasks tests. Keep the label text-only and omit it for
 legacy answers without scope.
 
+- Done 2026-11-02: `brwr-rr93` (cycle commit prepared for driver).
+
 ## 2026-11-02 — Make capture pause stop late automatic starts
 
 Change: check `capture_enabled` under the same native eligibility lock as
@@ -240,3 +242,16 @@ exists), so development, the release app and `brauser register` share one ID
 and the registration code can be tested against it before M5. Where:
 `extension/manifest.json`, `scripts/register-dev-host.mjs`, and the
 self-registration tests when that code is built.
+- Done 2026-11-02: `brwr-q0i4` (cycle commit prepared for driver).
+
+
+## 2026-11-02 — Disclose reading scope when choosing a saved summary
+
+Change: carry validated saved-summary reading scope to the Summary line in
+This page and to Recent, omitting it for legacy records (`brwr-30xv`,
+discovered from `brwr-rr93`). Why: scope is now visible in run cards and Tasks
+detail, but the overview shown while choosing a remembered artifact can still
+look complete when the agent read only its browser viewer. Where:
+`SummaryView` in `protocol/schema.json`, the host's saved-summary projection,
+`extension/summary-text.ts` and the built page-summary/Recent tests. Use
+recorded scope rather than inference from overview text.
