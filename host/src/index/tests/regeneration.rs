@@ -498,3 +498,43 @@ fn one_failing_artifact_path_does_not_block_the_others() {
     let report = index.regenerate_dirty().unwrap();
     assert_eq!((report.written, report.failed), (1, 0));
 }
+
+/// The pass marker's offset is that of the latest activity across artifacts,
+/// as `latest_at` records it, not that of the artifact whose newest event of
+/// any kind (here a why, which never moves `latest_at`) is latest.
+#[test]
+fn the_pass_marker_offset_follows_the_latest_activity_not_a_later_why() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let a = activity(
+        "00000000-0000-4000-8000-0000000000a1",
+        "A",
+        "A",
+        "2026-10-02T06:00:00Z",
+    );
+    let b = activity(
+        "00000000-0000-4000-8000-0000000000b1",
+        "B",
+        "B",
+        "2026-10-02T02:00:00-07:00",
+    );
+    index.record_activities([&a, &b], &[]).unwrap();
+    index
+        .record_why(
+            &WhyEvent {
+                event_id: "00000000-0000-4000-8000-0000000000a2".into(),
+                artifact_id: a.artifact_id.clone(),
+                url: a.url.clone(),
+                occurred_at: "2026-10-02T10:00:00Z".into(),
+                incognito: false,
+                text: "later context".into(),
+            },
+            &[],
+        )
+        .unwrap();
+    index.regenerate_dirty().unwrap();
+    let marker: serde_json::Value =
+        serde_json::from_slice(&fs::read(cache.path().join("regenerated.json")).unwrap()).unwrap();
+    assert_eq!(marker["offset_seconds"], -7 * 3600, "{marker}");
+}

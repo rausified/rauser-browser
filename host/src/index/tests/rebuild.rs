@@ -206,6 +206,46 @@ fn rebuild_progress_resumes_after_a_crash_mid_pass() {
     SCAN_LIMIT.with(|value| value.set(MAX_SCAN_BYTES));
 }
 
+/// A reindex stopped between passes, with the JSON cache still current and
+/// no log changed since, resumes on the next read and the next pass rather
+/// than leaving history unavailable until some log changes.
+#[test]
+fn a_stopped_reindex_resumes_on_reads_when_no_log_changed() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (_, size) = three_logs(&root);
+    let first = index(&root, &cache);
+    assert_eq!(first.recent(None, None, 32).unwrap().0.len(), 3);
+    assert!(first.state_path().exists());
+    // `brauser reindex` commits one pass of two logs and is killed.
+    SCAN_LIMIT.with(|value| value.set(size * 5 / 2));
+    assert!(
+        !first
+            .rebuild_pass(crate::index::rebuild::Finish::All)
+            .unwrap()
+    );
+    assert_eq!(meta(&cache, "rebuild"), text("staging"));
+    SCAN_LIMIT.with(|value| value.set(MAX_SCAN_BYTES));
+    drop(first);
+    // The next read advances the staged rebuild to its finish.
+    let reader = index(&root, &cache);
+    assert_eq!(reader.recent(None, None, 32).unwrap().0.len(), 3);
+    assert_eq!(meta(&cache, "rebuild"), text("none"));
+    assert!(stage_tables(&cache).is_empty());
+
+    // A regeneration pass resumes one the same way.
+    SCAN_LIMIT.with(|value| value.set(size * 5 / 2));
+    assert!(
+        !reader
+            .rebuild_pass(crate::index::rebuild::Finish::All)
+            .unwrap()
+    );
+    SCAN_LIMIT.with(|value| value.set(MAX_SCAN_BYTES));
+    reader.regenerate_dirty().unwrap();
+    assert_eq!(meta(&cache, "rebuild"), text("none"));
+    assert_eq!(reader.recent(None, None, 32).unwrap().0.len(), 3);
+}
+
 #[test]
 fn previous_rows_stay_readable_while_a_rebuild_is_staged() {
     let root = TempDir::new().unwrap();

@@ -9,7 +9,7 @@
 //! so a pass killed midway keeps every clear it made, and a mark a delivery
 //! renews meanwhile (a fresh generation) survives the clear.
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Transaction, params};
 
 use super::*;
 
@@ -119,20 +119,28 @@ fn clear(tx: &Transaction<'_>, mark: &DirtyMark, settled: &Settled) -> Result<bo
     Ok(true)
 }
 
-/// The UTC offset of the newest group's latest activity, for the pass
-/// marker's local day.
+/// The UTC offset of the latest activity across artifacts, for the pass
+/// marker's local day. This is the greatest `latest_at` instant, as the
+/// derive's `max(latest_at)` was; `latest_key` would also count a group's
+/// why and child events, which never move its `latest_at`. On equal
+/// instants the last artifact in ID order wins, as `Iterator::max` did.
 fn newest_offset(tx: &Transaction<'_>) -> Result<Option<UtcOffset>> {
-    let latest = tx
-        .prepare_cached(
-            "SELECT latest_at FROM brauser_group_state
-             WHERE artifact_id IN (SELECT artifact_id FROM artifacts)
-             ORDER BY latest_key DESC LIMIT 1",
-        )?
-        .query_row([], |row| row.get::<_, String>(0))
-        .optional()?;
-    Ok(latest
-        .and_then(|at| OffsetDateTime::parse(&at, &Rfc3339).ok())
-        .map(OffsetDateTime::offset))
+    let mut statement = tx.prepare_cached(
+        "SELECT latest_at FROM brauser_group_state
+         WHERE artifact_id IN (SELECT artifact_id FROM artifacts)
+         ORDER BY artifact_id",
+    )?;
+    let mut rows = statement.query([])?;
+    let mut newest: Option<OffsetDateTime> = None;
+    while let Some(row) = rows.next()? {
+        let Ok(at) = OffsetDateTime::parse(&row.get::<_, String>(0)?, &Rfc3339) else {
+            continue;
+        };
+        if newest.is_none_or(|newest| at >= newest) {
+            newest = Some(at);
+        }
+    }
+    Ok(newest.map(OffsetDateTime::offset))
 }
 
 /// The JSON cache's container bookkeeping (plan T15 removes it): every

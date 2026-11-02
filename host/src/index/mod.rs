@@ -1266,7 +1266,12 @@ impl ArtifactIndex {
             *state = self.empty_state();
         }
         let changed = reset || state.logs != checkpoints || state.gap_logs != checkpoints;
-        if !changed {
+        // A staged rebuild in progress (a reindex stopped between passes, a
+        // failed finalize, or one the watermark requested) resumes even when
+        // no log changed since the cache was published; its reads are
+        // unavailable until it finishes.
+        let staged = self.store_rebuilding();
+        if !changed && !staged {
             return Ok(LogPass {
                 changed,
                 reset,
@@ -1277,7 +1282,7 @@ impl ArtifactIndex {
         // store already has in progress) is the store's staged rebuild: each
         // call advances one bounded pass, and the finished store becomes
         // the cache. Only artifacts whose render changed are marked dirty.
-        if rebuild || reset || self.store_rebuilding() {
+        if rebuild || reset || staged {
             if !self.rebuild_pass(rebuild::Finish::Changed)? {
                 bail!(INCOMPLETE_CATCH_UP);
             }
