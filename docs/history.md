@@ -164,6 +164,23 @@ external rerun; sandbox skips are still explicit and never count as passes.
 
 *Side panel states, the row for a non-artifact page on an enabled origin, before Capture Site was built:* No artifact card; chip `○ Not an artifact · Create adapter`. When unrecognized pages recur, a hint also offers to draft one from them (Tier 2, §5.1). **As built (2026-10-27, `brwr-t40`):** the chip reads `○ Not an artifact`.
 
+**Side panel redesign (2026-11-02).** John supplied the "Brauser Sidebar"
+dark-glass design and decided three things before the build: the page card
+shows the title and URL again (superseding the same day's status-only page
+area, PR #231), a light variant follows the system theme, and the full
+design is built, including pieces the panel lacked. A design challenge before
+task 1 kept one Summarize & log button (relabelled Save Page and Summarize
+again rather than a second control), kept the capture strip's smoke-tested
+wording, kept the destructive pause out of the strip's one-click action,
+limited the header pill to global capture, kept the native worklog select,
+and required solid surfaces so axe measures contrast instead of reporting it
+incomplete. The first light build failed the gate at 4.05:1 (white on the
+accent) and on a removed focus outline; both were fixed. The design's
+monospace and sans faces map to system stacks because the CSP sets
+`font-src 'none'`. The design's arrow-only Run button keeps its "Run" text,
+which the task bar sets as it starts. Plan:
+[2026-11-02-sidebar-redesign](superpowers/plans/2026-11-02-sidebar-redesign.md).
+
 ## §6.1 Folder layout — history
 
 **Moving an older layout (2026-10-27).** The rule this record introduced is now stated in DESIGN.md §6.1, “Moving an older layout”.
