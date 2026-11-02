@@ -931,3 +931,51 @@ checks and explicitly skips 36 sandbox-blocked browser cases. Fresh manual
 diff review and one local Codex reviewer pass found no remaining issues;
 external harness/API review was not invoked. Durable apply brwr-dbp, then
 panel Re-learn under brwr-6x2, remain next; no migration acceptance is claimed.
+
+
+### 2026-11-02 — Freeze recorded incoming navigation for summary context
+
+brwr-sm1 adds a summary-only host snapshot of the current artifact view's
+incoming navigation. The service derives identity from its own adapter match
+under the config lock; no protocol field accepts incoming rows or aliases.
+Lookup failure is optional context loss and logs a warning. Existing index
+selection supplies only known attributed navigation sources, capped at five.
+The shared summary/incoming.rs helper bounds source titles to 512 characters,
+keeps only safe unchanged HTTP(S) URLs up to 8192 bytes, validates dates and
+transitions, and reuses inline/page_destination escaping in both outputs.
+
+RunStatusFile's optional incoming array is absent for empty/legacy records.
+It is the frozen queue-time snapshot, persisted with page.md and reused on
+restart and Retry save. The host places its Incoming navigation section
+immediately after Source, closes it with End incoming navigation, then writes
+Office/Miro metadata and Page content. The new conditional SUMMARY.md block
+is enabled from the persisted snapshot, never from headings in page text.
+It treats labels and addresses as untrusted observations, grants no source
+retrieval and forbids inferring dependencies or endorsement. Tasks retain
+their existing page layout. The saved summary's host-rendered Incoming list
+follows Assessment and precedes the answer's outgoing References; it is
+omitted without observations. Older services reject a status record holding
+the new field, matching the existing unreleased optional-field contract.
+
+The pre-build design challenge considered file-only rendering; the snapshot
+was kept to satisfy the requested agent context while adopting the reviewer's
+conditional instruction and fixed-boundary restrictions. Ten new tests pass,
+including real log/index fixtures, cache loss/failure, hostile titles and
+URLs, legacy decoding, in-process runner restart and byte-identical save
+retry. All required/README checks pass: 1,331 workspace Rust-reported outcomes
+(92 IPC guard skips), 40 extension files, both Clippy configurations,
+10,696 inert corpus renderings, eight script test files and 221 Python tests
+(92 platform skips). A11y passes two fixtures and reports 36 sandbox-blocked
+browser skips. Linux tests do not establish macOS/Windows UI acceptance.
+
+Queue reconciliation found the earlier brwr-ruwj implementation only in
+archived commit 396d0bf6 / held PR #238, gated by human/pr-held brwr-37ca.
+The provisional restoration was fully reversed. Its prerequisite was reopened
+as blocked, and the assigned apply/panel/restoration chain now records that
+real blocker. No held code is duplicated and no Re-learn apply is enabled.
+
+
+The full fresh diff was reviewed manually, then the single local Codex
+reviewer pass found no P1–P3 issues. No external harness/API review was run;
+the driver retains its independent gate and publication review. The plan,
+feature briefing and pending documentation record the final contract.

@@ -103,12 +103,8 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
 <!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.**
-  Next prerequisite of `brwr-6x2`, after the completed decision journal:
-  revalidate the review at apply, integrate crash-safe config/content changes,
-  preserve both-side notes/summaries and URL copies, and rebuild the same keys
-  from authoritative history. Ordinary config saves keep the ID freeze.
-  Panel review remains a subsequent parent stage.
+- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** Blocked on held PR #238 (`brwr-37ca`), which contains the shared resolver/preview prerequisite `brwr-ruwj`. After it lands: physical note selection/revision, authoritative applied home history, exact config preparation and universal recovery/refusal, alias-aware access, old-path stubs and crash/reindex acceptance. Ordinary config saves keep the ID freeze.
+- [ ] `brwr-ruwj` **Project reviewed re-key history through a shared identity resolver.** Direct prerequisite of assigned brwr-dbp's migration design challenge. Extract existing alias rehearsal replay into one shared host identity resolver and use it to project strict authoritative log evidence without mutating capture events or files. Expose a read-only… _(P2; blocked)_
 <!-- END GENERATED section=plan -->
 
 ### Gated plan work (do not start yet)
@@ -179,13 +175,11 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
-- [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2)_
-- [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
+- [ ] `brwr-37ca` **Held PR #238: CI still red after 0 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/238 (branch cookie/cookie-overnight/cycle-2-8a8d351): checks green but still not merged after 2700s (is auto-merge on?). It stays open with the held label; nothing new is built on it. Fix it on its… _(P1; labels: human, pr-held)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
 - [ ] `brwr-tsh1` **Tasks page: keep the runs_may_exist hint while summary runs are retained.** Codex review of the one-summary-card PR (P2), extension/run-card.ts restoreRunCards and extension/tasks.ts open(). restoreRunCards clears runs_may_exist_v1 when no card is shown, even when list_runs returned retained summary runs that were only older than a day or dismissed.… _(P2; labels: tasks-page)_
 - [ ] `brwr-tp1` **adapter-templates: title captures consume token base64 padding.** Codex review of PRs #215/#219 (P2), adapter-templates/src/ctype.rs BaseType::in_alphabet and extension/adapter-templates.ts inTitleAlphabet. Path and query token captures now accept up to two trailing '=' (Miro board IDs such as uXjVM0uuBLo=), but title runs still stop at '='.… _(P2; labels: adapter-templates)_
-- [ ] `brwr-sm1` **Summaries: incoming sources from the recorded trail.** SUMMARY.md v2 (feat/summary-md-v2) captures outgoing sources as the answer's `references`, but not where the user came from. The host already records incoming source/transition pairs for an artifact (brwr-1g2, protocol v8). Write them into the run's page.md as a host-owned… _(P2)_
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2)_
 - [ ] `brwr-sm3` **Show the summary overview in the panel and Recent.** SUMMARY.md v2 adds a required one-sentence `overview` that the UI should show (John: mandatory UI fields are the overview, the type and more TBD). Today it reaches only the summary file. Carry it in the summary log event, SummaryView and RunAnswer (additive protocol change… _(P2)_
 - [ ] `brwr-sm5` **Tell the summary agent when Brauser's page capture was truncated.** Codex review of PR #236 (P2, SUMMARY.md read_scope): when content exceeds the extraction limits, extension `extractReadablePage` sets `truncated`, but `choosePage` and `readTab` (extension/summarize.ts) drop it, so page.md looks the same for a complete and a capped capture. An… _(P2)_
@@ -202,13 +196,7 @@ queue".
 ## In Progress / This Iteration
 
 <!-- BEGIN GENERATED section=in-progress: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.**
-  John approved the Re-learn direction on 2026-11-01 (append-only alias/re-key
-  migration replaces the ID freeze, pulling forward M1.5b step 7.2). The
-  [staged plan](docs/superpowers/plans/2026-10-28-capture-relearning.md) has
-  shipped offline alias rehearsal (`brwr-sq9`), impact review (`brwr-hq8`) and
-  the decision journal (`brwr-wvi`); next is vault/index apply (`brwr-dbp`),
-  then the panel review. No migration is enabled yet and the ID freeze stays enforced.
+- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.** John approved the append-only re-key direction. Alias rehearsal, impact review and the journal are on this base; the shared projected-history preview (`brwr-ruwj`) remains in held PR #238 (`brwr-37ca`). Durable apply (`brwr-dbp`) and panel review follow its integration. No migration is enabled and ID freezing remains enforced.
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   **Blocked on platform execution; implementation complete.** The built-page
   smoke covers artifact/context interactions, Recent filters, worklog Copy,
@@ -229,6 +217,8 @@ queue".
   action is to record current Windows and macOS green CI against a named
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
+- [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2; assignee: john-index-lane)_
+- [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2; assignee: john-index-lane)_
 <!-- END GENERATED section=in-progress -->
 
 
@@ -238,6 +228,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
 - **Category:** Bug Fix. **Stopping a run ends its harness, not just the harness's children (2026-11-02).** Found that on macOS a process-group SIGKILL could kill a harness's background child first and leave the woken parent time to exit normally, so a cancelled run could report an answer. The kill now reaches the leader directly before the group, with a regression test that repeats the race twenty times. **Metrics:** under load, the two flaky kill tests went from 36/50 and 41/50 failures to 0/50, the new test from 50/50 to 0/50; all README gates green.
+
+- **Category:** New Capability. **Preserve recorded incoming navigation in summaries (2026-11-02).** Summaries freeze up to five host-derived source/transition pairs and retain them through queueing, restart and Retry save. A bounded untrusted section gives the agent attributed context without source retrieval; the host renders an Incoming list with safe title links and last-recorded dates, omitted for absent/legacy context. Hostile text remains inert and Office/Miro retrieval keeps its boundaries. **Metrics:** 1,331 workspace Rust-reported outcomes (+10 tests; 92 IPC guard skips), 40 extension test files, both Clippy builds, 10,696 inert renderings; a11y 2 fixture passes and 36 explicit sandbox skips.
 
 - **Category:** Bug Fix. **Detect Re-learn key collisions across origins (2026-11-02).** All-origin log, owned-note/summary and verified implicit-container identities protect occupied sources and destinations, including HTTP/HTTPS keys sharing a host. Fresh approval refuses these conflicts; unrelated origins stay outside migration rows. All contracts used for occupancy bind the review revision. **Metrics:** 4 new regressions for this fix; 7 across the assigned pair, 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension files and both Clippy builds; 36 browser sandbox skips.
 
@@ -1803,3 +1795,18 @@ queue consistency and renderer freshness checks passed. Full diff reviewed
 locally; logs are in `target/overnight-health/assignment-mirror-repair/`.
 No new feature shipped, so no feature-briefing or product-design change was
 needed. Independent review and publication remain with the driver.
+
+
+### 2026-11-02 — Queue readiness must account for held cycle PRs
+
+On baseline 81ca663b the live beads database remembered completed brwr-ruwj,
+but its code was only in archived commit 396d0bf6 and held PR #238. The
+human/pr-held bead brwr-37ca explicitly forbids building on that held cycle.
+A provisional exact restoration was reversed before any feature work; no
+Re-learn code is part of this cycle. The missing real dependencies are now
+recorded: brwr-dbp waits on brwr-37ca, brwr-6x2 waits on brwr-dbp, and
+brwr-7lq waits on brwr-dbp. All three assigned items stay blocked until the
+driver/operator resolves the held implementation. After a driver reset to
+main, check held-PR beads before trusting a closed prerequisite's narrative.
+With assigned work unavailable, brwr-sm1 was the selected ready P2 product
+capability. brwr-sm3 remains a valuable next UI task; reuse that existing bead.
