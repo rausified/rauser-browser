@@ -18,6 +18,7 @@ mod presentation;
 mod regeneration;
 mod scan;
 pub(crate) mod sql;
+mod store;
 mod summaries;
 mod views;
 

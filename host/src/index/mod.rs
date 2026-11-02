@@ -2,8 +2,10 @@
 //!
 //! The append-only daily log is authoritative. `index-state.json` is a small
 //! host cache used to avoid reparsing old logs after every delivery, while
-//! `index.db` is a standards-compliant SQLite snapshot for current and future
-//! readers. Either file may be deleted; `brauser reindex` recreates both.
+//! `index.db` is a rusqlite database (`store`) whose `brauser_events` hold
+//! every indexed event and whose derived tables serve current and future
+//! readers; a delivery re-derives only the groups it touches. Either file
+//! may be deleted; `brauser reindex` recreates both.
 //! A catch-up that needs more than one pass's read bound (a rebuild of a
 //! long history) saves its progress in `index-catch-up.json`, which is never
 //! served, and the next pass resumes from it.
@@ -53,7 +55,11 @@ mod query;
 mod regen;
 mod render;
 mod scan;
+// The hand-written snapshot writer, unused since index.db became the
+// rusqlite store (plan T8); plan T15 deletes it.
+#[allow(dead_code)]
 mod snapshot;
+mod store;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -64,6 +70,7 @@ use query::*;
 use regen::*;
 use render::*;
 use scan::*;
+#[cfg(test)]
 use snapshot::*;
 
 // v2 (main, independently) forces a rescan for the artifact-history
@@ -99,6 +106,8 @@ const MARKER_PREFIX: &str = concat!("<!-- ", crate::namespace!(), ":visit id=");
 thread_local! {
     static LOG_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PUBLICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Derives of a whole (nonempty) history. A delivery runs none.
+    static FULL_DERIVES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static SCAN_LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(MAX_SCAN_BYTES) };
 }
 
@@ -522,13 +531,6 @@ struct Derived {
     edges: Vec<EdgeRow>,
     /// The instant of each row's `why`, for rows that have one, so a later
     /// fold can be seeded with it (`Fold::seeded`).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "brauser_group_state.why_at (plan T8) is its first reader"
-        )
-    )]
     why_at: BTreeMap<String, OffsetDateTime>,
 }
 
@@ -598,6 +600,10 @@ impl ArtifactIndex {
     }
 
     fn derive(&self, state: &IndexState) -> Derived {
+        #[cfg(test)]
+        if !state.events.is_empty() {
+            FULL_DERIVES.with(|count| count.set(count.get() + 1));
+        }
         derive(state, self.adapters.as_deref())
     }
 
@@ -639,23 +645,63 @@ impl ArtifactIndex {
     /// Index events whose log append already succeeded. Catch-up has just
     /// read the authoritative log, so a body that disagrees with an indexed
     /// event is skipped (and reported) without dropping the rest.
+    ///
+    /// The events go into `brauser_events` in one transaction that re-derives
+    /// only the affected groups (each event's artifact and container) and
+    /// marks them dirty with fresh generations; no full derive runs. Until
+    /// plan T15 the JSON cache takes the same events, and the store is first
+    /// brought level with it when catch-up changed it.
     fn record_events(&self, events: impl IntoIterator<Item = CachedEvent>) -> Result<()> {
-        let (mut state, _) = self.load_current_state()?;
-        let mut conflicts = 0usize;
-        for event in events {
-            let (event_id, artifact_id) = event_identity(&event);
-            match state.events.get(&event_id) {
-                Some(previous) if previous.data != event.data => conflicts += 1,
-                Some(_) => {
-                    state.dirty.insert(artifact_id);
+        let (mut state, publish) = self.load_current_state()?;
+        let events = events.into_iter().collect::<Vec<_>>();
+        let adapters = self.adapters.as_deref();
+        let fingerprint = self.adapters_fingerprint();
+        let mut conn = store::open(&self.cache_dir)?;
+        let conflicts = store::write(&mut conn, adapters, |tx| {
+            let mut remarked = if publish || !store::mirrors(tx, &state, &fingerprint)? {
+                store::sync_to_state(tx, adapters, &fingerprint, &state)?
+            } else {
+                BTreeSet::new()
+            };
+            let mut containers = Containers::new(adapters);
+            let mut rederive = BTreeSet::new();
+            let mut conflicts = 0usize;
+            for event in &events {
+                let (outcome, groups) = store::ingest(tx, &mut containers, event, None)?;
+                if !store::FAST_PATH && matches!(outcome, store::Ingest::Inserted) {
+                    rederive.extend(groups.iter().cloned());
                 }
-                None => {
-                    state.ingest(event, None, false);
+                remarked.extend(groups);
+                let (event_id, artifact_id) = event_identity(event);
+                match state.events.get(&event_id) {
+                    Some(previous) if previous.data != event.data => conflicts += 1,
+                    Some(_) => {
+                        state.dirty.insert(artifact_id);
+                    }
+                    None => {
+                        state.ingest(event.clone(), None, false);
+                    }
                 }
+                debug_assert_eq!(
+                    matches!(outcome, store::Ingest::Conflict),
+                    state
+                        .events
+                        .get(&event_id)
+                        .is_some_and(|indexed| indexed.data != event.data)
+                );
             }
-        }
-        self.dirty_containers(&mut state);
-        self.publish_state_and_database(&state)?;
+            store::rederive_groups(tx, adapters, &rederive)?;
+            self.dirty_containers(&mut state);
+            store::sync_dirty(tx, &state.dirty, &remarked)?;
+            #[cfg(test)]
+            assert!(
+                store::sync_to_state(tx, adapters, &fingerprint, &state)?.is_empty(),
+                "the store and the JSON cache took the delivery differently"
+            );
+            Ok(conflicts)
+        })?;
+        drop(conn);
+        self.write_state(&state)?;
         if conflicts > 0 {
             bail!("an indexed event ID cannot be reused with different content");
         }
@@ -1450,26 +1496,31 @@ impl ArtifactIndex {
         })
     }
 
+    /// Bring `index.db` level with `state` (re-deriving only the groups whose
+    /// events changed, and mirroring its dirty set), then publish the JSON
+    /// cache. Plan T15 removes the JSON half.
     fn publish_state_and_database(&self, state: &IndexState) -> Result<()> {
         #[cfg(test)]
         PUBLICATIONS.with(|count| count.set(count.get() + 1));
+        let adapters = self.adapters.as_deref();
+        let fingerprint = self.adapters_fingerprint();
+        let mut conn = store::open(&self.cache_dir)?;
+        store::write(&mut conn, adapters, |tx| {
+            let changed = store::sync_to_state(tx, adapters, &fingerprint, state)?;
+            store::sync_dirty(tx, &state.dirty, &changed)
+        })?;
+        drop(conn);
+        self.write_state(state)
+    }
+
+    /// Publish the JSON cache, last: if a write fails, a subsequent read
+    /// still sees the older checkpoint and retries the catch-up.
+    fn write_state(&self, state: &IndexState) -> Result<()> {
         fs::create_dir_all(&self.cache_dir).context("creating artifact index cache directory")?;
         let bytes = serde_json::to_vec(state).context("serializing artifact index state")?;
         if bytes.len() as u64 > MAX_STATE_BYTES {
             bail!("artifact index state exceeds its 64 MiB limit");
         }
-        let database = sqlite_snapshot(&self.derive(state), &state.dirty, &state.events)?;
-        if database.skipped_rows > 0 {
-            // index.db is a derived snapshot; the log and the ingestion
-            // cache keep the event. One bad row never stops publication.
-            tracing::warn!(
-                skipped_rows = database.skipped_rows,
-                "left artifact index rows larger than one SQLite page out of index.db"
-            );
-        }
-        atomic_write(&self.database_path(), &database.bytes)?;
-        // Publish the checkpoint last. If either write fails, a subsequent
-        // read still sees the older checkpoint and retries the catch-up.
         atomic_write(&self.state_path(), &bytes)?;
         // The published cache now covers any saved partial pass.
         match fs::remove_file(self.pending_path()) {
