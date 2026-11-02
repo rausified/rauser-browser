@@ -10,6 +10,14 @@ This document is self-contained and travels with the repository. It assumes noth
 
 When you can't test something without UI, don't fall back to the user's screen on your own. Ask first (see "Real-UI acceptance" below), or say clearly that it was not tested.
 
+## Accessibility checks in a real browser
+
+Accessibility tests use axe-core through playwright-core against a real headless Chromium, launched through `scripts/a11y-browser.mjs` (`a11yBrowser(t)`; open pages with `browser.newContext()` then `context.newPage()`, because AxeBuilder rejects `browser.newPage()`). The packages are exact-pinned devDependencies (`playwright-core` 1.64.1, `@axe-core/playwright` 4.14.0, `axe-core` 4.14.0); nothing downloads a browser (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`).
+
+- **Which browser:** `CHROME_PATH`, else `/opt/browsers/chromium` on Linux (a stable symlink to Playwright's Chrome for Testing build on the worker VMs: 156.0.8078.4, revision chromium-1248), else the Google Chrome app on macOS. Launch flags are `headless` plus `--no-sandbox`, which is harmless where Chrome's own sandbox works.
+- **Codex sandbox:** Chromium cannot start inside Codex's workspace-write sandbox on Linux with any flags: its seccomp filter returns EPERM for `setsockopt` and `shutdown` on Unix socketpairs, and Chromium aborts at startup. That sandbox sets `CODEX_SANDBOX_NETWORK_DISABLED=1`, so the launcher skips with a one-line reason there. A missing browser elsewhere also skips. `BRAUSER_REQUIRE_A11Y_TESTS=1` turns both into failures.
+- **Where they run for real:** CI's macOS job and the worker's unsandboxed commit gate (a `--test-cmd`). On a worker VM, install offline with `npm ci --offline --ignore-scripts` against the committed lockfile; `npm install --offline` fails in the sandbox because `~/.npm` is read-only there.
+
 ## Test layers
 
 Put each check in the lowest layer that can prove it.
