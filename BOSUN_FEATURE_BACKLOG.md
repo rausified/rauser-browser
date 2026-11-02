@@ -178,6 +178,7 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
+- [ ] `brwr-e7b0` **Stop accessibility regressions across Brauser's UI.** Run axe-core against built `panel.html`, `options.html` and `tasks.html` in a small state matrix covering setup, configured, disconnected and error states. Add keyboard assertions for reaching and activating each primary action, changing panel tabs, operating the task listbox… _(P1; blocked; labels: assigned, scout-proposal)_
 - [ ] `brwr-5yn` **[human] M1.5a step 6.8: certify the three starter adapters.** Check the Jira, SharePoint/OneDrive and GitHub drafts against each live tool and record the date in docs/adapters/. Needs John on macOS with real accounts; Cookie must not change the 'development draft' label or mark 6.8 done. _(P2; labels: human)_
 - [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2)_
 - [ ] `brwr-mff` **[human] Add rusqlite (bundled) to the workspace and warm the VM cargo cache.** Cookie's codex sandbox cannot fetch crates, so step 6.6 hand-wrote a SQLite file writer instead of using a library. Outside the sandbox: add rusqlite with the bundled feature to host/Cargo.toml, update Cargo.lock, pass cargo deny check --all-features --locked (license… _(P2; labels: human)_
@@ -238,6 +239,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Testing & Verification. **Separate supervisor waits from disk flush latency (2026-11-01).** Supervisor and retention fixtures explicitly choose unit-test-only temporary stores while keeping private writes, atomic replacements and filesystem errors. Production and normal storage tests still sync. Resumed-run limit and vocabulary checks are independent, retaining the one-second timeout and checking the full recorded-vocabulary prompt without racing a shell. **Metrics:** 1,209 Rust tests (+2), 87 supervisor cases, 38 extension test files and 85 Python tests; full required gate green, with sandbox IPC guards self-skipping.
+
 - **Category:** Maintenance. **Remove the task tracker unused clock dependency (2026-11-01).** Simplify the tracker dependency contract and update the panel and direct test constructors without a clock callback. **Metrics:** Typecheck and lint passed; 15 tracker tests passed.
 
 - **Category:** Bug Fix. **Announce each watched task completion once (2026-11-01).** Remember announced run IDs for the panel lifetime so stale start or running views cannot replay a finish, while distinct tasks still announce independently. **Metrics:** 15 direct tracker tests; 38 extension files passed.
@@ -384,6 +387,22 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-11-01 repair-only health cycle.** The opening gate failed six
+  supervisor tests; focused reruns reproduced task-capacity and long-report
+  failures, and a local file fsync took 5.6 seconds. `brwr-pnti` keeps the real
+  writer and existing timing assertions while making supervisor/retention
+  fixtures explicitly temporary; normal record storage tests remain durable.
+  Keep asynchronous lifecycle verification separate from disk flush latency.
+  A full-run follow-up also split the resumed-run one-second timeout check
+  from vocabulary prompt capture, using the existing in-process runner for
+  the latter instead of racing a shell against the watchdog.
+  `brwr-e7b0` remains blocked on provisioning offline Chrome/Chromium and
+  pinned axe-core tooling; no accessibility acceptance is claimed. The assigned
+  Tasks page refresh race (`brwr-um4`) and timing tests (`brwr-jzs`) remain
+  untouched for the next green cycle. Existing `brwr-ppn` (worklog curation)
+  and `brwr-ued` (named cross-tool focus sessions) remain useful user-facing
+  directions after assignments clear; avoid duplicate proposals.
 
 - **2026-11-01 assigned queue hydration.** `brwr-f85` adds the guarded
   `scripts/dev/create-bead` workflow; linked worktrees still use isolated

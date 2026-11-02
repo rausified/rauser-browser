@@ -782,3 +782,22 @@ panel's cached list error behind, so a later worker summary restore could
 resurrect it. Successful tracker updates now clear that error and its notice;
 a panel regression reproduces the failed list, automatic recovery and later
 worker notice.
+
+
+### 2026-11-01 — Separate supervisor fixture timing from disk durability
+
+The initial health gate reproduced supervisor state-wait failures with a
+single file fsync taking 5.6 seconds. `brwr-pnti` adds the explicit
+`RunStore::ephemeral` unit-test constructor and uses it in supervisor and
+retention fixtures, including their seeded and restarted stores. It omits
+file and directory sync waits while sharing the real writer's private modes,
+atomic renames, error handling and cleanup. The ordinary `RunStore::open`
+constructor and the existing record storage tests remain durable, and the
+ephemeral field and constructor are absent from production and
+scripted-dialogs builds. No supervisor timeout or product contract changed.
+
+The full gate then exposed a resumed-run test racing its one-second watchdog
+against a shell copying the prompt. Separate tests retain the recorded
+one-second limit and check the full vocabulary prompt with the existing
+in-process recording runner, preserving both assertions without the shell
+startup dependency.

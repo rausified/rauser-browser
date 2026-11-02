@@ -833,3 +833,26 @@ delivery and a stored notice consumed when the panel follows its tab.
 TaskTracker no longer asks callers for a clock it never reads. Its only timing
 mechanism is the polling timer; the panel and direct tests now construct it
 without an unused timestamp callback. Type checking verifies the updated API.
+
+
+### 2026-11-01 — Keep supervisor tests independent of disk flush speed (brwr-pnti)
+
+The opening health check failed six supervisor tests. Focused runs reproduced
+the task-capacity and long-report failures with their runs still progressing.
+A local probe measured 5.6 seconds for a single file flush, enough for a few durable
+status writes to exhaust a ten-second state wait. Supervisor and retention
+unit fixtures now explicitly choose temporary record stores that omit those
+flush waits while retaining actual filesystem writes, atomic replacement,
+private permissions and write failures. Their existing timeouts and state
+assertions remain intact. Normal stores, the record storage tests, and
+all production and scripted-dialogs builds retain file and directory syncing;
+the temporary-store switch exists only in unit-test builds. An added storage
+regression protects the temporary path's permissions, refusal to overwrite
+an existing result directory, cleanup and preservation of existing content.
+
+The full run also exposed a separate race in a resumed-run test that combined
+a one-second timeout with capturing the prompt through a shell. Those checks
+are now independent: the recorded limit still has to time out after one
+second, while the existing in-process recording runner checks the complete
+prompt built from the recorded vocabulary. This preserves both expectations
+without making prompt verification depend on subprocess startup speed.

@@ -367,6 +367,8 @@ impl From<io::Error> for StreamError {
 #[derive(Debug, Clone)]
 pub struct RunStore {
     runs: PathBuf,
+    #[cfg(test)]
+    ephemeral: bool,
 }
 
 impl RunStore {
@@ -390,7 +392,21 @@ impl RunStore {
         }
         fs::set_permissions(&runs, fs::Permissions::from_mode(0o700))
             .with_context(|| format!("securing {}", runs.display()))?;
-        Ok(Self { runs })
+        Ok(Self {
+            runs,
+            #[cfg(test)]
+            ephemeral: false,
+        })
+    }
+
+    /// Temporary unit-test records: keep real writes, permissions, atomic
+    /// replacement and I/O errors, but do not wait for crash durability.
+    /// Storage tests use `open`, which always syncs, including in test builds.
+    #[cfg(test)]
+    pub(super) fn ephemeral(runs: PathBuf) -> Result<Self> {
+        let mut store = Self::open(runs)?;
+        store.ephemeral = true;
+        Ok(store)
     }
 
     /// The service's support folder, which holds `runs/` and `agent.env`.
@@ -415,7 +431,8 @@ impl RunStore {
             .mode(0o700)
             .create(&dir)
             .with_context(|| format!("creating run directory {}", dir.display()))?;
-        let result = write_new(&dir.join(PAGE_FILE), page_md.as_bytes())
+        let result = self
+            .write_new(&dir.join(PAGE_FILE), page_md.as_bytes())
             .context("writing page.md")
             .and_then(|()| self.write_status(status));
         if result.is_err() {
@@ -449,7 +466,8 @@ impl RunStore {
             status
         };
         let bytes = serde_json::to_vec_pretty(status).context("encoding status.json")?;
-        atomic_write(&self.run_dir(id), STATUS_FILE, &bytes).context("writing status.json")
+        self.atomic_write(&self.run_dir(id), STATUS_FILE, &bytes)
+            .context("writing status.json")
     }
 
     pub fn status(&self, id: Uuid) -> Result<RunStatusFile> {
@@ -587,7 +605,8 @@ impl RunStore {
     /// Replace `result.json` atomically.
     pub fn write_result(&self, id: Uuid, value: &serde_json::Value) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(value).context("encoding result.json")?;
-        atomic_write(&self.run_dir(id), RESULT_FILE, &bytes).context("writing result.json")
+        self.atomic_write(&self.run_dir(id), RESULT_FILE, &bytes)
+            .context("writing result.json")
     }
 
     /// The validated answer, or `None` before one is written.
@@ -611,6 +630,33 @@ impl RunStore {
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error).with_context(|| format!("removing {}", dir.display())),
         }
+    }
+
+    fn sync(&self, file: &File) -> io::Result<()> {
+        #[cfg(test)]
+        if self.ephemeral {
+            return Ok(());
+        }
+        file.sync_all()
+    }
+
+    fn write_new(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let mut file = private_options().write(true).create_new(true).open(path)?;
+        file.write_all(bytes)?;
+        self.sync(&file)
+    }
+
+    fn atomic_write(&self, dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+        let temporary = dir.join(format!(".{name}-{}.tmp", Uuid::new_v4()));
+        if let Err(error) = self.write_new(&temporary, bytes) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        if let Err(error) = fs::rename(&temporary, dir.join(name)) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        self.sync(&File::open(dir)?)
     }
 }
 
@@ -674,25 +720,6 @@ fn private_options() -> OpenOptions {
 
 fn open_append(path: &Path) -> io::Result<File> {
     private_options().append(true).create(true).open(path)
-}
-
-fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = private_options().write(true).create_new(true).open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
-}
-
-fn atomic_write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
-    let temporary = dir.join(format!(".{name}-{}.tmp", Uuid::new_v4()));
-    if let Err(error) = write_new(&temporary, bytes) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-    if let Err(error) = fs::rename(&temporary, dir.join(name)) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-    File::open(dir)?.sync_all()
 }
 
 #[cfg(test)]
@@ -1009,6 +1036,42 @@ mod tests {
         value["surprise"] = serde_json::json!(true);
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(store.status(id).is_err());
+    }
+
+    #[test]
+    fn ephemeral_store_preserves_private_atomic_writes_and_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::ephemeral(dir.path().join("runs")).unwrap();
+        let id = created(&store);
+        let mut status = store.status(id).unwrap();
+        status.state = RunState::Running;
+        store.write_status(&status).unwrap();
+        assert_eq!(store.status(id).unwrap(), status);
+        assert_eq!(mode(&dir.path().join("runs")), 0o700);
+        assert_eq!(mode(&store.run_dir(id)), 0o700);
+        assert_eq!(mode(&store.page_path(id)), 0o600);
+        assert_eq!(mode(&store.run_dir(id).join(STATUS_FILE)), 0o600);
+
+        // A failed atomic replacement still refuses to overwrite a directory,
+        // keeps its contents and removes the temporary result file.
+        let result = store.run_dir(id).join(RESULT_FILE);
+        fs::create_dir(&result).unwrap();
+        fs::write(result.join("keep"), "existing content").unwrap();
+        assert!(store.write_result(id, &serde_json::json!({})).is_err());
+        assert_eq!(
+            fs::read_to_string(result.join("keep")).unwrap(),
+            "existing content"
+        );
+        assert!(fs::read_dir(store.run_dir(id)).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+        assert!(store.create(&sample(id), "replacement").is_err());
+        assert_eq!(fs::read_to_string(store.page_path(id)).unwrap(), "# A\n");
+        assert_eq!(store.status(id).unwrap(), status);
     }
 
     #[test]
