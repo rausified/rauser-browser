@@ -533,3 +533,122 @@ fn the_pass_marker_offset_follows_the_latest_activity_not_a_later_why() {
         serde_json::from_slice(&fs::read(cache.path().join("regenerated.json")).unwrap()).unwrap();
     assert_eq!(marker["offset_seconds"], -7 * 3600, "{marker}");
 }
+
+/// Hold `<cache>/index-regen.lock` as another host's regenerator would.
+fn hold_regen_lock(cache: &Path) -> File {
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(cache.join(regen::REGEN_LOCK))
+        .unwrap();
+    lock.lock().unwrap();
+    lock
+}
+
+#[test]
+fn a_held_regen_lock_skips_the_close_pass() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let event = activity(
+        "00000000-0000-4000-8000-0000000000e1",
+        "HELD",
+        "Held",
+        "2026-10-15T12:00:00Z",
+    );
+    index.record_activity(&event, &[]).unwrap();
+    let held = hold_regen_lock(cache.path());
+    // Another regenerator holds the lock: the pass returns at once, writes
+    // nothing, records no pass and keeps the mark for the next pass.
+    let started = Instant::now();
+    assert_eq!(index.regenerate_dirty_unless_busy().unwrap(), None);
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(!root.path().join("artifacts").exists());
+    assert!(!cache.path().join("regenerated.json").exists());
+    assert_eq!(
+        dirty_set(&index),
+        BTreeSet::from([event.artifact_id.clone()])
+    );
+    drop(held);
+    let report = index.regenerate_dirty_unless_busy().unwrap().unwrap();
+    assert_eq!(report.written, 1);
+    assert_eq!(artifact_files(root.path()).len(), 1);
+    assert!(dirty_set(&index).is_empty());
+    // A free lock is released again after the pass.
+    drop(hold_regen_lock(cache.path()));
+}
+
+#[test]
+fn an_explicit_pass_waits_for_a_held_regen_lock() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let event = activity(
+        "00000000-0000-4000-8000-0000000000e2",
+        "WAITS",
+        "Waits",
+        "2026-10-15T12:00:00Z",
+    );
+    index.record_activity(&event, &[]).unwrap();
+    let held = hold_regen_lock(cache.path());
+    let hold = Duration::from_millis(300);
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        drop(held);
+    });
+    // The settings refresh (and the reindex tail) wait for the holder.
+    let started = Instant::now();
+    let report = index.regenerate_dirty().unwrap();
+    assert!(started.elapsed() >= hold);
+    assert_eq!(report.written, 1);
+    release.join().unwrap();
+    assert!(dirty_set(&index).is_empty());
+}
+
+#[test]
+fn sweep_keeps_wal_shm_journal_and_lock_files() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    index
+        .record_activity(&typed_activity(1, "A", "work.item"), &[])
+        .unwrap();
+    index.regenerate_dirty().unwrap();
+    let old = crate::vault::STALE_TEMPORARY_AGE + Duration::from_secs(60);
+    let kept = [
+        "index.db",
+        "index.db-wal",
+        "index.db-shm",
+        "index.db-journal",
+        regen::REGEN_LOCK,
+        "index-open.lock",
+        "regenerated.json",
+    ]
+    .map(|name| {
+        let path = cache.path().join(name);
+        if !path.exists() {
+            fs::write(&path, "").unwrap();
+        }
+        crate::vault::tests::age_file(&path, old);
+        path
+    });
+    let stale = cache
+        .path()
+        .join(format!(".{NAMESPACE}-index-{}.tmp", Uuid::new_v4()));
+    fs::write(&stale, "partial").unwrap();
+    crate::vault::tests::age_file(&stale, old);
+    assert_eq!(index.sweep_stale_temporaries().unwrap(), 1);
+    assert!(!stale.exists());
+    for path in kept {
+        assert!(path.is_file(), "{} was swept", path.display());
+    }
+    // The database still opens and answers.
+    assert!(
+        index
+            .artifact(&typed_activity(1, "A", "work.item").artifact_id)
+            .unwrap()
+            .is_some()
+    );
+}

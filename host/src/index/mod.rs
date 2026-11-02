@@ -61,6 +61,10 @@ mod scan;
 mod store;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) use db::BUSY_MESSAGE;
+/// Busy accounting for host-level tests (7vf).
+#[cfg(test)]
+pub(crate) use db::{BUSY_SURFACED, BusyTimeout};
 
 use fold::*;
 pub(crate) use fold::{unvisited_container, unvisited_within};
@@ -154,7 +158,7 @@ enum Probe {
 }
 
 /// Whether `error` is the write lock staying busy past its timeout.
-fn busy(error: &anyhow::Error) -> bool {
+pub(crate) fn busy(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         matches!(cause.downcast_ref::<db::DbError>(), Some(db::DbError::Busy))
             || cause

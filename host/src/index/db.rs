@@ -40,6 +40,50 @@ const JOURNAL_SIZE_LIMIT: i64 = 8 * 1024 * 1024;
 /// Sidecars removed, in this order, before a legacy main file.
 const SIDECARS: [&str; 3] = ["-wal", "-shm", "-journal"];
 
+#[cfg(test)]
+thread_local! {
+    /// Busy errors in this thread that outlasted every wait and retry and
+    /// became [`DbError::Busy`]. The multi-process acceptance expects none.
+    pub(crate) static BUSY_SURFACED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static BUSY_TIMEOUT_OVERRIDE: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// [`BUSY_TIMEOUT`], or a test's shorter one for this thread's connections.
+fn busy_timeout() -> Duration {
+    #[cfg(test)]
+    if let Some(timeout) = BUSY_TIMEOUT_OVERRIDE.with(std::cell::Cell::get) {
+        return timeout;
+    }
+    BUSY_TIMEOUT
+}
+
+/// Shortens the busy timeout of connections this thread opens until it is
+/// dropped, so a test can hold a lock without waiting ten seconds per call.
+#[cfg(test)]
+pub(crate) struct BusyTimeout(Option<Duration>);
+
+#[cfg(test)]
+impl BusyTimeout {
+    pub(crate) fn set(timeout: Duration) -> Self {
+        Self(BUSY_TIMEOUT_OVERRIDE.with(|cell| cell.replace(Some(timeout))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for BusyTimeout {
+    fn drop(&mut self) {
+        BUSY_TIMEOUT_OVERRIDE.with(|cell| cell.set(self.0));
+    }
+}
+
+/// A busy or locked database that outlasted the waits: never SQLite's text.
+fn busy() -> anyhow::Error {
+    #[cfg(test)]
+    BUSY_SURFACED.with(|count| count.set(count.get() + 1));
+    DbError::Busy.into()
+}
+
 /// The format 9 schema (DESIGN §5.5). Public tables first, then the
 /// `brauser_`-prefixed internal ones. The rebuild's `brauser_stage_*` tables
 /// exist only while a staged rebuild runs and are created by it.
@@ -144,12 +188,14 @@ pub(crate) enum DbError {
     Unavailable(String),
 }
 
+/// [`DbError::Busy`]'s text, which a native response may carry.
+pub(crate) const BUSY_MESSAGE: &str =
+    "artifact history is unavailable: another process is updating the index";
+
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Busy => f.write_str(
-                "artifact history is unavailable: another process is updating the index",
-            ),
+            Self::Busy => f.write_str(BUSY_MESSAGE),
             Self::Legacy => f.write_str(
                 "artifact history is unavailable: index.db predates cache format 9 and is rebuilt on the next delivery",
             ),
@@ -349,7 +395,7 @@ fn precreate(path: &Path) -> io::Result<()> {
 
 /// The per-connection pragmas other than the journal mode.
 fn configure(conn: &Connection) -> rusqlite::Result<()> {
-    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.busy_timeout(busy_timeout())?;
     conn.pragma_update(None, "foreign_keys", false)?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -380,8 +426,8 @@ fn set_journal_mode(conn: &Connection) -> Result<()> {
                 if current.eq_ignore_ascii_case("wal") {
                     return Ok(());
                 }
-                if started.elapsed() >= BUSY_TIMEOUT {
-                    return Err(DbError::Busy.into());
+                if started.elapsed() >= busy_timeout() {
+                    return Err(busy());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
@@ -477,13 +523,13 @@ fn confirm_legacy(path: &Path) -> Result<FileState> {
     let Ok(conn) = Connection::open_with_flags(path, flags) else {
         return Ok(FileState::Legacy);
     };
-    conn.busy_timeout(BUSY_TIMEOUT).map_err(sqlite)?;
+    conn.busy_timeout(busy_timeout()).map_err(sqlite)?;
     let application_id =
         conn.pragma_query_value(None, "application_id", |row| row.get::<_, i64>(0));
     drop(conn);
     match application_id {
         Ok(id) if id == i64::from(APPLICATION_ID) => Ok(FileState::Ours),
-        Err(error) if is_busy(&error) => Err(DbError::Busy.into()),
+        Err(error) if is_busy(&error) => Err(busy()),
         _ => Ok(FileState::Legacy),
     }
 }
@@ -528,7 +574,7 @@ fn drop_in_place(path: &Path) -> Result<()> {
     let attempt = || -> Result<()> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let mut conn = Connection::open_with_flags(path, flags)?;
-        conn.busy_timeout(BUSY_TIMEOUT)?;
+        conn.busy_timeout(busy_timeout())?;
         write_txn(&mut conn, |tx| {
             let mut statement = tx.prepare(
                 "SELECT type, name FROM sqlite_master
@@ -633,7 +679,7 @@ pub(crate) fn map_busy(error: anyhow::Error) -> anyhow::Error {
     let busy = error
         .chain()
         .any(|cause| cause.downcast_ref::<rusqlite::Error>().is_some_and(is_busy));
-    if busy { DbError::Busy.into() } else { error }
+    if busy { self::busy() } else { error }
 }
 
 #[cfg(test)]
@@ -870,6 +916,8 @@ mod tests {
                             Ok(())
                         })?;
                     }
+                    // Every wait ended in the lock.
+                    assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), 0);
                     Ok(())
                 })
             })
@@ -969,6 +1017,76 @@ mod tests {
         assert!(!text.contains("locked") && !text.contains("busy"), "{text}");
         tx.rollback().unwrap();
         write_txn(&mut holder, |_| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn a_busy_error_that_outlasts_the_retries_is_counted() {
+        let dir = TempDir::new().unwrap();
+        let mut holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
+        waiter.busy_timeout(Duration::from_millis(5)).unwrap();
+        let before = BUSY_SURFACED.with(std::cell::Cell::get);
+        // Waits that end in a lock are not counted.
+        write_txn(&mut holder, |_| Ok(())).unwrap();
+        write_txn(&mut waiter, |_| Ok(())).unwrap();
+        assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before);
+        let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
+        write_txn(&mut waiter, |_| Ok(())).unwrap_err();
+        assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before + 1);
+        // An already mapped error is not counted twice.
+        let mapped = map_busy(write_txn(&mut waiter, |_| Ok(())).unwrap_err());
+        assert!(matches!(db_error(&mapped), DbError::Busy));
+        assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before + 2);
+        tx.rollback().unwrap();
+    }
+
+    #[test]
+    fn a_wal_switch_waits_out_another_connections_read_lock() {
+        let dir = TempDir::new().unwrap();
+        let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        // A file left in rollback mode (a host that fell back to DELETE).
+        conn.pragma_update(None, "journal_mode", "DELETE").unwrap();
+        drop(conn);
+        let reader = Connection::open(db_path(dir.path())).unwrap();
+        reader.execute("BEGIN", []).unwrap();
+        reader
+            .query_row("SELECT count(*) FROM brauser_meta", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        let hold = Duration::from_millis(300);
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(hold);
+            reader.execute("COMMIT", []).unwrap();
+        });
+        // The switch to WAL needs the file to itself; it waits for the
+        // reader to finish instead of falling back to DELETE.
+        let started = std::time::Instant::now();
+        let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let journal: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal, "wal");
+        assert!(started.elapsed() >= hold);
+        release.join().unwrap();
+        assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn a_test_can_shorten_the_busy_timeout_of_its_own_connections() {
+        let dir = TempDir::new().unwrap();
+        let holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let _short = BusyTimeout::set(Duration::from_millis(20));
+        let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
+        assert_eq!(pragma_i64(&waiter, "busy_timeout"), 20);
+        let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
+        let started = std::time::Instant::now();
+        write_txn(&mut waiter, |_| Ok(())).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        tx.rollback().unwrap();
+        drop(_short);
+        let again = open(dir.path(), Mode::IfExists).unwrap().unwrap();
+        assert_eq!(pragma_i64(&again, "busy_timeout"), 10_000);
     }
 
     #[test]
