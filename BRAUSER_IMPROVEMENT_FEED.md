@@ -188,3 +188,24 @@ What: in `scripts/a11y-browser.mjs`, wrap the Playwright `launch` (and the first
 Why: during the auto-summary build (load average 20–27), `npm run test:a11y` first failed every test with "Promise resolution is still pending but the event loop has already resolved" after a 17.7 s first test. A rerun then hung for over 10 minutes with no Chrome child process and no output after the fixture test, and had to be killed by hand. The same machine passed the headless smoke and every other gate, so the gate's result said nothing about accessibility.
 
 Where: `scripts/a11y-browser.mjs` (the shared launcher), `extension/tests/a11y/*.test.mjs`; note the timeout and its message in TESTING.md "Accessibility checks in a real browser".
+
+
+## 2026-11-02 — Explain limited reading beside a summary overview
+
+Change: show the validated whole/partial/page-only reading scope in the run
+card and Tasks detail, as proposed in `brwr-rr93`. Why: fixing next-day retry
+(`brwr-sm9`) exposed that a viewer-only summary can look finished in the panel
+while the host deliberately allows another attempt tomorrow. A short label
+would help a person judge the overview and understand a later retry. Where:
+`protocol/schema.json`, `host/src/service/record.rs`, `extension/run-card.ts`
+and the built run-card/Tasks tests. Keep the label text-only and omit it for
+legacy answers without scope.
+
+## 2026-11-02 — Make capture pause stop late automatic starts
+
+Change: check `capture_enabled` under the same native eligibility lock as
+`auto_summary.enabled` (`brwr-q0i4`). Why: the `brwr-sm7` review found that a
+pause during page extraction is not rechecked by `start_auto_summary`; an
+already-reading page can still start a run after capture is paused. Where:
+`host/src/native.rs` and its offline auto-summary regression tests. Explicit
+Summarize & log should stay available while capture is paused.

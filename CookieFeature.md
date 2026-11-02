@@ -1170,3 +1170,40 @@ IPC and real Chromium checks explicitly skip in this sandbox; the ordinary
 differential runner skipped its blocked child pipes and fuzz compilation
 could not find the uncached `libfuzzer-sys` dependency. Those checks remain for
 the external gate/CI. No live service, harness or external API was used.
+
+
+## 2026-11-02 — Keep automatic summaries within current page rules
+
+Brauser now checks the site's current capture rules when an automatic summary
+reaches the native host. If the site was removed or its rules narrowed while
+the browser was reading the page, the host skips the automatic run. Earlier
+rules still preserve the shared page note, and a person can explicitly choose
+Summarize & log as before. The eligibility settings, note key and current-rule
+check share one refreshed configuration lock; it is released before talking
+to the service. An offline regression saves a real note, removes or narrows
+the rules, and verifies both the skip and the preserved note.
+
+## 2026-11-02 — Retry viewer-only summaries across local days
+
+A browser that stays open overnight can now revisit a summary made from only
+the document viewer. The worker remembers already-summarized artifacts for the
+current local day rather than the whole browser session. On the next day's
+activity synchronization, an open tab can become eligible again; the host
+still refuses a new automatic summary when its existing whole or partial
+summary is sufficient. Same-day duplicate tabs remain suppressed. Older
+undated browser caches are cleared once, while dwell progress and retry state
+stay intact. Pure clock-controlled tests cover midnight and a backward date
+change, and a worker test verifies a second host request without restarting
+the browser.
+
+A delayed already-summarized reply that crosses midnight does not mark the
+new day: the worker retains the local day of the actual request timestamp,
+and lets the next activity update ask the host for a current-day decision.
+A failing-first worker regression covers the delayed reply.
+
+Final validation for both changes: 1,365 Rust-reported outcomes (94 explicit
+IPC sandbox skips), all 41 extension test files, both Clippy configurations,
+14 pure-state cases in UTC and Pacific time, and 102 worker cases. Five new
+regressions and one enhanced case cover the changed behavior. The browser
+accessibility command passes its two fixtures and explicitly skips 36 real
+browser checks in this sandbox; external driver/CI evidence is still needed.

@@ -57,7 +57,7 @@ test("twoTabsOneArtifactSubmitOnce", () => {
     noteLoaded(state, tab);
   }
   assert.deepEqual(dueTabs(state, 10, 0), [1, 2]);
-  markSubmitted(state, 1);
+  markSubmitted(state, 1, 10);
   assert.deepEqual(dueTabs(state, 10, 0), [], "the other tab's candidate for it goes too");
   assert.deepEqual(state.submitted, [doc("a").artifact_id]);
   noteArtifact(state, 3, doc("a"), 20);
@@ -68,12 +68,60 @@ test("submittedIsCappedOldestFirst", () => {
   const state = emptyAutoSummaryState();
   for (let n = 0; n < MAX_SUBMITTED + 3; n++) {
     noteArtifact(state, 1, doc(n), n);
-    markSubmitted(state, 1);
+    markSubmitted(state, 1, n);
   }
   assert.equal(MAX_SUBMITTED, 500);
   assert.equal(state.submitted.length, MAX_SUBMITTED);
   assert.equal(state.submitted[0], doc(3).artifact_id);
   assert.equal(state.submitted.at(-1), doc(MAX_SUBMITTED + 2).artifact_id);
+});
+
+test("alreadySummarizedIsEligibleOnTheNextLocalDay", () => {
+  const state = emptyAutoSummaryState();
+  const today = new Date(2026, 10, 2, 23, 59).getTime();
+  const tomorrow = new Date(2026, 10, 3, 0, 1).getTime();
+  noteArtifact(state, 1, doc("a"), today);
+  markSubmitted(state, 1, today);
+  noteArtifact(state, 2, doc("a"), today + SEC);
+  assert.equal(state.candidates["2"], undefined, "same day is still suppressed");
+  noteArtifact(state, 1, doc("a"), tomorrow);
+  assert.equal(state.candidates["1"]?.artifact_id, doc("a").artifact_id);
+  noteLoaded(state, 1);
+  assert.deepEqual(dueTabs(state, tomorrow, 0), [1]);
+});
+
+test("legacyUndatedSubmissionsExpireWithoutClearingOtherState", () => {
+  const state = emptyAutoSummaryState();
+  state.submitted = [doc("a").artifact_id];
+  state.retry_after = 123;
+  state.skipped = { other: 456 };
+  state.revision = "keep";
+  noteArtifact(state, 1, doc("a"), new Date(2026, 10, 2).getTime());
+  assert.equal(state.candidates["1"]?.artifact_id, doc("a").artifact_id);
+  assert.equal(state.retry_after, 123);
+  assert.deepEqual(state.skipped, { other: 456 });
+  assert.equal(state.revision, "keep");
+});
+
+test("submissionAfterMidnightDoesNotRenewYesterdayOrResetAnotherCandidatesDwell", () => {
+  const state = emptyAutoSummaryState();
+  const today = new Date(2026, 10, 2, 23, 59).getTime();
+  const tomorrow = new Date(2026, 10, 3, 0, 1).getTime();
+  noteArtifact(state, 1, doc("a"), today);
+  noteArtifact(state, 2, doc("b"), today);
+  noteArtifact(state, 3, doc("c"), today);
+  noteLoaded(state, 3);
+  noteAttention(state, 3, today);
+  markSubmitted(state, 1, today);
+  markSubmitted(state, 2, tomorrow);
+  noteArtifact(state, 3, doc("c"), tomorrow);
+  assert.deepEqual(dueTabs(state, tomorrow, 60 * SEC), [3], "dwell survives date rotation");
+  assert.deepEqual(state.submitted, [doc("b").artifact_id]);
+  noteArtifact(state, 1, doc("a"), tomorrow);
+  assert.equal(state.candidates["1"]?.artifact_id, doc("a").artifact_id);
+  // A local date can also move back after a timezone or clock change.
+  noteArtifact(state, 2, doc("b"), today);
+  assert.equal(state.candidates["2"]?.artifact_id, doc("b").artifact_id);
 });
 
 test("notSetUpLeavesTheArtifactEligible", () => {
