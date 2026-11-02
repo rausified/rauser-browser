@@ -88,6 +88,12 @@ export function describeRule(rule: unknown): string {
   return text;
 }
 
+/** The review's line when no chosen rule records the tab it was opened on.
+ * Capture Site is often opened from a list page, so this warns rather than
+ * blocking Save. */
+const NOT_THIS_PAGE = "This page: will not be captured";
+const NOT_THIS_PAGE_HINT = "If you want pages like this one remembered, these rules will not record them.";
+
 function child<K extends keyof HTMLElementTagNameMap>(
   parent: HTMLElement, tag: K, text = "", className = "",
 ): HTMLElementTagNameMap[K] {
@@ -721,7 +727,8 @@ export class CaptureSitePanel {
       const scoped = selection.scope.some((choice) => choice !== null && choice !== "unscoped");
       if (scoped && tenants) child(this.preview, "p", `Records pages only for: ${tenants.join(", ")}.`);
       child(this.preview, "p", `Matches ${visited} of ${visitedTotal} visited patterns and ${links} of ${linksTotal} link patterns.`);
-      child(this.preview, "p", `This page: ${plan.current.result.match ? "will be captured" : "will not be captured"} — ${plan.current.url}`);
+      if (plan.current.result.match) child(this.preview, "p", `This page: will be captured — ${plan.current.url}`);
+      else child(this.preview, "p", `${NOT_THIS_PAGE} — ${plan.current.url}. ${NOT_THIS_PAGE_HINT}`, "warning");
       const examples = child(this.preview, "ul", "", "plain-list");
       for (const example of plan.examples) {
         child(examples, "li", `Illustrative example (${example.result.match ? "captured" : "skipped"}): ${example.url}`);
@@ -938,7 +945,9 @@ export class CaptureSitePanel {
         this.preview.append(orgs);
       }
       const current = document.createElement("p");
-      current.textContent = `This page: ${plan.current.result.match ? "will be captured" : "will not be captured"} — ${plan.current.url}`;
+      current.textContent = plan.current.result.match ? `This page: will be captured — ${plan.current.url}`
+        : `${NOT_THIS_PAGE} — ${plan.current.url}. ${NOT_THIS_PAGE_HINT}`;
+      if (!plan.current.result.match) current.className = "warning";
       this.preview.append(current);
       const examples = document.createElement("ul");
       examples.className = "plain-list";

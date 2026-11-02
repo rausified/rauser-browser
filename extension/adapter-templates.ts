@@ -1064,7 +1064,8 @@ function canonical(ctype: CType, value: string, fold: boolean): string | null {
     case "hex":
       return allChars(text, isHexDigit) && inRange(text.length) ? asciiLower(text) : null;
     case "token":
-      return allChars(text, isTokenChar) && inRange(text.length) ? applyCase(text, ctype.caseMod) : null;
+      // Up to two trailing "=" are base64 padding (Miro board IDs).
+      return isPaddedToken(text) && inRange(text.length) ? applyCase(text, ctype.caseMod) : null;
     case "name":
       if (text === "." || text === ".." || !allChars(text, isNameChar) || !inRange(text.length)) return null;
       return applyCase(text, ctype.caseMod);
@@ -1343,6 +1344,12 @@ function inTitleAlphabet(type: TypeName, char: string | undefined): boolean {
 }
 
 // ---- Characters -----------------------------------------------------------
+
+/** Token characters, then at most two "=" of base64 padding (§7.1). */
+function isPaddedToken(text: string): boolean {
+  const body = text.endsWith("==") ? text.slice(0, -2) : text.endsWith("=") ? text.slice(0, -1) : text;
+  return body.length > 0 && allChars(body, isTokenChar);
+}
 
 /** Strict percent-decoding as UTF-8, or null (§5.1 step 4). */
 function percentDecode(text: string): string | null {

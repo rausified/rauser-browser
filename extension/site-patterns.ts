@@ -33,7 +33,8 @@ export function inspectSitePatterns(expectedUrl: string, readLinks = false): Sit
       if (value.length === length && /^[0-9a-f]+$/i.test(value)) return `{hex${length}}`;
     }
     if (/^.+-[0-9a-f]{32}$/i.test(value)) return "{tailhex32}";
-    if (/\d/.test(value) && /^[A-Za-z0-9_-]+$/.test(value)) return "{id}";
+    // Up to two trailing "=" are base64 padding, as on Miro boards (token, adapter-templates.md §7.1).
+    if (/\d/.test(value) && /^[A-Za-z0-9_-]+={0,2}$/.test(value)) return "{id}";
     return "{slug}";
   };
   const parse = (raw: string): URL | null => {
