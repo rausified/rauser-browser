@@ -103,6 +103,14 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
 <!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->
+- [ ] `brwr-r62` **Re-learn review: include other-origin identities when detecting key collisions.**
+  Codex P2 from PR #203 (`host/src/relearn.rs:288`): HTTP/HTTPS origins sharing a host can
+  collide on artifact ID, but the plan drops other-origin evidence, so an approvable
+  plan can hide a merge. Fix before `brwr-dbp` relies on approvals.
+- [ ] `brwr-eo7` **Re-learn review: refuse damaged owned log markers in the strict scan.**
+  Codex P2 from PR #203 (`host/src/index.rs:1524`): the strict scan silently drops torn
+  log markers, so an incomplete plan can be approved. Refuse damaged owned markers;
+  fix before `brwr-dbp` relies on approvals.
 - [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.**
   Next prerequisite of `brwr-6x2`, after the completed decision journal:
   revalidate the review at apply, integrate crash-safe config/content changes,
