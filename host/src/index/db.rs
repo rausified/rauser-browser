@@ -42,6 +42,10 @@ const JOURNAL_SIZE_LIMIT: i64 = 8 * 1024 * 1024;
 /// Sidecars removed, in this order, before a legacy main file.
 const SIDECARS: [&str; 3] = ["-wal", "-shm", "-journal"];
 
+/// A test's hook into [`open_with`].
+#[cfg(test)]
+type OpenHook = Option<Box<dyn FnOnce(&Path)>>;
+
 #[cfg(test)]
 thread_local! {
     /// Busy errors in this thread that outlasted every wait and retry and
@@ -49,6 +53,9 @@ thread_local! {
     pub(crate) static BUSY_SURFACED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static BUSY_TIMEOUT_OVERRIDE: std::cell::Cell<Option<Duration>> =
         const { std::cell::Cell::new(None) };
+    /// Run once, just before this thread's next SQLite open of `index.db`.
+    pub(crate) static BEFORE_SQLITE_OPEN: std::cell::RefCell<OpenHook> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// [`BUSY_TIMEOUT`], or a test's shorter one for this thread's connections.
@@ -273,13 +280,45 @@ fn open_with(
     mode: Mode,
     remove: &mut dyn FnMut(&Path) -> io::Result<()>,
 ) -> Result<Option<Connection>> {
+    // A file that vanishes between its detection and the SQLite open is
+    // decided again, so a missing one is only ever created under the lock.
+    let mut vanished = 0;
+    loop {
+        match open_once(cache_dir, mode, remove)? {
+            Opened::Vanished if vanished < 3 => vanished += 1,
+            Opened::Vanished => {
+                return Err(DbError::Unavailable(format!(
+                    "{} keeps disappearing while it is opened",
+                    db_path(cache_dir).display()
+                ))
+                .into());
+            }
+            Opened::Missing => return Ok(None),
+            Opened::Connection(conn) => return Ok(Some(conn)),
+        }
+    }
+}
+
+enum Opened {
+    Connection(Connection),
+    /// `IfExists`: no database.
+    Missing,
+    /// `ReadWrite`: the file was gone when SQLite came to open it.
+    Vanished,
+}
+
+fn open_once(
+    cache_dir: &Path,
+    mode: Mode,
+    remove: &mut dyn FnMut(&Path) -> io::Result<()>,
+) -> Result<Opened> {
     let path = db_path(cache_dir);
     // Held from deciding to create or replace the file until it is in WAL
     // with its schema, so another host never sees it half made.
     let mut replacing: Option<fs::File> = None;
     let state = match mode {
         Mode::IfExists => match detect_legacy(&path).map_err(|error| unavailable(&path, error))? {
-            FileState::Missing | FileState::Empty => return Ok(None),
+            FileState::Missing | FileState::Empty => return Ok(Opened::Missing),
             FileState::Legacy => return Err(DbError::Legacy.into()),
             state => state,
         },
@@ -347,12 +386,27 @@ fn open_with(
 
     // Not SQLITE_OPEN_NOFOLLOW: it refuses a symlink anywhere in the path
     // (macOS's /var, a relocated home). `detect_legacy` refuses a symlink at
-    // `index.db` itself.
-    let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    if mode == Mode::ReadWrite {
-        flags |= OpenFlags::SQLITE_OPEN_CREATE;
+    // `index.db` itself. Never SQLITE_OPEN_CREATE: SQLite would create a
+    // file that vanished since its detection (a concurrent `discard`, the
+    // user clearing the cache) at 0644 and outside the lock; the file exists
+    // here, pre-created owner-only under the lock when it was missing.
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    #[cfg(test)]
+    if let Some(hook) = BEFORE_SQLITE_OPEN.with(|hook| hook.borrow_mut().take()) {
+        hook(&path);
     }
-    let mut conn = Connection::open_with_flags(&path, flags).map_err(sqlite)?;
+    let mut conn = match Connection::open_with_flags(&path, flags) {
+        Ok(conn) => conn,
+        Err(error) => {
+            if detect_legacy(&path).is_ok_and(|state| state == FileState::Missing) {
+                return Ok(match mode {
+                    Mode::IfExists => Opened::Missing,
+                    Mode::ReadWrite => Opened::Vanished,
+                });
+            }
+            return Err(sqlite(error));
+        }
+    };
     configure(&conn).map_err(sqlite)?;
     match mode {
         Mode::ReadWrite => ensure_schema(&mut conn)?,
@@ -363,7 +417,7 @@ fn open_with(
     }
     set_journal_mode(&conn)?;
     drop(replacing);
-    Ok(Some(conn))
+    Ok(Opened::Connection(conn))
 }
 
 /// An empty format 9 store in memory, for a read over a history that has
@@ -384,6 +438,53 @@ fn sqlite(error: rusqlite::Error) -> anyhow::Error {
     map_busy(error.into())
 }
 
+/// Windows refuses to open, create or delete a name while another handle
+/// holds it without delete sharing (SQLite's own) or after its delete while
+/// some handle is still open (delete pending, reported as access denied).
+/// Between hosts opening one cache at once these clear within moments: a
+/// header read closes, a deleted legacy file's last handle goes.
+fn transient(error: &io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        const ERROR_ACCESS_DENIED: i32 = 5;
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        const ERROR_LOCK_VIOLATION: i32 = 33;
+        const ERROR_DELETE_PENDING: i32 = 303;
+        matches!(
+            error.raw_os_error(),
+            Some(
+                ERROR_ACCESS_DENIED
+                    | ERROR_SHARING_VIOLATION
+                    | ERROR_LOCK_VIOLATION
+                    | ERROR_DELETE_PENDING
+            )
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = error;
+        false
+    }
+}
+
+/// Runs `op` again while it fails with an error `transient` accepts, within
+/// the busy timeout; the error that outlasts it (a real permission problem)
+/// is returned.
+fn retry_io<T>(
+    transient: fn(&io::Error) -> bool,
+    mut op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let started = std::time::Instant::now();
+    loop {
+        match op() {
+            Err(error) if transient(&error) && started.elapsed() < busy_timeout() => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Unix: owner-only before SQLite first opens it (SQLite gives its `-wal`
 /// and `-shm` the main file's mode). Another host's pre-create is kept.
 fn precreate(path: &Path) -> io::Result<()> {
@@ -394,7 +495,7 @@ fn precreate(path: &Path) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    match options.open(path) {
+    match retry_io(transient, || options.open(path)) {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
         Err(error) => Err(error),
@@ -499,7 +600,12 @@ fn ensure_schema(conn: &mut Connection) -> Result<()> {
 
 /// Classifies the file at `path` from its first 100 bytes, with no SQLite
 /// connection open (so stale WAL frames beside it are never replayed).
+/// Windows: a sharing violation or a delete pending is waited out.
 pub(crate) fn detect_legacy(path: &Path) -> io::Result<FileState> {
+    retry_io(transient, || detect_once(path))
+}
+
+fn detect_once(path: &Path) -> io::Result<FileState> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(FileState::Missing),
@@ -552,7 +658,7 @@ pub(crate) fn clear_legacy(
 ) -> Result<Cleared> {
     for suffix in SIDECARS {
         let target = sidecar(path, suffix);
-        match remove(&target) {
+        match retry_io(transient, || remove(&target)) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(unavailable(&target, error)),
@@ -561,6 +667,11 @@ pub(crate) fn clear_legacy(
     match remove(path) {
         Ok(()) => Ok(Cleared::Removed),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Cleared::Removed),
+        // Windows: already deleted by someone else and pending until its
+        // last handle closes; waited out by the detection.
+        Err(_) if detect_legacy(path).is_ok_and(|state| state == FileState::Missing) => {
+            Ok(Cleared::Removed)
+        }
         Err(error) => {
             tracing::warn!(%error, "removing a legacy index.db failed; dropping its tables in place");
             drop_in_place(path)?;
@@ -903,6 +1014,123 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
         drop(conn);
+    }
+
+    /// A current store deleted between its detection and the SQLite open
+    /// (a concurrent `discard`, or the user clearing the cache) is created
+    /// again owner-only through the locked branch, never by SQLite at 0644.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_that_vanishes_before_its_open_is_recreated_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        drop(open(dir.path(), Mode::ReadWrite).unwrap().unwrap());
+        assert_eq!(
+            detect_legacy(&db_path(dir.path())).unwrap(),
+            FileState::Ours
+        );
+        let cache = dir.path().to_path_buf();
+        BEFORE_SQLITE_OPEN.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |_: &Path| discard(&cache).unwrap()));
+        });
+        let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        assert!(BEFORE_SQLITE_OPEN.with(|hook| hook.borrow().is_none()));
+        assert_eq!(pragma_i64(&conn, "user_version"), 9);
+        let mode = fs::metadata(db_path(dir.path()))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// A store that vanishes before an `IfExists` open reads as no store.
+    #[test]
+    fn a_store_that_vanishes_before_an_if_exists_open_is_none() {
+        let dir = TempDir::new().unwrap();
+        drop(open(dir.path(), Mode::ReadWrite).unwrap().unwrap());
+        let cache = dir.path().to_path_buf();
+        BEFORE_SQLITE_OPEN.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |_: &Path| discard(&cache).unwrap()));
+        });
+        assert!(open(dir.path(), Mode::IfExists).unwrap().is_none());
+        assert!(!db_path(dir.path()).exists());
+    }
+
+    /// A transient refusal is retried until it clears; one that outlasts the
+    /// busy timeout, or any other error, is returned.
+    #[test]
+    fn transient_io_errors_are_retried_within_the_busy_timeout() {
+        let _timeout = BusyTimeout::set(Duration::from_millis(200));
+        let interrupted = |error: &io::Error| error.kind() == io::ErrorKind::Interrupted;
+        let mut calls = 0;
+        let value = retry_io(interrupted, || {
+            calls += 1;
+            if calls < 4 {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            } else {
+                Ok(calls)
+            }
+        })
+        .unwrap();
+        assert_eq!(value, 4);
+
+        let started = std::time::Instant::now();
+        let error = retry_io(interrupted, || -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::Interrupted))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert!(started.elapsed() >= Duration::from_millis(200));
+
+        let mut calls = 0;
+        let error = retry_io(interrupted, || -> io::Result<()> {
+            calls += 1;
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        })
+        .unwrap_err();
+        assert_eq!((error.kind(), calls), (io::ErrorKind::NotFound, 1));
+    }
+
+    /// Windows: the refusals another handle causes are transient, a missing
+    /// file is not.
+    #[cfg(windows)]
+    #[test]
+    fn windows_sharing_and_delete_pending_refusals_are_transient() {
+        for code in [5, 32, 33, 303] {
+            assert!(transient(&io::Error::from_raw_os_error(code)), "{code}");
+        }
+        assert!(!transient(&io::Error::from_raw_os_error(2)));
+        assert!(!transient(&io::Error::from(io::ErrorKind::NotFound)));
+    }
+
+    /// Windows: a name another handle still holds after its delete (delete
+    /// pending) refuses every open and create with access denied until that
+    /// handle closes, so detection and the pre-create wait it out.
+    #[cfg(windows)]
+    #[test]
+    fn a_delete_pending_index_db_is_waited_out() {
+        let dir = TempDir::new().unwrap();
+        let path = db_path(dir.path());
+        for step in ["detect", "precreate"] {
+            fs::write(&path, b"legacy bytes").unwrap();
+            // std shares read, write and delete, so the delete succeeds and
+            // leaves the name pending until this handle closes.
+            let holder = fs::File::open(&path).unwrap();
+            fs::remove_file(&path).unwrap();
+            let release = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(150));
+                drop(holder);
+            });
+            match step {
+                "detect" => assert_eq!(detect_legacy(&path).unwrap(), FileState::Missing),
+                _ => {
+                    precreate(&path).unwrap();
+                    assert_eq!(detect_legacy(&path).unwrap(), FileState::Empty);
+                    fs::remove_file(&path).unwrap();
+                }
+            }
+            release.join().unwrap();
+        }
     }
 
     #[cfg(unix)]
