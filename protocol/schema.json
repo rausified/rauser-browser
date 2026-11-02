@@ -2052,6 +2052,7 @@
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "title": { "type": "string", "maxLength": 2048 },
         "content": { "type": "string", "maxLength": 1048576 },
+        "capture_truncated": { "description": "Optional; missing or false means no reported cut. True when the extractor capped page text or highlighted selection. The service persists this provenance and discloses it in page.md and the prompt.", "type": "boolean" },
         "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
         "record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
@@ -2342,6 +2343,7 @@
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "title": { "type": "string", "maxLength": 2048 },
         "content": { "type": "string", "maxLength": 1048576 },
+        "capture_truncated": { "description": "Optional; missing or false means no reported cut. True when the extractor capped page text or highlighted selection. The service persists this provenance and discloses it in page.md and the prompt.", "type": "boolean" },
         "requested_at": { "description": "When the artifact became due, with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
       }
     },
@@ -2374,6 +2376,7 @@
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "title": { "type": "string", "maxLength": 2048 },
         "content": { "type": "string", "maxLength": 1048576 },
+        "capture_truncated": { "description": "Optional; missing or false means no reported cut. True when the extractor capped page text or highlighted selection. The service persists this provenance and discloses it in page.md and the prompt.", "type": "boolean" },
         "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
         "instruction": { "description": "The user's typed instruction, in characters. The host also refuses one that is blank after trimming or holds a control character other than newline and tab.", "type": "string", "minLength": 1, "maxLength": 4096 },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },

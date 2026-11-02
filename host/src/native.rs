@@ -962,6 +962,7 @@ fn start_auto_summary(
         url: value.url,
         title: value.title,
         content: value.content,
+        capture_truncated: value.capture_truncated,
         selection: None,
         harness: None,
         record_key: Some(key),
@@ -1043,6 +1044,7 @@ fn start_task(
         request_id: value.request_id,
         url: value.url,
         title: value.title,
+        capture_truncated: value.capture_truncated,
         content: value.content,
         selection: value.selection,
         harness: value.harness,
@@ -9308,6 +9310,7 @@ title = "{title} - Jira"
                 request_id: "run-1".into(),
                 url: url.into(),
                 title: "A page".into(),
+                capture_truncated: None,
                 content: "Some text".into(),
                 selection: None,
                 harness: None,
@@ -9599,10 +9602,14 @@ title = "{title} - Jira"
             let dir = fake::short_dir();
             let socket = fake::socket_in(&dir);
             let service = echoing_service(&socket);
+            let Request::StartRun(mut request) = start_run(url, None, &now()) else {
+                unreachable!();
+            };
+            request.capture_truncated = Some(true);
             let response = call(
                 &mut config,
                 &link(socket, never),
-                start_run(url, None, &now()),
+                Request::StartRun(request),
             );
             match response {
                 Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
@@ -9615,6 +9622,7 @@ title = "{title} - Jira"
                     assert_eq!(forwarded.record_key.as_ref(), Some(&expected));
                     assert_eq!(forwarded.url, url);
                     assert_eq!(forwarded.content, "Some text");
+                    assert_eq!(forwarded.capture_truncated, Some(true));
                 }
                 other => panic!("expected start_run, got {other:?}"),
             }
@@ -9879,6 +9887,7 @@ title = "{title} - Jira"
                 request_id: "task-1".into(),
                 url: url.into(),
                 title: "A page".into(),
+                capture_truncated: None,
                 content: "Some text".into(),
                 selection: Some("a selection".into()),
                 instruction: instruction.into(),
@@ -9906,10 +9915,12 @@ title = "{title} - Jira"
             let socket = fake::socket_in(&dir);
             let service = echoing_service(&socket);
             let requested_at = now();
+            let mut request = start_task_request(url, TASK_INSTRUCTION, &requested_at);
+            request.capture_truncated = Some(true);
             let response = call(
                 &mut config,
                 &link(socket, never),
-                start_task(url, TASK_INSTRUCTION, &requested_at),
+                Request::StartTask(request),
             );
             match response {
                 Response::RunStarted(started) => {
@@ -9928,6 +9939,7 @@ title = "{title} - Jira"
                     request_id: "task-1".into(),
                     url: url.into(),
                     title: "A page".into(),
+                    capture_truncated: Some(true),
                     content: "Some text".into(),
                     selection: Some("a selection".into()),
                     harness: Some(brauser_protocol::HarnessId::Claude),
@@ -10077,6 +10089,7 @@ title = "{title} - Jira"
                 request_id: value.request_id.clone(),
                 url: value.url.clone(),
                 title: value.title.clone(),
+                capture_truncated: None,
                 content: String::new(),
                 selection: value.selection.clone(),
                 harness: value.harness,
@@ -10321,6 +10334,7 @@ id = "gdoc:{host}/{id}"
                 url: url.into(),
                 title: "A doc".into(),
                 content: "Some text".into(),
+                capture_truncated: None,
                 requested_at: now(),
             })
         }
@@ -10485,7 +10499,15 @@ id = "gdoc:{host}/{id}"
             let dir = fake::short_dir();
             let socket = fake::socket_in(&dir);
             let service = echoing_service(&socket);
-            let response = call(&mut config, &link(socket, never), start_auto(GDOC_URL, "a"));
+            let Request::StartAutoSummary(mut request) = start_auto(GDOC_URL, "a") else {
+                unreachable!();
+            };
+            request.capture_truncated = Some(true);
+            let response = call(
+                &mut config,
+                &link(socket, never),
+                Request::StartAutoSummary(request),
+            );
             match response {
                 Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
                 other => panic!("expected run_started, got {other:?}"),
@@ -10496,6 +10518,7 @@ id = "gdoc:{host}/{id}"
                 panic!("{requests:?}")
             };
             assert_eq!(forwarded.kind, Some(RunKind::Summary));
+            assert_eq!(forwarded.capture_truncated, Some(true));
             assert_eq!(forwarded.record_key, Some(expected));
             assert_eq!(forwarded.harness, None);
             assert_eq!(forwarded.selection, None);

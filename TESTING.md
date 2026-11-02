@@ -264,6 +264,19 @@ The Tasks page keyboard-focus regression triggers
 the existing hide/show refresh handler and waits for a rendered status pill
 or new row, so both focus assertions avoid racing the real polling interval.
 
+## Capped browser captures
+
+The existing extraction, task and built-panel summarize tests cover the
+extractor's combined text/selection truncation flag through manual summaries,
+automatic summaries and tasks. Frame-choice fixtures distinguish a capped
+chosen frame from discarded frame text and a borrowed highlight. Protocol
+wire tests pin missing/true/false compatibility. Rust page-file tests cover
+ordinary, Office and Miro pages with and without Incoming navigation; supervisor
+fixtures verify both initial prompts and queued recovery use stored provenance,
+including a page that forges a completeness notice. The agent boundary is a
+recording fake: these tests prove the context delivered to an agent, not that a
+real agent fetched a full artifact or selected the right reading scope.
+
 ## Panel status and artifact refresh coverage
 
 The built-panel tests assert adapter-based capture wording with zero and some

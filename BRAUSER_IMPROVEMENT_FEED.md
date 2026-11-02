@@ -219,6 +219,12 @@ would help a person judge the overview and understand a later retry. Where:
 `protocol/schema.json`, `host/src/service/record.rs`, `extension/run-card.ts`
 and the built run-card/Tasks tests. Keep the label text-only and omit it for
 legacy answers without scope.
+- +1 2026-11-02: brwr-sm5 now tells agents when browser capture was capped,
+  including automatic summaries. Carry the validated resulting scope into saved
+  summary choices in Recent and This page too (`brwr-30xv`), where people decide
+  whether to reopen an artifact without opening Tasks detail. Keep this distinct
+  from the capture flag: a capped page can still yield a whole-artifact summary
+  after the agent retrieves it. The run-card projection is pending held PR #249.
 
 ## 2026-11-02 — Make capture pause stop late automatic starts
 

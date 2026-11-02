@@ -63,6 +63,12 @@ function taskDeps({ page = framePage({ content: "Body text" }), answer } = {}) {
 
 const byteLength = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
 
+test("startTask carries a capped capture to the host", async () => {
+  const { deps, requests } = taskDeps({ page: framePage({ content: "Excerpt", truncated: true }) });
+  await startTask(TAB, "Read this", deps);
+  assert.equal(requests[0].request.capture_truncated, true);
+});
+
 test("startTask sends start_task with the page and instruction and no kind or record key", async () => {
   const { deps, requests } = taskDeps({ page: framePage({ content: "Body text", selection: "picked" }) });
   const run = await startTask(TAB, "Draft a reply to this thread", deps);

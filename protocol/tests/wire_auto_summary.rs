@@ -23,6 +23,26 @@ fn start_auto_summary_round_trips() {
         panic!("{parsed:?}");
     };
     assert_eq!(value.url, "https://a.example/x");
+    assert_eq!(value.capture_truncated, None);
+}
+
+#[test]
+fn automatic_capture_truncation_is_an_optional_boolean() {
+    let mut value = start_auto_summary();
+    for flag in [true, false] {
+        value["capture_truncated"] = json!(flag);
+        let Request::StartAutoSummary(request) =
+            assert_request_round_trips("StartAutoSummaryRequest", &value)
+        else {
+            panic!("expected start_auto_summary");
+        };
+        assert_eq!(request.capture_truncated, Some(flag));
+    }
+    for invalid in [json!("true"), json!(1), json!({})] {
+        value["capture_truncated"] = invalid;
+        assert!(!schema_subset::valid("StartAutoSummaryRequest", &value));
+        assert!(serde_json::from_value::<Request>(value.clone()).is_err());
+    }
 }
 
 #[test]

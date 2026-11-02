@@ -119,6 +119,17 @@ revision-checked `update_config`; global pauses stay set. No page URL, title,
 content, folder path or save token is part of this pair. Historical title/ref
 extraction is not available. The host retains all existing identity guards.
 
+Version 8 (additive): `start_run`, `start_task` and `start_auto_summary`
+accept optional boolean `capture_truncated`. The extension sends it only when
+true: the extractor capped page text or highlighted selection. Missing/false
+means no reported cut. The native host forwards it into the summary/task run;
+the service stores it and uses it for a page-file disclosure and fixed prompt
+notice, including queued recovery. This grants no retrieval authority. Host
+and extension deploy together: an older host rejects the field. Roll back the
+service only with no queued/running run; older services reject status records
+containing true and cannot recover their process groups. Those records remain
+unreadable to the older service until pruned. See DESIGN.md §4.5.
+
 Version 8: incoming navigation. `ArtifactView.incoming_trails` is required
 and holds up to five `IncomingTrailView` entries: `source` is an
 `ArtifactRefView`, `transition` is a known Chrome transition other than
