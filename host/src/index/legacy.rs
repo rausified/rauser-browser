@@ -333,18 +333,20 @@ impl ArtifactIndex {
 
     /// Advance a pending migration by one bounded rebuild pass (all of them
     /// with `all_passes`), then clean up once the rebuild has committed.
-    /// While passes remain, history is unavailable.
-    pub(super) fn migrate_legacy(&self, all_passes: bool) -> Result<()> {
+    /// While passes remain, history is unavailable. Returns whether this
+    /// call saw a fallback rebuild (`Finish::Missing`) finish, which kept
+    /// every existing file unmarked.
+    pub(super) fn migrate_legacy(&self, all_passes: bool) -> Result<bool> {
         let step = self.legacy_step()?;
         self.advance_legacy(step, all_passes)
     }
 
     /// Advance the migration from `step`. Its rebuild only resumes: when
     /// another host has finished it since `step` was read, no new one
-    /// begins.
-    pub(super) fn advance_legacy(&self, step: Legacy, all_passes: bool) -> Result<()> {
+    /// begins. Returns whether a fallback rebuild finished.
+    pub(super) fn advance_legacy(&self, step: Legacy, all_passes: bool) -> Result<bool> {
         match step {
-            Legacy::None => return Ok(()),
+            Legacy::None => return Ok(false),
             Legacy::Rebuild(finish) => {
                 while !self.resume_rebuild_pass(finish)? {
                     if !all_passes {
@@ -354,7 +356,8 @@ impl ArtifactIndex {
             }
             Legacy::Cleanup => {}
         }
-        self.finish_legacy()
+        self.finish_legacy()?;
+        Ok(step == Legacy::Rebuild(rebuild::Finish::Missing))
     }
 
     /// Migration step 7: remove the legacy JSON files and record the

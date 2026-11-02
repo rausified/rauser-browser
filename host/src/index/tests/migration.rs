@@ -478,3 +478,39 @@ fn an_m1_legacy_visit_counts_one_open_with_a_dated_timeline_line() {
         "ok\n1\n"
     );
 }
+
+/// The delivery that triggers a fallback migration is a real change to an
+/// artifact whose file already exists: the `Finish::Missing` finalize keeps
+/// that file, and the caller's copy of the event then ingests as the body
+/// the rebuild just read from the log. The file must still be marked, or
+/// it never shows this visit until some later event for the artifact.
+#[test]
+fn the_visit_that_triggers_a_fallback_migration_marks_its_existing_file() {
+    let v8 = V8::load();
+    fs::write(v8.state_path(), b"{\"version\": 7}").unwrap();
+    let before = fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap();
+    let index = v8.index();
+    let state = TempDir::new().unwrap();
+    let capture =
+        crate::capture::CaptureStore::open_in(&index.storage, None, state.path()).unwrap();
+    let visit = activity(
+        "00000000-0000-4000-8000-000000000a01",
+        "A1",
+        "Alpha item",
+        &super::store::at_minute(0),
+    );
+    super::store::deliver_logged(
+        &capture,
+        &index,
+        &["https://example.com".to_owned()],
+        &[&visit],
+    );
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    assert!(
+        dirty(&v8).contains(&vec![text(V8_CLEAN)]),
+        "{:?}",
+        dirty(&v8)
+    );
+    index.regenerate_dirty().unwrap();
+    assert_ne!(fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap(), before);
+}

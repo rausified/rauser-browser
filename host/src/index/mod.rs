@@ -515,7 +515,9 @@ impl ArtifactIndex {
     /// - A catch-up that reaches the per-pass read bound commits what it
     ///   read and reports unavailable history; the next call resumes.
     fn catch_up_store(&self, events: &[CachedEvent]) -> Result<usize> {
-        self.migrate_legacy(false)?;
+        // A fallback finalize marks only missing files, so the caller's
+        // events it just read from the log still mark their groups below.
+        let fallback_finished = self.migrate_legacy(false)?;
         if events.is_empty() && self.nothing_to_commit()? {
             return Ok(0);
         }
@@ -565,8 +567,14 @@ impl ArtifactIndex {
                         }
                         // A body already indexed (by an earlier delivery, or
                         // by this catch-up from its own log append) changes
-                        // no row, so it neither marks nor bumps a generation.
-                        if matches!(outcome, store::Ingest::Inserted | store::Ingest::Moved) {
+                        // no row, so it neither marks nor bumps a generation,
+                        // unless a fallback migration finished in this call:
+                        // its finalize indexed the body without marking an
+                        // existing file, and this delivery is a real change.
+                        let fresh =
+                            matches!(outcome, store::Ingest::Inserted | store::Ingest::Moved)
+                                || (fallback_finished && outcome == store::Ingest::Same);
+                        if fresh {
                             dirty.extend(groups.iter().cloned());
                         }
                         changes.record(outcome, &event_identity(event).0, groups);

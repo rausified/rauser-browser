@@ -357,7 +357,7 @@ fn every_mark_takes_a_newer_generation() {
 
 /// Deliver `events` as the native host does: append them to the daily log
 /// through `CaptureStore`, then index the persisted ones.
-fn deliver_logged(
+pub(super) fn deliver_logged(
     capture: &crate::capture::CaptureStore,
     index: &ArtifactIndex,
     origins: &[String],
@@ -381,7 +381,7 @@ fn deliver_logged(
         .unwrap();
 }
 
-fn at_minute(minute: i64) -> String {
+pub(super) fn at_minute(minute: i64) -> String {
     (crate::capture::fixtures::event_time() + time::Duration::minutes(minute))
         .format(&Rfc3339)
         .unwrap()
