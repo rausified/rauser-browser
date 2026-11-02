@@ -1764,6 +1764,47 @@ mod tests {
         assert_eq!(events[0].occurred_at, shown(answered_at()));
     }
 
+    /// The latest past 06:30Z: 23:30 the evening before in UTC-7, when the
+    /// UTC date has already turned over.
+    fn late_evening_mst() -> OffsetDateTime {
+        let now = OffsetDateTime::now_utc();
+        let today = now.replace_time(time::Time::from_hms(6, 30, 0).unwrap());
+        if today > now {
+            today - time::Duration::days(1)
+        } else {
+            today
+        }
+    }
+
+    #[test]
+    fn an_evening_summary_west_of_utc_is_filed_under_the_local_day() {
+        // brwr-hkn8: a summary clicked at 23:30 in UTC-7 is the local day's,
+        // in the daily log's file, its event and the summary file.
+        let world = World::new();
+        let mut run = run(&world, PAGE, HarnessId::Codex);
+        let at = late_evening_mst();
+        let local = at.to_offset(time::UtcOffset::from_hms(-7, 0, 0).unwrap());
+        run.requested_at = local.format(&Rfc3339).unwrap();
+        let finisher = SummaryFinisher::with_clock(world.config_path(), late_evening_mst);
+        finisher.save(&run, &answer()).unwrap();
+
+        let day = local.date().to_string();
+        assert_ne!(day, at.date().to_string(), "the UTC date has turned over");
+        let log = world.log_file();
+        assert_eq!(
+            log.file_name().unwrap().to_string_lossy(),
+            format!("{day}.md")
+        );
+        let events = world.summary_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].occurred_at, format!("{day}T23:30:00-07:00"));
+        let file = fs::read_to_string(world.root.join(world.summary_path(PAGE))).unwrap();
+        assert!(
+            file.contains(&format!("summarized_at: \"{day}T23:30:00-07:00\"")),
+            "{file}"
+        );
+    }
+
     #[test]
     fn summarized_at_uses_the_click_offset() {
         let now = OffsetDateTime::parse("2026-10-26T21:05:00.75Z", &Rfc3339).unwrap();
