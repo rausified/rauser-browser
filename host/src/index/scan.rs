@@ -1,6 +1,182 @@
-//! Daily-log discovery and marker parsing.
+//! Daily-log discovery and marker parsing, and `LogScan`: one bounded,
+//! log-only pass over the daily logs that never reads or writes the cache.
 
 use super::*;
+
+/// The events, positions, gaps and conflicts one pass over the daily logs
+/// finds, with no persistence: `IndexState` without the cache. Relearn uses
+/// it for authoritative evidence that no cache can influence.
+pub(super) struct LogScan {
+    /// One body per event ID: the copy at the earliest log position.
+    pub(super) events: BTreeMap<String, CachedEvent>,
+    /// Each event's earliest durable position (log path, zero-based line).
+    pub(super) positions: BTreeMap<String, (PathBuf, u64)>,
+    /// Overflow notices, each at its earliest log position.
+    pub(super) gaps: BTreeMap<String, CachedGap>,
+    /// Rejected bodies for an event ID, at most 8, each at its earliest
+    /// position.
+    pub(super) conflicts: BTreeMap<String, Vec<Conflict>>,
+    /// Every log was read; otherwise the per-pass read bound stopped the scan
+    /// before the next log in sorted order.
+    pub(super) complete: bool,
+}
+
+impl LogScan {
+    /// Read the selected home folder's logs in sorted order, within the
+    /// per-file and per-pass bounds. `strict` refuses symlinked or
+    /// non-regular log history instead of skipping it, so a review can never
+    /// present an omission as a complete inventory.
+    pub(super) fn read(storage: &StorageConfig, root_identity: &str, strict: bool) -> Result<Self> {
+        let mut scan = Self {
+            events: BTreeMap::new(),
+            positions: BTreeMap::new(),
+            gaps: BTreeMap::new(),
+            conflicts: BTreeMap::new(),
+            complete: true,
+        };
+        let (root, _) = open_selected_root(Path::new(&storage.root), Some(root_identity))?;
+        let log_dir = checked_relative_dir(&storage.log_dir)?;
+        if strict
+            && root
+                .symlink_metadata(&log_dir)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            bail!("re-learning review cannot inspect symlinked log history");
+        }
+        let logs = match root.open_dir(&log_dir) {
+            Ok(logs) => logs,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(scan),
+            Err(error) => {
+                return Err(error).context("artifact history is unavailable: opening logs");
+            }
+        };
+        let mut files = Vec::new();
+        collect_markdown(&logs, Path::new(""), 0, &mut files, strict)?;
+        files.sort();
+        let shown = |relative: &Path| log_dir.join(relative).display().to_string();
+        let mut checkpoints = Vec::with_capacity(files.len());
+        for relative in files {
+            let metadata = logs
+                .symlink_metadata(&relative)
+                .with_context(|| format!("checking artifact log file {}", shown(&relative)))?;
+            if !metadata.is_file() {
+                bail!(
+                    "artifact history is unavailable: {} is not a regular file",
+                    shown(&relative)
+                );
+            }
+            checkpoints.push((relative, LogCheckpoint::read(&metadata)?));
+        }
+        let limit = scan_byte_limit();
+        let mut scanned = 0;
+        for (relative, checkpoint) in &checkpoints {
+            if checkpoint.bytes > MAX_LOG_BYTES {
+                bail!(
+                    "artifact history is unavailable: log exceeds its 32 MiB limit: {}",
+                    shown(relative)
+                );
+            }
+            // One log always fits (the per-file bound is below the pass
+            // bound), so a pass always reads at least one log.
+            if scanned > 0 && scanned + checkpoint.bytes > limit {
+                scan.complete = false;
+                break;
+            }
+            scanned += checkpoint.bytes;
+            let mut file = logs
+                .open(relative)
+                .with_context(|| format!("opening artifact log file {}", shown(relative)))?;
+            let mut bytes = Vec::new();
+            Read::by_ref(&mut file)
+                .take(checkpoint.bytes + 1)
+                .read_to_end(&mut bytes)
+                .with_context(|| format!("reading artifact log file {}", shown(relative)))?;
+            if bytes.len() as u64 != checkpoint.bytes
+                || LogCheckpoint::read(&file.metadata()?)? != *checkpoint
+            {
+                bail!(
+                    "artifact history is unavailable: {} changed during catch-up",
+                    shown(relative)
+                );
+            }
+            #[cfg(test)]
+            LOG_BYTES_READ.with(|count| count.set(count.get() + bytes.len() as u64));
+            // Markers are ASCII. A torn multibyte prose line (capture
+            // tolerates one and keeps appending) must not drop the whole day.
+            let text = String::from_utf8_lossy(&bytes);
+            if !text.starts_with(LOG_HEADER) {
+                continue;
+            }
+            for (line, event) in parse_log_lines(&text) {
+                scan.ingest(event, (relative.clone(), line));
+            }
+            for (number, line) in text.lines().enumerate() {
+                if let Some((id, marker)) = parse_overflow_marker(line) {
+                    let position = (relative.clone(), number as u64);
+                    // Retries reuse the marker ID; the earliest copy wins.
+                    let gap = scan.gaps.entry(id).or_insert_with(|| CachedGap {
+                        marker: marker.clone(),
+                        position: position.clone(),
+                    });
+                    if position < gap.position {
+                        *gap = CachedGap { marker, position };
+                    }
+                }
+            }
+        }
+        Ok(scan)
+    }
+
+    /// Add one logged event. A reused ID with a different body keeps the copy
+    /// at the earliest log position and records the other as a conflict; the
+    /// same body seen earlier takes that position.
+    fn ingest(&mut self, event: CachedEvent, position: (PathBuf, u64)) {
+        let (id, _) = event_identity(&event);
+        let Some(previous) = self.events.get(&id) else {
+            self.positions.insert(id.clone(), position);
+            self.events.insert(id, event);
+            return;
+        };
+        if previous == &event {
+            if self
+                .positions
+                .get(&id)
+                .is_none_or(|indexed| &position < indexed)
+            {
+                self.positions.insert(id, position);
+            }
+            return;
+        }
+        let (event, position) = if self
+            .positions
+            .get(&id)
+            .is_some_and(|indexed| &position < indexed)
+        {
+            let rejected_at = self.positions.insert(id.clone(), position);
+            let rejected = self.events.insert(id.clone(), event).unwrap();
+            (rejected, rejected_at)
+        } else {
+            (event, Some(position))
+        };
+        let chosen = &self.events[&id];
+        let seen = self.conflicts.entry(id).or_default();
+        seen.retain(|(body, _)| body != chosen);
+        if let Some((_, earliest)) = seen.iter_mut().find(|(body, _)| body == &event) {
+            if let Some(position) = position
+                && earliest.as_ref().is_none_or(|indexed| &position < indexed)
+            {
+                *earliest = Some(position);
+            }
+        } else if seen.len() < 8 {
+            seen.push((event, position));
+        }
+    }
+
+    /// The relearn revision: a hash of the scanned events, keyed by ID.
+    pub(super) fn revision(&self) -> Result<String> {
+        Ok(sha256_hex(&serde_json::to_vec(&self.events)?))
+    }
+}
 
 pub(super) fn collect_markdown(
     dir: &Dir,

@@ -1551,19 +1551,19 @@ impl ArtifactIndex {
     /// Fresh authoritative evidence for impact review. No cache is trusted,
     /// published or resumed. Oversized/inconsistent history refuses the plan.
     /// Caller holds the config and capture locks, in that order.
+    /// It reads only the logs, never the cache directory.
     pub(crate) fn relearn_evidence(&self) -> Result<(String, Vec<(RecordKey, StoredUrl)>)> {
-        let mut state = self.empty_state();
-        let pass = self.catch_up_logs(&mut state, true, true)?;
+        let scan = LogScan::read(&self.storage, &self.root_identity, true)?;
         anyhow::ensure!(
-            pass.complete,
+            scan.complete,
             "re-learning review exceeds the log scan limit"
         );
         anyhow::ensure!(
-            state.conflicts.is_empty(),
+            scan.conflicts.is_empty(),
             "conflicting recorded event IDs prevent re-learning review"
         );
-        let revision = sha256_hex(&serde_json::to_vec(&state.events)?);
-        let evidence = state
+        let revision = scan.revision()?;
+        let evidence = scan
             .events
             .values()
             .flat_map(|event| {

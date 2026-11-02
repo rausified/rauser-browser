@@ -15,6 +15,7 @@ mod migration;
 mod ordering;
 mod presentation;
 mod regeneration;
+mod scan;
 mod summaries;
 mod views;
 
