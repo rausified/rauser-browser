@@ -117,15 +117,25 @@ export function samePage(runUrl: string, pageUrl: string): boolean {
   return runUrl.split("#")[0] === pageUrl.split("#")[0];
 }
 
-/** The summary runs a newly opened panel shows: every queued or running
- * run, then the newest {@link MAX_RESTORED_FINISHED} finished in the last day
- * that the user has not dismissed. A run without a kind is a summary; a
+/** The summary runs a newly opened panel shows, one per page, that page's
+ * newest run: every page whose newest run is queued or running, then the
+ * {@link MAX_RESTORED_FINISHED} pages whose newest run finished most
+ * recently, in the last day, and was not dismissed. A run without a kind is a summary; a
  * task shows on the Tasks page, and a Capture Site draft run belongs to its
  * review, so neither is ever a card. */
 export function restorable(runs: RunView[], now: number, dismissed: ReadonlySet<string>): RunView[] {
   const ofKind = runs.filter((run) => (run.kind ?? "summary") === "summary");
-  const active = ofKind.filter((run) => !isTerminal(run));
-  const finished = ofKind
+  // A page shows only its newest run (RunCards), so only that run counts:
+  // a dismissed or stale newest run hides its page's older ones too.
+  const newest = new Map<string, RunView>();
+  for (const run of ofKind) {
+    const page = run.url.split("#")[0]!;
+    const known = newest.get(page);
+    if (!known || newerRun(run, known)) newest.set(page, run);
+  }
+  const candidates = [...newest.values()];
+  const active = candidates.filter((run) => !isTerminal(run));
+  const finished = candidates
     .filter((run) => isTerminal(run) && !dismissed.has(run.run_id))
     .map((run) => ({ run, at: run.finished_at === null ? NaN : Date.parse(run.finished_at) }))
     .filter(({ at }) => Number.isFinite(at) && now - at <= RESTORE_FINISHED_WITHIN_MS)
@@ -133,6 +143,19 @@ export function restorable(runs: RunView[], now: number, dismissed: ReadonlySet<
     .slice(0, MAX_RESTORED_FINISHED)
     .map(({ run }) => run);
   return [...active, ...finished];
+}
+
+/** Whether `a` was created after `b`: by `created_at` as a time (an
+ * unparsable one compares as text), then by `run_id` on a tie. */
+export function newerRun(a: RunView, b: RunView): boolean {
+  const at = Date.parse(a.created_at);
+  const bt = Date.parse(b.created_at);
+  if (Number.isFinite(at) && Number.isFinite(bt)) {
+    if (at !== bt) return at > bt;
+  } else if (a.created_at !== b.created_at) {
+    return a.created_at > b.created_at;
+  }
+  return a.run_id > b.run_id;
 }
 
 /** Records, at `at` (ms), that the service may hold a run to restore. */
@@ -390,6 +413,11 @@ class RunCard extends RunWatcher {
     return this.view.url;
   }
 
+  /** The run as last seen. */
+  get run(): RunView {
+    return this.view;
+  }
+
   constructor(
     view: RunView,
     private readonly deps: RunCardDeps,
@@ -549,7 +577,10 @@ function startedText(run: RunView): string | null {
  * toggle stays across re-renders (decision 43). It
  * offers Cancel, Copy report, Copy (a failed task's error), Reuse, the
  * harness's resume, Open page and Dismiss, and never Open summary or Retry
- * save: a task writes nothing. The full instruction and the report come
+ * save: a task writes nothing. A summary run (whose panel card goes once a
+ * newer run of its page starts) shows the page as its headline and its
+ * answer line in place of a report, and offers Open summary instead of Copy
+ * report and Reuse; Retry save stays the panel card's. The full instruction and the report come
  * from get_run views only (list_runs cuts the instruction and leaves the
  * report out, so a list view never replaces either). All agent text is
  * shown with textContent only.
@@ -645,6 +676,25 @@ export class TaskDetail extends RunWatcher {
     return [actionButton("Reuse", () => this.deps.reuse(instruction))];
   }
 
+  /** Whether this is a page summary's run rather than a task's. */
+  private isSummary(): boolean {
+    return (this.view.kind ?? "summary") === "summary";
+  }
+
+  /** Open summary, on a finished summary run that wrote a file (a failed
+   * save can still have written it, as on the panel's card). */
+  private openSummaryButtons(): HTMLButtonElement[] {
+    const run = this.view;
+    if (!this.isSummary() || !isTerminal(run) || run.summary_path === null) return [];
+    return [actionButton("Open summary", () => void this.act(async () => {
+      await this.deps.host.call({
+        type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        // The file this run wrote, whatever record its URL resolves to now.
+        url: run.url, summary_path: run.summary_path,
+      }, "summary_opened");
+    }, "Could not open the summary"))];
+  }
+
   private dismiss(): void {
     const runId = this.view.run_id;
     void rememberDismissed(this.deps.storage, runId).then(() => this.deps.dismissed(runId));
@@ -652,7 +702,8 @@ export class TaskDetail extends RunWatcher {
 
   protected render(): void {
     const run = this.view;
-    this.headline.textContent = this.instructionText();
+    const summary = this.isSummary();
+    this.headline.textContent = summary ? `Summary of ${run.title || run.url}` : this.instructionText();
     const started = startedText(run);
     const elapsed = elapsedText(run, this.deps.now());
     this.metaLine.textContent = [
@@ -661,10 +712,15 @@ export class TaskDetail extends RunWatcher {
     ].filter((part) => part !== "").join(" · ");
     this.problemLine.textContent = this.problem ?? "";
     this.problemLine.hidden = this.problem === null;
-    const changed = this.changesMayStay();
+    const changed = !summary && this.changesMayStay();
     this.noteLine.textContent = changed ? CHANGES_STAY : "";
     this.noteLine.hidden = !changed;
-    const report = this.shownReport();
+    // A summary's "report" is its answer line; a summary run writes only
+    // its own summary file, so the changes note is a task's alone.
+    const report = summary
+      ? run.state === "succeeded" && run.answer ? answerLine(run.answer) : null
+      : this.shownReport();
+    this.reportLabel.textContent = summary ? "Answer" : "Report";
     this.reportText.textContent = report ?? "";
     this.reportText.hidden = report === null;
     this.reportLabel.hidden = report === null;
@@ -677,7 +733,8 @@ export class TaskDetail extends RunWatcher {
     }
 
     const buttons: HTMLButtonElement[] = [
-      ...this.cancelButtons(), ...this.copyReportButtons(), ...this.copyFailureButtons(),
+      ...this.cancelButtons(), ...this.openSummaryButtons(), ...(summary ? [] : this.copyReportButtons()),
+      ...this.copyFailureButtons(),
       ...this.reuseButtons(), ...this.resumeButtons(),
       actionButton("Open page", () => this.deps.openPage(this.view.url)),
     ];
@@ -924,6 +981,13 @@ export class RunCards {
       existing.update(run);
       return;
     }
+    // One card per page, its newest run's: a run just started (`atTop`)
+    // or a newer restored one replaces the page's other card, which is not
+    // dismissed, so the Tasks page still lists it; an older restored run (a
+    // list answered after a run was started) shows none.
+    const samePageCards = [...this.cards.values()].filter((other) => samePage(other.url, run.url));
+    if (!atTop && samePageCards.some((other) => newerRun(other.run, run))) return;
+    for (const older of samePageCards) this.remove(older);
     const card = new RunCard(run, this.deps, (dismissed) => void this.dismiss(dismissed));
     this.place(card);
     const cardElements = new Set<Element>(Array.from(this.cards.values(), (other) => other.element));
@@ -944,10 +1008,14 @@ export class RunCards {
     card.element.hidden = followed !== undefined && (followed === null || !samePage(card.url, followed));
   }
 
-  private async dismiss(card: RunCard): Promise<void> {
+  private remove(card: RunCard): void {
     card.dispose();
     this.cards.delete(card.runId);
     removeChild(this.container, card.element);
+  }
+
+  private async dismiss(card: RunCard): Promise<void> {
+    this.remove(card);
     await rememberDismissed(this.deps.storage, card.runId);
   }
 }

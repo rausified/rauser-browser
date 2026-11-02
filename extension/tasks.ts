@@ -1,5 +1,6 @@
-// The Tasks page (spec 2026-10-28, layout A): every task run the service
-// keeps, listed on the left by day with search and a status filter, and
+// The Tasks page (spec 2026-10-28, layout A): every task and summary run
+// the service keeps (a page's sidebar shows only its newest summary run, so
+// this is where an older one stays reachable), listed on the left by day with search and a status filter, and
 // the chosen task on the right as a live TaskDetail. The page lists runs
 // only when a harness is ready or a run may exist, so opening it never
 // wakes the on-demand service needlessly, and it does not poll while
@@ -18,7 +19,8 @@ import { harnessReady } from "./summarize.js";
 import { SELECT_KEY, parseSelectSignal, sendReuse } from "./task-handoff.js";
 import { TASK_NEEDS_HARNESS_MESSAGE, UNSUPPORTED_REQUEST_TEXT } from "./task.js";
 import {
-  fetchOffPageRun, filterTasks, groupTasks, listAllTasks, listTaskPage, mergeRuns, parseRunHash, type StatusFilter,
+  HISTORY_KINDS, fetchOffPageRun, filterTasks, groupTasks, listAllTasks, listTaskPage, mergeRuns, ofKind,
+  parseRunHash, runKind, type StatusFilter,
 } from "./task-history.js";
 
 initDiag("tasks");
@@ -51,7 +53,7 @@ const empty = element<HTMLParagraphElement>("tasks-empty");
 const session = new ConfigSession(() => undefined);
 const storage = chrome.storage.local;
 
-// Every task run seen, newest first (mergeRuns' order).
+// Every task and summary run seen, newest first (mergeRuns' order).
 let runs: RunView[] = [];
 let dismissed = new Set<string>();
 // The run ids in the order the list shows them, for the arrow keys.
@@ -113,9 +115,16 @@ function showListError(error: unknown): void {
   listErrorShown = true;
 }
 
-/** An older service ignores `kind` and lists summaries too. */
-function tasksOnly(views: readonly RunView[]): RunView[] {
-  return views.filter((run) => run.kind === "task");
+/** The first page of each kind the page lists (active runs and the newest
+ * finished), keeping only that kind's runs from each answer. */
+async function listFirstPages(): Promise<RunView[]> {
+  const pages = await Promise.all(HISTORY_KINDS.map((kind) => listTaskPage(session.host, null, kind)));
+  return pages.flatMap((page, index) => ofKind(page.runs, HISTORY_KINDS[index]!));
+}
+
+/** A row's headline: a task's instruction, or the page a summary is of. */
+function rowText(run: RunView): string {
+  return runKind(run) === "task" ? run.instruction ?? "" : `Summary · ${run.title || run.url}`;
 }
 
 function shownRuns(): RunView[] {
@@ -169,7 +178,7 @@ function setText(node: HTMLElement, text: string): void {
 
 /** A row's text, from the latest view of its run. */
 function fillRow(parts: RowParts, run: RunView): void {
-  setText(parts.instruction, run.instruction ?? "");
+  setText(parts.instruction, rowText(run));
   setPill(parts.pill, run);
   setText(parts.time, startTime(run));
 }
@@ -373,9 +382,9 @@ async function selectFromSignal(runId: string): Promise<void> {
     return;
   }
   try {
-    const page = await listTaskPage(session.host, null);
+    const fresh = await listFirstPages();
     if (closed) return;
-    runs = mergeRuns(runs, tasksOnly(page.runs));
+    runs = mergeRuns(runs, fresh);
     renderList();
   } catch {
     // Select from whatever is already known instead.
@@ -444,9 +453,8 @@ function refresh(): Promise<void> {
 
 async function refreshOnce(): Promise<void> {
   try {
-    const page = await listTaskPage(session.host, null);
+    const fresh = await listFirstPages();
     if (closed) return;
-    const fresh = tasksOnly(page.runs);
     const onPage = new Set(fresh.map((run) => run.run_id));
     const gone = new Set<string>();
     const missing = runs.filter((candidate) => !isTerminal(candidate) && !onPage.has(candidate.run_id));
@@ -502,9 +510,9 @@ async function open(): Promise<void> {
   showStatus("Loading tasks…");
   let complete: boolean;
   try {
-    const all = await listAllTasks(session.host);
-    runs = mergeRuns([], tasksOnly(all.runs));
-    complete = all.complete;
+    const walks = await Promise.all(HISTORY_KINDS.map((kind) => listAllTasks(session.host, kind)));
+    runs = mergeRuns([], walks.flatMap((walk, index) => ofKind(walk.runs, HISTORY_KINDS[index]!)));
+    complete = walks.every((walk) => walk.complete);
   } catch (error) {
     showListError(error);
     return;

@@ -1,11 +1,11 @@
-// The Tasks page's own view of every task run (spec §5.8), independent of
-// the live task cards a panel shows. It walks list_runs with kind "task"
-// one page at a time, merges what the page already has with what a page
+// The Tasks page's own view of every task and summary run (spec §5.8),
+// independent of the live cards a panel shows. It walks list_runs one kind
+// at a time ("task", then "summary"), one page at a time, merges what the page already has with what a page
 // returns (a run can arrive both active and, later, finished), then lets
 // the page filter and group what it shows. Agent text (instruction, title)
 // is untrusted and only ever matched or shown as text, never rendered as
 // HTML or Markdown.
-import type { RunCursor, RunView } from "../protocol/ts/generated.js";
+import type { RunCursor, RunKind, RunView } from "../protocol/ts/generated.js";
 import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
 import { isTerminal } from "./run-card.js";
 
@@ -16,17 +16,34 @@ export type StatusFilter = "all" | "running" | "done" | "failed" | "canceled";
  * that never says it is done cannot hang the page. */
 export const MAX_HISTORY_PAGES = 100;
 
-/** One page of task history. A missing `more` (an older host) counts as
- * the last page. `before` is omitted from the request when there is none,
- * so the first page asks for the service's default first page of tasks. */
+/** The run kinds the Tasks page lists: the task bar's tasks, and page
+ * summaries, whose panel card only ever shows a page's newest run. */
+export const HISTORY_KINDS = ["task", "summary"] as const satisfies readonly RunKind[];
+export type HistoryKind = typeof HISTORY_KINDS[number];
+
+/** A run's kind; a run without one is a summary (an older service's record). */
+export function runKind(run: RunView): RunKind {
+  return run.kind ?? "summary";
+}
+
+/** The runs in `views` of `kind`: an older service ignores list_runs'
+ * `kind` and lists every kind. */
+export function ofKind(views: readonly RunView[], kind: HistoryKind): RunView[] {
+  return views.filter((run) => runKind(run) === kind);
+}
+
+/** One page of one kind's history (tasks unless `kind` says otherwise). A
+ * missing `more` (an older host) counts as the last page. `before` is
+ * omitted from the request when there is none, so the first page asks for
+ * the service's default first page of that kind. */
 export async function listTaskPage(
-  host: Pick<HostClient, "call">, before: RunCursor | null,
+  host: Pick<HostClient, "call">, before: RunCursor | null, kind: HistoryKind = "task",
 ): Promise<{ runs: RunView[]; more: boolean }> {
   const response = await host.call({
     type: "list_runs",
     protocol_version: PROTOCOL_VERSION,
     request_id: newRequestId(),
-    kind: "task",
+    kind,
     ...(before === null ? {} : { before }),
   }, "runs_listed");
   return { runs: response.runs, more: response.more ?? false };
@@ -62,8 +79,8 @@ function lastFinishedRun(runs: readonly RunView[]): RunView | undefined {
   return undefined;
 }
 
-/** Every task run the service holds, walked one page at a time with the
- * last *finished* run of each page as the next page's cursor (see
+/** Every run of `kind` (tasks unless it says otherwise) the service
+ * holds, walked one page at a time with the last *finished* run of each page as the next page's cursor (see
  * {@link lastFinishedRun}). Stops when a page says there is no more, after
  * {@link MAX_HISTORY_PAGES} pages, when a page has no finished run to
  * cursor from, or when a page's cursor does not move past the one it was
@@ -77,11 +94,13 @@ function lastFinishedRun(runs: readonly RunView[]): RunView | undefined {
  * real history was left unread. The stuck-cursor and no-finished-run stops
  * are not reported as incomplete: a host behaving that way is not expected
  * to have more that a bigger cap would actually reach. */
-export async function listAllTasks(host: Pick<HostClient, "call">): Promise<{ runs: RunView[]; complete: boolean }> {
+export async function listAllTasks(
+  host: Pick<HostClient, "call">, kind: HistoryKind = "task",
+): Promise<{ runs: RunView[]; complete: boolean }> {
   const all: RunView[] = [];
   let cursor: RunCursor | null = null;
   for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
-    const { runs, more } = await listTaskPage(host, cursor);
+    const { runs, more } = await listTaskPage(host, cursor, kind);
     all.push(...runs);
     if (!more) return { runs: all, complete: true };
     const last = lastFinishedRun(runs);

@@ -45,6 +45,12 @@ function deferred() {
 test.beforeEach(() => mock.timers.enable({ apis: ["setTimeout"] }));
 test.afterEach(() => mock.timers.reset());
 
+// A list_runs for the task kind. The page also lists the summary kind
+// beside each one; tests that count or hold lists track the task kind's.
+function isTaskList(request) {
+  return request.type === "list_runs" && request.kind === "task";
+}
+
 function runId(n) {
   return `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 }
@@ -129,11 +135,12 @@ async function openTasks({
   function reply(request) {
     if (request.type === "get_config") return { ...hostReply(request), agent_status: state.agentStatus };
     if (request.type === "list_runs") {
-      const sorted = [...state.runs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+      const ofKind = request.kind ? state.runs.filter((run) => (run.kind ?? "summary") === request.kind) : state.runs;
+      const sorted = [...ofKind].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
       const start = request.before
         ? sorted.findIndex((run) => run.run_id === request.before.run_id) + 1
         : 0;
-      const page = sorted.slice(start, start + state.pageSize).map((run) => ({ ...run, task_report: null }));
+      const page = sorted.slice(start, start + state.pageSize).map((run) => run.kind === "task" ? { ...run, task_report: null } : run);
       return { type: "runs_listed", runs: page, more: start + state.pageSize < sorted.length };
     }
     if (request.type === "get_run") {
@@ -209,6 +216,8 @@ async function openTasks({
       return found;
     },
     sent: (type) => state.requests.filter((request) => request.type === type),
+    // The task kind's list_runs; each also has a summary-kind twin.
+    taskLists: () => state.requests.filter(isTaskList),
     calls: (name) => state.counts.get(name) ?? 0,
     rows: () => descendants(elements.get("tasks-list")).filter((node) => (node.className ?? "").split(" ").includes("task-row")),
     selected: () => page.rows().filter((row) => row.getAttribute("aria-selected") === "true").map((row) => row.dataset.runId),
@@ -254,7 +263,7 @@ async function afterPoll(condition, what) {
 test("the page lists every page of tasks and selects the newest", async () => {
   const page = await openTasks({ runs: [task(1), task(2), task(3), task(4), task(5)], pageSize: 2 });
   await until(() => page.rows().length === 5, "all five tasks");
-  const lists = page.sent("list_runs");
+  const lists = page.taskLists();
   assert.equal(lists.length, 3);
   for (const request of lists) assert.equal(request.kind, "task");
   assert.equal(lists[0].before, undefined);
@@ -279,7 +288,7 @@ test("the page says when history is incomplete", async () => {
   let served = 0;
   const page = await openTasks({
     intercept: (request) => {
-      if (request.type !== "list_runs") return null;
+      if (!isTaskList(request)) return null;
       served += 1;
       return { type: "runs_listed", runs: [task(served)], more: true };
     },
@@ -327,7 +336,7 @@ test("a select signal for a run not yet listed refreshes, then selects it", asyn
   const page = await openTasks({ runs: [task(1), task(2)] });
   await listed(page);
   assert.deepEqual(page.selected(), [runId(1)]);
-  assert.equal(page.sent("list_runs").length, 1);
+  assert.equal(page.taskLists().length, 1);
   // A run started after this page's list, which it does not know about yet.
   page.state.runs.push(task(0));
   page.selectSignal(runId(0));
@@ -335,7 +344,7 @@ test("a select signal for a run not yet listed refreshes, then selects it", asyn
   assert.deepEqual(page.selected(), [runId(0)]);
   assert.equal(page.location.hash, `#run=${runId(0)}`);
   // One refresh found it; the signal does not poll repeatedly.
-  assert.equal(page.sent("list_runs").length, 2);
+  assert.equal(page.taskLists().length, 2);
 });
 
 test("an unknown #run= selects the newest task", async () => {
@@ -355,7 +364,7 @@ for (const firstFails of [false, true]) {
     let lists = 0;
     const page = await openTasks({
       runs: [task(1), task(2)],
-      intercept: (request) => request.type === "list_runs" && ++lists === 2 ? held.promise : null,
+      intercept: (request) => isTaskList(request) && ++lists === 2 ? held.promise : null,
     });
     await listed(page);
     page.setHidden(true);
@@ -384,7 +393,7 @@ test("a held refresh follows the latest hash instead of an earlier handler's tar
   let lists = 0;
   const page = await openTasks({
     runs: [task(1), task(2)],
-    intercept: (request) => request.type === "list_runs" && ++lists === 2 ? held.promise : null,
+    intercept: (request) => isTaskList(request) && ++lists === 2 ? held.promise : null,
   });
   await listed(page);
   page.setHidden(true);
@@ -405,7 +414,7 @@ test("an initially empty history preserves the requested hash through an interme
   let lists = 0;
   const page = await openTasks({
     runs: [],
-    intercept: (request) => request.type === "list_runs" && ++lists === 2 ? held.promise : null,
+    intercept: (request) => isTaskList(request) && ++lists === 2 ? held.promise : null,
   });
   await until(() => page.el("tasks-empty").hidden === false, "the empty history");
   page.setHidden(true);
@@ -425,7 +434,7 @@ test("pagehide stops a pending refresh and its queued follow-up", async () => {
   let lists = 0;
   const page = await openTasks({
     runs: [task(1)],
-    intercept: (request) => request.type === "list_runs" && ++lists === 2 ? held.promise : null,
+    intercept: (request) => isTaskList(request) && ++lists === 2 ? held.promise : null,
   });
   await listed(page);
   page.setHidden(true);
@@ -443,7 +452,7 @@ test("the page does not list runs without a harness or a run record", async () =
   const page = await openTasks({ agentStatus: NOT_SET_UP });
   await until(() => page.el("tasks-status").textContent !== "" && page.sent("get_config").length > 0, "the status");
   await settle();
-  assert.equal(page.sent("list_runs").length, 0);
+  assert.equal(page.taskLists().length, 0);
   assert.equal(page.el("tasks-status").textContent, TASK_NEEDS_HARNESS_MESSAGE);
   assert.equal(page.el("tasks-status-box").hidden, false);
   assert.equal(page.el("tasks-status-settings").hidden, false);
@@ -454,7 +463,7 @@ test("the page does not list runs without a harness or a run record", async () =
   // With a record that runs may exist, the page lists them anyway.
   const recorded = await openTasks({ agentStatus: NOT_SET_UP, local: new Map([[RUNS_MAY_EXIST_KEY, 1]]) });
   await listed(recorded);
-  assert.equal(recorded.sent("list_runs").length, 1);
+  assert.equal(recorded.taskLists().length, 1);
 });
 
 test("the page shows the service setup text with Open settings when the service is unavailable", async () => {
@@ -475,7 +484,7 @@ test("the page lists tasks once a harness is set up and the page is shown again"
   const page = await openTasks({ agentStatus: NOT_SET_UP });
   await until(() => page.el("tasks-status").textContent === TASK_NEEDS_HARNESS_MESSAGE, "the setup text");
   await settle();
-  assert.equal(page.sent("list_runs").length, 0);
+  assert.equal(page.taskLists().length, 0);
   // The user sets up a harness in settings, then comes back to this tab.
   page.state.agentStatus = READY;
   page.setHidden(true);
@@ -494,7 +503,7 @@ test("the page lists tasks once a harness is set up and the page is shown again"
 test("a first list that finds the service unavailable recovers when the page is shown again", async () => {
   let failures = 1;
   const page = await openTasks({
-    intercept: (request) => request.type === "list_runs" && failures-- > 0
+    intercept: (request) => isTaskList(request) && failures-- > 0
       ? { type: "error", code: "service_unavailable", message: "The service is not running." }
       : null,
   });
@@ -511,7 +520,7 @@ test("a first list that finds the service unavailable recovers when the page is 
 test("a select signal before the first list worked opens the page again on that run", async () => {
   let failures = 1;
   const page = await openTasks({
-    intercept: (request) => request.type === "list_runs" && failures-- > 0
+    intercept: (request) => isTaskList(request) && failures-- > 0
       ? { type: "error", code: "service_unavailable", message: "The service is not running." }
       : null,
   });
@@ -534,9 +543,9 @@ test("an active row missing from the first page is fetched once and shows its fi
   assert.equal(fetches.length, 1);
   assert.equal(fetches[0].since_offset, 17);
   // Nothing is active now, so the page stops polling.
-  const lists = page.sent("list_runs").length;
+  const lists = page.taskLists().length;
   await settle(LIST_REFRESH_MS * 2);
-  assert.equal(page.sent("list_runs").length, lists, "no list refresh once nothing is active");
+  assert.equal(page.taskLists().length, lists, "no list refresh once nothing is active");
 });
 
 test("an active row the service no longer holds is dropped from the list", async () => {
@@ -682,17 +691,17 @@ test("search and status filter narrow the list; Running includes queued", async 
 test("the page stops polling while hidden and refreshes on show", async () => {
   const page = await openTasks({ runs: [task(1, { state: "running" }), task(2)] });
   await listed(page);
-  await afterPoll(() => page.sent("list_runs").length >= 2, "a list refresh while a task runs");
+  await afterPoll(() => page.taskLists().length >= 2, "a list refresh while a task runs");
   page.setHidden(true);
   await settle(20);
-  const before = page.sent("list_runs").length;
+  const before = page.taskLists().length;
   await settle(LIST_REFRESH_MS * 2);
-  assert.equal(page.sent("list_runs").length, before, "no list refresh while hidden");
+  assert.equal(page.taskLists().length, before, "no list refresh while hidden");
   page.state.runs.unshift(task(0));
   page.setHidden(false);
-  await until(() => page.sent("list_runs").length === before + 1, "one refresh on show");
+  await until(() => page.taskLists().length === before + 1, "one refresh on show");
   await until(() => page.rows().some((row) => row.dataset.runId === runId(0)), "the new task in the list");
-  assert.equal(page.sent("list_runs").at(-1).before, undefined);
+  assert.equal(page.taskLists().at(-1).before, undefined);
 });
 
 test("a task finishing updates its row pill", async () => {
@@ -779,8 +788,8 @@ test("an Open page error stays after a refresh", async () => {
   const text = "Could not open the page: Tabs cannot be edited right now.";
   await until(() => page.el("tasks-status").textContent === text, "the Open page error");
   // Task 2 keeps the page polling; a refresh that works leaves the line.
-  const lists = page.sent("list_runs").length;
-  await afterPoll(() => page.sent("list_runs").length > lists, "a list refresh");
+  const lists = page.taskLists().length;
+  await afterPoll(() => page.taskLists().length > lists, "a list refresh");
   await settle(20);
   assert.equal(page.el("tasks-status").textContent, text);
   assert.equal(page.el("tasks-status-box").hidden, false);
@@ -790,7 +799,7 @@ test("a list error clears once a refresh works", async () => {
   let failures = 0;
   const page = await openTasks({
     runs: [task(1, { state: "running" }), task(2)],
-    intercept: (request) => request.type === "list_runs" && failures-- > 0
+    intercept: (request) => isTaskList(request) && failures-- > 0
       ? { type: "error", code: "internal", message: "disk full" }
       : null,
   });
@@ -873,4 +882,53 @@ test("a dismissed-list read failure still shows the tasks", async () => {
   await until(() => page.rows().length === 3, "the task list");
   assert.equal(page.el("tasks-status-box").hidden, true);
   assert.deepEqual(page.selected(), [runId(1)]);
+});
+
+test("summary runs are listed beside tasks and their detail offers Open summary", async () => {
+  const answer = {
+    document_type: "specification", category: "project plan", importance: "medium",
+    importance_reason: "Adds detailed requirements.",
+  };
+  const { instruction: _instruction, task_report: _report, ...base } = task(2, {
+    kind: "summary", title: "User story mapping.docx", url: "https://work.example/doc",
+    summary_path: "Summaries/doc.summary.md", answer,
+  });
+  const older = base;
+  const newer = { ...older, run_id: runId(1), created_at: task(1).created_at, finished_at: task(1).finished_at };
+  // An older service's summary record has no kind.
+  const { kind: _kind, ...legacy } = { ...older, run_id: runId(4), created_at: task(4).created_at };
+  const page = await openTasks({
+    runs: [newer, older, task(3), legacy],
+    intercept: (request) => request.type === "open_summary" ? { type: "summary_opened" } : null,
+  });
+  await until(() => page.rows().length === 4, "both summaries, the legacy one and the task");
+  const kinds = page.sent("list_runs").map((request) => request.kind);
+  assert.deepEqual([...new Set(kinds)].sort(), ["summary", "task"]);
+  assert.deepEqual(page.rows().map((row) => row.dataset.runId), [1, 2, 3, 4].map(runId));
+  assert.match(page.rows()[0].textContent, /Summary · User story mapping\.docx/);
+  assert.match(page.rows()[2].textContent, /Task 3/);
+
+  // The older summary, whose panel card a newer run replaced, opens here.
+  page.rows()[1].click();
+  await until(() => page.detailId() === runId(2), "the older summary's detail");
+  const detail = page.el("tasks-detail");
+  await until(() => buttonIn(detail, "Open summary"), "the Open summary button");
+  assert.match(detail.textContent, /Summary of User story mapping\.docx/);
+  assert.match(detail.textContent, /Answer/);
+  assert.match(detail.textContent, /Importance: medium — Adds detailed requirements\./);
+  assert.equal(buttonIn(detail, "Reuse"), null);
+  assert.equal(buttonIn(detail, "Copy report"), null);
+  assert.ok(buttonIn(detail, "Open page"));
+  assert.ok(buttonIn(detail, "Dismiss"));
+  buttonIn(detail, "Open summary").click();
+  await until(() => page.sent("open_summary").length === 1, "the open_summary request");
+  assert.deepEqual(
+    [page.sent("open_summary")[0].url, page.sent("open_summary")[0].summary_path],
+    ["https://work.example/doc", "Summaries/doc.summary.md"],
+  );
+
+  // Search matches a summary by its page title.
+  page.el("tasks-search").value = "story";
+  page.el("tasks-search").dispatch("input", {});
+  await until(() => page.rows().length === 3, "the three summaries");
 });
