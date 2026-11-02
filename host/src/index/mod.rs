@@ -48,6 +48,7 @@ use crate::vault::{
 mod db;
 mod fold;
 mod legacy;
+mod ord;
 mod query;
 mod regen;
 mod render;
