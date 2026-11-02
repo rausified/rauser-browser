@@ -10,6 +10,7 @@ mod catch_up;
 mod containers;
 mod database;
 mod gaps;
+mod golden;
 mod identity;
 mod migration;
 mod ordering;
