@@ -45,6 +45,7 @@ use crate::vault::{
     sync_directory,
 };
 
+mod db;
 mod fold;
 mod legacy;
 mod query;
