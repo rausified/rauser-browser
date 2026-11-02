@@ -1390,7 +1390,9 @@ impl ArtifactIndex {
             if !text.starts_with(LOG_HEADER) {
                 continue;
             }
-            for (line, event) in parse_log_lines(&text) {
+            for (line, event) in parse_log_lines(&text, strict)
+                .with_context(|| format!("inspecting artifact log {}", shown(relative)))?
+            {
                 state.ingest(event, Some((relative.clone(), line)), rebuild || reset);
             }
             for (number, line) in text.lines().enumerate() {
@@ -2680,23 +2682,36 @@ fn collect_markdown(
 
 #[cfg(test)]
 fn parse_log(text: &str) -> Vec<CachedEvent> {
-    parse_log_lines(text)
+    parse_log_lines(text, false)
+        .unwrap()
         .into_iter()
         .map(|(_, event)| event)
         .collect()
 }
 
 /// Owned events with their zero-based line numbers.
-fn parse_log_lines(text: &str) -> Vec<(u64, CachedEvent)> {
+fn parse_log_lines(text: &str, strict: bool) -> Result<Vec<(u64, CachedEvent)>> {
     let mut output = Vec::new();
     let mut previous = "";
     for (number, line) in text.lines().enumerate() {
-        if let Some(event) = parse_marker_event(line, previous) {
+        let event = parse_marker_event(line, previous);
+        let marker_start = concat!("<!-- ", crate::namespace!(), ":visit");
+        if strict
+            && line.contains(marker_start)
+            && (line.matches(marker_start).count() != 1
+                || (event.is_none() && parse_overflow_marker(line).is_none()))
+        {
+            // Indexing tolerates torn/invalid entries so later completed
+            // appends can recover them. An identity review must never turn
+            // the same omission into an apparently complete, approvable plan.
+            bail!("damaged owned log marker at line {}", number + 1);
+        }
+        if let Some(event) = event {
             output.push((number as u64, event));
         }
         previous = line;
     }
-    output
+    Ok(output)
 }
 
 /// Overflow is system evidence, never an artifact, visit, duration or open.
@@ -3890,6 +3905,76 @@ mod tests {
             marker.last_occurred_at,
             hex::encode(serde_json::to_vec(marker).unwrap())
         )
+    }
+
+    #[test]
+    fn strict_review_accepts_legacy_activity_why_summary_and_both_overflow_forms() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let at = "2026-11-02T10:00:00Z";
+        let url = "https://example.com/items/1";
+        let activity = activity(&Uuid::new_v4().to_string(), "1", "Item", at);
+        let summary = adapter_summary("work:example.com/1", "work.item", url, at);
+        let why = WhyEvent {
+            event_id: Uuid::new_v4().to_string(),
+            artifact_id: "work:example.com/1".into(),
+            url: url.into(),
+            text: "Context".into(),
+            occurred_at: at.into(),
+            incognito: false,
+        };
+        let legacy = format!(
+            "- {at} — Legacy — <{url}>\n{MARKER_PREFIX}{} url={} at={at} -->\n",
+            sha256_hex(b"legacy"),
+            sha256_hex(url.as_bytes())
+        );
+        let why = format!(
+            "{MARKER_PREFIX}{} url={} at={at} kind=why data={} -->\n",
+            sha256_hex(why.event_id.as_bytes()),
+            sha256_hex(url.as_bytes()),
+            hex::encode(serde_json::to_vec(&why).unwrap())
+        );
+        let overflow = OverflowMarker {
+            count: 1,
+            first_occurred_at: at.into(),
+            last_occurred_at: at.into(),
+        };
+        let mut attached_payload = serde_json::to_value(&overflow).unwrap();
+        attached_payload["url"] = serde_json::json!(url);
+        let attached = format!(
+            "{MARKER_PREFIX}{} url={} at={at} kind=overflow data={} -->\n",
+            sha256_hex(b"attached"),
+            sha256_hex(url.as_bytes()),
+            hex::encode(serde_json::to_vec(&attached_payload).unwrap())
+        );
+        let logs = root.path().join("log");
+        fs::create_dir_all(&logs).unwrap();
+        let path = logs.join("day.md");
+        let mut contents = format!(
+            "{LOG_HEADER}\n{legacy}{why}{}{}{}{attached}",
+            activity_marker(&activity),
+            summary_marker(&summary),
+            overflow_line("standalone", &overflow)
+        );
+        fs::write(&path, &contents).unwrap();
+        let (_, evidence) = index.relearn_evidence().unwrap();
+        assert_eq!(
+            evidence.len(),
+            5,
+            "legacy, why, summary, activity and its mode URL"
+        );
+        assert!(!cache.path().join("index-state.json").exists());
+
+        // A torn marker still must not stop ordinary indexing or destroy its
+        // successfully parsed neighbors, including when it has no provenance.
+        let bare = why.trim_end();
+        contents.push_str(&format!("{bare}{bare}\n<!-- brauser:visit id=torn"));
+        fs::write(&path, &contents).unwrap();
+        assert!(index.relearn_evidence().is_err());
+        index.reindex().unwrap();
+        assert!(index.artifact("work:example.com/1").unwrap().is_some());
+        assert_eq!(fs::read_to_string(path).unwrap(), contents);
     }
 
     #[test]

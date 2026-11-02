@@ -1418,10 +1418,24 @@ bytes and verify no cache or adopted-contract file is created.
 The log inventory regression refuses symlinked daily files, archive directories
 and the logs directory itself, so the index's normal symlink skipping cannot
 produce an incomplete impact plan.
+Damaged owned-marker regressions cover truncated payloads/closers, invalid hex
+and provenance, missing IDs, unsupported kinds, indentation and joined markers.
+Both planning and decision recording refuse them without creating a cache or
+journal. `cargo test --locked -p brauser --lib strict_review_accepts` verifies
+legacy visits, activity, why, summary and both overflow forms remain readable;
+ordinary reindex still tolerates torn entries and preserves the daily file.
+Cross-origin regressions occupy destinations through HTTP history, owned notes,
+owned summaries and implicit containers, and protect a source already shared
+with HTTPS. Fresh approval refuses each conflict, unrelated foreign history
+stays outside the migration rows, and changed foreign evidence changes the token.
 `cargo test --locked -p brauser --test relearn_plan` also runs the real CLI
 against malformed/oversized requests and an apply flag. An injected absolute
 `--config` path keeps these child processes away from real user state on every
 platform. The library request/JSON output path is tested with that same seam.
+`cargo test --locked -p brauser --test relearn_journal` includes a real-binary
+regression that truncates a valid why marker: both commands refuse even when
+the caller supplies a previously valid empty-plan revision. It checks exact
+config/log bytes and the absence of cache and journal writes.
 These tests use no browser or harness and do not establish panel Re-learn or
 migration acceptance. POSIX symlink fixtures state their Windows exclusion;
 all other planning tests are portable.

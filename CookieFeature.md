@@ -1061,3 +1061,32 @@ instead of reapplying an obsolete quarantine patch. All eleven non-browser
 health commands pass locally. Required browser mode still fails at the
 explicit sandbox guard, so this run adds no new browser acceptance evidence.
 Incomplete axe results and screen-reader behavior still require human review.
+
+### 2026-11-02 — Refuse incomplete Re-learn history
+
+Re-learning review now stops when an owned daily log contains a recognizable
+but damaged visit marker. Previously a truncated marker could silently vanish
+from the impact report and let the host record approval of an empty plan.
+The strict scan reuses the existing event and overflow parsers and reports the
+file and line that need inspection. Legacy visits, activity, saved context,
+summary markers and both overflow forms remain readable; normal indexing
+continues to tolerate incomplete entries for capture recovery. Regressions
+exercise malformed payloads, provenance and joined markers, plus the real
+`relearn-plan` and `relearn-record` commands with a torn why marker. Neither
+command changes the config, log, cache or decision journal on refusal.
+
+### 2026-11-02 — Include other sites when checking Re-learn key collisions
+
+A site's proposed keys are now checked against recorded identities from every
+origin, including owned notes, summaries and containers that have never been
+opened directly. HTTP and HTTPS pages can share a hostname and therefore an
+artifact ID; previously reviewing just one scheme could miss a merge with the
+other scheme's history. A foreign-occupied destination now reports a merge and
+blocks approval. A source already shared with another origin is also blocked,
+even when its new key would otherwise be free. Other sites remain outside the
+migration rows, and unrelated foreign history still permits a clean approval.
+All recorded contracts used to derive occupancy bind the review token. These
+two assigned prerequisites add seven regression tests; the full local gate
+passes with 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension
+test files and both Clippy builds. Browser execution still skips 36 cases in
+this sandbox. Durable apply (`brwr-dbp`) and panel Re-learn remain unfinished.
