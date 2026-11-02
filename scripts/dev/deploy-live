@@ -547,7 +547,8 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         d.say(f"  host:      {host_version} ({binary})")
         d.say(f"  extension: {ext_id}" + (", changed" if extension_changed else ", unchanged"))
         if extension_changed:
-            d.say("  Reload Brauser at chrome://extensions to load the new extension build.")
+            d.say("  Reload Brauser at chrome://extensions to load the new extension build,")
+            d.say("  or click Reload Brauser in an open side panel.")
         if active:
             d.say("  runs that were active: " + ", ".join(active))
         return 0

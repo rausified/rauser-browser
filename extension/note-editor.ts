@@ -111,6 +111,11 @@ export class NoteEditor {
     }, this.debounceMs);
   }
 
+  /** Whether an edit has not been saved yet, such as after a failed save. */
+  get hasUnsavedEdit(): boolean {
+    return this.dirty;
+  }
+
   /** Saves pending edits now, after any load or save already running. */
   flush(): Promise<void> {
     this.clearTimer();

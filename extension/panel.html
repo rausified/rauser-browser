@@ -25,6 +25,12 @@
         <button id="setup-open-settings" type="button">Open settings</button>
       </div>
 
+      <div id="update-warning" class="setup-warning" role="alert" hidden>
+        <p><strong>{{APP_NAME}} was updated.</strong> This window is still running the earlier build. Reload {{APP_NAME}} to use the new one; your note is saved first, and the side panel closes.</p>
+        <p id="update-message"></p>
+        <button id="update-reload" type="button">Reload {{APP_NAME}}</button>
+      </div>
+
       <div id="site-access-warning" class="site-access-warning" role="alert" hidden>
         <p><strong>{{APP_NAME}} needs site access — re-enable in Chrome.</strong> Chrome has withdrawn {{APP_NAME}}'s access to websites, so it cannot see this tab.</p>
         <button id="site-access-reenable" type="button">Open {{APP_NAME}} in Chrome's extension settings</button>

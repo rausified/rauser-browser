@@ -28,6 +28,7 @@ import { TaskTracker } from "./task-tracker.js";
 import { recentSummaryText, summaryLine } from "./summary-text.js";
 import { NoteEditor } from "./note-editor.js";
 import { NoteRecovery, type RecoveryText } from "./note-recovery.js";
+import { chromeManifests, newerBuildOnDisk } from "./build-update.js";
 import {
   ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
 } from "./artifact-refresh.js";
@@ -47,6 +48,9 @@ initDiag("panel");
 const status = element<HTMLDivElement>("status");
 const buildId = element<HTMLSpanElement>("build-id");
 const hostBuild = element<HTMLSpanElement>("host-build");
+const updateWarning = element<HTMLDivElement>("update-warning");
+const updateMessage = element<HTMLParagraphElement>("update-message");
+const updateReloadButton = element<HTMLButtonElement>("update-reload");
 
 function showHostBuild(hostVersion: string): void {
   hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hostVersion);
@@ -1856,8 +1860,38 @@ taskOpenButton.addEventListener("click", openTasks);
 // The tracker does not poll while the panel is hidden; showing it again
 // catches up at once.
 document.addEventListener("visibilitychange", () => {
-  if (tracker !== null && document.visibilityState !== "hidden") void refreshTasks();
+  if (document.visibilityState === "hidden") return;
+  if (tracker !== null) void refreshTasks();
+  void checkForUpdate();
 });
+
+// --- Newer build on disk (scripts/dev/deploy-live) ---------------------------
+const updates = chromeManifests();
+
+/** Shows the update notice while a newer build than the running one is on
+ * disk (build-update.ts). Checked at startup, when the panel is shown again,
+ * and on every status poll, since a deploy usually lands while it is open. */
+async function checkForUpdate(): Promise<void> {
+  if (closed) return;
+  const disk = await newerBuildOnDisk(updates);
+  if (!closed) updateWarning.hidden = disk === null;
+}
+
+/** Saves the note, then reloads the whole extension so the worker and this
+ * panel both run the new build. A note that did not save keeps the panel. */
+async function reloadForUpdate(): Promise<void> {
+  updateReloadButton.disabled = true;
+  updateMessage.textContent = "Saving your note…";
+  await notes.flush();
+  if (notes.hasUnsavedEdit) {
+    updateMessage.textContent = "Your note is not saved, so Brauser was not reloaded. Copy the note or fix the save problem, then reload.";
+    updateReloadButton.disabled = false;
+    return;
+  }
+  chrome.runtime.reload();
+}
+updateReloadButton.addEventListener("click", () => void reloadForUpdate());
+void checkForUpdate();
 pageSummaryOpen.addEventListener("click", () => void openPageSummary());
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (sender.id === chrome.runtime.id && isPanelNotice(message) && showNotice(message)) {
@@ -1880,7 +1914,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onReplaced?.addListener((addedTabId, removedTabId) => {
   if (followsTabReplacement(addedTabId, removedTabId, followedTabId)) void refreshActiveTab();
 });
-const pollTimer = setInterval(() => void panelTick(), STATUS_POLL_MS);
+const pollTimer = setInterval(() => {
+  void panelTick();
+  void checkForUpdate();
+}, STATUS_POLL_MS);
 window.addEventListener("pagehide", () => {
   closed = true;
   clearInterval(pollTimer);

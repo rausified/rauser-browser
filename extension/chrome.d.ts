@@ -87,7 +87,7 @@ interface ChromeApi {
     getURL(path: string): string;
     reload(): void;
     openOptionsPage(): Promise<void>;
-    getManifest(): { version: string; options_ui?: { page: string } };
+    getManifest(): { version: string; version_name?: string; options_ui?: { page: string } };
     connectNative(name: string): ChromePort;
     sendMessage<T = unknown>(message: unknown): Promise<T>;
     getContexts(filter: { contextTypes: string[] }): Promise<ChromeExtensionContext[]>;
