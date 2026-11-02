@@ -213,6 +213,10 @@ export async function install({
   // The panel's own window (chrome.windows.getCurrent), and the Tasks tabs
   // runtime.getContexts reports already open, for Tasks ↗ (task-handoff.ts).
   windowId = 1, tasksContexts = [],
+  // The build Chrome loaded (getManifest().version_name) and the manifest a
+  // fetch of the extension's own manifest.json reads from disk;
+  // `state.diskManifest` can change mid-test, as a deploy does.
+  loadedBuild = "0.1.0 (test-build)", diskManifest = { version_name: "0.1.0 (test-build)" },
 }) {
   const elements = pageElements();
   const listeners = () => {
@@ -238,6 +242,7 @@ export async function install({
     session,
     runtimeMessages: listeners(),
     windowId,
+    diskManifest,
     tasksContexts,
     tabUpdates: [],
     windowUpdates: [],
@@ -285,6 +290,12 @@ export async function install({
   };
   const tabActivated = listeners();
   const tabUpdated = listeners();
+  globalThis.fetch = async (url) => {
+    if (url !== "chrome-extension://test-id/manifest.json" || state.diskManifest === null) {
+      throw new TypeError(`fetch failed: ${url}`);
+    }
+    return { ok: true, json: async () => structuredClone(state.diskManifest) };
+  };
   globalThis.chrome = {
     scripting: {
       // Site-pattern review injections go to `script` and `state.scripts`;
@@ -307,7 +318,8 @@ export async function install({
     runtime: {
       id: "test-id",
       lastError: undefined,
-      getManifest: () => ({ options_ui: { page: "options.html" } }),
+      getManifest: () => ({ options_ui: { page: "options.html" }, version_name: loadedBuild }),
+      reload: () => { count("runtime.reload"); },
       getURL: (path) => `chrome-extension://test-id/${path}`,
       openOptionsPage: async () => { count("openOptionsPage"); },
       // Tasks ↗ (task-handoff.ts openTasksPage) looks for an open Tasks

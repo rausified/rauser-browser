@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  CAPTURING, JIRA_URL, artifact, editNote, install, noteLoaded,
+  CAPTURING, JIRA_URL, artifact, editNote, install, memoryStorage, noteLoaded,
   outageWithDraft, recognized, settle, starterOffersFor, typeWhy, until,
   withStoredWhy,
 } from "./harness.mjs";
@@ -174,3 +174,91 @@ for (const pendingOrigin of ["https://docs.example", "https://other.example"]) {
     if (blocked) assert.equal(page.el("artifact-why").value, "my context draft");
   });
 }
+
+// A deploy rebuilds extension/dist while Chrome keeps running the old build
+// until the extension is reloaded (scripts/dev/deploy-live).
+test("a newer build on disk shows Reload, which saves the note and reloads Brauser", async () => {
+  const page = await install({
+    tab: { id: 1, url: JIRA_URL, title: "Issue" },
+    loadedBuild: "0.1.0 (33a108070e87)", diskManifest: { version_name: "0.1.0 (029a398fa684)" },
+  });
+  await until(() => !page.el("update-warning").hidden, "the update notice");
+  assert.match(page.el("update-warning").textContent, /was updated/);
+  await noteLoaded(page);
+  editNote(page, "Unsaved thought");
+  page.el("update-reload").click();
+  await until(() => page.calls("runtime.reload") === 1, "the reload");
+  assert.ok(page.sent("save_note").some((request) => request.body.includes("Unsaved thought")));
+});
+
+test("the same build on disk shows nothing until a deploy changes it", async () => {
+  const page = await install({ tab: { id: 1, url: JIRA_URL, title: "Issue" } });
+  await noteLoaded(page);
+  await settle();
+  assert.equal(page.el("update-warning").hidden, true);
+  page.state.diskManifest = { version_name: "0.1.0 (029a398fa684)" };
+  page.setHidden(false);
+  await until(() => !page.el("update-warning").hidden, "the update notice after the deploy");
+});
+
+test("Reload waits for the note: a failed save keeps the panel and says why", async () => {
+  const page = await install({
+    tab: { id: 1, url: JIRA_URL, title: "Issue" },
+    loadedBuild: "0.1.0 (33a108070e87)", diskManifest: { version_name: "0.1.0 (029a398fa684)" },
+    intercept: (request) => request.type === "save_note" ? { type: "error", code: "io", message: "disk full" } : undefined,
+  });
+  await until(() => !page.el("update-warning").hidden, "the update notice");
+  await noteLoaded(page);
+  editNote(page, "Unsaved thought");
+  page.el("update-reload").click();
+  await until(() => /note is not saved/.test(page.el("update-message").textContent), "the refusal");
+  assert.equal(page.calls("runtime.reload"), 0);
+});
+
+const CONFLICT = {
+  type: "note_conflict", revision: "other-r2", body: "another window's note", exists: true, title: "Issue",
+  key: { kind: "url", value: JIRA_URL }, reason: "stale",
+};
+
+test("Reload stops on the click whose save conflicts, then reloads once the copy is kept", async () => {
+  const page = await install({
+    tab: { id: 1, url: JIRA_URL, title: "Issue" },
+    loadedBuild: "0.1.0 (33a108070e87)", diskManifest: { version_name: "0.1.0 (029a398fa684)" },
+    intercept: (request) => request.type === "save_note" ? CONFLICT : undefined,
+  });
+  await until(() => !page.el("update-warning").hidden, "the update notice");
+  await noteLoaded(page);
+  editNote(page, "Unsaved thought");
+  page.el("update-reload").click();
+  await until(() => /changed elsewhere/.test(page.el("update-message").textContent), "the conflict refusal");
+  assert.equal(page.calls("runtime.reload"), 0);
+  assert.ok(page.state.localStorage.length > 0, "the conflict copy is kept locally");
+  // Kept locally, the copy reappears after the reload, so a second click goes ahead.
+  page.el("update-reload").click();
+  await until(() => page.calls("runtime.reload") === 1, "the reload");
+});
+
+test("Reload never runs while a conflict copy exists only in this panel", async () => {
+  const localStorage = memoryStorage();
+  const page = await install({
+    tab: { id: 1, url: JIRA_URL, title: "Issue" }, localStorage,
+    loadedBuild: "0.1.0 (33a108070e87)", diskManifest: { version_name: "0.1.0 (029a398fa684)" },
+    intercept: (request) => request.type === "save_note" ? CONFLICT : undefined,
+  });
+  await until(() => !page.el("update-warning").hidden, "the update notice");
+  await noteLoaded(page);
+  localStorage.setItem = () => { throw new Error("quota full"); };
+  editNote(page, "Unsaved thought");
+  page.el("update-reload").click();
+  await until(() => /changed elsewhere/.test(page.el("update-message").textContent), "the conflict refusal");
+  page.el("update-reload").click();
+  await until(() => /could not be kept/.test(page.el("update-message").textContent), "the recovery refusal");
+  assert.equal(page.calls("runtime.reload"), 0);
+});
+
+test("an unreadable manifest on disk shows no update notice", async () => {
+  const page = await install({ tab: { id: 1, url: JIRA_URL, title: "Issue" }, diskManifest: null });
+  await noteLoaded(page);
+  await settle();
+  assert.equal(page.el("update-warning").hidden, true);
+});
