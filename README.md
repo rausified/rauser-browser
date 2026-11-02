@@ -55,6 +55,11 @@ See the [impact-plan interface](docs/superpowers/plans/2026-10-28-capture-relear
 rejection, and `adapters relearn-journal` inspects and recovers those decisions.
 Both accept the same optional `--config` path. See the
 [decision journal interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#durable-decision-journal).
+`adapters relearn-preview` takes the same request as `relearn-plan` and shows
+corrected artifact totals, Recent/worklog rows, links and original summary
+locations for an unambiguous proposal. It reads authoritative history without
+publishing a cache or changing content or config. See the
+[projected-history interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#projected-history-preview).
 Re-learn in the panel and applying migrations remain under development.
 
 ### Try the M1 development build

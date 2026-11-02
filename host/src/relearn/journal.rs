@@ -111,7 +111,7 @@ fn validate_request(request: &RecordRequest) -> Result<()> {
     Ok(())
 }
 
-fn validate_decision(decision: Decision, plan: &Plan) -> Result<()> {
+pub(super) fn validate_decision(decision: Decision, plan: &Plan) -> Result<()> {
     if decision == Decision::Approve {
         ensure!(
             plan.identities.iter().all(|row| {

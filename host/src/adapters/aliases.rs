@@ -4,13 +4,17 @@
 //! The future durable importer must supply that same stable order and verify
 //! its own evidence; a successful CLI rehearsal is never migration authority.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufWriter, Read, Write};
 
 use adapter_templates::{Document, Value};
 use anyhow::{Context, Result, bail, ensure};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use url::Url;
+
+use crate::relearn::{
+    Identity,
+    aliases::{Action, Event, Preview, replay},
+};
 
 const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_EVENTS: usize = 4096;
@@ -42,145 +46,6 @@ struct Endpoint {
     /// Missing means legacy unknown. It cannot prove identity under a query
     /// reader. An explicit empty list describes an unstripped input URL.
     stripped_params: Option<Vec<String>>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum Action {
-    Confirm,
-    Suggest,
-    Unalias,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct Identity {
-    artifact_type: String,
-    artifact_id: String,
-}
-
-/// Endpoints here have already been derived by the host, including type and
-/// scope. Native messages must never deserialize directly into this type.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Event {
-    event_id: String,
-    action: Action,
-    from: Identity,
-    to: Identity,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize)]
-struct Group {
-    canonical: Identity,
-    members: Vec<Identity>,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize)]
-struct Suggestion {
-    event_id: String,
-    from: Identity,
-    to: Identity,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize)]
-struct Preview {
-    /// This output describes only supplied evidence, never the entire vault.
-    review_only: bool,
-    groups: Vec<Group>,
-    suggestions: Vec<Suggestion>,
-}
-
-/// Rebuild from the append-only operations, without mutating an earlier
-/// projection. The latest confirmed operation for an unordered pair wins;
-/// a suggestion cannot revoke a confirmation. Unalias removes that pair's
-/// edge, not every path between its endpoints. Canonical identity is the
-/// target of the most recent still-active confirmation in the component.
-fn replay(events: &[Event]) -> Result<Preview> {
-    let mut seen = BTreeMap::new();
-    let mut identities = BTreeSet::new();
-    let mut decisions = BTreeMap::new();
-    let mut suggestions = BTreeMap::new();
-    for (sequence, event) in events.iter().enumerate() {
-        if let Some(previous) = seen.insert(&event.event_id, event) {
-            ensure!(previous == event, "conflicting reuse of an event ID");
-            continue;
-        }
-        ensure!(
-            event.from != event.to,
-            "an alias must name two different identities"
-        );
-        ensure!(
-            event.from.artifact_type == event.to.artifact_type,
-            "an alias cannot join different artifact types"
-        );
-        identities.extend([event.from.clone(), event.to.clone()]);
-        let pair = if event.from < event.to {
-            (&event.from, &event.to)
-        } else {
-            (&event.to, &event.from)
-        };
-        if event.action == Action::Suggest {
-            suggestions.insert(pair, event);
-        } else {
-            decisions.insert(pair, (sequence, event));
-            suggestions.remove(&pair);
-        }
-    }
-
-    let mut neighbors: BTreeMap<&Identity, Vec<(&Identity, usize, &Identity)>> = BTreeMap::new();
-    for &(sequence, event) in decisions.values() {
-        if event.action == Action::Confirm {
-            neighbors
-                .entry(&event.from)
-                .or_default()
-                .push((&event.to, sequence, &event.to));
-            neighbors
-                .entry(&event.to)
-                .or_default()
-                .push((&event.from, sequence, &event.to));
-        }
-    }
-    let mut remaining = identities;
-    let mut canonical_by_id = BTreeMap::new();
-    let mut groups = Vec::new();
-    while let Some(first) = remaining.pop_first() {
-        let mut members = BTreeSet::from([first.clone()]);
-        let mut pending = vec![first.clone()];
-        let mut newest = None;
-        while let Some(current) = pending.pop() {
-            for &(neighbor, sequence, target) in neighbors.get(&current).into_iter().flatten() {
-                if newest.is_none_or(|(last, _)| sequence > last) {
-                    newest = Some((sequence, target));
-                }
-                if remaining.remove(neighbor) {
-                    members.insert(neighbor.clone());
-                    pending.push(neighbor.clone());
-                }
-            }
-        }
-        let canonical = newest.map_or(first, |(_, target)| target.clone());
-        for member in &members {
-            canonical_by_id.insert(member.clone(), canonical.clone());
-        }
-        groups.push(Group {
-            canonical,
-            members: members.into_iter().collect(),
-        });
-    }
-    groups.sort_by(|a, b| a.canonical.cmp(&b.canonical));
-    let suggestions = suggestions
-        .into_values()
-        .filter(|event| canonical_by_id[&event.from] != canonical_by_id[&event.to])
-        .map(|event| Suggestion {
-            event_id: event.event_id.clone(),
-            from: event.from.clone(),
-            to: event.to.clone(),
-        })
-        .collect();
-    Ok(Preview {
-        review_only: true,
-        groups,
-        suggestions,
-    })
 }
 
 fn compile(raw: &serde_json::Value) -> Result<Document> {
