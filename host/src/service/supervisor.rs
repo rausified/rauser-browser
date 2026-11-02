@@ -46,7 +46,6 @@ use super::harness_api::{
     HarnessEvent, HarnessRegistry, OutputSchema, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use super::maintenance;
-use super::office;
 use super::prompt::{
     repair_prompt, site_draft_prompt, summary_prompt, task_prompt, task_repair_prompt,
 };
@@ -55,6 +54,7 @@ use super::record::{
     MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, TaskStatus, cap_bytes,
     fit_session_id, list_instruction, page_markdown,
 };
+use super::section::{PageSection, SectionKind};
 use crate::answer::parse_answer;
 use crate::capture_site::catalog;
 use crate::config::{default_summary_vocabulary, valid_summary_vocabulary};
@@ -628,16 +628,20 @@ impl Supervisor {
             // From the page's address only, and only for a page run; the
             // document identity goes to `page.md` (and to a suspect
             // capture's warning), not to the routine `run queued` line.
-            let office = match req.kind {
-                RunKind::Summary | RunKind::Task => office::office_document(&req.url),
+            let section = match req.kind {
+                RunKind::Summary | RunKind::Task => PageSection::for_url(&req.url),
                 RunKind::SiteDraft => None,
             };
             // Measured now, before a site draft's content moves into its page.
             let suspect = match req.kind {
-                RunKind::Summary | RunKind::Task => {
-                    capture_quality::assess(&req.content, office.as_ref().map(|doc| doc.kind))
-                        .map(|found| (found, capture_quality::excerpt(&req.content)))
-                }
+                RunKind::Summary | RunKind::Task => capture_quality::assess(
+                    &req.content,
+                    section
+                        .as_ref()
+                        .and_then(PageSection::office)
+                        .map(|doc| doc.kind),
+                )
+                .map(|found| (found, capture_quality::excerpt(&req.content))),
                 RunKind::SiteDraft => None,
             };
             let (cwd, page) = match req.kind {
@@ -648,7 +652,7 @@ impl Supervisor {
                         &req.url,
                         &req.content,
                         req.selection.as_deref(),
-                        office.as_ref(),
+                        section.as_ref(),
                     ),
                 ),
                 // Its own run directory, never the knowledge base; its page
@@ -683,7 +687,7 @@ impl Supervisor {
                 answered_at: None,
                 first_answered_at: None,
                 save_final: false,
-                office_section: office.is_some(),
+                office_section: section.is_some(),
                 kind: req.kind,
                 task: req.task,
             };
@@ -708,7 +712,8 @@ impl Supervisor {
                 harness = harness_name(runner.harness()),
                 kind = kind_name(req.kind),
                 origin = diag::url_origin(&req.url),
-                office_document = office.is_some(),
+                office_document = section.as_ref().is_some_and(|s| s.kind() == SectionKind::Office),
+                miro_board = section.as_ref().is_some_and(|s| s.kind() == SectionKind::Miro),
                 waiting = scheduler.waiting_len(),
                 running = scheduler.running_len(),
                 "run queued"
@@ -721,7 +726,10 @@ impl Supervisor {
                     run_id = %id,
                     kind = kind_name(req.kind),
                     reasons = found.reason_names(),
-                    office_kind = office.as_ref().map_or("none", |doc| doc.kind.label()),
+                    office_kind = section
+                        .as_ref()
+                        .and_then(PageSection::office)
+                        .map_or("none", |doc| doc.kind.label()),
                     url = %req.url,
                     title = %req.title,
                     chars = found.chars,
@@ -1273,14 +1281,19 @@ impl Inner {
         // A task sends none either, because its answer is a plain-text
         // report, and its Codex thread is named after its instruction.
         // Recognised again from the run's own record, so a resumed run gets
-        // the same answer; only the yes or no reaches the prompt. A record
-        // whose page.md predates the host's Office section never enables
-        // retrieval: a page could have forged that section there.
-        let office_document =
-            status.office_section && office::office_document(&status.url).is_some();
+        // the same answer; only the section's kind reaches the prompt. A
+        // record whose page.md predates the host's section never enables
+        // retrieval: a page could have forged that section there. A record
+        // from before Miro boards had a section has `office_section` false
+        // for a board, so it is never read as one.
+        let section = status
+            .office_section
+            .then(|| PageSection::for_url(&status.url))
+            .flatten()
+            .map(|section| section.kind());
         let (prompt, output_schema, title) = match status.kind {
             RunKind::Summary => (
-                summary_prompt(&page_path, &launch.cwd, &launch.vocabulary, office_document),
+                summary_prompt(&page_path, &launch.cwd, &launch.vocabulary, section),
                 OutputSchema::RunnerDefault,
                 status.title.clone(),
             ),
@@ -1300,7 +1313,7 @@ impl Inner {
                         &launch.cwd,
                         self.store.support_dir(),
                         &task.protected,
-                        office_document,
+                        section,
                     ),
                     OutputSchema::Omit,
                     task_title(&task.instruction),
@@ -1982,8 +1995,8 @@ mod tests {
     use crate::service::finisher::{KindFinisher, SummaryFinisher};
     use crate::service::harness_api::{HarnessRegistry, HarnessRunner, HarnessSession};
     use crate::service::prompt::{
-        OFFICE_TASK_PARAGRAPH, TASK_PROMPT_START, office_summary_paragraph, site_draft_input,
-        task_prompt, task_repair_prompt,
+        MIRO_TASK_PARAGRAPH, OFFICE_TASK_PARAGRAPH, TASK_PROMPT_START, miro_summary_paragraph,
+        office_summary_paragraph, site_draft_input, task_prompt, task_repair_prompt,
     };
     use crate::service::record::{
         LIST_INSTRUCTION_CHARS, MAX_TASK_REPORT_BYTES, RunStatusFile, RunStore, TaskStatus,
@@ -3857,7 +3870,7 @@ mod tests {
                 &store.page_path(id),
                 fixture.dir.path(),
                 &custom_vocabulary(),
-                false,
+                None,
             )]
         );
     }
@@ -5165,7 +5178,7 @@ mod tests {
                 &spec.cwd,
                 fixture.dir.path(),
                 &fixture.protected(),
-                false,
+                None,
             )
         );
         // The service folder holding `runs/` is named, with its agent.env.
@@ -5309,7 +5322,7 @@ mod tests {
                 &spec.cwd,
                 fixture.dir.path(),
                 &fixture.protected(),
-                true,
+                Some(SectionKind::Office),
             )
         );
         assert!(prompt.contains(OFFICE_TASK_PARAGRAPH));
@@ -5338,6 +5351,47 @@ mod tests {
             )),
             "{page}"
         );
+    }
+
+    const MIRO_URL: &str = "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=1";
+
+    #[test]
+    fn a_miro_board_run_gets_the_board_section_and_the_miro_paragraph() {
+        let (fixture, seen) = recording(&[TEST_ANSWER]);
+        let mut req = fixture.request("a");
+        req.url = MIRO_URL.to_string();
+        req.record_key.value = MIRO_URL.to_string();
+        req.content = "Insert link".to_string();
+        let (view, _) = fixture.supervisor.start_run(req).unwrap();
+        let id = Uuid::parse_str(&view.run_id).unwrap();
+        assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        assert!(
+            fixture
+                .supervisor
+                .inner
+                .store
+                .status(id)
+                .unwrap()
+                .office_section
+        );
+        let seen = seen.lock().unwrap();
+        assert!(seen.prompts[0].contains(miro_summary_paragraph()));
+        assert!(!seen.prompts[0].contains(office_summary_paragraph()));
+        assert!(
+            !seen.prompts[0].contains("uXjVM0uuBLo"),
+            "the board ID stays in page.md"
+        );
+        let page = &seen.starts[0].1;
+        assert!(page.contains("\n## Miro board\n"), "{page}");
+        assert!(page.contains("- Board ID: uXjVM0uuBLo=\n"), "{page}");
+        // A task on the board gets the task paragraph.
+        let (tasks, task_seen) = recording(&["Done."]);
+        let mut req = tasks.task_request("t", INSTRUCTION);
+        req.url = MIRO_URL.to_string();
+        req.record_key.value = MIRO_URL.to_string();
+        let (view, _) = tasks.supervisor.start_run(req).unwrap();
+        tasks.wait_finished(Uuid::parse_str(&view.run_id).unwrap());
+        assert!(task_seen.lock().unwrap().prompts[0].contains(MIRO_TASK_PARAGRAPH));
     }
 
     #[test]

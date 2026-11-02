@@ -2,6 +2,7 @@
 // panel button, the `summarize` shortcut, and the context menu all use
 // summarizeTab; the host and the service check every field again.
 import type { AgentStatus, RunView } from "../protocol/ts/generated.js";
+import { canonicalCapture } from "./adapter-templates.js";
 import { serviceSetupText } from "./agent.js";
 import { APP_NAME, BINARY_NAME } from "./brand.js";
 import { EXTRACT_LIMITS, extractReadablePage, wellFormed, type ExtractedPage } from "./extract.js";
@@ -62,6 +63,26 @@ function sameAddress(a: string, b: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/** Whether `url` is a Miro board, as the host's `service::miro::miro_board`
+ * recognises it (the shared vectors in host/tests/fixtures/miro-board-urls.json):
+ * `https://miro.com/app/board/<token(12)>` with an optional trailing slash,
+ * a `%3D` read as `=`. Like an Office document, it only lets a board with no
+ * text start a run; the host decides what the run is told. */
+export function isMiroBoardUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "miro.com" || parsed.port !== "" ||
+      parsed.username !== "" || parsed.password !== "") return false;
+  const segments = parsed.pathname.split("/").slice(1);
+  if (segments.at(-1) === "") segments.pop();
+  if (segments.length !== 3 || segments[0] !== "app" || segments[1] !== "board") return false;
+  return canonicalCapture("token(12)", segments[2]!.replaceAll(/%3d/gi, "=")) !== null;
 }
 
 /** Whether `url` is an Office for the web document address, as the host's
@@ -187,8 +208,9 @@ export interface TabPage {
  * the frame content choosePage picks, every string well-formed. A page whose
  * top frame cannot be read, or no frame of which yields text, throws
  * `HostError("unreadable")`, except that an Office document address
- * (isOfficeDocumentUrl) with no text is read with empty content: the host
- * names the document in page.md and the agent reads it itself; a top frame that by then holds another address
+ * (isOfficeDocumentUrl) or a Miro board (isMiroBoardUrl) with no text is read
+ * with empty content: the host names the document or board in page.md and
+ * the agent reads it itself; a top frame that by then holds another address
  * (a navigation, or an SPA's pushState) throws `HostError("page_changed")`.
  * It sends nothing to the host: Summarize & log and the task bar both read
  * pages through it. */
@@ -232,7 +254,7 @@ export async function readTab(
   }
   const page = choosePage(Array.isArray(results) ? results : []);
   if (!page) throw new HostError("unreadable", UNREADABLE_MESSAGE);
-  if (page.content.trim().length === 0 && !isOfficeDocumentUrl(tab.url)) {
+  if (page.content.trim().length === 0 && !isOfficeDocumentUrl(tab.url) && !isMiroBoardUrl(tab.url)) {
     throw new HostError("unreadable", UNREADABLE_MESSAGE);
   }
   // The run is keyed by `tab.url`, so its content must come from that page;

@@ -1,0 +1,103 @@
+{
+  "description": "Shared Miro board URL vectors (DESIGN.md \u00a74.5 \"Miro boards\"): host/src/service/miro.rs miro_board and extension/summarize.ts isMiroBoardUrl must agree on every case.",
+  "cases": [
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
+      "board": true,
+      "board_id": "uXjVM0uuBLo=",
+      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=",
+      "board": true,
+      "board_id": "uXjVM0uuBLo=",
+      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990",
+      "board": true,
+      "board_id": "uXjVM0uuBLo=",
+      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764680052296737&cot=14",
+      "board": true,
+      "board_id": "uXjVM0uuBLo=",
+      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo%3D/",
+      "board": true,
+      "board_id": "uXjVM0uuBLo=",
+      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=/#frame",
+      "board": true,
+      "board_id": "uXjVM0uuBLo=",
+      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+    },
+    {
+      "url": "https://miro.com/app/board/o9J_kpXb3Lw=/",
+      "board": true,
+      "board_id": "o9J_kpXb3Lw=",
+      "board_url": "https://miro.com/app/board/o9J_kpXb3Lw=/"
+    },
+    {
+      "url": "https://miro.com/app/dashboard/",
+      "board": false
+    },
+    {
+      "url": "https://miro.com/app/",
+      "board": false
+    },
+    {
+      "url": "https://miro.com/login/",
+      "board": false
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=/export",
+      "board": false
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBL=/",
+      "board": false
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo=x/",
+      "board": false
+    },
+    {
+      "url": "https://miro.com/app/live-embed/uXjVM0uuBLo=/",
+      "board": false
+    },
+    {
+      "url": "http://miro.com/app/board/uXjVM0uuBLo=/",
+      "board": false
+    },
+    {
+      "url": "https://www.miro.com/app/board/uXjVM0uuBLo=/",
+      "board": false
+    },
+    {
+      "url": "https://miro.com.evil.example/app/board/uXjVM0uuBLo=/",
+      "board": false
+    },
+    {
+      "url": "https://miro.com:8443/app/board/uXjVM0uuBLo=/",
+      "board": false
+    },
+    {
+      "url": "https://user@miro.com/app/board/uXjVM0uuBLo=/",
+      "board": false
+    },
+    {
+      "url": "https://miro.com/app/board/uXjVM0uuBLo%2F/",
+      "board": false
+    },
+    {
+      "url": "not a url",
+      "board": false
+    }
+  ]
+}
