@@ -3,15 +3,29 @@
 use super::*;
 
 pub(super) fn artifact_path(artifacts_dir: &str, artifact: &ArtifactRow) -> PathBuf {
-    let native = artifact
-        .artifact_id
+    artifact_file(
+        artifacts_dir,
+        &artifact.artifact_id,
+        &artifact.artifact_type,
+        &artifact.site,
+    )
+}
+
+/// [`artifact_path`] from the `artifacts` columns it depends on.
+pub(super) fn artifact_file(
+    artifacts_dir: &str,
+    artifact_id: &str,
+    artifact_type: &str,
+    site: &str,
+) -> PathBuf {
+    let native = artifact_id
         .split_once('/')
-        .map_or(artifact.artifact_id.as_str(), |(_, value)| value);
-    let hash = sha256_hex(artifact.artifact_id.as_bytes());
+        .map_or(artifact_id, |(_, value)| value);
+    let hash = sha256_hex(artifact_id.as_bytes());
     checked_relative_dir(artifacts_dir)
         .expect("validated artifacts directory")
-        .join(slug(&artifact.artifact_type, "artifact"))
-        .join(slug(&artifact.site, "site"))
+        .join(slug(artifact_type, "artifact"))
+        .join(slug(site, "site"))
         .join(format!("{}-{}.md", slug(native, "item"), &hash[..12]))
 }
 

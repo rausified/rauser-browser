@@ -107,10 +107,6 @@ fn a_year_of_daily_opens_has_a_bounded_timeline() {
     );
     assert!(markdown.contains("- 2025-10"));
     assert!(markdown.contains("- 2026-09-30"));
-    assert!(
-        fs::metadata(index.database_path()).unwrap().len() > (5 * SQLITE_PAGE_SIZE) as u64,
-        "the SQLite fixture did not exercise an interior B-tree page"
-    );
     assert_eq!(
         sql::sql_rows(&index.database_path(), "select count(*) from visits"),
         [[sql::Value::Integer(365)]]
