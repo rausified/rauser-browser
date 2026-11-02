@@ -7855,6 +7855,94 @@ id = "work:{host}/{id}"
         }
     }
 
+    /// `index.db` is created only by a commit of ingested data: reads, the
+    /// connection-boundary pass, an explicit refresh and log reconciliation
+    /// over a history with nothing to index leave the cache without it.
+    #[test]
+    fn reads_and_passes_over_an_empty_history_never_create_index_db() {
+        for logs_exist in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            if logs_exist {
+                std::fs::create_dir(root.join("logs")).unwrap();
+            }
+            let path = folder.path().join("config.toml");
+            write_adapter_config(
+                &path,
+                &root,
+                r#"[[artifacts]]
+ type = "work.item"
+ origin = "https://work.example"
+ match = [{ path = "/issues/{id:int}" }]
+ id = "work:{host}/{id}"
+ "#,
+            );
+            let mut config = loaded(&path);
+            let cache = config.cache_dir().unwrap();
+            let Response::ArtifactListResult(recent) = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recent".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            ) else {
+                panic!("expected an empty history")
+            };
+            assert!(recent.items.is_empty());
+            assert!(matches!(
+                get_artifact(
+                    brauser_protocol::GetArtifactRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "artifact".into(),
+                        url: "https://work.example/issues/1".into(),
+                        title: None,
+                    },
+                    &mut config,
+                ),
+                Response::ArtifactResult(_)
+            ));
+            assert!(matches!(
+                worklog(
+                    brauser_protocol::WorklogRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "worklog".into(),
+                        start_date: invalid_policy_day(),
+                        end_date: invalid_policy_day(),
+                    },
+                    &mut config,
+                ),
+                Response::WorklogResult(_)
+            ));
+            assert!(matches!(
+                refresh_artifacts(
+                    brauser_protocol::RefreshArtifactsRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "refresh".into(),
+                    },
+                    &mut config,
+                ),
+                Response::ArtifactsRefreshed(_)
+            ));
+            regenerate_artifacts(&mut config, true);
+            reconcile_index_from_logs(&config);
+            for name in [
+                "index.db",
+                "index.db-wal",
+                "index.db-shm",
+                "index.db-journal",
+            ] {
+                assert!(
+                    !cache.join(name).exists(),
+                    "{name} exists, logs_exist={logs_exist}"
+                );
+            }
+        }
+    }
+
     fn deliver_activity(config: &mut ConfigStore, event: ActivityEvent) -> VisitOutcome {
         let Response::ActivityRecorded(reply) = record_activity(
             RecordActivityRequest {
