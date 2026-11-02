@@ -14,6 +14,37 @@ for (const pageName of ["panel", "options", "tasks"]) {
   }
 }
 
+test("adapter repair exposes preserved values, match preview and keyboard cancellation", async (t) => {
+  const page = await browserFixture(t, "options", "adapter-repair");
+  if (!page) return;
+  const open = page.locator("#repair-adapters");
+  await open.click();
+  const original = page.locator("#adapter-repair-original");
+  await original.waitFor();
+  assert.equal(await original.getAttribute("readonly"), "");
+  assert.match(await original.inputValue(), /future_mode/);
+  const replacement = JSON.stringify({ format: 1, artifacts: [{
+    type: "work.item", origin: "https://work.example", match: [{ path: "/items/{id:int}" }], id: "work.item:{host}/{id}",
+  }] });
+  await page.locator("#adapter-repair-json").fill(replacement);
+  await page.locator("#adapter-repair-url").fill("https://work.example/items/42");
+  await page.locator("#adapter-repair-preview").getByText(/Example:.*work.item:work.example\/42/).waitFor();
+  assert.equal(await page.locator("#adapter-repair-save").isEnabled(), true);
+  await audit(t, page, "options/adapter-repair");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#adapter-repair").isVisible(), false);
+  assert.equal(await open.evaluate((node) => node === document.activeElement), true);
+  await page.keyboard.press("Enter");
+  await page.locator("#adapter-repair-json").fill(replacement);
+  await page.locator("#adapter-repair-save").click();
+  await page.locator("#status").filter({ hasText: /Adapter document replaced/ }).waitFor();
+  assert.equal(await page.locator("#adapter-repair").isVisible(), false);
+  assert.equal(await page.locator("#new-adapter").evaluate((node) => node === document.activeElement), true);
+  assert.equal(await page.evaluate(() => window.fixture.config.capture_enabled), true);
+  assert.equal(await page.evaluate(() => window.fixture.requests.filter(({ type }) => type === "replace_adapters").length), 1);
+  await audit(t, page, "options/adapter-repaired");
+});
+
 test("Tasks listbox keeps named groups and valid children through filtering", async (t) => {
   const today = new Date();
   today.setHours(12, 0, 0, 0);

@@ -111,6 +111,14 @@ To check the Chrome behavior M1.5a artifact logging relies on (new-tab events, t
 
 The development registration in step 3 changes only the current user's Chrome native-host entry. It is for development; the self-registering Brauser app planned for M5 will own registration and removal. A folder path previously entered directly in an M0 config must be selected again through the native picker before M1 can use it. The host backs up malformed or incompatible config files during a revision-checked repair.
 
+If settings reports an adapter document issue, **Repair adapter document…**
+opens preserved values you can copy and a separate complete format-1 JSON
+replacement with match preview. Include every rule you want to keep; no newer
+format is converted automatically. **Back up and replace all adapter rules**
+keeps your other settings and capture on/off choice, and saves the exact original
+config as `config-invalid-<uuid>.toml` beside config.toml before replacement.
+A stale review cannot save. **Remove all adapter rules** remains available.
+
 The host binds the chosen folder to its filesystem identity. If that folder is moved or replaced, choose it again before capture resumes. M1 keeps a synced visit-ID intent file in the OS config directory for each saved visit so retries can recover across log dates and interrupted appends. These files remain indefinitely in the development build; compacting the index is part of the public-release work.
 
 Page notes are replaced whole under a version the panel names on every save (`load_note`/`save_note`); a save based on an out-of-date version is refused, and the host returns the note's current content instead of writing anything, so the panel can show it and let the user copy back what it could not save. The host checks the existing file's recorded canonical URL and Brauser ownership before replacing it; a mismatch is left untouched. Automatic capture still checks the original URL against the host's adapters before normalizing or logging it, but notes work on any HTTP(S) page whether or not an adapter covers it. See [protocol/README.md](protocol/README.md) for the message contract.

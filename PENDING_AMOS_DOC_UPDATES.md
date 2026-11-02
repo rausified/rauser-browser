@@ -340,3 +340,11 @@
   current page; Tasks-page Reuse also reopens the original page.
 
 - **Brauser — tasks without a page (2026-11-02, brwr-qin).** The task bar now works on non-web tabs, and Include this page lets a user run a knowledge-base instruction without attaching the active web page. Explicit scope is checked by host and service, omits page.md and page-reading permissions, and survives Tasks history/Reuse without navigation. Local required/README gates pass; real browser/IPC acceptance and publication remain driver/platform work. Brauser project documentation remains in this repository.
+
+- **2026-11-02 — Brauser adapter repair (`brwr-jnj`):** Settings can copy
+  preserved adapter values and preview a complete format-1 replacement while
+  the original document is invalid. The host backs up the exact config before
+  replacement, preserves pause/folders/agent settings, refuses stale or invalid
+  submissions and retains recorded identity protection. Future formats remain
+  opaque; remove-all recovery is still available. Project details remain in
+  Brauser's README, DESIGN.md §7.2, TESTING.md and CookieFeature.md.
