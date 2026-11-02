@@ -9,7 +9,8 @@
 //! The goldens were captured from the hand-written snapshot code before the
 //! rusqlite store replaced it. Later work keeps these tests green without
 //! editing the goldens; `bless_golden_fixtures` exists only to add a new
-//! fixture, and rewriting an existing golden needs a stated reason.
+//! fixture (it needs `BRAUSER_BLESS_GOLDENS=1` as well as `--ignored`), and
+//! rewriting an existing golden needs a stated reason.
 
 use super::*;
 use crate::url_provenance::UrlProvenance;
@@ -382,12 +383,37 @@ fn every_fixture_directory_is_checked() {
     assert_eq!(found, listed);
 }
 
+/// The environment variable that must be set to `1` before
+/// `bless_golden_fixtures` rewrites anything. `#[ignore]` alone is not
+/// enough: any `--ignored`/`--include-ignored` run would otherwise recapture
+/// the goldens from the code under test and hide a parity regression.
+const BLESS_ENV: &str = "BRAUSER_BLESS_GOLDENS";
+
+fn bless_requested(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "1")
+}
+
+#[test]
+fn blessing_needs_the_explicit_env_var() {
+    assert!(!bless_requested(None));
+    assert!(!bless_requested(Some("".as_ref())));
+    assert!(!bless_requested(Some("0".as_ref())));
+    assert!(!bless_requested(Some("true".as_ref())));
+    assert!(bless_requested(Some("1".as_ref())));
+}
+
 /// Write every fixture's logs, adapter document and queries, then capture
 /// its goldens from the code under test. Run only to add a fixture:
-/// `cargo test -p brauser --lib bless_golden_fixtures -- --ignored`.
+/// `BRAUSER_BLESS_GOLDENS=1 cargo test -p brauser --lib bless_golden_fixtures -- --ignored`.
+/// Without the env var it does nothing, so a broad `--ignored` run cannot
+/// silently rewrite the goldens.
 #[test]
-#[ignore = "rewrites the committed golden fixtures"]
+#[ignore = "rewrites the committed golden fixtures; also needs BRAUSER_BLESS_GOLDENS=1"]
 fn bless_golden_fixtures() {
+    if !bless_requested(std::env::var_os(BLESS_ENV).as_deref()) {
+        eprintln!("bless_golden_fixtures: {BLESS_ENV}=1 is not set; leaving the goldens untouched");
+        return;
+    }
     for fixture in build_fixtures() {
         let dir = fixtures_root().join(fixture.name);
         if dir.exists() {
