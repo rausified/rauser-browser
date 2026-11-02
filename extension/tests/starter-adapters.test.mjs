@@ -197,24 +197,24 @@ test("Confluence draft keys pages by page ID across view, edit, history and lega
   const [jira, confluence] = starterOffers(origin, []);
   assert.equal(confluence.adapter.id, "confluence.page:{host}/{id}");
   const doc = compiled([jira, confluence]);
-  const id = "confluence.page:acme.atlassian.net/1493076381";
-  const page = evaluate(doc, `${origin}/wiki/spaces/ENG/pages/1493076381/Release+Plan?atl_f=PAGETREE#0a1b2c3d4e5f`,
+  const id = "confluence.page:acme.atlassian.net/1000001";
+  const page = evaluate(doc, `${origin}/wiki/spaces/ENG/pages/1000001/Release+Plan?atl_f=PAGETREE#0a1b2c3d4e5f`,
     "OPS-12 rollout plan - Engineering - Confluence");
   assert.equal(page.artifact_id, id);
   assert.equal(page.mode, null);
   assert.equal(page.title, "OPS-12 rollout plan");
   assert.deepEqual(page.refs, [{ type: "jira.issue", value: "OPS-12" }]);
   // The ID never carries the space key: a moved page keeps its identity.
-  assert.equal(evaluate(doc, `${origin}/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1493076381`).artifact_id, id);
-  const edit = evaluate(doc, `${origin}/wiki/spaces/ENG/pages/edit-v2/1493076381`);
+  assert.equal(evaluate(doc, `${origin}/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1000001`).artifact_id, id);
+  const edit = evaluate(doc, `${origin}/wiki/spaces/ENG/pages/edit-v2/1000001`);
   assert.deepEqual([edit.artifact_id, edit.mode], [id, "edit"]);
-  const history = evaluate(doc, `${origin}/wiki/spaces/ENG/history/1493076381/Release+Plan`,
+  const history = evaluate(doc, `${origin}/wiki/spaces/ENG/history/1000001/Release+Plan`,
     "Version history - Release plan - Engineering - Confluence");
   assert.deepEqual([history.artifact_id, history.mode, history.title], [id, "view", "Release plan"]);
-  assert.equal(evaluate(doc, `${origin}/wiki/pages/viewpage.action?pageId=1493076381`).artifact_id, id);
+  assert.equal(evaluate(doc, `${origin}/wiki/pages/viewpage.action?pageId=1000001`).artifact_id, id);
   for (const path of [
-    "/wiki", "/wiki/home", "/wiki/search?text=plan", "/wiki/spaces/ENG/overview", "/wiki/spaces/ENG/database/1493076381",
-    "/wiki/x/AbCdEf", "/wiki/spaces/ENG/whiteboard/1493076381", "/wiki/spaces/ENG/blog/2026/10/30/1493076381/Notes",
+    "/wiki", "/wiki/home", "/wiki/search?text=plan", "/wiki/spaces/ENG/overview", "/wiki/spaces/ENG/database/1000001",
+    "/wiki/x/AbCdEf", "/wiki/spaces/ENG/whiteboard/1000001", "/wiki/spaces/ENG/blog/2026/10/30/1000001/Notes",
   ]) assert.equal(evaluate(doc, `${origin}${path}`).match, false, path);
   // Jira keeps its own routes on the shared origin.
   assert.equal(evaluate(doc, `${origin}/browse/OPS-12`).artifact_id, "jira:acme.atlassian.net/OPS-12");
@@ -408,8 +408,8 @@ test("a Confluence adapter saved without the history rule can gain it, with its 
   assert.equal(addition.adapter.modes, undefined, "a fixed rule mode needs no modes table");
   const doc = compileDocument({ format: 1, artifacts: [addition.adapter] });
   assert.equal(doc.ok, true);
-  const history = evaluate(doc.doc, "https://acme.atlassian.net/wiki/spaces/ENG/history/1493076381");
-  assert.deepEqual([history.artifact_id, history.mode], ["confluence.page:acme.atlassian.net/1493076381", "view"]);
+  const history = evaluate(doc.doc, "https://acme.atlassian.net/wiki/spaces/ENG/history/1000001");
+  assert.deepEqual([history.artifact_id, history.mode], ["confluence.page:acme.atlassian.net/1000001", "view"]);
   // The current starter itself needs no update.
   assert.equal(starterRuleUpdate(confluence.adapter), null);
 });

@@ -132,7 +132,7 @@ test("Capture Site offers Miro boards as a starter, keyed by the padded board ID
   assert.equal(saved.unscoped, undefined);
 });
 
-const CONFLUENCE_URL = "https://acme.atlassian.net/wiki/spaces/ENG/pages/1493076381/Release+Plan?atl_f=PAGETREE";
+const CONFLUENCE_URL = "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan?atl_f=PAGETREE";
 
 test("Capture Site offers Jira issues and Confluence pages on an Atlassian site, both chosen", async () => {
   const page = await captureReview(CONFLUENCE_URL);

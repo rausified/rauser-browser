@@ -42,11 +42,11 @@ test("Jira and OneDrive start from the current URL and retain starter identities
 });
 
 test("Atlassian sites plan Jira issues and Confluence pages together or alone", () => {
-  const url = "https://acme.atlassian.net/wiki/spaces/ENG/pages/1493076381/Release+Plan?atl_f=PAGETREE";
+  const url = "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan?atl_f=PAGETREE";
   const both = plan(url);
   assert.deepEqual(both.document.artifacts.map((adapter) => adapter.type), ["jira.issue", "confluence.page"]);
   assert.deepEqual(both.offers.map((offer) => offer.label), ["Jira issues", "Confluence pages"]);
-  assert.equal(both.current.result.artifact_id, "confluence.page:acme.atlassian.net/1493076381");
+  assert.equal(both.current.result.artifact_id, "confluence.page:acme.atlassian.net/1000001");
   assert.equal(both.probes.length, 27);
   assert.ok(both.probes.every((row) => !row.result.match));
   assert.deepEqual(both.examples.map((row) => row.result.type), ["jira.issue", "confluence.page"]);

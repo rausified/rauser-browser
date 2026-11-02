@@ -143,11 +143,11 @@ test("a Confluence adapter without the history rule is offered it on a version-h
   const [jira, confluence] = adaptersOf("https://acme.atlassian.net");
   const history = confluence.match[2];
   const saved = { ...confluence, match: confluence.match.filter((rule) => rule !== history) };
-  const url = "https://acme.atlassian.net/wiki/spaces/ENG/history/1493076381/Release+Plan";
+  const url = "https://acme.atlassian.net/wiki/spaces/ENG/history/1000001/Release+Plan";
   assert.deepEqual(noRule([jira, saved], url), { kind: "starter_rule", adapter: 1, label: "Confluence pages", rule: history });
   // A Jira-only site is not offered Confluence as a near-miss: the Confluence
   // starter is added from the settings gallery, not as a rule of Jira's.
-  assert.equal(noRule([jira], "https://acme.atlassian.net/wiki/spaces/ENG/pages/1493076381"), null);
+  assert.equal(noRule([jira], "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001"), null);
 });
 
 test("a starter rule the adapter's own scope rejects is not a near-miss", () => {

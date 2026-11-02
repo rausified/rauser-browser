@@ -85,13 +85,13 @@ is a shared vector (`eval.confluence.*` in
 
 | URL | Tab title | Records |
 |---|---|---|
-| `/wiki/spaces/ENG/pages/1493076381/Release+Plan` | `Release plan - Engineering - Confluence` | `…/1493076381`, title `Release plan` |
-| `/wiki/spaces/OPS/pages/1509755905` (no slug) | same form | `…/1509755905` |
-| `/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1538895180/Some+Page` | `Some Page - Alex Example - Confluence` (a personal space is named after its owner) | `…/1538895180`, title `Some Page` |
-| `/wiki/spaces/ENG/pages/1493076381/Release+Plan?atl_f=PAGETREE`, `?xpis=…`, `?search_id=…&additional_analytics=…`, `#0a1b2c3d4e5f` | | `…/1493076381` |
-| `/wiki/spaces/OPS/pages/edit-v2/1509755905` | not recorded | `…/1509755905`, edit mode |
-| `/wiki/spaces/ENG/history/1511794830/Release+Plan` | `Version history - Release plan - Engineering - Confluence` | `…/1511794830`, view mode, title `Release plan` |
-| `/wiki/pages/viewpage.action?pageId=1493076381` | `OPS-12 rollout plan - Engineering - Confluence` | `…/1493076381`, title `OPS-12 rollout plan`, mentions `OPS-12` |
+| `/wiki/spaces/ENG/pages/1000001/Release+Plan` | `Release plan - Engineering - Confluence` | `…/1000001`, title `Release plan` |
+| `/wiki/spaces/OPS/pages/1000002` (no slug) | same form | `…/1000002` |
+| `/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1000003/Some+Page` | `Some Page - Alex Example - Confluence` (a personal space is named after its owner) | `…/1000003`, title `Some Page` |
+| `/wiki/spaces/ENG/pages/1000001/Release+Plan?atl_f=PAGETREE`, `?xpis=…`, `?search_id=…&additional_analytics=…`, `#0a1b2c3d4e5f` | | `…/1000001` |
+| `/wiki/spaces/OPS/pages/edit-v2/1000002` | not recorded | `…/1000002`, edit mode |
+| `/wiki/spaces/ENG/history/1000004/Release+Plan` | `Version history - Release plan - Engineering - Confluence` | `…/1000004`, view mode, title `Release plan` |
+| `/wiki/pages/viewpage.action?pageId=1000001` | `OPS-12 rollout plan - Engineering - Confluence` | `…/1000001`, title `OPS-12 rollout plan`, mentions `OPS-12` |
 
 ## What the draft does not record
 
