@@ -18,7 +18,7 @@ use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
 use serde_json::{Value, json};
 
 /// Every fixture directory, in the order the tests check them.
-const FIXTURES: &[&str] = &[
+pub(super) const FIXTURES: &[&str] = &[
     "hostile",
     "case-collision",
     "containers",
@@ -106,11 +106,11 @@ struct RecentQuery {
     limit: usize,
 }
 
-fn fixtures_root() -> PathBuf {
+pub(super) fn fixtures_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/index")
 }
 
-fn read_json(path: &Path) -> Value {
+pub(super) fn read_json(path: &Path) -> Value {
     let bytes = fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }

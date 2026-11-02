@@ -6,9 +6,11 @@
 //! every indexed event and whose derived tables serve current and future
 //! readers; a delivery re-derives only the groups it touches. Either file
 //! may be deleted; `brauser reindex` recreates both.
-//! A catch-up that needs more than one pass's read bound (a rebuild of a
-//! long history) saves its progress in `index-catch-up.json`, which is never
-//! served, and the next pass resumes from it.
+//! A rebuild (reindex, a lost cache, a removed or shrunk log) is staged in
+//! `index.db` (`rebuild.rs`): each bounded pass commits its progress there,
+//! the previous rows keep serving, and the next pass resumes. An incremental
+//! catch-up that needs more than one pass's read bound saves its progress in
+//! `index-catch-up.json`, which is never served, until plan T15.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions as StdOpenOptions};
@@ -53,6 +55,7 @@ mod fold;
 mod legacy;
 mod ord;
 mod query;
+mod rebuild;
 mod regen;
 mod render;
 mod scan;
@@ -740,17 +743,13 @@ impl ArtifactIndex {
     /// the watermark, or a pass the JSON cache made itself (its first build,
     /// a resumed or reset pass). The events come from `state` through
     /// `store::sync_to_state`, so this pass only advances the watermark.
-    /// A shrunk or removed log resets the watermark and reads every log
-    /// again, until the staged rebuild (plan T10) takes that over.
     fn level_watermark(&self, tx: &rusqlite::Transaction<'_>, state: &IndexState) -> Result<()> {
         if catchup::checkpoints(tx)? != state.logs {
             let mut ignore =
                 |_: &rusqlite::Transaction<'_>, _: CachedEvent, _: (PathBuf, u64)| Ok(());
-            let pass = catchup::catch_up(tx, &self.storage, &self.root_identity, &mut ignore)?;
-            if pass == catchup::CatchUp::Rebuilding {
-                catchup::reset(tx)?;
-                catchup::catch_up(tx, &self.storage, &self.root_identity, &mut ignore)?;
-            }
+            // A shrunk or removed log the cache has not seen yet leaves the
+            // staged rebuild requested; the next catch-up runs it.
+            catchup::catch_up(tx, &self.storage, &self.root_identity, &mut ignore)?;
         }
         // Once level, the watermark's gaps are exactly the cache's.
         #[cfg(test)]
@@ -826,31 +825,22 @@ impl ArtifactIndex {
         state.dirty.extend(found);
     }
 
-    /// Rebuild both cache files from owned log markers, then regenerate every
-    /// artifact file. This is the explicit repair path for a deleted or
-    /// corrupt cache and intentionally replaces user edits to owned files.
-    /// A history larger than one pass's read bound is read in several
-    /// bounded passes, each saving its progress, within this one call.
+    /// Rebuild `index.db` in place from owned log markers through the staged
+    /// rebuild (`rebuild.rs`), then regenerate every artifact file. This is
+    /// the explicit repair path for a deleted or corrupt cache and
+    /// intentionally replaces user edits to owned files. A history larger
+    /// than one pass's read bound is read in several bounded passes, each
+    /// committing its progress, within this one call; a rebuild already in
+    /// progress (another call, or a host that stopped mid-pass) resumes.
     pub fn reindex(&self) -> Result<RegenerationReport> {
-        let (mut state, previous) = loop {
-            if let Some(rescanned) = self.rescan_logs(false)? {
-                break rescanned;
-            }
-        };
-        let derived = self.derive(&state);
-        state.dirty = derived.artifacts.keys().cloned().collect();
-        // A rebuilt state knows no container files, so a container that no
-        // longer derives a record would keep its file. Take them from the
-        // published cache and from the owned files on disk.
-        let mut known = previous
-            .map(|previous| previous.container_files)
-            .unwrap_or_default();
-        for (id, path) in self.owned_rollup_files() {
-            known.entry(id).or_insert(path);
-        }
-        adopt_vanished_container_files(&mut state, &derived, known);
-        self.publish_state_and_database(&state)?;
-        self.regenerate_state(state, false)
+        while !self.rebuild_pass(rebuild::Finish::All)? {}
+        // Vanished container files were adopted from the store and from the
+        // owned roll-up files on disk; a replaced file is not Brauser's.
+        let state = self.store_state()?;
+        self.write_state(&state)?;
+        let report = self.regenerate_state(state, false);
+        self.checkpoint_wal();
+        report
     }
 
     /// Best-effort lifecycle pass used at native-host connection boundaries.
@@ -1153,11 +1143,19 @@ impl ArtifactIndex {
         state.adapters = adapters;
         // Containers follow the adapters too: their files regenerate when
         // the document changes, not only after the next visit (§8.3).
+        // The store re-derives for the new document once and marks only
+        // the files whose render changes; without a store the cache marks
+        // every file that depends on the adapters at all.
         if resolution_changed {
-            let dependent = self.adapter_dependent_files(&state);
-            state.dirty.extend(dependent);
-            let previous = std::mem::take(&mut state.containers);
-            state.dirty.extend(previous);
+            match self.store_adapter_change()? {
+                Some(dirty) => state.dirty.extend(dirty),
+                None => {
+                    let dependent = self.adapter_dependent_files(&state);
+                    state.dirty.extend(dependent);
+                    let previous = std::mem::take(&mut state.containers);
+                    state.dirty.extend(previous);
+                }
+            }
         }
         if republish || changed || resolution_changed {
             self.dirty_containers(&mut state);
@@ -1354,22 +1352,6 @@ impl ArtifactIndex {
         }
     }
 
-    /// One bounded pass of a full rebuild from the logs, resuming a saved
-    /// partial rebuild. Keeps the published cache's conflict winners
-    /// (`catch_up_pass`) and also returns that cache. `None` means the pass
-    /// reached its read bound and saved its progress.
-    fn rescan_logs(&self, reconcile: bool) -> Result<Option<(IndexState, Option<IndexState>)>> {
-        let mut state = match self.read_pending() {
-            Some(pending) if pending.rebuild => pending.state,
-            _ => self.empty_state(),
-        };
-        state.adapters = self.adapters_fingerprint();
-        match self.catch_up_pass(&mut state, &mut true, reconcile)? {
-            CatchUp::Incomplete => Ok(None),
-            CatchUp::Complete { previous, .. } => Ok(Some((state, previous.map(|state| *state)))),
-        }
-    }
-
     /// Called under the native host's configuration/write lock. Limit the
     /// total bytes read in one pass as well as individual files and file count.
     /// A pass that reaches the byte bound stops before the next changed log,
@@ -1381,9 +1363,15 @@ impl ArtifactIndex {
     /// (`catchup::catch_up`), whose tail parse reads only what was appended
     /// to a log. Its rows and gaps commit with each pass, and `state` takes
     /// the events it found, its checkpoints and its gaps. A watermark that
-    /// does not describe `state` (a reset or rebuilt cache, a store written
-    /// before the watermark, a crash between the commit and the cache's
-    /// publication) is reset first, so that pass reads every log in full.
+    /// does not describe `state` (a store written before the watermark, a
+    /// crash between the commit and the cache's publication) is reset
+    /// first, so that pass reads every log in full.
+    ///
+    /// A rebuild (`rebuild`, a removed or shrunk log, or a staged rebuild
+    /// the store already has in progress) is instead one pass of the
+    /// store's staged rebuild, which keeps the previous winner of a reused
+    /// event ID by joining with `brauser_events`; once it finishes, `state`
+    /// becomes the store's contents.
     fn catch_up_logs(&self, state: &mut IndexState, rebuild: bool) -> Result<LogPass> {
         let (root, _) =
             open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
@@ -1439,10 +1427,25 @@ impl ArtifactIndex {
                 complete: true,
             });
         }
+        // A rebuild (no usable cache, a removed or shrunk log, or one the
+        // store already has in progress) is the store's staged rebuild: each
+        // call advances one bounded pass, and the finished store becomes
+        // the cache. Only artifacts whose render changed are marked dirty.
+        if rebuild || reset || self.store_rebuilding() {
+            if !self.rebuild_pass(rebuild::Finish::Changed)? {
+                bail!(INCOMPLETE_CATCH_UP);
+            }
+            *state = self.store_state()?;
+            return Ok(LogPass {
+                changed: true,
+                reset: true,
+                complete: true,
+            });
+        }
         let mut found = Vec::new();
         let mut conn = store::open(&self.cache_dir)?;
         let (complete, watermark, gaps) = db::write_txn(&mut conn, |tx| {
-            if reset || state.gap_logs != state.logs || catchup::checkpoints(tx)? != state.logs {
+            if state.gap_logs != state.logs || catchup::checkpoints(tx)? != state.logs {
                 catchup::reset(tx)?;
             }
             let mut sink = |_: &rusqlite::Transaction<'_>, event, position| {
@@ -1461,7 +1464,7 @@ impl ArtifactIndex {
         })?;
         drop(conn);
         for (event, position) in found {
-            state.ingest(event, Some(position), rebuild || reset);
+            state.ingest(event, Some(position), false);
         }
         // Retries reuse the marker ID. Conflicting copies always keep the
         // earliest log position, including after reindex.
