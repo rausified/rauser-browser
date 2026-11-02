@@ -310,3 +310,13 @@
   delimiter. Added 26 shared vectors and verified 2,024 offline comparisons;
   full local gate passed with explicit sandbox skips. Fuzz compilation needs
   its uncached dependency and platform/browser evidence remains CI/human work.
+
+
+- 2026-11-02 — Brauser (`brwr-sm7`): automatic summaries require the original
+  page URL to match a current adapter, checked under the native configuration
+  lock. Removed/narrowed rules still preserve existing notes and explicit
+  summaries. An offline saved-note regression covers both changes.
+- 2026-11-02 — Brauser (`brwr-sm9`): already-summarized suppression now expires
+  by local calendar day, so viewer-only summaries can retry while Chrome stays
+  open. Same-day suppression, pending dwell and retry state remain intact;
+  the host continues deciding which saved summaries block another run.

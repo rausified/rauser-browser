@@ -1025,3 +1025,29 @@ the history hint. A successful list of retained summaries now recreates that
 hint even when every card is dismissed or too old. The panel-to-Tasks
 regression exercises both an existing hint and an absent one before removing
 the harness.
+
+
+## 2026-11-02 — Automatic summary eligibility follows current capture rules
+
+`brwr-sm7`: `start_auto_summary` holds one configuration lock while refreshing
+settings, checking setup, resolving the page key and matching the original URL
+against the current adapter document. An artifact key from a retired note
+contract alone no longer authorizes a run. The host releases the lock before
+service IPC. Manual runs and note identity retain their existing resolver.
+The regression saves a real artifact note, removes or narrows the adapter,
+and checks the preserved note plus automatic refusal and manual forwarding.
+
+`brwr-sm9`: the session state's existing bounded `submitted` array gains an
+optional `submitted_day`, using the shared offset-qualified local timestamp
+formatter's calendar date. Candidate synchronization and submission rotate
+that cache on a different date; old undated caches expire once. Candidate
+attention, skips and retry state are retained. Reconsideration occurs on the
+next activity synchronization, with the ordinary load/dwell rules, and the
+host still decides whether the saved summary blocks. No wire or disk-summary
+format change is needed. Pure tests run in UTC and America/Los_Angeles, and a
+worker test keeps the browser session and tab open across the date boundary.
+
+A delayed already-summarized reply that crosses midnight does not mark the
+new day: the worker retains the local day of the actual request timestamp,
+and lets the next activity update ask the host for a current-day decision.
+A failing-first worker regression covers the delayed reply.
