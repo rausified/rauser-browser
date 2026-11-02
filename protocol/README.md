@@ -620,7 +620,10 @@ extension deploy together.
 cache. Older events and run results omit it and keep their previous UI text;
 it is never sent as null or an empty string. The event validator bounds it
 to 300 Unicode characters and refuses control characters. Cache format 8
-remains readable without a rebuild. Deploy host and extension together:
+remains readable without a rebuild. Retry save of an append journaled before
+this field was added completes the original bytes, keeping its event without
+an overview; all other payload and identity checks still apply.
+Deploy host and extension together:
 older extensions reject the new reply field. Downgrading the host after
 recording new summaries is unsupported: older hosts reject summary events
 with the new field and can omit them on rebuild. Re-upgrade and run

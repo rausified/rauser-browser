@@ -958,7 +958,8 @@ export async function restoreRunCards(
   clearNotice(noticeArea);
   for (const cards of containers) cards.restoreFrom(runs, dismissed);
   const hasHistory = runs.some((run) => (run.kind ?? "summary") === "summary" || run.kind === "task");
-  if (!hasHistory && options.keepRecord !== true) await clearRunsMayExist(deps.storage, listedAt);
+  if (hasHistory) await markRunsMayExist(deps.storage, deps.now());
+  else if (options.keepRecord !== true) await clearRunsMayExist(deps.storage, listedAt);
 }
 
 /** The summary run cards in `container`, which they share with other

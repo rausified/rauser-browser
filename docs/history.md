@@ -996,3 +996,19 @@ Cookie also repaired brwr-tsh1: summary restore retains `runs_may_exist_v1`
 for any retained summary/task even when no panel card qualifies. A dismissed
 summary remains reachable on Tasks after the harness is removed. The empty
 list's existing timestamp guard still protects a concurrently started run.
+
+## 2026-11-02 — Preserve interrupted summary appends across the overview upgrade
+
+Independent review found that Retry save added `overview` to an older run's
+journaled event, so the exact payload check refused to complete it. Summary
+recording now tries the pre-overview payload after that mismatch, retaining
+all existing replay checks and returning the original event for indexing.
+Regressions cover rolled-back, partially written and complete old entries,
+byte-identical recovery after reopening the store, changed paths, and refusal
+to alter an overview already bound by a newer intent.
+
+Review also covered profiles where the old restore bug had already erased
+the history hint. A successful list of retained summaries now recreates that
+hint even when every card is dismissed or too old. The panel-to-Tasks
+regression exercises both an existing hint and an absent one before removing
+the harness.

@@ -485,30 +485,33 @@ test("the page shows the service setup text with Open settings when the service 
   assert.equal(page.calls("openOptionsPage"), 1);
 });
 
-test("a dismissed summary stays reachable after panel restore and harness removal", async () => {
-  const { instruction: _instruction, task_report: _report, ...summary } = task(1, {
-    kind: "summary", title: "Retained summary",
-  });
-  const local = new Map([[RUNS_MAY_EXIST_KEY, 1], [DISMISSED_KEY, [summary.run_id]]]);
-  const panel = await install({
-    tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY, config: SET_UP, local,
-    intercept: (request) => request.type === "list_runs"
-      ? { type: "runs_listed", runs: request.kind === "summary" ? [summary] : [], more: false }
-      : null,
-  });
-  await until(() => panel.sent("list_runs").some((request) => request.kind === "summary"), "panel summary restore");
-  await settle();
-  assert.equal(panel.el("run-area").textContent, "", "dismissal hides the panel card");
-  teardown.splice(0).forEach((listener) => listener());
+for (const hadHint of [true, false]) {
+  test(`a dismissed summary stays reachable after panel restore and harness removal (${hadHint ? "existing" : "missing"} hint)`, async () => {
+    const { instruction: _instruction, task_report: _report, ...summary } = task(1, {
+      kind: "summary", title: "Retained summary",
+    });
+    const local = new Map([[DISMISSED_KEY, [summary.run_id]]]);
+    if (hadHint) local.set(RUNS_MAY_EXIST_KEY, 1);
+    const panel = await install({
+      tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY, config: SET_UP, local,
+      intercept: (request) => request.type === "list_runs"
+        ? { type: "runs_listed", runs: request.kind === "summary" ? [summary] : [], more: false }
+        : null,
+    });
+    await until(() => panel.sent("list_runs").some((request) => request.kind === "summary"), "panel summary restore");
+    await settle();
+    assert.equal(panel.el("run-area").textContent, "", "dismissal hides the panel card");
+    teardown.splice(0).forEach((listener) => listener());
 
-  const page = await openTasks({ runs: [summary], local, agentStatus: NOT_SET_UP });
-  await settle();
-  assert.ok(page.sent("list_runs").some((request) => request.kind === "summary"), "history lists without a harness");
-  page.el("tasks-show-dismissed").checked = true;
-  page.el("tasks-show-dismissed").dispatch("change");
-  await until(() => page.rows().length === 1, "the retained summary");
-  assert.match(page.rows()[0].textContent, /Summary · Retained summary/);
-});
+    const page = await openTasks({ runs: [summary], local, agentStatus: NOT_SET_UP });
+    await settle();
+    assert.ok(page.sent("list_runs").some((request) => request.kind === "summary"), "history lists without a harness");
+    page.el("tasks-show-dismissed").checked = true;
+    page.el("tasks-show-dismissed").dispatch("change");
+    await until(() => page.rows().length === 1, "the retained summary");
+    assert.match(page.rows()[0].textContent, /Summary · Retained summary/);
+  });
+}
 
 test("the page lists tasks once a harness is set up and the page is shown again", async () => {
   const page = await openTasks({ agentStatus: NOT_SET_UP });
