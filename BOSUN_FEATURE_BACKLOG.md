@@ -187,6 +187,7 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
+- [ ] `brwr-vtff` **Wardroom smoke test.** Wardroom smoke test Assigned by John in the Wardroom (ASSIGN-a5825eb21444). _(P1; labels: assigned, wardroom-assignment)_
 - [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2)_
 - [ ] `brwr-mff` **[human] Add rusqlite (bundled) to the workspace and warm the VM cargo cache.** Cookie's codex sandbox cannot fetch crates, so step 6.6 hand-wrote a SQLite file writer instead of using a library. Outside the sandbox: add rusqlite with the bundled feature to host/Cargo.toml, update Cargo.lock, pass cargo deny check --all-features --locked (license… _(P2; labels: human)_
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
@@ -248,6 +249,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
 - **Category:** Quality. `brwr-5yn` **Five starter adapters release-certified (2026-11-02).** John checked the Jira issue, SharePoint/OneDrive document, and GitHub repository, pull request and issue drafts against the live tools on macOS with real Chrome; their docs/adapters/ status lines now read release-certified 2026-11-02. Miro stays a development draft. **Metrics:** 5 of 6 starter drafts certified.
+
+- **Category:** Testing & Verification. **Gate keyboard access across built browser pages (2026-11-02).** Added local-fixture axe audits across panel, settings and Tasks states and themes, keyboard flows and a seeded serious violation. Fixed tab and listbox semantics, theme contrast, review and polling focus, and keyboard access to the adapter match preview. Incomplete axe checks remain human review. The coordinator accepted PR #212 after required real-browser validation. **Metrics:** 38 accessibility cases passed three times on macOS Chrome; sandbox skips are not acceptance.
 
 - **Category:** Bug Fix. **Hide Tasks page controls on Windows (2026-11-01).** The Tasks page's search box, status filter and Show dismissed toggle (`.tasks-controls`) now hide on Windows alongside the existing "Tasks are not supported on Windows yet." text, instead of staying visible and inert. DESIGN.md's Tasks page paragraph now notes the hidden state. **Metrics:** 1 new test (29 in tasks-page.test.mjs); 1930 extension tests; full required gate (typecheck, lint, build, tests) green.
 
@@ -417,6 +420,17 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-11-02 accessibility recovery completed upstream.** The cycle-4
+  rejection notice is stale on `0641650e`: PR #212 already recovered the
+  quarantined work, fixed the adapter preview focusability and recorded three
+  passing required 38-case runs on macOS Chrome. The coordinator closed
+  `brwr-e7b0`; earlier pending-acceptance notes below are historical. This
+  repair-only cycle verifies the integrated checkout and reconciles its
+  documentation and Shipped metadata without reapplying the old patch.
+  Future recovery should compare the quarantine with current history before
+  applying it, preserving fixes merged in the meantime. Assigned Re-learn
+  prerequisites and the local-summary-date bug remain queued for later cycles.
 
 - **2026-11-02 Tasks listbox quarantine repair.** This cycle began red
   after the external cycle-3 gate rejected critical `aria-required-children`

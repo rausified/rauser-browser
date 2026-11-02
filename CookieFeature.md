@@ -1043,3 +1043,21 @@ two local fixture checks and 36 browser cases. Browser execution remains
 blocked inside this sandbox, so the required external gate must validate
 the repair before `brwr-e7b0` closes. This red-start cycle recovers the
 quarantined work and repairs it without starting unrelated product work.
+
+
+### 2026-11-02 — Complete the accessibility recovery handoff
+
+The cycle-4 rejection notice describes an adapter preview that keyboard users
+could not scroll. The current checkout already includes the repair from
+PR #212: the preview has a keyboard tab stop and an accessible label. That
+PR also waits for the asynchronous diagnostics copy in the keyboard test
+and preserves scroll position when restoring run-action focus. The
+coordinator recorded three passing required 38-case runs on macOS Chrome
+and closed `brwr-e7b0`; that supersedes the pending-acceptance entries above.
+
+This repair-only cycle reconciles the testing guide, history and generated
+Shipped entry with that recorded acceptance, preserving all newer code
+instead of reapplying an obsolete quarantine patch. All eleven non-browser
+health commands pass locally. Required browser mode still fails at the
+explicit sandbox guard, so this run adds no new browser acceptance evidence.
+Incomplete axe results and screen-reader behavior still require human review.
