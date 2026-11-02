@@ -167,7 +167,7 @@ interface ChromeApi {
   tabs: {
     get(tabId: number): Promise<ChromeTab>;
     query(queryInfo: { active?: boolean; currentWindow?: boolean }): Promise<ChromeTab[]>;
-    create(properties: { url: string }): Promise<ChromeTab>;
+    create(properties: { url: string; windowId?: number; active?: boolean }): Promise<ChromeTab>;
     update(tabId: number, updateProperties: { active?: boolean; url?: string }): Promise<ChromeTab>;
     onUpdated: {
       addListener(

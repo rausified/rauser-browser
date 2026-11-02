@@ -570,8 +570,10 @@ const CHANGES_STAY = "Changes the agent already made stay; check before running 
 /** What the Tasks page's {@link TaskDetail} needs. */
 export interface TaskDetailDeps extends RunProgressDeps {
   storage: ChromeStorageArea;
-  /** Puts the full instruction back in the panel's task bar. */
-  reuse(instruction: string): void;
+  /** Puts the full instruction back in the panel's task bar and reopens the
+   * run's own `url` (never a URL from agent text), so the instruction runs
+   * against the page it was first given on. */
+  reuse(instruction: string, url: string): void;
   /** Opens the run's own `url` (never a URL from agent text). */
   openPage(url: string): void;
   /** The run was dismissed, and its id remembered. */
@@ -692,7 +694,7 @@ export class TaskDetail extends RunWatcher {
   private reuseButtons(): HTMLButtonElement[] {
     const instruction = this.fullInstruction;
     if (!isTerminal(this.view) || instruction === null) return [];
-    return [actionButton("Reuse", () => this.deps.reuse(instruction))];
+    return [actionButton("Reuse", () => this.deps.reuse(instruction, this.view.url))];
   }
 
   /** Whether this is a page summary's run rather than a task's. */

@@ -793,6 +793,9 @@ test("Open page opens the task's own URL and Reuse opens the side panel and hand
   await until(() => page.el("tasks-status").textContent === "Instruction sent to the task bar.", "the Reuse text");
   // The side panel was opened for this page's own window, read at load.
   assert.deepEqual(page.state.sidePanelOpens, [{ windowId: 9 }]);
+  // Reuse also reopens the task's own page, active in this page's window, so
+  // the panel follows it and the reused instruction runs against that page.
+  assert.deepEqual(page.state.created[1], { url: "https://work.example/page", windowId: 9, active: true });
   const handed = page.state.session.get(storageKey("task_reuse_v1"));
   assert.equal(handed.instruction, "Task 1");
   assert.equal(handed.window_id, 9);
@@ -827,6 +830,25 @@ test("a list error clears once a refresh works", async () => {
   await afterPoll(() => page.el("tasks-status").textContent === "Could not list tasks: disk full", "the list error");
   // The next poll works and clears it.
   await afterPoll(() => page.el("tasks-status-box").hidden, "the list error to clear");
+});
+
+test("Reuse still hands off the instruction when its page cannot be opened, and says so", async () => {
+  const page = await openTasks({ windowId: 9, createFails: true });
+  await listed(page);
+  await until(() => buttonIn(page.el("tasks-detail"), "Reuse"), "the Reuse button");
+  buttonIn(page.el("tasks-detail"), "Reuse").click();
+  const text = "Instruction sent to the task bar. Could not open the page: Tabs cannot be edited right now.";
+  await until(() => page.el("tasks-status").textContent === text, "the Reuse text with the tab error");
+  assert.equal(page.state.session.get(storageKey("task_reuse_v1")).instruction, "Task 1");
+});
+
+test("Reuse never opens a page that is not http(s)", async () => {
+  const page = await openTasks({ runs: [task(1, { url: "javascript:alert(1)" })] });
+  await listed(page);
+  await until(() => buttonIn(page.el("tasks-detail"), "Reuse"), "the Reuse button");
+  buttonIn(page.el("tasks-detail"), "Reuse").click();
+  await until(() => page.el("tasks-status").textContent === "Instruction sent to the task bar.", "the Reuse text");
+  assert.deepEqual(page.state.created, []);
 });
 
 test("Reuse still hands off the instruction, to any window, when opening the side panel fails", async () => {
