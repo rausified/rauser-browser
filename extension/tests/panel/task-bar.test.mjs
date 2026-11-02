@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ARTICLE_URL, CONFIG, PANEL_HTML, READY, REUSE_KEY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
+  ARTICLE_URL, CONFIG, PANEL_HTML, PANEL_NOTICE_KEY, READY, REUSE_KEY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
   buttonIn, descendants, install, readablePage, settle, startsRun, storageKey, teardown, until,
 } from "./harness.mjs";
 
@@ -469,6 +469,68 @@ test("a list_runs failure shows one notice, in the task area", async () => {
   await settle(20);
   assert.equal(older.el("task-run-area").textContent, "Rebuild the Brauser host to see task history.");
   assert.equal(tasksButton(older), "Tasks ↗");
+});
+
+for (const delivery of ["live", "stored"]) {
+  test(`a ${delivery} worker summary notice preserves a failed task-list notice`, async () => {
+    const restore = held();
+    let summaries = 0;
+    const session = new Map();
+    const notice = { kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: delivery === "stored" ? 2 : 1, at: Date.now() };
+    const page = await taskPanel({
+      session,
+      intercept: (request) => {
+        if (request.type === "list_runs" && request.kind === "task") {
+          return { type: "error", code: "internal", message: "task list broke" };
+        }
+        if (request.type === "list_runs" && request.kind === "summary" && ++summaries === 2) return restore.promise;
+        return startsTask()(request);
+      },
+    });
+    await until(() => page.el("task-run-area").textContent.includes("task list broke"), "the task-list notice");
+    await settle(20);
+    if (delivery === "live") page.notify(notice);
+    else {
+      session.set(PANEL_NOTICE_KEY, notice);
+      page.navigate(OTHER_URL, 2);
+    }
+    await until(() => summaries === 2, "the worker's summary restore");
+    restore.release({ type: "runs_listed", runs: [], more: false });
+    await settle(20);
+    assert.equal(page.el("task-run-area").textContent, "Could not list agent runs: task list broke");
+    assert.doesNotMatch(page.el("run-area").textContent, /task list broke/);
+  });
+}
+
+test("a worker summary notice does not resurrect a task-list error after polling recovers", async (t) => {
+  const setTimer = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) =>
+    setTimer(callback, delay === 2000 ? 0 : delay, ...args));
+  const recovered = held();
+  let lists = 0;
+  const done = { ...TASK_VIEW, state: "succeeded", finished_at: RECENT };
+  const page = await taskPanel({
+    intercept: (request) => {
+      if (request.type === "list_runs" && request.kind === "task") {
+        lists += 1;
+        if (lists === 2) return { type: "error", code: "internal", message: "temporary task-list failure" };
+        if (lists === 3) return recovered.promise;
+      }
+      return startsTask()(request);
+    },
+  });
+  await until(() => taskLists(page).length === 1 && summaryLists(page).length === 1, "the initial lists");
+  type(page, "Recover the task list");
+  enter(page);
+  await until(() => page.el("task-run-area").textContent.includes("temporary task-list failure"), "the failed list notice");
+  await until(() => lists === 3, "the automatic retry");
+  recovered.release({ type: "runs_listed", runs: [done], more: false });
+  await until(() => page.el("task-announce").textContent !== "", "the recovered poll's completion");
+  assert.doesNotMatch(page.el("task-run-area").textContent, /temporary task-list failure/);
+  page.notify({ kind: "run_started", run_id: RUN_VIEW.run_id, tab_id: 1, at: Date.now() });
+  await until(() => summaryLists(page).length === 2, "the worker's summary restore");
+  await settle(20);
+  assert.doesNotMatch(page.el("task-run-area").textContent, /temporary task-list failure/);
 });
 
 test("summary restore asks list_runs for kind summary", async () => {

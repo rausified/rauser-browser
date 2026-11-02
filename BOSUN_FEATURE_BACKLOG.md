@@ -190,11 +190,6 @@ queue".
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
 - [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
 - [ ] `brwr-ppn` **Curate a worklog before copying it.** Recent and the native worklog make captured work visible, but copying a day or week currently includes every recorded artifact. Let a person prepare a concise update by selecting the artifact-day rows they want to share and previewing the result, without altering measured… _(P3)_
-- [ ] `brwr-jlz` **TaskTracker: guard against double-announcing a finish.** TaskTracker: a stale track() after an announce can announce a finish twice. Guard it with a Set of run ids already reported. _(P3; labels: assigned, task-tracker, tasks-page)_
-- [ ] `brwr-2p0` **TaskTracker: a failed refresh drops a merged "again" request.** TaskTracker: a failed refresh drops a merged `again` request. _(P3; labels: assigned, task-tracker, tasks-page)_
-- [ ] `brwr-7u4` **TaskTracker: add backoff after consecutive poll failures.** TaskTracker: no backoff. It polls every 2 s indefinitely against a failing host while a run is watched; stop after N consecutive failures. _(P3; labels: assigned, task-tracker, tasks-page)_
-- [ ] `brwr-4r1` **Panel: re-show trackerError after a worker-notice restore.** Panel: a worker-notice restore (showNotice -> restoreCards) can clear the tracker's failure notice; re-show trackerError after it. _(P3; labels: assigned, panel, tasks-page)_
-- [ ] `brwr-ug2` **TaskTracker: remove the unused now dependency.** TaskTracker: the `now` dependency is unused. _(P3; labels: assigned, task-tracker, tasks-page)_
 - [ ] `brwr-um4` **Tasks page: a hashchange during an in-flight refresh can miss a just-started run.** Tasks page: a hashchange during an in-flight refresh can miss a just-started run. The select signal mostly covers this. _(P3; labels: assigned, tasks-page)_
 - [ ] `brwr-64i` **Tasks page (Windows): hide .tasks-controls when search/filter/dismissed controls should be hidden.** Tasks page on Windows: the search, filter and Show dismissed controls are still visible; hide .tasks-controls. _(P3; labels: needs-windows, tasks-page, windows)_
 - [ ] `brwr-jzs` **tasks-page tests: avoid the 2.3s real-time wait and add an overlapping-refresh test.** tasks-page tests: the hidden-polling test waits 2.3 s of real time, and there is no overlapping-refresh test. _(P3; labels: assigned, tasks-page, tests)_
@@ -243,6 +238,16 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Maintenance. **Remove the task tracker unused clock dependency (2026-11-01).** Simplify the tracker dependency contract and update the panel and direct test constructors without a clock callback. **Metrics:** Typecheck and lint passed; 15 tracker tests passed.
+
+- **Category:** Bug Fix. **Announce each watched task completion once (2026-11-01).** Remember announced run IDs for the panel lifetime so stale start or running views cannot replay a finish, while distinct tasks still announce independently. **Metrics:** 15 direct tracker tests; 38 extension files passed.
+
+- **Category:** Reliability. **Back off task tracking after repeated host failures (2026-11-01).** Retry failed list and off-page reads after 2/4/8/16 seconds, pause at five consecutive failed passes, and reset on success or explicit refresh. Mocked timers cover pause and recovery. **Metrics:** 15 tracker tests (+8); full gate green with 1,207 Rust reported passes (sandbox IPC guards apply).
+
+- **Category:** Bug Fix. **Keep task-list errors visible through worker summary restores (2026-11-01).** Restore the task tracker error in the shared summary-card restore wrapper, covering live worker messages and stored notices consumed after following their tab. **Metrics:** 2 new panel regressions; 38 extension files passed.
+
+- **Category:** Bug Fix. **Preserve refreshes queued behind failed task lists (2026-11-01).** Drain merged refresh requests after an in-flight failure and return the final attempt outcome to every caller. Disposal suppresses follow-ups. **Metrics:** 15 direct tracker tests; 38 extension files passed.
+
 - **Category:** Testing & Verification. **Finish adapter comparisons in restricted sandboxes (2026-11-01).** Reproduced the stall inside the Rust engine child call and added the shared child-pipe probe before either engine starts. Confirmed permission denial explicitly skips outside required mode and fails in CI; probe and engine timeouts diagnose hangs, and incomplete output fails. Neither production engine changed. **Metrics:** 15 new regression cases (one guarded child-pipe case skipped here), 5,000 real cases matched through supplemental regular-file transport; 1,207 reported Rust passes, 38 extension files, 85 Python tests, seven Node script files and all required/README gates green.
 
 - **Category:** Documentation & Process. **Hydrate tracked bead history before issue creation (2026-11-01).** The new create-bead command validates and imports the committed queue before creating, reserving closed IDs with the existing timestamp guard and retaining local-only work. Failed imports stop creation, JSON output stays clean, and linked worktrees and routing overrides use the documented isolated workflow. The queue checker now has a direct closed/open ID collision regression. **Metrics:** 9 new regressions; 85 Python tests; 38 extension test files; 1,207 reported Rust passes; full required and README gates green.
@@ -1504,3 +1509,36 @@ fixes together with their direct regressions when practical. Product ideation
 remains deferred while assignments are actionable. The recurring lesson is
 to distinguish blocked transport from engine behavior before changing a
 parser or adding another production mechanism.
+
+
+### Cycle observations (2026-11-01 — assigned tracker follow-ups)
+
+Completed assigned `brwr-jlz`, `brwr-2p0`, `brwr-7u4`, `brwr-4r1` and
+`brwr-ug2`. The four tracker items share one direct test seam: stale views
+no longer replay completion, merged refreshes survive a failed attempt,
+and both list and off-page failures use bounded retries. Retry policy was
+resolved by Cookie as this isolated cycle's coordinator within the assigned
+stop-after-N request: delays of 2/4/8/16 seconds, pause on failure five, reset
+on a fully successful pass or an explicit refresh. The shared summary-card
+restore now preserves the tracker error for startup and worker notices.
+
+Health started green with a clean worktree and no quarantine file. The final
+required gate and README checks passed: 1,207 reported Rust passes (sandbox
+IPC guards apply), all 38 extension files, both Clippy configurations, 85
+Python tests, seven Node script files and 10,696 inert Markdown renderings.
+Ten new regressions cover the behavior: eight tracker cases (15 total) and
+two panel notice cases. The new races use deferred replies and mocked
+tracker timers. Logs: `target/cookie-tracker-checks/`. Full diff reviewed
+locally; no live API or external Codex review was invoked under this run's
+offline guardrail. Independent review, publication and platform acceptance
+remain with the driver.
+
+Seven actionable assignments remain, starting with `brwr-um4` (Tasks page
+hashchange during refresh), then `brwr-jzs` (timer/overlap tests). Consider
+those together next, using the direct tracker tests as a pattern rather
+than adding more real-time waits. `brwr-7lq` remains blocked on the existing
+human-gated identity plan; no platform/human labels were changed. Product
+ideation stays deferred until assignments are cleared; the existing curated
+worklog and page-free task proposals remain useful later product directions.
+Beads' default actor here is lowercase `cookie`; when the assignee is
+`Cookie`, use `bd --actor Cookie close` so the ownership check matches.
