@@ -3,7 +3,7 @@ import test from "node:test";
 
 // Run after build:extension.
 const {
-  filterTasks, groupTasks, listAllTasks, mergeRuns, parseRunHash, runningCount, tasksPageUrl,
+  filterTasks, groupTasks, listAllTasks, mergeRuns, parseRunHash, runningCount, supersededSummaries, tasksPageUrl,
 } = await import("../dist/task-history.js");
 
 // A fake host that answers a script of list_runs replies in order, and
@@ -257,4 +257,28 @@ test("tasksPageUrl adds #run= only when a run id is given", () => {
   assert.equal(tasksPageUrl(null, getURL), "chrome-extension://abc/tasks.html");
   const uuid = "00000000-0000-4000-8000-000000000002";
   assert.equal(tasksPageUrl(uuid, getURL), `chrome-extension://abc/tasks.html#run=${uuid}`);
+});
+
+test("supersededSummaries marks the runs a newer succeeded run of the same file replaced", () => {
+  const summary = (n, overrides = {}) => taskRun(n, {
+    kind: "summary", instruction: undefined, summary_path: "summaries/a.summary.md", ...overrides,
+  });
+  const newest = summary(1);
+  const older = summary(2);
+  // A failed save that still wrote the file, and an older service's record with no kind.
+  const failedWrite = summary(3, { state: "failed", error_kind: "save_failed" });
+  const { kind: _kind, ...legacy } = summary(4);
+  // Newer than everything, but it wrote no file: it supersedes nothing.
+  const running = summary(0, { state: "running", summary_path: null });
+  // A newer run that failed before writing (no summary_path) replaces nothing.
+  const failedEarly = summary(-1, { state: "failed", error_kind: "invalid_output", summary_path: null });
+  const otherPage = summary(5, { summary_path: "summaries/b.summary.md" });
+  const task = taskRun(6, { summary_path: "summaries/a.summary.md" });
+  const shown = supersededSummaries([running, failedEarly, newest, older, failedWrite, legacy, otherPage, task]);
+  assert.deepEqual([...shown].sort(), [older, failedWrite, legacy].map((run) => run.run_id).sort());
+  assert.equal(supersededSummaries([newest]).size, 0);
+  // A newer failed save that still wrote the file holds it, so it supersedes the success.
+  const newerWrite = summary(-2, { state: "failed", error_kind: "save_failed" });
+  assert.ok(supersededSummaries([newest, newerWrite]).has(newest.run_id));
+  assert.ok(!supersededSummaries([newest, newerWrite]).has(newerWrite.run_id));
 });
