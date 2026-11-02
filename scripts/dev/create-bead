@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Hydrate this checkout's beads database before creating an issue.
+
+Usage: scripts/dev/create-bead <bd create arguments>
+
+Run in the checkout that owns the database. Linked worktrees must instead
+use a scratch database under target/ (see AGENTS.md "Work queue").
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from render_backlog import BacklogError, load_issues  # noqa: E402
+
+
+def main(argv: list[str] | None = None, *, root: pathlib.Path | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args == ["--help"] or args == ["-h"]:
+        print(__doc__)
+        return 0 if args else 2
+
+    # A create-side routing override would bypass the database we hydrated.
+    # Keep the interface to create arguments; routing is owned here.
+    routing = ("--db", "--database", "--directory", "--global", "--repo")
+    # bd accepts boolean short flags clustered before -C (for example -qC).
+    if any(arg.split("=", 1)[0] in routing or re.match(r"^-[hqv]*C", arg) for arg in args):
+        print("create-bead: database/directory overrides are not supported", file=sys.stderr)
+        return 2
+
+    root = (root or pathlib.Path(__file__).resolve().parents[2]).resolve()
+    if not (root / ".git").is_dir() or (root / ".beads" / "redirect").exists():
+        print(
+            "create-bead: use the checkout that owns the database; in a linked "
+            "worktree, import this branch's JSONL into a scratch database under "
+            "target/ before creating (AGENTS.md: Work queue)",
+            file=sys.stderr,
+        )
+        return 2
+
+    source = root / ".beads" / "issues.jsonl"
+    try:
+        load_issues(source)
+        # Default import keeps newer local scalar fields. Never pass
+        # --allow-stale or rebuild the database: DB-only work must survive.
+        hydrated = subprocess.run(
+            ["bd", "import", str(source)], cwd=root, check=False, stdout=sys.stderr,
+        )
+        if hydrated.returncode:
+            return hydrated.returncode
+        return subprocess.run(["bd", "create", *args], cwd=root, check=False).returncode
+    except (BacklogError, OSError) as error:
+        print(f"create-bead: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

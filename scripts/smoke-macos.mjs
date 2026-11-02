@@ -2851,7 +2851,9 @@ async function run() {
         const items = await waitUntil("the smoke.page artifact with its summary", () => listArtifacts("smoke.page"),
           (found) => found.some((item) => item.url === allowed && item.summary?.summary_path === run.summary_path),
           { timeout: 15_000, signal: abort.signal });
-        requireCondition(items.find((item) => item.url === allowed).opens > 0,
+        // Rows are per local day: a summary filed after midnight gets its own
+        // row, so the page's activity may sit on an earlier day's row.
+        requireCondition(items.some((item) => item.url === allowed && item.opens > 0),
           `The recognized page's artifact lost its activity: ${JSON.stringify(items)}`);
         const pages = await listArtifacts("web.page");
         requireCondition(!pages.some((item) => item.url === allowed), `A web.page item exists for ${allowed}`);

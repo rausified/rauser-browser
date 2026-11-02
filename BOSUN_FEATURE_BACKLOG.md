@@ -189,7 +189,6 @@ queue".
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
-- [ ] `brwr-f85` **bd: hydrate local DB from issues.jsonl before create to prevent ID collisions with closed rows.** The local bd DB must be hydrated from .beads/issues.jsonl before `bd create` (`bd import` with the updated_at guard), so new IDs can't collide with closed rows. scripts/check_queue_consistency.py should fail on duplicate IDs. Seen during PR #189, where `bd create` reused closed… _(P2; labels: assigned, beads, dev-tools)_
 - [ ] `brwr-0t1` **Near-miss detection: offer a rule when an enabled-site page looks like an artifact.** When a page on a site with capture rules carries an adapter's identifying parameter (e.g. OneDrive Doc.aspx with a sourcedoc GUID) but no rule matches, the panel says so and offers a one-click rule addition through the Update-to-current-rules editor flow. URL-only and local.… _(P2)_
 - [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
@@ -249,6 +248,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Documentation & Process. **Hydrate tracked bead history before issue creation (2026-11-01).** The new create-bead command validates and imports the committed queue before creating, reserving closed IDs with the existing timestamp guard and retaining local-only work. Failed imports stop creation, JSON output stays clean, and linked worktrees and routing overrides use the documented isolated workflow. The queue checker now has a direct closed/open ID collision regression. **Metrics:** 9 new regressions; 85 Python tests; 38 extension test files; 1,207 reported Rust passes; full required and README gates green.
+
 - **Category:** Testing & Verification. **Remove the Tasks focus test polling race (2026-11-01).** The focus regression now triggers the existing visibility refresh and waits for a rendered status change or added row before asserting retained-node and rebuilt-list focus. It no longer races the two-second poll or relies on a fixed settle delay. **Metrics:** 10/10 isolated local repeats; 38 extension test files; full required and README gates green.
 
 - **Category:** Testing & Verification. **Pin task tracker refresh and completion behavior (2026-11-01).** Seven direct tests use deferred replies and mocked timers to cover coalesced refreshes, one poll timer, one completion callback for tracked runs, off-page completion, visibility and disposal. The file is included in the normal extension suite. **Metrics:** 7 new tracker tests; 38 extension test files; full required and README gates green.
@@ -381,6 +382,15 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-11-01 assigned queue hydration.** `brwr-f85` adds the guarded
+  `scripts/dev/create-bead` workflow; linked worktrees still use isolated
+  scratch databases and copy only new rows. Import reserves tracked closed
+  IDs and preserves local-only work; it cannot identify stale unmerged
+  claims automatically. Continue the remaining assigned P3 work before
+  self-directed ideas. Existing `brwr-ppn` (worklog curation) and `brwr-ued`
+  (named cross-tool focus sessions) remain useful product directions after
+  assignments clear; no duplicate proposal is needed.
 
 - **2026-11-01 assigned dev-tool batch.** Completed the PR hygiene body-edit
   and removable-control-worktree fixes together. The next ready P2 is

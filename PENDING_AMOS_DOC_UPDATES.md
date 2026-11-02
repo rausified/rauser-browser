@@ -239,3 +239,5 @@
 - **Brauser — Verify task tracking directly (2026-11-01):** Seven dedicated unit tests pin merged refreshes, one poll timer, completion announcements, off-page completion fetches, visibility and disposal through deferred host replies and mocked timers. Included in the normal extension suite; runtime behavior is unchanged.
 
 - **Brauser — Remove the Tasks focus test's polling race (2026-11-01):** The regression now drives the existing visibility refresh and waits for rendered effects before checking retained-row and rebuilt-list focus. Ten isolated local repeat runs pass without depending on the two-second polling interval.
+
+- **Brauser — Reserve tracked IDs before creating issues (2026-11-01):** Added `scripts/dev/create-bead` to validate and import committed issue history before creation, including closed IDs. Uses the existing timestamp guard, retains local-only work, preserves JSON output, and stops after invalid input or a failed import. Contributor guidance keeps linked worktrees on isolated scratch databases; nine regressions cover the workflow and duplicate-ID rejection.
