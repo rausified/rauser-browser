@@ -15,9 +15,12 @@
 //! Warnings and errors are also mirrored to stderr as plain text: Chrome's
 //! log for the host, launchd's `service.log` for the service.
 //!
-//! Nothing here leaves the computer. Never log page text, note text, a
-//! prompt, an answer, a harness's output, or any `agent.env` value; log a
-//! URL only through [`url_origin`].
+//! Nothing here leaves the computer. Privacy is not a constraint for
+//! Brauser (DESIGN.md §14, 2026-11-01): an event may carry a full URL, a
+//! title, or a page-text excerpt when a log review needs it. Never log a
+//! credential (any `agent.env` name or value); a harness's output stays in
+//! its run's `run.log`. [`url_origin`] remains for events that only need a
+//! site.
 //!
 //! `BRAUSER_LOG` sets the filter (`EnvFilter` syntax, default `info`);
 //! `BRAUSER_LOG_DIR` moves the directory. Test and `scripted-dialogs`
