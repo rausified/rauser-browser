@@ -225,6 +225,7 @@ mod tests {
             answered_at: None,
             first_answered_at: None,
             save_final: false,
+            office_section: false,
             kind: RunKind::Summary,
             task: None,
         }

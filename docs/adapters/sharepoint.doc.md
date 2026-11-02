@@ -33,6 +33,12 @@ Recorded samples, one per rule:
 - `https://acme-my.sharepoint.com/personal/jdoe_acme_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true`
   — a personal (OneDrive for work) document opened directly.
 
+Separately from this draft, the Brauser service recognises these Office
+document routes (and the plain `:w:`/`:x:`/`:p:` sharing links) from a page's
+URL so that a task or summary run's agent can fetch the document itself
+(DESIGN.md §4.5 "Office documents"), whether or not this starter is adopted;
+that never changes record keys.
+
 The draft deliberately does not recognize folder listings, search results,
 ordinary site pages, a sharing link with no `sourcedoc` UUID (such as
 `https://acme-my.sharepoint.com/:w:/r/personal/x/_layouts/15/Doc.aspx`), or a
