@@ -7,16 +7,17 @@ import {
   recognized, settle, until,
 } from "./harness.mjs";
 
-// --- The page area (2026-11-02) --------------------------------------------
+// --- The page card (redesign, 2026-11-02) ----------------------------------
 
-test("the page area shows only the artifact status; title and URL are screen-reader only", () => {
+test("the page card shows the page's title and URL beside the artifact status", () => {
   for (const id of ["page-title", "page-url"]) {
     const tag = PANEL_HTML.match(new RegExp(`<p id="${id}"[^>]*>`))?.[0];
     assert.ok(tag, `${id} stays in the panel`);
-    assert.match(tag, /class="[^"]*\bvisually-hidden\b/, `${id} is visually hidden`);
+    assert.doesNotMatch(tag, /visually-hidden|\bhidden\b/, `${id} is visible`);
   }
   const status = PANEL_HTML.match(/<p id="artifact-status"[^>]*>/)?.[0];
   assert.ok(status && !/visually-hidden|hidden/.test(status), "the artifact status stays visible");
+  assert.match(PANEL_HTML, /<span id="page-glyph"[^>]*aria-hidden="true"/, "the page tile is decorative");
 });
 
 // --- The page's existing summary (Task 51) ---------------------------------
@@ -51,7 +52,12 @@ test("page and Recent show the overview and type as literal text", async () => {
       },
     });
     await until(() => !page.el("page-summary").hidden, "the overview");
-    assert.equal(page.el("page-summary-text").textContent, `${overview} · specification`);
+    // The overview is prose; its labels are chips, all literal text.
+    assert.equal(page.el("page-summary-text").textContent, overview);
+    assert.deepEqual(page.el("page-summary-chips").children.map((chip) => chip.textContent),
+      ["specification", "technical specification", "High importance"]);
+    assert.equal(page.el("page-summary-chips").children[2].dataset.tone, "high");
+    assert.equal(page.el("summarize").textContent, "Summarize again");
     page.el("tab-recent").click();
     await until(() => page.el("recent-list").textContent.includes("Summarized"), "the Recent overview");
     assert.ok(page.el("recent-list").textContent.includes(`Summarized · ${overview} · specification`));

@@ -537,6 +537,8 @@ class RunCard extends RunWatcher {
   protected render(): void {
     const run = this.view;
     this.titleLine.textContent = run.title || run.url;
+    // For the panel stylesheet's state indicator only.
+    this.element.dataset.state = run.state;
     this.stateLine.textContent = this.stateLineText();
     const answer = run.state === "succeeded" && run.answer ? answerLine(run.answer) : "";
     this.answerText.textContent = answer;
@@ -837,6 +839,7 @@ export class RunProgress extends RunWatcher {
   }
 
   protected render(): void {
+    this.element.dataset.state = this.view.state;
     this.stateLine.textContent = this.stateLineText();
     this.streamText.textContent = this.stream;
     this.streamText.hidden = this.stream === "";
