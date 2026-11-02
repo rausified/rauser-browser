@@ -1112,3 +1112,19 @@ and 2 accessibility fixtures passing with 39 browser sandbox skips. Sixteen new
 offline cases and one browser journey were added. The driver retains external
 acceptance, independent review and publication; the two feature beads are closed
 and the shared-helper bead remains blocked for its real-Chromium criterion.
+
+### 2026-11-02 — Wait for Word's paragraphs instead of reading its splash
+
+Summarize & log run 92dcfad9 (2026-11-01) on a SharePoint Word document saved
+`page.md` with only "Word is starting.": the run was triggered while Word for
+the web still showed its loading splash, no frame had `#PagesContainer
+.Paragraph` yet, and the extractor's Readability/body-text fallback read the
+splash. The host's suspect-capture check flagged it (`thin_office`). The
+extractor now reports `word` (it read Word paragraphs), and `readTab` re-reads
+a Word document address every 500 ms for up to 5 s until a frame has them;
+on timeout it sends empty content, which the Office path already accepts, so
+the agent reads the document itself. Only Word addresses wait, since Excel and
+PowerPoint never have Word paragraphs and would always pay the full wait. A
+frame with Word paragraphs now also always wins the content choice. The wait
+keys on the absence of paragraphs rather than on splash markup, which was not
+available to test against. Live Word behavior was not verified headlessly.
