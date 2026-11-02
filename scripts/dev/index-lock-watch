@@ -1,0 +1,473 @@
+#!/usr/bin/env python3
+"""Find out who leaves stale .git/index.lock files in the live install.
+
+Deploys of the live install (scripts/dev/deploy-live) have twice failed on an
+empty .git/index.lock that nothing held. git creates that file for any index
+write, including the optional refresh a plain `git status` does, and removes
+it when it finishes; a git killed hard (SIGKILL, a crash, a closed terminal
+that skips git's cleanup) leaves it behind. This watcher records who was
+running git whenever the lock exists, so the next stale one has a culprit.
+
+  record     What the LaunchAgent runs each time <repo>/.git changes. When
+             <repo>/.git/index.lock exists, appends one JSON line to the log
+             (default ~/Library/Logs/Brauser/index-lock-watch.jsonl, rotated
+             to .1 above 1 MiB): the time, the lock's size/mtime/inode, the
+             processes holding it open (lsof), and every running git process
+             whose cwd or arguments name the repo or one of its worktrees,
+             with its parent chain (up to 6 ancestors and their commands).
+             Writes nothing when there is no lock.
+  install    Writes ~/Library/LaunchAgents/com.rauser.brauser.index-lock-watch.plist
+             (WatchPaths <repo>/.git, ThrottleInterval 1, running this script's
+             `record --repo <repo>`) and bootstraps it with launchctl.
+             Install from a checkout that will stay (the main one): the agent
+             runs this file from where it is.
+  uninstall  Boots the agent out and removes its plist.
+  report     Summarises the log: the git commands and parent commands seen
+             most often, records where the lock existed with no git running
+             and no holder, and stale candidates: a lock (same inode and
+             mtime) still present on a later record, with who was running git
+             when it was first seen.
+
+install and uninstall print their commands without acting under --dry-run.
+
+Usage:
+  scripts/dev/index-lock-watch record --repo PATH [--log PATH]
+  scripts/dev/index-lock-watch install --repo PATH [--log PATH] [--dry-run]
+  scripts/dev/index-lock-watch uninstall [--dry-run]
+  scripts/dev/index-lock-watch report [--log PATH] [--top N]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import plistlib
+import shlex
+import subprocess
+import sys
+import time
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Optional
+
+LABEL = "com.rauser.brauser.index-lock-watch"
+MAX_LOG_BYTES = 1024 * 1024
+MAX_ANCESTORS = 6
+LAUNCHCTL = "/bin/launchctl"
+SCRIPT = Path(__file__).resolve()
+
+
+@dataclass
+class Result:
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
+
+
+Runner = Callable[[list], Result]
+
+
+def system_runner(argv) -> Result:
+    try:
+        proc = subprocess.run([str(a) for a in argv], capture_output=True, text=True, timeout=20)
+    except FileNotFoundError as exc:
+        return Result(127, "", str(exc))
+    except subprocess.TimeoutExpired:
+        return Result(124, "", "timed out")
+    return Result(proc.returncode, proc.stdout, proc.stderr)
+
+
+def default_log(home: Path) -> Path:
+    return home / "Library/Logs/Brauser/index-lock-watch.jsonl"
+
+
+def default_plist(home: Path) -> Path:
+    return home / f"Library/LaunchAgents/{LABEL}.plist"
+
+
+# --------------------------------------------------------------------------
+# probes
+
+
+@dataclass
+class Proc:
+    pid: int
+    ppid: int
+    command: str
+
+
+def parse_ps(text: str) -> dict[int, Proc]:
+    procs: dict[int, Proc] = {}
+    for line in text.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        pid, ppid = int(parts[0]), int(parts[1])
+        procs[pid] = Proc(pid, ppid, parts[2] if len(parts) > 2 else "")
+    return procs
+
+
+def parse_lsof(text: str) -> list[dict]:
+    """lsof -F pcn output: one {pid, command, name} per file line."""
+    found, pid, command = [], 0, ""
+    for line in text.splitlines():
+        if not line:
+            continue
+        tag, value = line[0], line[1:]
+        if tag == "p":
+            pid, command = (int(value) if value.isdigit() else 0), ""
+        elif tag == "c":
+            command = value
+        elif tag == "n":
+            found.append({"pid": pid, "command": command, "name": value})
+    return found
+
+
+def is_git(command: str) -> bool:
+    argv0 = os.path.basename(command.split(" ", 1)[0]) if command else ""
+    return argv0 == "git" or argv0.startswith("git-")
+
+
+class Probe:
+    def __init__(self, runner: Runner):
+        self.runner = runner
+
+    def processes(self) -> dict[int, Proc]:
+        res = self.runner(["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "command="])
+        if res.returncode != 0:
+            raise RuntimeError(f"ps failed: {res.stderr.strip()}")
+        return parse_ps(res.stdout)
+
+    def holders(self, path: Path) -> list[dict]:
+        res = self.runner(["lsof", "-n", "-P", "-w", "-F", "pcn", "--", str(path)])
+        if res.returncode == 1 and not res.stdout.strip():
+            return []
+        if res.returncode != 0:
+            raise RuntimeError(f"lsof failed: {res.stderr.strip()}")
+        seen, out = set(), []
+        for f in parse_lsof(res.stdout):
+            if f["pid"] not in seen:
+                seen.add(f["pid"])
+                out.append({"pid": f["pid"], "command": f["command"]})
+        return out
+
+    def cwds(self, pids: list[int]) -> dict[int, str]:
+        if not pids:
+            return {}
+        res = self.runner(["lsof", "-a", "-p", ",".join(map(str, pids)), "-d", "cwd", "-F", "pn"])
+        if res.returncode not in (0, 1):
+            raise RuntimeError(f"lsof cwd failed: {res.stderr.strip()}")
+        cwds, pid = {}, 0
+        for line in res.stdout.splitlines():
+            if line.startswith("p") and line[1:].isdigit():
+                pid = int(line[1:])
+            elif line.startswith("n") and pid:
+                cwds[pid] = line[1:]
+        return cwds
+
+
+# --------------------------------------------------------------------------
+# record
+
+
+def worktree_roots(repo: Path) -> list[Path]:
+    """The repo, its .git, and each linked worktree, read from .git/worktrees
+    without running git (which could itself take the lock)."""
+    roots = [repo, repo / ".git"]
+    wt = repo / ".git" / "worktrees"
+    if wt.is_dir():
+        for entry in sorted(wt.iterdir()):
+            try:
+                gitdir = (entry / "gitdir").read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if gitdir:
+                roots.append(Path(gitdir).parent)
+    return roots
+
+
+def names(text: str, root: Path, prefix_ok: bool) -> bool:
+    form = str(root).rstrip("/")
+    if prefix_ok:  # a path: root itself or under it
+        return text == form or text.startswith(form + "/")
+    idx = text.find(form)
+    while idx != -1:  # free text: root as a whole path component
+        end = idx + len(form)
+        if end == len(text) or text[end] in "/ \t\"'":
+            return True
+        idx = text.find(form, idx + 1)
+    return False
+
+
+def ancestors(procs: dict[int, Proc], pid: int) -> list[dict]:
+    chain, seen = [], {pid}
+    current = procs.get(pid)
+    while current and len(chain) < MAX_ANCESTORS:
+        parent = procs.get(current.ppid)
+        if parent is None or parent.pid in seen:
+            break
+        seen.add(parent.pid)
+        chain.append({"pid": parent.pid, "command": parent.command})
+        current = parent
+    return chain
+
+
+def iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="milliseconds")
+
+
+def rotate(log: Path) -> None:
+    try:
+        if log.stat().st_size > MAX_LOG_BYTES:
+            os.replace(log, log.with_name(log.name + ".1"))
+    except FileNotFoundError:
+        pass
+
+
+def record(repo: Path, log: Path, probe: Probe, now: Optional[float] = None) -> Optional[dict]:
+    lock = repo / ".git" / "index.lock"
+    try:
+        st = lock.stat()
+    except FileNotFoundError:
+        return None
+    now = time.time() if now is None else now
+    errors: list[str] = []
+    holders: list[dict] = []
+    try:
+        holders = probe.holders(lock)
+    except RuntimeError as exc:
+        errors.append(str(exc))
+    git_procs: list[dict] = []
+    try:
+        procs = probe.processes()
+        me = os.getpid()
+        gits = [p for p in procs.values() if p.pid != me and is_git(p.command)]
+        cwds = probe.cwds([p.pid for p in gits]) if gits else {}
+        roots = worktree_roots(repo)
+        for p in gits:
+            cwd = cwds.get(p.pid, "")
+            if any(names(cwd, r, True) or names(p.command, r, False) for r in roots):
+                git_procs.append({"pid": p.pid, "ppid": p.ppid, "command": p.command, "cwd": cwd,
+                                  "ancestors": ancestors(procs, p.pid)})
+    except RuntimeError as exc:
+        errors.append(str(exc))
+    entry = {
+        "ts": iso(now), "ts_epoch": round(now, 3), "repo": str(repo),
+        "lock": {"path": str(lock), "size": st.st_size, "mtime": iso(st.st_mtime),
+                 "mtime_ns": st.st_mtime_ns, "inode": st.st_ino,
+                 "age_s": round(now - st.st_mtime, 3)},
+        "holders": holders, "git_processes": git_procs, "errors": errors,
+    }
+    log.parent.mkdir(parents=True, exist_ok=True)
+    rotate(log)
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, sort_keys=True) + "\n")
+    return entry
+
+
+# --------------------------------------------------------------------------
+# install / uninstall
+
+
+def plist_data(repo: Path, log: Optional[Path], err_log: Path) -> dict:
+    args = [str(SCRIPT), "record", "--repo", str(repo)]
+    if log is not None:
+        args += ["--log", str(log)]
+    return {
+        "Label": LABEL,
+        "ProgramArguments": args,
+        "WatchPaths": [str(repo / ".git")],
+        "ThrottleInterval": 1,
+        "RunAtLoad": False,
+        "StandardOutPath": str(err_log),
+        "StandardErrorPath": str(err_log),
+    }
+
+
+def install(repo: Path, log: Optional[Path], home: Path, uid: int, runner: Runner, out,
+            dry_run: bool) -> int:
+    if not (repo / ".git").is_dir():
+        print(f"error: {repo}/.git is not a directory; pass the main worktree "
+              "(linked worktrees share its .git)", file=out)
+        return 2
+    plist = default_plist(home)
+    err_log = (log or default_log(home)).with_name("index-lock-watch.err.log")
+    data = plist_data(repo, log, err_log)
+    commands = [[LAUNCHCTL, "bootout", f"gui/{uid}/{LABEL}"],
+                [LAUNCHCTL, "bootstrap", f"gui/{uid}", str(plist)]]
+    if not names(str(SCRIPT), repo, True):
+        print(f"warning: {SCRIPT} is outside {repo}; the agent stops working if this "
+              "checkout is removed", file=out)
+    if dry_run:
+        print(f"would write {plist}:", file=out)
+        print(plistlib.dumps(data).decode(), file=out)
+        for c in commands:
+            print("would run: " + shlex.join(c), file=out)
+        return 0
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    err_log.parent.mkdir(parents=True, exist_ok=True)
+    with plist.open("wb") as fh:
+        plistlib.dump(data, fh)
+    print(f"wrote {plist}", file=out)
+    runner(commands[0])  # not loaded yet is fine
+    res = runner(commands[1])
+    if res.returncode != 0:
+        print(f"error: {shlex.join(commands[1])} failed: {(res.stderr or res.stdout).strip()}",
+              file=out)
+        return 1
+    print(f"loaded {LABEL}; it records to {log or default_log(home)} whenever "
+          f"{repo / '.git' / 'index.lock'} exists", file=out)
+    return 0
+
+
+def uninstall(home: Path, uid: int, runner: Runner, out, dry_run: bool) -> int:
+    plist = default_plist(home)
+    command = [LAUNCHCTL, "bootout", f"gui/{uid}/{LABEL}"]
+    if dry_run:
+        print("would run: " + shlex.join(command), file=out)
+        print(f"would remove {plist}", file=out)
+        return 0
+    res = runner(command)
+    if res.returncode != 0:
+        print(f"note: {LABEL} was not loaded ({(res.stderr or res.stdout).strip()})", file=out)
+    try:
+        plist.unlink()
+        print(f"removed {plist}", file=out)
+    except FileNotFoundError:
+        print(f"no {plist}", file=out)
+    return 0
+
+
+# --------------------------------------------------------------------------
+# report
+
+
+def read_log(log: Path) -> tuple[list[dict], int]:
+    entries, bad = [], 0
+    for path in (log.with_name(log.name + ".1"), log):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            try:
+                e = json.loads(line)
+                if isinstance(e, dict) and isinstance(e.get("lock"), dict):
+                    entries.append(e)
+                    continue
+            except ValueError:
+                pass
+            bad += 1
+    entries.sort(key=lambda e: e.get("ts_epoch", 0))
+    return entries, bad
+
+
+def short(text: str, width: int = 120) -> str:
+    return text if len(text) <= width else text[: width - 3] + "..."
+
+
+def report(log: Path, out, top: int = 10) -> int:
+    entries, bad = read_log(log)
+    if bad:
+        print(f"({bad} unreadable line(s) skipped)", file=out)
+    if not entries:
+        print(f"no records in {log}", file=out)
+        return 0
+    print(f"{len(entries)} records in {log}, {entries[0].get('ts')} to {entries[-1].get('ts')}",
+          file=out)
+
+    def table(title: str, counter: Counter) -> None:
+        print(f"\n{title}:", file=out)
+        if not counter:
+            print("  (none)", file=out)
+        for text, n in counter.most_common(top):
+            print(f"  {n:>5}  {short(text)}", file=out)
+
+    commands, parents, chains = Counter(), Counter(), Counter()
+    orphans = []
+    for e in entries:
+        procs = e.get("git_processes") or []
+        for p in procs:
+            commands[p.get("command", "")] += 1
+            anc = p.get("ancestors") or []
+            parents[anc[0]["command"] if anc else "(no parent)"] += 1
+        seen = {a.get("command", "") for p in procs for a in (p.get("ancestors") or [])}
+        chains.update(seen)
+        if not procs and not e.get("holders"):
+            orphans.append(e)
+    table("parent commands of git (most often first)", parents)
+    table("git commands", commands)
+    table("commands anywhere in git's ancestry (once per record)", chains)
+
+    print(f"\n{len(orphans)} record(s) with no git process and no holder "
+          "(the lock was already left behind, or its writer is not git):", file=out)
+    for e in orphans[:top]:
+        print(f"  {e.get('ts')}  inode {e['lock'].get('inode')}  size {e['lock'].get('size')}",
+              file=out)
+
+    by_lock: dict[tuple, list[dict]] = defaultdict(list)
+    for e in entries:
+        lock = e["lock"]
+        by_lock[(lock.get("path"), lock.get("inode"), lock.get("mtime_ns"))].append(e)
+    stale = [group for group in by_lock.values()
+             if len(group) > 1 and group[-1].get("ts_epoch", 0) > group[0].get("ts_epoch", 0)]
+    print("\nstale candidates (the same lock still present on a later record):", file=out)
+    print(f"  {len(stale)} stale candidate(s)", file=out)
+    for group in stale:
+        first, last = group[0], group[-1]
+        span = last.get("ts_epoch", 0) - first.get("ts_epoch", 0)
+        print(f"  {first['lock'].get('path')} (inode {first['lock'].get('inode')}, "
+              f"size {first['lock'].get('size')}): first seen {first.get('ts')}, "
+              f"last seen {last.get('ts')} ({span:.0f}s, {len(group)} records)", file=out)
+        procs = first.get("git_processes") or []
+        if not procs:
+            print("    no git was running when first seen" +
+                  (", holders: " + ", ".join(f"{h['command']}[{h['pid']}]" for h in first["holders"])
+                   if first.get("holders") else ""), file=out)
+        for p in procs:
+            chain = " <- ".join(short(a.get("command", ""), 60) for a in p.get("ancestors") or [])
+            print(f"    git[{p.get('pid')}] {short(p.get('command', ''), 80)} in {p.get('cwd')}"
+                  + (f" <- {chain}" if chain else ""), file=out)
+    return 0
+
+
+# --------------------------------------------------------------------------
+# CLI
+
+
+def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=sys.stdout,
+         home: Optional[Path] = None, uid: Optional[int] = None, now: Optional[float] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="mode", required=True)
+    p_record = sub.add_parser("record", help="log the lock's holders and git processes, if locked")
+    p_record.add_argument("--repo", type=Path, required=True)
+    p_record.add_argument("--log", type=Path)
+    p_install = sub.add_parser("install", help="install the watching LaunchAgent")
+    p_install.add_argument("--repo", type=Path, required=True)
+    p_install.add_argument("--log", type=Path)
+    p_install.add_argument("--dry-run", action="store_true")
+    p_uninstall = sub.add_parser("uninstall", help="remove the watching LaunchAgent")
+    p_uninstall.add_argument("--dry-run", action="store_true")
+    p_report = sub.add_parser("report", help="summarise the log")
+    p_report.add_argument("--log", type=Path)
+    p_report.add_argument("--top", type=int, default=10)
+    args = parser.parse_args(argv)
+
+    runner = runner or system_runner
+    home = home or Path.home()
+    uid = os.getuid() if uid is None else uid
+    if args.mode == "record":
+        record(args.repo.resolve(), args.log or default_log(home), Probe(runner), now)
+        return 0
+    if args.mode == "install":
+        return install(args.repo.resolve(), args.log, home, uid, runner, out, args.dry_run)
+    if args.mode == "uninstall":
+        return uninstall(home, uid, runner, out, args.dry_run)
+    return report(args.log or default_log(home), out, args.top)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
