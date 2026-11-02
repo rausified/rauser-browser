@@ -546,6 +546,18 @@ mod tests {
     }
 
     #[test]
+    fn summary_md_has_lf_line_endings() {
+        // .gitattributes pins SUMMARY.md to LF: the template's delimiters are
+        // LF-only, and a CRLF copy would make every summary run panic.
+        assert!(
+            !SUMMARY_MD.contains('\r'),
+            "SUMMARY.md must use LF line endings"
+        );
+        let crlf: &'static str = Box::leak(SUMMARY_MD.replace('\n', "\r\n").into_boxed_str());
+        assert!(parse_summary_template(crlf).is_err());
+    }
+
+    #[test]
     fn summary_values_are_inserted_in_one_pass() {
         let vocabulary = SummaryVocabulary {
             document_types: vec!["{{page}}".into()],

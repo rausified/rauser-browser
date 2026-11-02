@@ -7,3 +7,6 @@ host/tests/fixtures/** -text
 # text merge). BOSUN_FEATURE_BACKLOG.md's generated blocks are re-rendered by
 # `python3 scripts/render_backlog.py --resolve` after a conflict.
 .beads/issues.jsonl merge=beads-jsonl
+# SUMMARY.md is compiled into the host as the summary prompt; its template
+# delimiters are LF-only, so never let a checkout convert it to CRLF.
+SUMMARY.md text eol=lf
