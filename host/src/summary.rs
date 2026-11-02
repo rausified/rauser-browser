@@ -31,6 +31,8 @@ use crate::markdown::{LinkStyle, inline, neutralize_remote, wikilink, yaml_strin
 use crate::presentation::plain_line;
 use crate::vault::{note_filename, owned_frontmatter};
 
+pub(crate) mod incoming;
+
 pub const MAX_TITLE_BYTES: usize = 2048;
 /// The most characters (not bytes) of a summary's document type and
 /// category: the answer's and the vocabulary's own bound, so a label the
@@ -311,6 +313,8 @@ pub struct SummaryDocument<'a> {
     pub session: SessionLink,
     pub note_link: String,
     pub answer: &'a SummaryAnswer,
+    /// The host's frozen queue-time navigation snapshot, never agent output.
+    pub incoming: &'a [brauser_protocol::IncomingTrailView],
 }
 
 /// The importance level's wire name, as `ImportanceLevel` serializes.
@@ -613,6 +617,11 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
     out.push_str("\n## Assessment\n");
     out.push_str(&neutralize_remote(&answer.assessment));
     out.push('\n');
+    let incoming = incoming::list(doc.incoming);
+    if !incoming.is_empty() {
+        out.push_str("\n## Incoming\n\nRecorded navigation when this summary was requested.\n\n");
+        out.push_str(&incoming);
+    }
     if !answer.references.is_empty() {
         out.push_str("\n## References\n");
         for reference in &answer.references {
@@ -1360,7 +1369,26 @@ mod tests {
             session: SessionLink::CodexThread("t-1".into()),
             note_link,
             answer,
+            incoming: &[],
         }
+    }
+
+    #[test]
+    fn summary_incoming_navigation_is_host_rendered_and_absent_without_observations() {
+        let key = url_record_key(PAGE_URL).unwrap();
+        let answer = answer();
+        let mut doc = document(&key, &answer, "Page note".into());
+        let plain = render_summary(&doc, LinkStyle::Relative);
+        assert!(!plain.contains("## Incoming"));
+        let incoming = [incoming::example()];
+        doc.incoming = &incoming;
+        let rendered = render_summary(&doc, LinkStyle::Relative);
+        assert!(
+            rendered.contains("## Incoming\n\nRecorded navigation when this summary was requested")
+        );
+        assert!(rendered.contains("Link navigation from [Planning ticket](<https://example.com/items/1>) · last recorded 2026-11-02"));
+        assert!(rendered.contains("## References"));
+        assert_eq!(frontmatter(&rendered), frontmatter(&plain));
     }
 
     /// The leading frontmatter of a rendered summary, without its fences.
