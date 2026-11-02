@@ -41,6 +41,31 @@ pub(super) const TAIL_WINDOW: u64 = 4096;
 /// `brauser_logs.purpose` of the watermark this module keeps.
 const EVENTS: &str = "events";
 
+/// Which watermark and gap tables a pass reads and advances: the live ones,
+/// or the staged rebuild's (`rebuild.rs`), which are read the same way into
+/// `brauser_stage_*` while the live ones keep serving.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Target {
+    Live,
+    Stage,
+}
+
+impl Target {
+    fn logs(self) -> &'static str {
+        match self {
+            Self::Live => "brauser_logs",
+            Self::Stage => "brauser_stage_logs",
+        }
+    }
+
+    fn gaps(self) -> &'static str {
+        match self {
+            Self::Live => "brauser_gaps",
+            Self::Stage => "brauser_stage_gaps",
+        }
+    }
+}
+
 /// Where one logged event goes: the store's ingest, inside the same
 /// transaction, with the event's durable position (log-dir-relative path,
 /// zero-based line).
@@ -114,10 +139,23 @@ pub(super) fn catch_up(
     root_identity: &str,
     ingest: &mut Ingest<'_>,
 ) -> Result<CatchUp> {
-    if rebuilding(tx)? {
+    catch_up_into(tx, Target::Live, storage, root_identity, ingest)
+}
+
+/// [`catch_up`] against `target`'s tables. For [`Target::Stage`] a pending
+/// rebuild is the point, so it is not checked, and a shrunk or removed log
+/// returns [`CatchUp::Rebuilding`] without a request: the stage must restart.
+pub(super) fn catch_up_into(
+    tx: &Transaction<'_>,
+    target: Target,
+    storage: &StorageConfig,
+    root_identity: &str,
+    ingest: &mut Ingest<'_>,
+) -> Result<CatchUp> {
+    if target == Target::Live && rebuilding(tx)? {
         return Ok(CatchUp::Rebuilding);
     }
-    let stored = watermarks(tx)?;
+    let stored = watermarks_in(tx, target)?;
     let Some((logs, log_dir, stats)) = stat_logs(storage, root_identity, !stored.is_empty())?
     else {
         return Ok(CatchUp::Caught {
@@ -136,7 +174,9 @@ pub(super) fn catch_up(
             .get(path.as_str())
             .is_none_or(|stat| stat.checkpoint.bytes < mark.bytes)
     }) {
-        request_rebuild(tx)?;
+        if target == Target::Live {
+            request_rebuild(tx)?;
+        }
         return Ok(CatchUp::Rebuilding);
     }
     let shown = |relative: &Path| log_dir.join(relative).display().to_string();
@@ -166,7 +206,7 @@ pub(super) fn catch_up(
         let tail = mark.filter(|mark| bytes > mark.bytes && mark.parsed_bytes > 0);
         let read = read_log(&logs, stat, tail)
             .with_context(|| format!("reading artifact log file {}", shown(&stat.relative)))?;
-        ingest_log(tx, stat, read, ingest)?;
+        ingest_log(tx, target, stat, read, ingest)?;
         logs_read += 1;
     }
     Ok(CatchUp::Caught {
@@ -216,8 +256,8 @@ pub(super) fn rebuilding(tx: &Transaction<'_>) -> Result<bool> {
     Ok(value.as_deref() == Some("staging"))
 }
 
-/// Ask for a staged rebuild; the rebuild itself (T10) prepares the stage
-/// tables and clears the flag when it finalizes.
+/// Ask for a staged rebuild; the rebuild itself (`rebuild.rs`) prepares the
+/// stage tables and clears the flag when it finalizes.
 pub(super) fn request_rebuild(tx: &Transaction<'_>) -> Result<()> {
     tx.execute(
         "INSERT INTO brauser_meta(key, value) VALUES ('rebuild', 'staging')
@@ -228,9 +268,9 @@ pub(super) fn request_rebuild(tx: &Transaction<'_>) -> Result<()> {
 }
 
 /// Forget the watermark and the gaps, and clear a pending rebuild request,
-/// so the next pass reads every log again. Until the staged rebuild (T10),
-/// this answers a shrunk or removed log: the JSON cache has already rebuilt
-/// its events from the remaining logs, and the store mirrors those.
+/// so the next pass reads every log again. Until the JSON cache goes (plan
+/// T15), this answers a watermark that does not describe that cache; a
+/// shrunk or removed log is the staged rebuild's (`rebuild.rs`).
 pub(super) fn reset(tx: &Transaction<'_>) -> Result<()> {
     tx.execute("DELETE FROM brauser_logs WHERE purpose = ?1", [EVENTS])?;
     tx.execute("DELETE FROM brauser_gaps", [])?;
@@ -317,10 +357,15 @@ fn to_i64(value: u64) -> Result<i64> {
 }
 
 fn watermarks(tx: &Transaction<'_>) -> Result<BTreeMap<String, Watermark>> {
-    let mut statement = tx.prepare(
+    watermarks_in(tx, Target::Live)
+}
+
+fn watermarks_in(tx: &Transaction<'_>, target: Target) -> Result<BTreeMap<String, Watermark>> {
+    let mut statement = tx.prepare(&format!(
         "SELECT path, bytes, modified_ns, parsed_bytes, parsed_lines, tail_sha256
-         FROM brauser_logs WHERE purpose = ?1",
-    )?;
+         FROM {} WHERE purpose = ?1",
+        target.logs()
+    ))?;
     let rows = statement.query_map([EVENTS], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -506,6 +551,7 @@ fn needs_previous(tail: &[u8]) -> bool {
 /// overflow markers and advance the log's watermark.
 fn ingest_log(
     tx: &Transaction<'_>,
+    target: Target,
     stat: &Stat,
     read: LogRead,
     ingest: &mut Ingest<'_>,
@@ -545,7 +591,7 @@ fn ingest_log(
                 ingest(tx, event, (stat.relative.clone(), number))?;
             }
             if let Some((id, marker)) = parse_overflow_marker(line) {
-                upsert_gap(tx, &id, &marker, stat, number)?;
+                upsert_gap(tx, target, &id, &marker, stat, number)?;
             }
             previous = line;
         }
@@ -556,13 +602,16 @@ fn ingest_log(
         (0, 0, Sha256::digest([]).to_vec())
     };
     tx.execute(
-        "INSERT INTO brauser_logs(path, purpose, bytes, modified_ns, parsed_bytes, parsed_lines,
-                                  tail_sha256)
+        &format!(
+            "INSERT INTO {}(path, purpose, bytes, modified_ns, parsed_bytes, parsed_lines,
+                            tail_sha256)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(path, purpose) DO UPDATE SET
            bytes = excluded.bytes, modified_ns = excluded.modified_ns,
            parsed_bytes = excluded.parsed_bytes, parsed_lines = excluded.parsed_lines,
            tail_sha256 = excluded.tail_sha256",
+            target.logs()
+        ),
         params![
             stat.key,
             EVENTS,
@@ -580,6 +629,7 @@ fn ingest_log(
 /// earliest log position wins, whichever pass found it first.
 fn upsert_gap(
     tx: &Transaction<'_>,
+    target: Target,
     id: &str,
     marker: &OverflowMarker,
     stat: &Stat,
@@ -587,7 +637,10 @@ fn upsert_gap(
 ) -> Result<()> {
     let existing: Option<(Option<String>, Option<i64>)> = tx
         .query_row(
-            "SELECT log_path, log_line FROM brauser_gaps WHERE gap_id = ?1",
+            &format!(
+                "SELECT log_path, log_line FROM {} WHERE gap_id = ?1",
+                target.gaps()
+            ),
             [id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -603,12 +656,15 @@ fn upsert_gap(
     let first = OffsetDateTime::parse(&marker.first_occurred_at, &Rfc3339)?.date();
     let last = OffsetDateTime::parse(&marker.last_occurred_at, &Rfc3339)?.date();
     tx.execute(
-        "INSERT INTO brauser_gaps(gap_id, marker, log_path, log_line, start_date, end_date)
+        &format!(
+            "INSERT INTO {}(gap_id, marker, log_path, log_line, start_date, end_date)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(gap_id) DO UPDATE SET
            marker = excluded.marker, log_path = excluded.log_path,
            log_line = excluded.log_line, start_date = excluded.start_date,
            end_date = excluded.end_date",
+            target.gaps()
+        ),
         params![
             id,
             serde_json::to_string(marker)?,

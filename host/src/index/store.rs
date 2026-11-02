@@ -78,7 +78,7 @@ pub(super) struct StoredEvent {
     pub(super) event: CachedEvent,
 }
 
-fn event_kind(event: &CachedEvent) -> &'static str {
+pub(super) fn event_kind(event: &CachedEvent) -> &'static str {
     match event.data {
         EventData::Activity(_) => "activity",
         EventData::Why(_) => "why",
@@ -89,7 +89,7 @@ fn event_kind(event: &CachedEvent) -> &'static str {
 
 /// The container a visit rolls up into under the current adapters. Only
 /// activity and M1 visits roll up.
-fn container_of(containers: &mut Containers<'_>, event: &CachedEvent) -> Option<String> {
+pub(super) fn container_of(containers: &mut Containers<'_>, event: &CachedEvent) -> Option<String> {
     let (url, artifact_id) = match &event.data {
         EventData::Activity(event) => (&event.url, &event.artifact_id),
         EventData::Legacy(event) => (&event.url, &event.artifact_id),
@@ -100,7 +100,7 @@ fn container_of(containers: &mut Containers<'_>, event: &CachedEvent) -> Option<
         .map(|(_, container, _)| container)
 }
 
-fn has_refs(event: &CachedEvent) -> bool {
+pub(super) fn has_refs(event: &CachedEvent) -> bool {
     matches!(&event.data, EventData::Activity(event) if !event.refs.is_empty())
 }
 
@@ -126,19 +126,19 @@ fn key_of(
     )
 }
 
-fn sql_int(value: u64) -> i64 {
+pub(super) fn sql_int(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-fn sha256(bytes: &[u8]) -> Vec<u8> {
+pub(super) fn sha256(bytes: &[u8]) -> Vec<u8> {
     Sha256::digest(bytes).to_vec()
 }
 
-fn body_of(event: &CachedEvent) -> Result<String> {
+pub(super) fn body_of(event: &CachedEvent) -> Result<String> {
     serde_json::to_string(event).context("serializing an indexed event")
 }
 
-fn parse_body(body: &str) -> Result<CachedEvent> {
+pub(super) fn parse_body(body: &str) -> Result<CachedEvent> {
     serde_json::from_str(body).context("artifact history is unavailable: unreadable indexed event")
 }
 
@@ -162,7 +162,7 @@ pub(super) fn set_meta(tx: &Transaction<'_>, key: &str, value: &str) -> Result<(
     Ok(())
 }
 
-fn meta_u64(tx: &Transaction<'_>, key: &str) -> Result<u64> {
+pub(super) fn meta_u64(tx: &Transaction<'_>, key: &str) -> Result<u64> {
     match meta(tx, key)? {
         Some(value) => value
             .parse()
@@ -293,7 +293,7 @@ fn stored_event(
 
 /// A group's events in `ordered_events` order: the artifact's own, and the
 /// children that roll up into it.
-fn group_events(tx: &Transaction<'_>, group: &str) -> Result<Vec<StoredEvent>> {
+pub(super) fn group_events(tx: &Transaction<'_>, group: &str) -> Result<Vec<StoredEvent>> {
     let mut statement = tx.prepare_cached(
         "SELECT artifact_id, container_id, order_key, body FROM brauser_events
            WHERE artifact_id = ?1
@@ -340,7 +340,7 @@ fn all_events(tx: &Transaction<'_>) -> Result<Vec<StoredEvent>> {
         .collect()
 }
 
-fn fold_events(adapters: Option<&Document>, events: &[StoredEvent]) -> Derived {
+pub(super) fn fold_events(adapters: Option<&Document>, events: &[StoredEvent]) -> Derived {
     let mut fold = Fold::new(adapters);
     for stored in events {
         fold.apply(&stored.event);
@@ -709,17 +709,28 @@ pub(super) fn rederive_groups(
     groups: &BTreeSet<String>,
 ) -> Result<()> {
     for group in groups {
-        #[cfg(test)]
-        GROUP_DERIVES.with(|count| count.set(count.get() + 1));
-        let events = group_events(tx, group)?;
-        let derived = fold_events(adapters, &events);
-        write_group(
-            tx,
-            group,
-            &rows_of(&derived, &events, |owner| owner == group),
-        )?;
+        rederive_group(tx, adapters, group)?;
     }
     Ok(())
+}
+
+/// Re-derive one group and replace the rows it owns. Returns the group's
+/// own derived record, if it has one, for a caller that renders it.
+pub(super) fn rederive_group(
+    tx: &Transaction<'_>,
+    adapters: Option<&Document>,
+    group: &str,
+) -> Result<Option<ArtifactRow>> {
+    #[cfg(test)]
+    GROUP_DERIVES.with(|count| count.set(count.get() + 1));
+    let events = group_events(tx, group)?;
+    let mut derived = fold_events(adapters, &events);
+    write_group(
+        tx,
+        group,
+        &rows_of(&derived, &events, |owner| owner == group),
+    )?;
+    Ok(derived.artifacts.remove(group))
 }
 
 /// Mark each artifact dirty with a fresh generation, replacing an older
