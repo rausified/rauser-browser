@@ -187,7 +187,6 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
-- [ ] `brwr-e7b0` **Stop accessibility regressions across Brauser's UI.** Run axe-core against built `panel.html`, `options.html` and `tasks.html` in a small state matrix covering setup, configured, disconnected and error states. Add keyboard assertions for reaching and activating each primary action, changing panel tabs, operating the task listbox… _(P1; labels: assigned, scout-proposal)_
 - [ ] `brwr-5yn` **[human] M1.5a step 6.8: certify the three starter adapters.** Check the Jira, SharePoint/OneDrive and GitHub drafts against each live tool and record the date in docs/adapters/. Needs John on macOS with real accounts; Cookie must not change the 'development draft' label or mark 6.8 done. _(P2; labels: human)_
 - [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2)_
 - [ ] `brwr-mff` **[human] Add rusqlite (bundled) to the workspace and warm the VM cargo cache.** Cookie's codex sandbox cannot fetch crates, so step 6.6 hand-wrote a SQLite file writer instead of using a library. Outside the sandbox: add rusqlite with the bundled feature to host/Cargo.toml, update Cargo.lock, pass cargo deny check --all-features --locked (license… _(P2; labels: human)_
@@ -199,6 +198,7 @@ queue".
 - [ ] `brwr-qn4` **Explain why a page on a captured site is 'Not an artifact'.** When the current origin has capture rules but none matches the page, the panel's artifact card should name the artifact types the site covers instead of a bare '○ Not an artifact'. Example: 'github.com captures repositories, pull requests and issues for cisco-sbg; this page… _(P2)_
 - [ ] `brwr-dl1` **deploy-live: invalidate the npm ci receipt before reinstalling.** Codex review of PR #207 (P2), scripts/dev/deploy-live npm ci step. When node_modules is missing but the recorded package-lock hash matches, a failed or interrupted npm ci can partly recreate node_modules while the old receipt in .git/deploy-live-state.json stays. The next deploy… _(P2; labels: deploy-live)_
 - [ ] `brwr-dl2` **deploy-live: keep the extension-reload requirement across a refused deploy.** Codex review of PR #207 (P2), scripts/dev/deploy-live summary. When a run appears during the builds, deploy-live refuses after rebuilding extension/dist and says not to reload. A retry at the same commit compares the rebuilt dist with itself, reports the extension unchanged, and… _(P2; labels: deploy-live)_
+- [ ] `brwr-tsh1` **Tasks page: keep the runs_may_exist hint while summary runs are retained.** Codex review of the one-summary-card PR (P2), extension/run-card.ts restoreRunCards and extension/tasks.ts open(). restoreRunCards clears runs_may_exist_v1 when no card is shown, even when list_runs returned retained summary runs that were only older than a day or dismissed.… _(P2; labels: tasks-page)_
 - [ ] `brwr-tp1` **adapter-templates: title captures consume token base64 padding.** Codex review of PRs #215/#219 (P2), adapter-templates/src/ctype.rs BaseType::in_alphabet and extension/adapter-templates.ts inTitleAlphabet. Path and query token captures now accept up to two trailing '=' (Miro board IDs such as uXjVM0uuBLo=), but title runs still stop at '='.… _(P2; labels: adapter-templates)_
 - [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
@@ -415,6 +415,48 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Make adapter templates real, host-validated protocol v5 configuration (2026-10-16).** Brauser now round-trips `[adapters] format = 1` and `[[artifacts]]`, validates every definition with the Rust adapter-template authority and enabled-origin policy, surfaces bounded overlap warnings, and puts adapter changes behind native consent. Unsupported future formats remain intact on disk while every extension entry point and the autonomous worker suspend capture; unscoped shared origins disclose every-account capture, existing IDs stay frozen until migrations exist, and page notes and AI settings remain usable during adapter repair. **Metrics:** 12 protocol tests, 8 focused host regressions, and 5 extension suites passing; full build, format, clippy, typecheck, lint, and extension checks green.
 
 ## Notes / Ideas for Later
+
+- **2026-11-02 Tasks listbox quarantine repair.** This cycle began red
+  after the external cycle-3 gate rejected critical `aria-required-children`
+  failures. Recovered the quarantined accessibility work, made visible group
+  labels presentational while retaining names through `aria-labelledby`, and
+  moved the no-match message beside the hidden empty listbox while keeping
+  the selected detail available. Review caught that presentation alone would
+  still leave an empty listbox without options. Two controller regressions
+  failed against the recovered build and pass with the fix. Added a real-browser
+  group/filter/restore regression; there are now 36 browser cases plus two
+  local fixture checks. The required browser run remains blocked here and
+  must pass externally before `brwr-e7b0` closes. No unrelated feature work
+  or duplicate proposal was started. Future cycles should use the external
+  gate's exact node diagnostics and check adjacent dynamic states; fake DOM
+  assertions supplement browser validation. Assigned Re-learn work and the
+  summary local-date bug remain next; existing worklog curation and focus
+  session proposals remain useful once the assigned queue clears.
+
+- **2026-11-02 quarantined accessibility repair.** This cycle began red:
+  the external cycle-2 gate found serious contrast failures on dark Tasks
+  disconnected/error warnings. Recovered all quarantined work and added an
+  explicit Canvas/CanvasText document background/text pair, plus two real
+  browser regressions that switch themes and require a measured warning
+  contrast pass. The full non-browser gate passes locally; required browser
+  execution remains blocked by the sandbox and must pass in the driver's
+  external gate before `brwr-e7b0` closes. This repair supersedes the earlier
+  33-browser-case count: there are now 35, plus two local fixture checks.
+  No new product work or duplicate proposals were started on a red cycle.
+  Existing assigned Re-learn work and the summary local-date correction
+  remain next; future product ideation should resume after those assignments.
+
+- **2026-11-02 accessibility implementation.** Tooling is provisioned; the
+  old provisioning blocker below is superseded. `brwr-e7b0` now contains
+  the built-page axe matrix, keyboard flows, UI fixes and required macOS CI
+  wiring. Chromium remains unavailable inside the cycle sandbox: local
+  browser cases skip explicitly, and `BRAUSER_REQUIRE_A11Y_TESTS=1` fails
+  there by design. Keep the bead in progress until the driver's required
+  external run supplies actual browser evidence; do not weaken its launcher
+  or call skipped cases passed. The remaining assigned Re-learn apply work
+  and summary local-date bug remain queued. After assignments clear,
+  existing worklog curation (`brwr-ppn`) and named focus sessions (`brwr-ued`)
+  remain useful product directions; no duplicate proposal is needed.
 
 - **2026-11-01 repair-only health cycle.** The opening gate failed six
   supervisor tests; focused reruns reproduced task-capacity and long-report

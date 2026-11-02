@@ -130,6 +130,7 @@ type AdapterEdit =
   | { kind: "draft"; handoff: DraftHandoff };
 
 let adapterEdit: AdapterEdit | null = null;
+let adapterOpener: HTMLElement | null = null;
 let githubScopeText = "";
 // Until the user types in the organization field, it follows the
 // organizations the configured GitHub rules already name.
@@ -773,6 +774,7 @@ function openAdapterEditor(
   edit: AdapterEdit, adapter: AdapterObject | AdapterObject[], heading: string,
   review: { line: string; items: string[]; example: AdapterObject } | null = null,
 ): void {
+  adapterOpener = document.activeElement as HTMLElement | null;
   adapterEdit = edit;
   adapterEditor.hidden = false;
   adapterEditorHeading.textContent = heading;
@@ -835,6 +837,12 @@ function beginStarterUpdate(index: number): void {
   );
 }
 
+function focusAdapterOpener(opener: HTMLElement | null): void {
+  // A save may have rebuilt the gallery/list that contained the opener.
+  const target = opener?.isConnected && opener !== document.body ? opener : newAdapterButton;
+  target.focus();
+}
+
 function closeAdapterEditor(): void {
   adapterEdit = null;
   adapterEditor.hidden = true;
@@ -843,6 +851,8 @@ function closeAdapterEditor(): void {
   adapterValidation.textContent = "";
   adapterPreview.replaceChildren();
   updateControls();
+  if (!busy) focusAdapterOpener(adapterOpener);
+  adapterOpener = null;
 }
 
 /**
@@ -859,6 +869,8 @@ async function saveAdapterDocument(
   // Every settings save keeps contained adapters ahead of their container's
   // catch-all, whichever path built the document.
   const document: AdapterDocument = { ...proposed, artifacts: orderContainedFirst(proposed.artifacts) };
+  const hadEditorFocus = adapterEditor.contains(globalThis.document.activeElement);
+  const opener = adapterOpener;
   busy = true;
   updateControls();
   const selection = picker;
@@ -890,6 +902,9 @@ async function saveAdapterDocument(
   } finally {
     busy = false;
     renderConfig();
+    if (hadEditorFocus && adapterEdit === null && globalThis.document.activeElement === globalThis.document.body) {
+      focusAdapterOpener(opener);
+    }
   }
 }
 
@@ -1451,6 +1466,11 @@ resetAdaptersButton.addEventListener("click", () => void resetAdapters());
 refreshArtifactsButton.addEventListener("click", () => void refreshArtifactFiles());
 saveAdapterButton.addEventListener("click", () => void saveAdapter());
 cancelAdapterButton.addEventListener("click", closeAdapterEditor);
+adapterEditor.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || event.isComposing || busy) return;
+  event.preventDefault();
+  closeAdapterEditor();
+});
 adapterJson.addEventListener("input", refreshAdapterEditor);
 adapterPreviewUrl.addEventListener("input", refreshAdapterEditor);
 adapterPreviewTitle.addEventListener("input", refreshAdapterEditor);

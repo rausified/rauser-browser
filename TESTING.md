@@ -18,6 +18,71 @@ Accessibility tests use axe-core through playwright-core against a real headless
 - **Codex sandbox:** Chromium cannot start inside Codex's workspace-write sandbox on Linux with any flags: its seccomp filter returns EPERM for `setsockopt` and `shutdown` on Unix socketpairs, and Chromium aborts at startup. That sandbox sets `CODEX_SANDBOX_NETWORK_DISABLED=1`, so the launcher skips with a one-line reason there. A missing browser elsewhere also skips. `BRAUSER_REQUIRE_A11Y_TESTS=1` turns both into failures.
 - **Where they run for real:** CI's macOS job and the worker's unsandboxed commit gate (a `--test-cmd`). On a worker VM, install offline with `npm ci --offline --ignore-scripts` against the committed lockfile; `npm install --offline` fails in the sandbox because `~/.npm` is read-only there.
 
+After `npm run build:extension`, run `npm run test:a11y`. Set
+`BRAUSER_REQUIRE_A11Y_TESTS=1` for an acceptance run; the macOS CI build and
+Cookie's external commit gate require it. The command uses Node's
+`--test-isolation=none` so a sandbox that cannot return child-process test
+output still reports each actual case, including browser skips or failures.
+The browser tests share no fake global DOM. Transport-only checks still run
+in the sandbox and validate the scripted host replies against the extension's
+wire guard.
+
+`extension/tests/a11y/` opens the built HTML, CSS and JavaScript with a real
+headless browser. A Playwright route fulfills files from `extension/dist/`
+at a synthetic HTTPS origin and aborts other requests. Chrome APIs and native
+host replies are synthetic; no extension installation, native host, harness,
+server, real page, folder picker or network access is involved.
+
+| Page | States checked with axe | Themes |
+| --- | --- | --- |
+| `panel.html` | No home folder/harness, configured, native host disconnected, config read error | Light and dark |
+| `options.html` | No home folder/harness, configured, native host disconnected, config read error | Light and dark |
+| `tasks.html` | No harness, configured history, native host disconnected, task-list read error | Light and dark |
+
+These 24 combinations fail on every critical or serious axe violation.
+Additional audits cover Recent, the Capture Site and Page patterns reviews,
+the adapter editor, agent-start errors and task dismissal. Each audit reports
+all violation IDs and impact levels plus `manual_review` entries for axe's
+incomplete checks and their selectors. Incomplete results remain unresolved
+manual work; they are never counted as automated passes. A seeded unnamed
+button must produce `button-name` and fail the very same assertion used by
+the matrix.
+
+The disconnected/error Tasks warnings also run through a light → dark →
+light theme change without a reload. Those regressions require an opaque
+computed document background and an actual `color-contrast` pass for
+`#tasks-status`, so an incomplete contrast check cannot satisfy them. The
+shared stylesheet explicitly paints `Canvas`/`CanvasText`; leaving the
+background implicit made axe blend translucent warnings over white in dark
+mode. Failed audits include each node's selector and axe failure summary.
+
+The Tasks group/filter regression checks named Running, Today and Yesterday
+groups, requires a measured `aria-required-children` pass for the populated
+listbox, and audits the no-match and restored states. Group labels stay
+presentational inside the composite. When filtering finds no matches, the
+listbox is hidden and a message beside it leaves the selected detail visible.
+Two controller regressions reproduce the heading and empty-listbox defects
+without a browser; these supplement the required real-browser audit.
+
+Keyboard cases use actual Tab navigation, Enter, Space and
+arrow/Home/End keys, without mouse clicks or programmatic focus setup. They
+exercise settings access, Capture Site review/save, Page patterns, panel tabs
+and worklog copy, note typing/autosave, task start/Tasks navigation, summary start,
+folder choice, harness detection/selection/setup, adapter editing/save, vocabulary save, diagnostics copy,
+task selection, report copy, Reuse, Open page, Cancel and Dismiss. They check
+tab/listbox roles and selected state, one composite tab stop, visible focus
+outlines, Escape from reviews, and focus during real timed task polls and
+after dismissal. The agent-start fixtures return a controlled service error;
+they do not run an agent. Unexpected requests and page errors fail the tests.
+
+This is regression coverage, not full WCAG conformance or screen-reader
+certification. Human checks still include screen-reader announcements,
+reading order, meaningful labels in context, zoom/reflow, OS high-contrast
+mode and all reported incomplete results. A sandbox skip is not evidence of
+browser acceptance. In particular, the initial Cookie implementation of
+`brwr-e7b0` remains in progress until the required external browser gate has
+actually exercised it; the script and CI wiring alone do not close the bead.
+
 ## Test layers
 
 Put each check in the lowest layer that can prove it.
@@ -562,6 +627,15 @@ the same way, for tasks and summaries alike:
   `office_paragraphs_mark_the_document_untrusted_and_bound_the_section`,
   `office_paragraphs_keep_a_downloaded_copy_out_of_the_knowledge_base` and
   `office_paragraphs_fetch_when_the_page_holds_only_part_of_the_document`;
+- the summary instructions, `SUMMARY.md` as rendered by
+  `host/src/service/prompt.rs`:
+  `summary_md_is_the_whole_prompt_without_its_maintainer_comment`,
+  `summary_values_are_inserted_in_one_pass` (a path or vocabulary value
+  holding `{{placeholder}}` text is never expanded) and
+  `summary_template_rejects_a_malformed_summary_md` (missing or repeated
+  placeholders, an unknown placeholder, a missing `{{#office}}` block or
+  maintainer comment); the untrusted-page and vocabulary tests above it
+  also guard edits to `SUMMARY.md`;
 - the supervisor, `host/src/service/supervisor.rs`:
   `an_office_task_names_the_document_in_page_md_and_its_prompt_says_to_fetch_it`,
   `office_page_content_with_forged_bullets_leaves_one_host_address_line`,
