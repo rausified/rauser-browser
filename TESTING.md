@@ -758,6 +758,50 @@ closes stdin before the parent finishes writing and races into `EPIPE`. Do
 not read until EOF either: the parent keeps stdin open until the child exits.
 The fixture uses the same `head -c` tool as the neighboring timeout fixture.
 
+## Bookkeeping-file merge drivers
+
+`.beads/issues.jsonl`, `BOSUN_FEATURE_BACKLOG.md`, `PENDING_AMOS_DOC_UPDATES.md`
+and `CookieFeature.md` change in every worker cycle, queue PR and human PR,
+so merging main into a branch (Cookie's overnight driver does `git merge`
+on its VM) used to stop on them. `.gitattributes` gives each a merge driver:
+
+- `beads-jsonl` merges the queue bead by bead (`render_backlog.merge_jsonl`):
+  a field changed on one side takes that side, `metadata` merges key by
+  key, a field both sides changed takes the newer `updated_at`, a delete
+  against an edit keeps the edit, and lines come out in `bd export`'s order
+  (priority, newest `created_at`, id) and byte format. A combined bead (equal
+  to neither side) gets an `updated_at` one second after both, because `bd
+  import` keeps a database row whose `updated_at` ties the imported one and
+  would otherwise drop the other side's fields when a workspace hydrates. Only two different
+  values for one field with an equal or unreadable `updated_at` stop the
+  merge, as markers around that bead.
+- `bosun-backlog` merges the hand-written text three ways and renders the
+  generated blocks from the merged queue, never text-merging them. git
+  gives a driver only one file's three versions, so the driver finds the
+  queues itself: ours is HEAD; theirs is the `GITHEAD_<oid>` a `git merge`
+  or `git pull` exports, or the commit a rebase is picking; the base is
+  their single merge base (or the picked commit's parent). Each guess is
+  used only when that commit's backlog is byte for byte the version git
+  handed the driver. When the commits cannot be established (a
+  cherry-pick, several merge bases) or the queue itself conflicts, the
+  backlog stays conflicted with its prose merged and no markers, and
+  `python3 scripts/render_backlog.py --resolve` finishes it.
+- The two logs use git's built-in `union`: both sides' appended entries
+  are kept, ours first. An entry edited in place on both sides comes out
+  twice (both wordings), never as markers; tidy it by hand if that happens.
+
+The drivers live in per-clone git config, so a clone (or the clone a
+worktree belongs to, or a worker workspace) runs
+`sh scripts/install-merge-drivers.sh` once; it is idempotent. Without them
+git does a normal text merge and `--resolve` still finishes it. GitHub's
+own merges (the merge queue, the PR page) never run custom drivers.
+
+`scripts/tests/test_merge_drivers.py` (`npm run test:queue`) covers the
+2026-11-01 conflict shapes in unit tests and in real `git merge`, `git
+rebase` and `git cherry-pick` runs in a temporary repository with the
+committed `.gitattributes` and the installed drivers; every integration
+test ends with `check_queue_consistency.py` passing.
+
 ## Local IPC in sandboxes
 
 Some development sandboxes deny local IPC. Codex's `workspace-write` sandbox
@@ -1002,6 +1046,19 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-11-01: Branch `feat/conflict-free-bookkeeping-merges`. A merge
+  driver sees one file at a time and git merges paths in an unspecified
+  order, so the backlog driver cannot wait for the queue driver's result.
+  It recomputes the merged queue from the commits instead, and accepts a
+  guessed commit only when its backlog matches the driver's input byte for
+  byte; a wrong guess would render the backlog from the wrong queue, so
+  anything unverified falls back to `--resolve`. Replaying the eight
+  historical merges since the renderer landed, with the drivers installed,
+  left no queue or backlog conflict in seven; the eighth's merge base
+  predates the GENERATED markers, so the backlog fell back to a line merge.
+  Two of the seven came out with a stale block because one parent had
+  itself committed a stale rendering; a driver cannot repair that, and
+  `check_queue_consistency.py` still catches it.
 - 2026-10-28: Branch `feat/task-bar`. A third run kind touched every place
   that branched on "summary or not": `RunStatusFile::view` used to put any
   non-summary result into `site_draft`, the repair prompt asked for JSON, and
