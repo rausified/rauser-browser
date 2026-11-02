@@ -1324,7 +1324,8 @@ function trimWhiteSpace(text: string): string {
   return text.slice(start, end);
 }
 
-/** The character run a title capture takes (§9.1). A uuid run stops at a
+/** The character run a title capture takes (§9.1), before whole-value
+ * validation checks token padding placement. A uuid run stops at a
  * brace, so a braced UUID in a title does not match (SQ7). */
 function inTitleAlphabet(type: TypeName, char: string | undefined): boolean {
   switch (type) {
@@ -1333,7 +1334,7 @@ function inTitleAlphabet(type: TypeName, char: string | undefined): boolean {
     case "hex":
       return isHexDigit(char);
     case "token":
-      return isTokenChar(char);
+      return isTokenChar(char) || char === "=";
     case "name":
       return isNameChar(char);
     case "jira_key":
