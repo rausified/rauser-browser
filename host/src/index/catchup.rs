@@ -86,7 +86,6 @@ pub(super) enum CatchUp {
 
 /// The stat-only comparison of the logs with the watermark, for the reads'
 /// freshness check (plan T11).
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Freshness {
     /// Every log is checkpointed at its current size and modification time.
@@ -218,7 +217,6 @@ pub(super) fn catch_up_into(
 /// Compare the logs with the watermark by their metadata alone; no log
 /// byte is read. Runs in a `read_txn` before a read decides whether a
 /// catch-up must run first.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn freshness(
     tx: &Transaction<'_>,
     storage: &StorageConfig,

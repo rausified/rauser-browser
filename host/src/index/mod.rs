@@ -70,6 +70,7 @@ pub(crate) mod tests;
 use fold::*;
 pub(crate) use fold::{unvisited_container, unvisited_within};
 use legacy::*;
+#[cfg(test)]
 use query::*;
 use regen::*;
 use render::*;
@@ -321,6 +322,35 @@ enum CatchUp {
     },
 }
 
+/// What a read's stat-only check found (`ArtifactIndex::probe`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Probe {
+    /// The snapshot is this folder's under these adapters, and every log is
+    /// checkpointed at its current size and modification time.
+    Current,
+    /// The snapshot is this folder's, but the logs are ahead of it.
+    Behind,
+    /// The snapshot cannot be served without a catch-up: no database, a
+    /// legacy file, another folder's rows, other adapters, or a store that
+    /// does not yet hold every event its watermark covers.
+    Unusable,
+}
+
+/// The `brauser_meta` key that holds `ArtifactIndex::mirror_location` while
+/// the store holds every event of the logs its watermark covers, and is
+/// empty otherwise. It goes with the JSON cache (plan T15).
+const MIRROR_KEY: &str = "json_mirror";
+
+/// Whether `error` is the write lock staying busy past its timeout.
+fn busy(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(cause.downcast_ref::<db::DbError>(), Some(db::DbError::Busy))
+            || cause
+                .downcast_ref::<rusqlite::Error>()
+                .is_some_and(db::is_busy)
+    })
+}
+
 const INCOMPLETE_CATCH_UP: &str = "artifact history is unavailable: catch-up reached its 64 MiB per-pass limit; the next pass resumes after the logs already read";
 
 /// Metadata is only an ingestion checkpoint, never capture authorization.
@@ -535,20 +565,6 @@ struct Derived {
     why_at: BTreeMap<String, OffsetDateTime>,
 }
 
-#[derive(Default)]
-struct WorklogRow {
-    focused: u64,
-    background: u64,
-    opens: u64,
-    /// Focus and opens from the artifact's own visits, without those of
-    /// artifacts within it, for the range's totals.
-    own_focused: u64,
-    own_opens: u64,
-    /// The latest summary (by `occurred_at`) among this artifact's visits
-    /// within the worklog's date range, if any.
-    summary: Option<SummaryEvent>,
-}
-
 /// The local day the last regeneration pass completed, the UTC offset that
 /// day was taken in, and the storage it covered (`ArtifactIndex::daily_pass_due`).
 /// The cache is shared, so a pass for another folder never counts.
@@ -703,6 +719,7 @@ impl ArtifactIndex {
                 store::sync_to_state(tx, adapters, &fingerprint, &state)?.is_empty(),
                 "the store and the JSON cache took the delivery differently"
             );
+            self.mark_mirror(tx, &state)?;
             Ok(conflicts)
         })?;
         drop(conn);
@@ -771,7 +788,8 @@ impl ArtifactIndex {
             } else {
                 BTreeSet::new()
             };
-            store::sync_dirty(tx, &state.dirty, &changed)
+            store::sync_dirty(tx, &state.dirty, &changed)?;
+            self.mark_mirror(tx, state)
         })
     }
 
@@ -897,11 +915,12 @@ impl ArtifactIndex {
         self.cache_dir.join("regenerated.json")
     }
 
+    /// The JSON cache, caught up and published. Reads no longer use it
+    /// (they answer from `index.db`); tests still inspect it until plan T15.
+    #[cfg(test)]
     fn load_or_rebuild(&self) -> Result<IndexState> {
         let (state, publish) = self.load_current_state()?;
         if publish {
-            // Queries publish repaired checkpoints too. Publication failure
-            // makes derived history unavailable, never silently complete.
             self.publish_state_and_database(&state)?;
         }
         Ok(state)
@@ -1249,6 +1268,9 @@ impl ArtifactIndex {
             if state.gap_logs != state.logs || catchup::checkpoints(tx)? != state.logs {
                 catchup::reset(tx)?;
             }
+            // This pass advances the watermark, but its events reach the
+            // store only when the JSON cache is published.
+            store::set_meta(tx, MIRROR_KEY, "")?;
             let mut sink = |_: &rusqlite::Transaction<'_>, event, position| {
                 found.push((event, position));
                 Ok(())
@@ -1315,46 +1337,27 @@ impl ArtifactIndex {
     }
 
     /// Return the current derived record for one recognized artifact. The
-    /// append-only log remains authoritative; this never trusts index.db.
+    /// append-only log remains authoritative: the read catches `index.db`
+    /// up with it first when it is behind.
     pub fn artifact(&self, artifact_id: &str) -> Result<Option<ArtifactView>> {
         Ok(self.artifact_with_summary(artifact_id)?.0)
     }
 
     /// The artifact's derived record and its latest summary from one
-    /// catch-up, so a panel request reads the logs once. A summary always
+    /// snapshot, so a panel request checks the logs once. A summary always
     /// derives a row, so a missing row means no summary either.
     pub fn artifact_with_summary(
         &self,
         artifact_id: &str,
     ) -> Result<(Option<ArtifactView>, Option<SummaryView>)> {
-        let derived = self.derive(&self.load_or_rebuild()?);
-        let Some(row) = derived.artifacts.get(artifact_id) else {
-            return Ok((None, None));
-        };
-        let view = artifact_view(row, &derived);
-        // Rows keep summaries sorted by instant, then append order; the newest
-        // that renders is the latest, so a broken one hides no earlier one.
-        Ok((
-            Some(view),
-            row.summaries.iter().rev().find_map(summary_view),
-        ))
+        self.read(|tx| query::card(tx, artifact_id))
     }
 
     /// The artifact's latest summary (by instant, then append order, as the
     /// artifact file's Summary line picks it) that renders as a view, or
     /// `None` when it has none.
     pub fn summary_for(&self, artifact_id: &str) -> Result<Option<SummaryView>> {
-        let cache = self.load_or_rebuild()?;
-        let mut summaries = ordered_events(&cache)
-            .into_iter()
-            .filter_map(|event| match &event.data {
-                EventData::Summary(summary) if summary.artifact_id == artifact_id => Some(summary),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        // Stable, so equal times keep `ordered_events`' log order.
-        summaries.sort_by(|a, b| timestamp_order(&a.occurred_at, &b.occurred_at));
-        Ok(summaries.into_iter().rev().find_map(summary_view))
+        self.read(|tx| query::summary_for(tx, artifact_id))
     }
 
     /// Canonical URLs previously recorded for an artifact, including mode
@@ -1371,15 +1374,7 @@ impl ArtifactIndex {
     }
 
     pub fn artifact_url_evidence(&self, artifact_id: &str) -> Result<Vec<StoredUrl>> {
-        Ok(self
-            .load_or_rebuild()?
-            .events
-            .values()
-            .filter(|event| event.artifact_id() == artifact_id)
-            .flat_map(CachedEvent::urls)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect())
+        self.read(|tx| query::url_evidence(tx, artifact_id))
     }
 
     /// Fresh authoritative evidence for impact review. No cache is trusted,
@@ -1419,14 +1414,7 @@ impl ArtifactIndex {
     /// recognized artifact can have saved context before its first hourly
     /// activity is delivered.
     pub fn latest_why(&self, artifact_id: &str) -> Result<Option<String>> {
-        let state = self.load_or_rebuild()?;
-        Ok(ordered_events(&state)
-            .into_iter()
-            .rev()
-            .find_map(|event| match &event.data {
-                EventData::Why(why) if why.artifact_id == artifact_id => Some(why.text.clone()),
-                _ => None,
-            }))
+        self.read(|tx| query::latest_why(tx, artifact_id))
     }
 
     /// One row per artifact and local day, newest day first and then by that
@@ -1438,69 +1426,7 @@ impl ArtifactIndex {
         title_query: Option<&str>,
         limit: usize,
     ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
-        let derived = self.derive(&self.load_or_rebuild()?);
-        let types = derived
-            .artifacts
-            .values()
-            .map(|row| row.artifact_type.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .take(64)
-            .collect::<Vec<_>>();
-        let query = title_query.map(str::trim).filter(|value| !value.is_empty());
-        let query = query.map(|value| value.to_lowercase());
-        let mut grouped = BTreeMap::<(String, String), ArtifactListItem>::new();
-        for visit in &derived.visits {
-            let Some(artifact) = derived.artifacts.get(&visit.artifact_id) else {
-                continue;
-            };
-            if artifact_type.is_some_and(|wanted| wanted != artifact.artifact_type) {
-                continue;
-            }
-            if query
-                .as_ref()
-                .is_some_and(|wanted| !artifact.title.to_lowercase().contains(wanted))
-            {
-                continue;
-            }
-            let row = grouped
-                .entry((visit.local_date.clone(), visit.artifact_id.clone()))
-                .or_insert_with(|| ArtifactListItem {
-                    local_date: visit.local_date.clone(),
-                    artifact_id: visit.artifact_id.clone(),
-                    artifact_type: artifact.artifact_type.clone(),
-                    title: artifact.title.clone(),
-                    url: artifact.url.clone(),
-                    focused_seconds: 0,
-                    background_seconds: 0,
-                    opens: 0,
-                    why: artifact.why.clone(),
-                    summary: None,
-                });
-            // Visits are in time order, so the day's latest summary that
-            // renders wins.
-            if let Some(view) = visit.summary.as_ref().and_then(summary_view) {
-                row.summary = Some(view);
-            }
-            row.focused_seconds =
-                saturating_u32(u64::from(row.focused_seconds).saturating_add(visit.focused_secs));
-            row.background_seconds = saturating_u32(
-                u64::from(row.background_seconds).saturating_add(visit.background_secs),
-            );
-            row.opens = saturating_u32(u64::from(row.opens).saturating_add(visit.opens));
-        }
-        let mut items = grouped.into_values().collect::<Vec<_>>();
-        items.sort_by(|left, right| {
-            right
-                .local_date
-                .cmp(&left.local_date)
-                .then(right.focused_seconds.cmp(&left.focused_seconds))
-                .then(left.title.cmp(&right.title))
-                .then(left.artifact_id.cmp(&right.artifact_id))
-        });
-        let truncated = items.len() > limit;
-        items.truncate(limit);
-        Ok((items, types, truncated))
+        self.read(|tx| query::recent(tx, artifact_type, title_query, limit))
     }
 
     /// Render a measured, agent-free summary for an inclusive range of local
@@ -1515,118 +1441,96 @@ impl ArtifactIndex {
         start: Date,
         end: Date,
     ) -> Result<(String, usize, Vec<OverflowMarker>, bool)> {
-        let state = self.load_or_rebuild()?;
-        let (gaps, gaps_truncated) = worklog_gaps(&state, start, end);
-        let derived = self.derive(&state);
-        let mut rows = BTreeMap::<String, WorklogRow>::new();
-        for visit in &derived.visits {
-            let Ok(date) = parse_date(&visit.local_date) else {
-                continue;
-            };
-            if date < start || date > end {
-                continue;
-            }
-            let row = rows.entry(visit.artifact_id.clone()).or_default();
-            row.focused = row.focused.saturating_add(visit.focused_secs);
-            row.background = row.background.saturating_add(visit.background_secs);
-            row.opens = row.opens.saturating_add(visit.opens);
-            if !visit.contained {
-                row.own_focused = row.own_focused.saturating_add(visit.focused_secs);
-                row.own_opens = row.own_opens.saturating_add(visit.opens);
-            }
-            if let Some(summary) = &visit.summary
-                && row.summary.as_ref().is_none_or(|current| {
-                    timestamp_order(&summary.occurred_at, &current.occurred_at).is_ge()
-                })
-            {
-                row.summary = Some(summary.clone());
-            }
+        self.read(|tx| query::worklog(tx, start, end))
+    }
+
+    /// Run one read in a single `read_txn` over `index.db`'s committed
+    /// rows, after a stat-only freshness check: only when the logs are
+    /// ahead of `brauser_logs` (or the snapshot is not this folder's under
+    /// these adapters) does a catch-up write run first.
+    fn read<T>(&self, query: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>) -> Result<T> {
+        self.read_with(|| self.reconcile_from_logs(), query)
+    }
+
+    /// [`Self::read`] with its catch-up given. If that catch-up finds the
+    /// write lock busy past its timeout, the lock holder is ingesting the
+    /// same appends, so a snapshot that is otherwise this folder's is
+    /// served instead of an error. While a staged rebuild is pending, the
+    /// history is unavailable.
+    fn read_with<T>(
+        &self,
+        catch_up: impl FnOnce() -> Result<()>,
+        query: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let probe = self.probe();
+        if probe != Probe::Current
+            && let Err(error) = catch_up()
+            && !(probe == Probe::Behind && busy(&error))
+        {
+            return Err(error);
         }
-        // A container is still listed with its rolled-up measures, but the
-        // range's totals count each visit once, by its own artifact. A
-        // summary is not measured activity: it is counted on its own and
-        // never as an open.
-        let opened = rows.values().filter(|row| row.own_opens > 0).count();
-        let carried = rows
-            .values()
-            .filter(|row| row.own_opens == 0 && row.own_focused > 0)
-            .count();
-        let summarized = rows.values().filter(|row| row.summary.is_some()).count();
-        let plural = |count: usize| if count == 1 { "" } else { "s" };
-        let mut text = if summarized > 0 {
-            format!(
-                "Opened {opened} artifact{}, focused on {carried} left open from an earlier day, and summarized {summarized} page{}.",
-                plural(opened),
-                plural(summarized)
-            )
-        } else {
-            format!(
-                "Opened {opened} artifact{}, and focused on {carried} left open from an earlier day.",
-                plural(opened)
-            )
-        };
-        let mut ordered = rows.into_iter().collect::<Vec<_>>();
-        ordered.sort_by(|left, right| {
-            right
-                .1
-                .focused
-                .cmp(&left.1.focused)
-                .then(right.1.opens.cmp(&left.1.opens))
-                .then(left.0.cmp(&right.0))
-        });
-        let mut shown = 0usize;
-        for (id, row) in &ordered {
-            let Some(artifact) = derived.artifacts.get(id) else {
-                continue;
+        let mut conn = db::open(&self.cache_dir, db::Mode::IfExists)?
+            .context("artifact history is unavailable: index.db is missing")?;
+        query::register(&conn)?;
+        db::read_txn(&mut conn, |tx| {
+            if catchup::rebuilding(tx)? {
+                bail!(INCOMPLETE_CATCH_UP);
+            }
+            query(tx)
+        })
+    }
+
+    /// The stat-only freshness check: no log byte or cache file is read.
+    /// Any doubt (no database, a legacy file, an unreadable log folder) is
+    /// [`Probe::Unusable`], and the catch-up then reports or repairs it.
+    fn probe(&self) -> Probe {
+        let probe = || -> Result<Probe> {
+            let Some(mut conn) = db::open(&self.cache_dir, db::Mode::IfExists)? else {
+                return Ok(Probe::Unusable);
             };
-            let mut line = if let Some(summary) = &row.summary {
-                let mut line = format!(
-                    "Summarized: {} — {}, {} importance",
-                    plain_text(&summary.title),
-                    plain_text(&summary.document_type),
-                    crate::summary::importance_str(summary.importance)
-                );
-                // A future adapter-attached summary (spec §7.2's "the
-                // adapter does recognize the page" branch) can land on an
-                // artifact that also has real measured activity; keep both
-                // instead of silently dropping the measures.
-                if row.focused > 0 || row.background > 0 || row.opens > 0 {
-                    line.push_str(&format!(
-                        " — {}",
-                        measures(row.focused, row.background, row.opens)
-                    ));
+            db::read_txn(&mut conn, |tx| {
+                let adapters = store::meta(tx, "adapters")?;
+                if store::meta(tx, MIRROR_KEY)? != Some(self.mirror_location())
+                    || adapters.as_deref() != Some(self.adapters_fingerprint().as_str())
+                {
+                    return Ok(Probe::Unusable);
                 }
-                line
-            } else {
-                let mut line = format!(
-                    "{} {}: {}",
-                    artifact.artifact_type,
-                    id,
-                    plain_text(&artifact.title)
-                );
-                line.push_str(&format!(
-                    " — {}",
-                    measures(row.focused, row.background, row.opens)
-                ));
-                line
-            };
-            if let Some(why) = &artifact.why {
-                line.push_str(&format!(". Why: {}", plain_text(why)));
-            }
-            if text.len().saturating_add(line.len()).saturating_add(1) > MAX_WORKLOG_BYTES {
-                break;
-            }
-            text.push('\n');
-            text.push_str(&line);
-            shown += 1;
-        }
-        if shown < ordered.len() {
-            text.push_str(&format!(
-                "\n… {} more artifacts omitted.",
-                ordered.len() - shown
-            ));
-        }
-        Ok((text, ordered.len(), gaps, gaps_truncated))
+                Ok(
+                    match catchup::freshness(tx, &self.storage, &self.root_identity)? {
+                        catchup::Freshness::Current => Probe::Current,
+                        catchup::Freshness::Behind | catchup::Freshness::Rebuilding => {
+                            Probe::Behind
+                        }
+                    },
+                )
+            })
+        };
+        probe().unwrap_or(Probe::Unusable)
+    }
+
+    /// This store's folder and layout, as `MIRROR_KEY` records it.
+    fn mirror_location(&self) -> String {
+        serde_json::json!([
+            self.storage.root,
+            self.root_identity,
+            self.storage.log_dir,
+            self.storage.artifacts_dir,
+        ])
+        .to_string()
+    }
+
+    /// Record whether the store now holds every event of the logs its
+    /// watermark covers, as `state` (the JSON cache it mirrors) does. Until
+    /// plan T15, only `catch_up_logs` advances the watermark without the
+    /// events, and it clears this mark.
+    fn mark_mirror(&self, tx: &rusqlite::Transaction<'_>, state: &IndexState) -> Result<()> {
+        let level = self.state_location_matches(state) && catchup::checkpoints(tx)? == state.logs;
+        let value = if level {
+            self.mirror_location()
+        } else {
+            String::new()
+        };
+        store::set_meta(tx, MIRROR_KEY, &value)
     }
 
     fn state_path(&self) -> PathBuf {
@@ -1642,6 +1546,7 @@ fn saturating_u32(value: u64) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
+#[cfg(test)]
 fn parse_date(value: &str) -> Result<Date> {
     let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")?;
     Ok(Date::parse(value, &format)?)

@@ -67,12 +67,14 @@ fn checkpoints_skip_unchanged_logs_and_recover_completed_trailing_markers() {
     assert_eq!(LOG_BYTES_READ.with(|count| count.get()), 0);
     // The old format has no ingestion checkpoints. Treat it as a cache
     // miss and rebuild every event, even if its old events map is valid.
+    // Reads answer from index.db, so the next write reads the JSON cache.
     let mut old: serde_json::Value =
         serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
     old["version"] = 1.into();
     old["events"].as_object_mut().unwrap().clear();
     old.as_object_mut().unwrap().remove("logs");
     fs::write(index.state_path(), serde_json::to_vec(&old).unwrap()).unwrap();
+    index.reconcile_from_logs().unwrap();
     assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 2);
     assert_eq!(
         read_state(&index.state_path()).unwrap().unwrap().version,
@@ -183,18 +185,19 @@ fn full_rebuilds_finish_in_bounded_passes_once_history_exceeds_one_pass() {
     }
 
     // A deleted cache rebuilds in bounded passes and never publishes a
-    // partial checkpoint on the way.
+    // partial checkpoint on the way. Reads answer from index.db, so the
+    // JSON cache is rebuilt by the writes (here, reconciling).
     fs::remove_file(index.state_path()).unwrap();
     let old_db = published(&index);
     let mut partial = Vec::new();
-    let (recent, passes) = bounded_passes(limit, || {
-        let result = index.recent(None, None, 32);
+    let ((), passes) = bounded_passes(limit, || {
+        let result = index.reconcile_from_logs();
         if result.is_err() {
             partial.push((index.state_path().exists(), published(&index) == old_db));
         }
         result
     });
-    assert_eq!((recent.0.len(), passes), (6, 3));
+    assert_eq!(passes, 3);
     assert_eq!(partial, [(false, true); 2]);
     LOG_BYTES_READ.with(|count| count.set(0));
     assert_eq!(index.recent(None, None, 32).unwrap().0.len(), 6);

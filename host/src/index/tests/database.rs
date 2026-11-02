@@ -261,6 +261,8 @@ fn an_oversize_cached_row_is_stored_in_index_db_without_stopping_publication() {
         serde_json::from_slice(&fs::read(index.state_path()).unwrap()).unwrap();
     cached["version"] = 4.into();
     fs::write(index.state_path(), serde_json::to_vec(&cached).unwrap()).unwrap();
+    // Reads answer from index.db; the next write reads the JSON cache.
+    index.reconcile_from_logs().unwrap();
     assert!(index.artifact(&oversize.artifact_id).unwrap().is_none());
     assert!(index.artifact(&good.artifact_id).unwrap().is_some());
     assert_eq!(

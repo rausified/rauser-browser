@@ -16,6 +16,7 @@ mod migration;
 pub(super) mod mp_harness;
 mod ordering;
 mod presentation;
+mod reads;
 mod rebuild;
 mod regeneration;
 mod scan;
