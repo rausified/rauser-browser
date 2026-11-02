@@ -1146,6 +1146,60 @@ impl ConfigStore {
         knowledge_base_identity: Option<&str>,
         harness_commit: Option<HarnessCommit>,
     ) -> Result<Option<String>> {
+        self.update_inner(
+            next,
+            expected_revision,
+            selected_identity,
+            knowledge_base_identity,
+            harness_commit,
+            false,
+        )
+    }
+
+    /// Complete replacement of an inert adapter document. Unrelated fields
+    /// come from the host, never from the repair request.
+    pub(crate) fn replace_adapters(
+        &mut self,
+        document: AdapterDocument,
+        expected_revision: &str,
+    ) -> Result<Option<String>> {
+        let next = ConfigSnapshot {
+            adapters: document,
+            ..self.snapshot().clone()
+        };
+        self.update_inner(next, expected_revision, None, None, None, true)
+    }
+
+    /// Preserved adapter values, including unsupported header keys. TOML
+    /// serialization preserves value types; this is not the file's formatting.
+    pub(crate) fn adapter_repair_original(&self) -> Result<String> {
+        #[derive(Serialize)]
+        struct Original<'a> {
+            adapters: StoredAdapters,
+            artifacts: &'a [serde_json::Value],
+        }
+        let text = toml::to_string_pretty(&Original {
+            adapters: StoredAdapters {
+                format: self.config.adapters.format,
+                extensions: self.adapter_extensions.clone(),
+            },
+            artifacts: &self.config.adapters.artifacts,
+        })?;
+        if text.len() > 256 * 1024 {
+            bail!("preserved adapter values exceed the repair preview limit");
+        }
+        Ok(text)
+    }
+
+    fn update_inner(
+        &mut self,
+        next: ConfigSnapshot,
+        expected_revision: &str,
+        selected_identity: Option<&str>,
+        knowledge_base_identity: Option<&str>,
+        harness_commit: Option<HarnessCommit>,
+        replacing_adapters: bool,
+    ) -> Result<Option<String>> {
         let json = serde_json::to_vec(&next).context("serializing config JSON")?;
         if json.len() > MAX_CONFIG_BYTES {
             return Err(config_size_refusal(0).into());
@@ -1169,6 +1223,24 @@ impl ConfigStore {
         if expected_revision != current.revision {
             self.adopt(current);
             return Ok(None);
+        }
+        if replacing_adapters {
+            if current.issue.is_some()
+                || (current.adapter_extensions.is_empty()
+                    && compile_validated_adapters(&current.config).is_ok())
+            {
+                bail!("read the current adapter issue before replacing the document");
+            }
+            // Unlike unrelated updates, an exact echo of an invalid document
+            // is never a successful repair.
+            compile_validated_adapters(&next)?;
+            let unchanged = ConfigSnapshot {
+                adapters: current.config.adapters.clone(),
+                ..next.clone()
+            };
+            if unchanged != current.config {
+                bail!("adapter repair cannot change other settings");
+            }
         }
         validate_update(&current.config, &next)?;
         // Another host may have recorded contracts since this one last read
@@ -1195,8 +1267,9 @@ impl ConfigStore {
         // exact no-op config update as that explicit narrowing; real unrelated
         // edits continue to preserve fields this host does not understand.
         let clear_adapter_extensions = !current.adapter_extensions.is_empty()
-            && next.adapters == empty_adapter_document
-            && (!adapters_unchanged || current.config == next);
+            && (replacing_adapters
+                || (next.adapters == empty_adapter_document
+                    && (!adapters_unchanged || current.config == next)));
         if !current.adapter_extensions.is_empty()
             && !adapters_unchanged
             && !clear_adapter_extensions
@@ -1343,7 +1416,7 @@ impl ConfigStore {
 
         // Repair must preserve the exact unreadable file. A no-clobber,
         // durable backup is created before the replacement can be published.
-        if current.needs_backup {
+        if current.needs_backup || replacing_adapters {
             backup_invalid(&parent, &self.path, &current.revision)?;
             // A local editor might ignore our lock. Do not replace bytes that
             // changed while the backup was being made.
@@ -6159,6 +6232,134 @@ mod tests {
         assert!(!repaired.contains("future_mode"), "{repaired}");
         assert!(!repaired.contains("[[artifacts]]"), "{repaired}");
         assert_eq!(store.adapter_issue(), None);
+    }
+
+    #[test]
+    fn explicit_adapter_repair_preserves_other_settings_and_backs_up_original_bytes() {
+        for broken in ["future_format", "future_header", "malformed_artifact"] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("config.toml");
+            let mut store = ConfigStore::for_test(path.clone());
+            let original = adapter_config(vec![adapter(
+                "https://work.example",
+                "work.issue",
+                "/issues/{id:int}",
+                "work.issue:{host}/{id}",
+            )]);
+            store
+                .update(original.clone(), MISSING_REVISION)
+                .unwrap()
+                .unwrap();
+            let text = fs::read_to_string(&path).unwrap();
+            let damaged = match broken {
+                "future_format" => text.replacen("format = 1", "format = 2 # original comment", 1),
+                "future_header" => {
+                    text.replacen("format = 1", "format = 1\nfuture_mode = \"semantic\"", 1)
+                }
+                _ => text.replace("/issues/{id:int}", "/issues/{unknown:int}"),
+            };
+            fs::write(&path, &damaged).unwrap();
+            store.refresh().unwrap();
+            assert!(store.adapter_issue().is_some(), "{broken}");
+            let revision = store.revision().to_owned();
+            let preserved = store.adapter_repair_original().unwrap();
+            assert!(preserved.contains("work.issue"));
+            if broken == "future_header" {
+                assert!(preserved.contains("future_mode = \"semantic\""));
+            }
+            store
+                .replace_adapters(original.adapters.clone(), &revision)
+                .unwrap()
+                .unwrap();
+            assert_eq!(store.snapshot(), &original);
+            assert_eq!(store.adapter_issue(), None);
+            let backups: Vec<_> = fs::read_dir(folder.path())
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.unwrap().path();
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("config-invalid-")
+                        .then_some(path)
+                })
+                .collect();
+            assert_eq!(backups.len(), 1);
+            assert_eq!(fs::read(&backups[0]).unwrap(), damaged.as_bytes());
+            assert_eq!(loaded(&path).snapshot(), &original);
+            assert!(!fs::read_to_string(&path).unwrap().contains("future_mode"));
+        }
+    }
+
+    #[test]
+    fn explicit_adapter_repair_refuses_invalid_stale_or_healthy_replacements() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let original = adapter_config(vec![adapter(
+            "https://work.example",
+            "work.issue",
+            "/issues/{id:int}",
+            "work.issue:{host}/{id}",
+        )]);
+        store
+            .update(original.clone(), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let healthy = store.revision().to_owned();
+        assert!(
+            store
+                .replace_adapters(original.adapters.clone(), &healthy)
+                .is_err()
+        );
+        fs::write(
+            &path,
+            fs::read_to_string(&path)
+                .unwrap()
+                .replacen("format = 1", "format = 2", 1),
+        )
+        .unwrap();
+        store.refresh().unwrap();
+        let damaged = fs::read(&path).unwrap();
+        let revision = store.revision().to_owned();
+        // validate_update's unchanged-inert exception must not apply here.
+        assert!(
+            store
+                .replace_adapters(store.snapshot().adapters.clone(), &revision)
+                .is_err()
+        );
+        let mut changed_id = original.adapters.clone();
+        changed_id.artifacts[0]["id"] = json!("work.issue:{host}/changed/{id}");
+        assert!(
+            store
+                .replace_adapters(changed_id, &revision)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot change until artifact migrations")
+        );
+        assert_eq!(fs::read(&path).unwrap(), damaged);
+        assert!(!fs::read_dir(folder.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("config-invalid-")
+        }));
+        // A different host's unrelated save invalidates the reviewed revision.
+        let mut another = loaded(&path);
+        let next = ConfigSnapshot {
+            strip_params: vec!["utm_*".into()],
+            ..another.snapshot().clone()
+        };
+        another.update(next, &revision).unwrap().unwrap();
+        let newer = fs::read(&path).unwrap();
+        assert!(
+            store
+                .replace_adapters(original.adapters, &revision)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read(&path).unwrap(), newer);
     }
 
     #[test]

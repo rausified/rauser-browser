@@ -111,6 +111,11 @@ function install({
     ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["strip-conflicts", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
     ["reset-adapters", "button"], ["refresh-artifacts", "button"],
+    ["repair-adapters", "button"], ["adapter-repair", "div"], ["adapter-repair-heading", "h3"],
+    ["adapter-repair-original", "textarea"], ["adapter-repair-copy", "button"],
+    ["adapter-repair-json", "textarea"], ["adapter-repair-validation", "output"],
+    ["adapter-repair-url", "input"], ["adapter-repair-title", "input"], ["adapter-repair-preview", "ul"],
+    ["adapter-repair-save", "button"], ["adapter-repair-cancel", "button"],
     ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-editor-review", "div"], ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
@@ -130,6 +135,7 @@ function install({
     elements.set(id, new FakeElement(tag));
   }
   elements.get("adapter-editor").hidden = true;
+  elements.get("adapter-repair").hidden = true;
   for (const id of ["adopted-state", "forget-adopted", "forget-adopted-confirm"]) elements.get(id).hidden = true;
   elements.get("status").textContent = "Connecting to native host…";
   elements.get("build-id").textContent = "abc1234def56";
@@ -695,6 +701,151 @@ test("no strip_params notice without a conflict, and the fix waits for repair", 
   const [fix] = env.elements.get("strip-conflicts").querySelectorAll("button");
   assert.equal(fix.textContent, "Stop stripping selected*");
   assert.equal(fix.disabled, true);
+});
+
+function installAdapterRepair({ format = 2, artifacts = [{ future: "untouched" }], refuse = false } = {}) {
+  const state = install({ captureEnabled: false, host: {
+    get_config: (_request, current) => ({
+      type: "config_result", revision: String(current.revision), config: current.config,
+      config_issue: null, agent_status: AGENT_STATUS, adapter_issue: current.repaired ? null : "adapter configuration is invalid",
+      adapter_warnings: [], adopted_state: current.adoptedState,
+    }),
+    get_adapter_repair: (_request, current) => ({
+      type: "adapter_repair_loaded", revision: String(current.revision),
+      original_toml: `[adapters]\nformat = ${format}\nfuture_mode = "semantic"\n# preserved values\n`,
+    }),
+    replace_adapters: (request, current) => {
+      if (request.expected_revision !== String(current.revision)) {
+        return { type: "error", code: "conflict", message: "configuration changed; reopen adapter repair" };
+      }
+      if (refuse) return { type: "error", code: "invalid_config", message: "recorded identities cannot change" };
+      current.config = { ...current.config, adapters: request.document };
+      current.repaired = true;
+      current.revision++;
+      return { type: "config_updated", config: current.config, revision: String(current.revision) };
+    },
+  } });
+  state.config.adapters = { format, artifacts };
+  return state;
+}
+
+async function openAdapterRepair() {
+  env.elements.get("repair-adapters").click();
+  await until(() => !env.elements.get("adapter-repair").hidden && idle(), "adapter repair to open");
+}
+
+function replacement(document) {
+  env.elements.get("adapter-repair-json").value = typeof document === "string" ? document : JSON.stringify(document);
+  env.elements.get("adapter-repair-json").dispatch("input");
+}
+
+test("repair copies preserved future values without interpreting or saving them", async () => {
+  const state = installAdapterRepair();
+  const before = structuredClone(state.config);
+  await openSettings();
+  assert.equal(state.requests.some(({ type }) => type === "get_adapter_repair"), false);
+  await openAdapterRepair();
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-repair-json").value), { format: 1, artifacts: [] });
+  assert.match(env.elements.get("adapter-repair-original").value, /future_mode/);
+  assert.deepEqual(state.config, before);
+  const copied = [];
+  const prior = Object.getOwnPropertyDescriptor(globalThis.navigator, "clipboard");
+  Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText: async (text) => copied.push(text) } });
+  try {
+    env.elements.get("adapter-repair-copy").click();
+    await until(() => copied.length === 1, "preserved values to copy");
+    assert.equal(copied[0], env.elements.get("adapter-repair-original").value);
+  } finally {
+    if (prior) Object.defineProperty(globalThis.navigator, "clipboard", prior);
+    else delete globalThis.navigator.clipboard;
+  }
+  env.elements.get("adapter-repair-cancel").click();
+  assert.equal(env.elements.get("adapter-repair").hidden, true);
+  assert.equal(FakeElement.focused, env.elements.get("repair-adapters"));
+  assert.equal(state.requests.some(({ type }) => type === "replace_adapters" || type === "update_config"), false);
+});
+
+test("whole-document repair previews every site and preserves pause and match order", async () => {
+  const state = installAdapterRepair();
+  const before = structuredClone(state.config);
+  await openSettings();
+  await openAdapterRepair();
+  const document = { format: 1, artifacts: [artifactFor("https://b.com"), artifactFor("https://a.com")] };
+  replacement(document);
+  env.elements.get("adapter-repair-url").value = "https://a.com/items/42";
+  env.elements.get("adapter-repair-url").dispatch("input");
+  assert.equal(env.elements.get("adapter-repair-save").disabled, false);
+  const preview = nodeText(env.elements.get("adapter-repair-preview"));
+  assert.match(preview, /https:\/\/b\.com\/login/);
+  assert.match(preview, /https:\/\/a\.com\/search/);
+  assert.match(preview, /Example:.*Matches/);
+  // An example at a fixed probe URL must not hide that probe's safety row.
+  env.elements.get("adapter-repair-url").value = "https://a.com/login";
+  env.elements.get("adapter-repair-url").dispatch("input");
+  const repeated = nodeText(env.elements.get("adapter-repair-preview"));
+  assert.match(repeated, /Example: https:\/\/a\.com\/login/);
+  assert.match(repeated, /Probe: https:\/\/a\.com\/login/);
+  env.elements.get("adapter-repair-save").click();
+  await until(() => state.repaired && idle(), "replacement to save");
+  assert.deepEqual(state.config, { ...before, adapters: document });
+  assert.deepEqual(state.requests.filter(({ type }) => type === "replace_adapters").map(({ document, expected_revision }) => ({ document, expected_revision })), [{ document, expected_revision: "1" }]);
+  assert.equal(state.requests.some(({ type }) => type === "update_config"), false);
+  assert.equal(state.workerRequests.filter(({ kind }) => kind === "install_policy").at(-1).lease.capture_enabled, false);
+  assert.match(statusText(), /original config is backed up/);
+  assert.equal(env.elements.get("adapter-repair").hidden, true);
+});
+
+test("malformed format-1 rules and future replacements stay editable but cannot save", async () => {
+  const state = installAdapterRepair({ format: 1, artifacts: [{ type: "work.issue", match: "broken" }] });
+  await openSettings();
+  await openAdapterRepair();
+  for (const invalid of ["{", { format: 2, artifacts: [] }, { format: 1, artifacts: [{ type: "work.issue", match: "broken" }] }, { format: 1, artifacts: [], future_mode: true }]) {
+    replacement(invalid);
+    assert.equal(env.elements.get("adapter-repair-save").disabled, true);
+    env.elements.get("adapter-repair-save").click();
+  }
+  assert.equal(state.requests.some(({ type }) => type === "replace_adapters"), false);
+  replacement({ format: 1, artifacts: [artifactFor("https://a.com")] });
+  assert.equal(env.elements.get("adapter-repair-save").disabled, false);
+  env.elements.get("adapter-repair-save").click();
+  await until(() => state.repaired && idle(), "malformed document repair");
+});
+
+test("background revisions preserve the repair draft and disable its save", async () => {
+  const state = installAdapterRepair();
+  await openSettings();
+  await openAdapterRepair();
+  replacement({ format: 1, artifacts: [artifactFor("https://a.com")] });
+  const draft = env.elements.get("adapter-repair-json").value;
+  const original = env.elements.get("adapter-repair-original").value;
+  state.revision++;
+  state.repaired = true;
+  state.config.adapters = { format: 1, artifacts: [artifactFor("https://b.com")] };
+  state.firePolicyChange();
+  await until(() => /Settings changed/.test(env.elements.get("adapter-repair-validation").textContent), "stale repair warning");
+  assert.equal(env.elements.get("adapter-repair-save").disabled, true);
+  assert.equal(env.elements.get("adapter-repair-json").value, draft);
+  assert.equal(env.elements.get("adapter-repair-original").value, original);
+  assert.equal(env.elements.get("adapter-repair-copy").disabled, false);
+  assert.equal(state.requests.some(({ type }) => type === "replace_adapters"), false);
+});
+
+test("host conflicts and policy refusals keep the complete repair draft", async () => {
+  for (const conflict of [true, false]) {
+    const state = installAdapterRepair({ refuse: !conflict });
+    await openSettings();
+    await openAdapterRepair();
+    replacement({ format: 1, artifacts: [artifactFor("https://a.com")] });
+    const draft = env.elements.get("adapter-repair-json").value;
+    if (conflict) state.revision++;
+    env.elements.get("adapter-repair-save").click();
+    await until(() => /Could not replace/.test(statusText()) && idle(), "host replacement refusal");
+    assert.equal(env.elements.get("adapter-repair-json").value, draft);
+    assert.equal(env.elements.get("adapter-repair").hidden, false);
+    assert.equal(state.config.adapters.format, 2);
+    assert.equal(state.workerRequests.some(({ kind }) => kind === "install_policy"), false);
+    if (conflict) assert.equal(env.elements.get("adapter-repair-save").disabled, true);
+  }
 });
 
 test("an unsupported adapter document can be removed without blocking unrelated controls", async () => {

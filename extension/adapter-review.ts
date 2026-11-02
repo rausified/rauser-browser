@@ -306,3 +306,13 @@ export function newAdapter(origin: string): AdapterObject {
     id: "work.item:{host}/{id}",
   };
 }
+
+export function matchText(result: { match: false; reason: string } | {
+  match: true; type: string; artifact_id: string; rule: number; title?: string; mode: string | null;
+}): string {
+  if (!result.match) return `No match (${result.reason})`;
+  const details = [`${result.type} rule ${result.rule + 1}`, result.artifact_id];
+  if (result.title) details.push(`title “${result.title}”`);
+  if (result.mode) details.push(`mode ${result.mode}`);
+  return `Matches ${details.join(" · ")}`;
+}

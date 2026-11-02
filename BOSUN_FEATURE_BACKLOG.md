@@ -157,6 +157,7 @@ strip_params note-identity follow-up has shipped (see Shipped).
 - [ ] `brwr-p71k` **Page through selected-work choices beyond the response cap.** The selected-work preview (brwr-ppn) deliberately bounds a report to 200 artifact-day rows and 96 KiB serialized data. Shortening a week can expose omitted days, but a single busy day can still exceed those limits, leaving later entries unavailable for a concise update. Add… _(P3)_
 - [ ] `brwr-k6rg` **Show the original page while recalling an earlier task.** Keyboard recall intentionally reuses the stored instruction on the current page, while Tasks-page Reuse also reopens the original page. The context line names the current page but the recalled instruction has no visible source provenance; a person repeating a page-specific task… _(P3)_
 - [ ] `brwr-5xpb` **Name the task working folder in the context line.** Tasks without a page show No page and say they run in the knowledge base, but the bar does not name the configured folder. Someone with several note or project folders should know which one the agent will use before pressing Run. Show a compact, text-only folder cue from… _(P3)_
+- [ ] `brwr-jxrw` **Review which adapter rules a repair will remove before saving.** The complete-document repair workspace (brwr-jnj) preserves the original values and backs up exact config bytes, but a person manually copying useful rules from a damaged document can omit a supported adapter unintentionally. Add a plain-language review of recognized adapters… _(P3)_
 <!-- END GENERATED section=proposals -->
 
 ### Task bar follow-ups
@@ -188,7 +189,6 @@ queue".
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2; blocked)_
 - [ ] `brwr-cf2` **[human] Live-certify the confluence.page starter.** The Confluence pages starter (brwr-cf1) ships as a development draft. Check it against a real Atlassian Cloud site on macOS with real Chrome, following the 'Live check still needed' list in docs/adapters/confluence.page.md: both Atlassian checkboxes in Capture Site, the settings… _(P2; labels: human, starters)_
-- [ ] `brwr-jnj` **Offer non-destructive adapter document repair.** The brwr-rhg recovery path deliberately removes the whole invalid adapter document. Give users a copy-out and whole-document replacement workspace so a malformed entry can be repaired without discarding otherwise useful rules, while never interpreting or auto-migrating an… _(P3)_
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
 - [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
@@ -234,6 +234,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** New Capability. **Repair capture rules without discarding the original (2026-11-02).** Settings offers copyable preserved values and a complete format-1 replacement with preview on every site. The host backs up the exact original config, preserves pause and other settings, refuses stale or invalid replacements and retains recorded identity checks. Future formats remain opaque and remove-all recovery stays available. **Metrics:** 4 new Rust/wire tests and 5 offline UI cases; 1,386 Rust-reported outcomes (94 IPC sandbox skips), 44 extension files and 95 settings cases pass; 2 accessibility fixtures pass, 41 browser cases explicitly skip in sandbox.
+
 - **Category:** New Capability. **Run tasks without attaching a browser page (2026-11-02).** The task bar works on non-web tabs and offers Include this page on web tabs. Host and service validate explicit scope, no page file or page-reading permission is created, and Tasks history/Reuse preserves the choice without navigation. Ordinary page extraction failures remain visible. **Metrics:** 8 new Rust/wire and 7 extension regressions; 1,382 Rust-reported outcomes (94 explicit IPC skips), all 44 extension files pass; 2 accessibility fixtures pass and 40 browser cases explicitly skip in sandbox.
 
 - **Category:** User Experience. **Reach the task bar from Chrome and the keyboard (2026-11-02).** Ctrl/Command+Shift+8 and Ask Brauser open and focus the task bar; panel-local slash focuses it outside editable controls. Drafts stay intact, fixed notices survive startup, and only Enter or Run starts a task. **Metrics:** 4 new offline gesture cases; all 44 extension files and required gate green, with 94 IPC and 39 browser sandbox skips.
@@ -1997,3 +1999,30 @@ local merge 59c7612a contains its recovery but the driver holds it in PR #255
 historical evidence retained; brwr-p71k cannot start until it integrates. Do not
 rebuild it on another branch. brwr-5xpb proposes naming the configured working
 folder beside task scope, to make the agent's destination visible before Run.
+
+### Cycle observations (2026-11-02 — complete adapter-document repair)
+
+The clean starting gate left all three assigned items blocked outside this VM,
+so Cookie took the oldest ready P3 feature, `brwr-jnj`. The new settings workspace
+separates preserved TOML values from a complete authored format-1 replacement;
+it does not reinterpret future formats. Adapter-only messages reuse native
+authority and the atomic config writer, with repair eligibility checked under
+lock, exact original backups, recorded identity protection and no incidental
+capture/folder changes. Existing remove-all recovery remains available.
+
+The design challenge favored a narrow request over a full-config repair flag.
+The completed diff review found no P1/P2 issue. Its small keyboard focus finding
+was fixed at the existing browser-test seam, as was a self-review observation
+that a typed example must not suppress an identical fixed probe. Final required
+and README gates pass: 1,386 Rust-reported outcomes (94 explicit IPC skips), all
+44 extension files and 95 settings cases, both Clippy builds, 10,696 inert
+Markdown renderings, script/queue/dev-tool checks. Accessibility reports two
+fixture passes and 41 explicit sandbox browser skips; the external driver/CI
+must execute the real-Chrome journey and platform checks. Logs are under
+`target/overnight/adapter-repair/`; no live service/API was used.
+
+`brwr-jxrw` proposes a plain-language comparison of kept/changed/removed supported
+rules before repair. Whole-document replacement is now recoverable, but a
+manual reconstruction still makes accidental omissions possible; future-format
+values must remain opaque in any comparison. The three assigned blockers and
+held PRs were left unchanged. `.bosun_commit_msg` holds the driver handoff.
