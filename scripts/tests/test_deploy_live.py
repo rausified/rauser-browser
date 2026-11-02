@@ -610,6 +610,18 @@ class SelfUpdate(Fixture):
         self.assertIn(f"commits:   {OLD[:12]}..{NEW[:12]}", out)
         self.assertIn("Reload Brauser", out)
 
+    def test_a_resumed_deploy_does_not_pull_again(self):
+        # The copy it runs is the one the first pull brought; a second pull
+        # could bring yet another deploy-live it would not run (Codex, #229).
+        self.runner.head = NEW
+        self.runner.after_pull = "2222222222222222222222222222222222222222"
+        self.runner.script_after_pull = "deploy-live v3"
+        code, out = self.deploy("--resumed-from", OLD)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("pull", self.kinds())
+        self.assertEqual(self.reexecs, [])
+        self.assertIn(f"commits:   {OLD[:12]}..{NEW[:12]}", out)
+
     def test_resumed_from_must_be_a_full_commit(self):
         code, out = self.deploy("--resumed-from", "HEAD~1")
         self.assertEqual(code, 1, out)

@@ -16,7 +16,8 @@ first failure:
   d. git pull --ff-only; when the pull changes scripts/dev/deploy-live itself,
      re-execute the new copy with the same arguments plus a hidden
      --resumed-from <starting commit>, so every later step (and the summary's
-     commit range) is the new code's, and a resumed run never re-executes;
+     commit range) is the new code's; a resumed run neither pulls again nor
+     re-executes, so the code it runs is always the code it deploys;
   e. cargo build --locked -p brauser --target-dir <repo>/target/deploy-staging,
      so the live target/debug/brauser is not replaced yet (opening the panel
      starts the live binary, and a new host restarts the service);
@@ -484,7 +485,12 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         dist_before = dist_digest(repo)
 
         d.step("git pull --ff-only")
-        if args.dry_run:
+        if args.resumed_from is not None:
+            # This copy is the one the first pull brought; pulling again could
+            # bring a newer deploy-live that this run would not execute.
+            new = git_text(runner, repo, "rev-parse", "HEAD")
+            d.say(f"    pulled by the first run: {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}")
+        elif args.dry_run:
             d.act(["git", "-C", str(repo), "pull", "--ff-only"], "git pull")
             new = old
         else:
