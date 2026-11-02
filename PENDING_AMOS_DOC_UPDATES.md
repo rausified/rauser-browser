@@ -302,3 +302,11 @@
 - Brauser (2026-11-02, brwr-tsh1): retained summary history remains reachable
   after panel restore and harness removal, including dismissed summaries and
   summaries too old for panel cards. Tasks can still reveal dismissed runs.
+
+- 2026-11-02 — Brauser (`brwr-tp1`): custom title capture rules and
+  tab-title alias suggestions now retain up to two trailing base64 `=` in
+  identifiers, matching URL behavior in both engines. Malformed padding and
+  length overflow still reject the title entry; `=` is no longer a valid token
+  delimiter. Added 26 shared vectors and verified 2,024 offline comparisons;
+  full local gate passed with explicit sandbox skips. Fuzz compilation needs
+  its uncached dependency and platform/browser evidence remains CI/human work.

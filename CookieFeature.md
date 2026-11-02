@@ -1145,3 +1145,28 @@ panel's one-day restore window. Tasks still lists those records and its Show
 dismissed control reveals them. An end-to-end controller regression follows
 a dismissed summary through panel restore, harness removal and Tasks, and
 additional cases cover older summaries and mixed legacy history.
+
+
+## 2026-11-02 — Recognize padded IDs in tab titles (brwr-tp1)
+
+Custom capture rules can now remove an identifier from a tab title even when
+it ends with base64 padding, such as `[uXjVM0uuBLo=] Roadmap`. The same ID
+already worked in URLs; the title matcher stopped before its `=` and left the
+whole title in place. Both the native host and browser now recognize the
+padded title in either direction, and tab-title alias suggestions retain the
+complete identifier. They still reject empty bodies, internal or excessive
+padding, and values whose padding exceeds the configured length limit.
+
+The fix reuses the existing longest-run matcher, with strict validation after
+scanning, following a separate parser design challenge. A custom template
+that uses `=` as the delimiter beside a token capture now fails validation;
+use a delimiter outside the token alphabet, such as brackets or spaces.
+Shipped starter rules do not use token title captures. The 26 shared regression
+vectors reproduced ten failures in each engine before the fix and now pass.
+The full local gate passed with 1,337 Rust-reported test outcomes, all 40
+extension files and both Clippy builds; 1,265 individual adapter JavaScript
+tests pass. A regular-file comparison also verified agreement on 2,024 cases.
+IPC and real Chromium checks explicitly skip in this sandbox; the ordinary
+differential runner skipped its blocked child pipes and fuzz compilation
+could not find the uncached `libfuzzer-sys` dependency. Those checks remain for
+the external gate/CI. No live service, harness or external API was used.

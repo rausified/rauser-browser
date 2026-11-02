@@ -214,6 +214,19 @@ external rerun; sandbox skips are still explicit and never count as passes.
 
 **As built (protocol v6, 2026-10-26).** The rule this record introduced is now stated in DESIGN.md §7.2, “Protocol v6 changes”.
 
+**Token title padding (2026-11-02, `brwr-tp1`).** Both title engines now
+consume `=` in their longest token runs before validating the complete value.
+Forward and backward captures can clean padded board titles and produce
+padded tab-title aliases. Internal padding, more than two `=`, padding alone
+and length overflow still reject that entry; the usual ordered-title fallback
+applies.
+Custom templates using `=` as the bounding delimiter now fail
+`title_capture_swallows`; no shipped starter uses token title captures.
+Shared vectors cover both directions and the existing whole-token oracle
+continues to reject malformed URL values. The pre-implementation reviewer
+kept the existing matcher rather than adding a padding-specific scanner;
+see [the plan](superpowers/plans/2026-11-02-token-title-padding.md).
+
 ## §8 Extension Permissions — history
 
 Protocol v6 (2026-10-26) replaced the earlier permission model. Before it, the manifest declared broad *optional* HTTP(S) patterns and Chrome granted only the exact origin the user enabled, wrote a first note on, or drafted an adapter for; `webNavigation` was optional; `activeTab`, a `note` command, and the toolbar action granted temporary access to one tab; and settings and the worker reconciled revoked grants.

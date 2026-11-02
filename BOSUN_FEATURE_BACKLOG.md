@@ -125,6 +125,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 ### Focused quality follow-up
 
 <!-- BEGIN GENERATED section=quality: edit the beads, then run python3 scripts/render_backlog.py -->
+- [ ] `brwr-ys8y` **Generate padded token values in adapter differential tests.** Discovered while fixing brwr-tp1: scripts/adapter-templates-diff.mjs genValue only emits the token body alphabet, so random URL/title/alias cases never exercise the supported base64 padding grammar. Shared fixed vectors caught title-run drift, but the property generator still… _(P3)_
 <!-- END GENERATED section=quality -->
 
 ### Confirmed low-severity defects (lane C review, 2026-10-27)
@@ -179,7 +180,6 @@ queue".
 - [ ] `brwr-37ca` **Held PR #238: CI still red after 0 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/238 (branch cookie/cookie-overnight/cycle-2-8a8d351): checks green but still not merged after 2700s (is auto-merge on?). It stays open with the held label; nothing new is built on it. Fix it on its… _(P1; labels: human, pr-held)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
-- [ ] `brwr-tp1` **adapter-templates: title captures consume token base64 padding.** Codex review of PRs #215/#219 (P2), adapter-templates/src/ctype.rs BaseType::in_alphabet and extension/adapter-templates.ts inTitleAlphabet. Path and query token captures now accept up to two trailing '=' (Miro board IDs such as uXjVM0uuBLo=), but title runs still stop at '='.… _(P2; labels: adapter-templates)_
 - [ ] `brwr-kpg` **(BUG) Process-group kill tests race under load.** service::child::tests::killed_slot_yields_closed and service::command_runner::tests::kill_ends_the_whole_process_group fail intermittently on origin/main (5be16d3) under machine load: run alone 8 times each at load average 19-31 on 2026-11-02, they failed 4/8 and 1/8. In the… _(P2)_
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2)_
 - [ ] `brwr-sm5` **Tell the summary agent when Brauser's page capture was truncated.** Codex review of PR #236 (P2, SUMMARY.md read_scope): when content exceeds the extraction limits, extension `extractReadablePage` sets `truncated`, but `choosePage` and `readTab` (extension/summarize.ts) drop it, so page.md looks the same for a complete and a capped capture. An… _(P2)_
@@ -228,6 +228,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** Bug Fix. **Recognize padded token IDs in tab titles (2026-11-02).** Both engines clean prefix/suffix titles and retain tab-title alias suggestions when IDs carry one or two trailing base64 padding characters. Strict validation still rejects malformed padding and length overflow; = cannot bound token title captures. **Metrics:** 26 new shared vectors (10 failures reproduced per engine), 1,265 adapter JavaScript tests, 2,024 file-based differential cases; full local gate passes with 1,337 Rust-reported outcomes, 40 extension files and explicit sandbox skips. Standard differential child-pipe execution and uncached fuzz compilation remain external checks.
+
 - **Category:** Bug Fix. **Keep dismissed summary history reachable without a harness (2026-11-02).** Panel restore keeps the shared history hint for retained summary or task runs independently of visible cards, so Tasks can still list summaries after harness removal. Dismissed and older summaries stay hidden from panel cards without clearing retained history; empty-list timestamp protection remains. **Metrics:** Failing-before/passing-after panel-to-Tasks regression plus old-summary and fallback-task cases; 1,335 Rust-reported passes and all 40 extension files, full gate green (explicit sandbox skips retained).
 
 - **Category:** User Experience. **Show summary overviews before reopening a page (2026-11-02).** Panel saved-summary lines and Recent now show the validated one-sentence overview beside the document type; run results lead with it while retaining their classification. Optional event and wire fields preserve old wording and survive cache reopen/reindex. Host and extension deploy together; older hosts cannot replay the new event field. **Metrics:** 1,335 Rust-reported passes (+4 across this cycle), 40 extension test files, 4 new UI regressions across this cycle; complete required and README gates green with 92 explicit IPC and 36 browser sandbox skips.
@@ -1845,3 +1847,31 @@ an assignment. Keep the human/platform acceptance gates open; this sandbox
 cannot prove Chrome or Unix-socket integration. Smoke steps and dialog count
 are unchanged. Publication and independent driver review remain outside this
 process; no git remote or live service was touched.
+
+
+### Cycle observations (2026-11-02 — token title padding)
+
+Clean start on 59a4debd with no quarantine report; required and README health
+checks passed before claiming the first ready P2, brwr-tp1. The assigned
+Re-learn chain still waits on held PR #238 / brwr-37ca; its blockers and notes
+were left unchanged. The parser design challenge kept the existing linear
+matcher and strict whole-token validator. Both engines now pass all 26 new
+shared title vectors; ten cases failed in each engine before the fix.
+
+The full local gate passes with 1,337 Rust-reported outcomes and 40 extension
+files. Adapter JavaScript runs 1,265 individual tests. Regular-file engine
+comparison covers 2,024 cases (972 matches, 182 invalid documents); the normal
+runner explicitly skipped blocked child pipes. Fuzz compilation is unavailable
+because libfuzzer-sys is uncached; real Chromium tests skip here (2 fixture
+passes, 36 browser skips). Standard differential, fuzz and macOS/Windows
+integration remain external checks. Smoke steps and dialog count are unchanged.
+
+The next ready P2s include brwr-kpg (its acceptance needs 50 runs under macOS
+load), brwr-sm2 (related open tabs; window/scope decisions remain open), and
+brwr-sm5 (make truncated summary capture explicit). Prefer the latter or
+resolve the related-tab decisions before starting dependent code; no platform
+or human acceptance should be inferred on this VM. The new P3 brwr-ys8y is a
+focused future test improvement discovered from brwr-tp1. The recent category
+mix suggests returning to user-visible capabilities as soon as the actionable
+higher-priority defects are cleared, rather than accumulating more parser
+hardening proposals. Driver owns independent review, commit and publication.
