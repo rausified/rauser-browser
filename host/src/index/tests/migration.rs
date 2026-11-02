@@ -589,3 +589,67 @@ fn a_visit_delivered_during_a_multi_pass_fallback_migration_marks_its_existing_f
     index.regenerate_dirty().unwrap();
     assert_ne!(fs::read_to_string(v8.file(V8_CLEAN_FILE)).unwrap(), before);
 }
+
+/// The home is selected but its log folder is briefly absent while a v8
+/// cache is migrated: the imported history says logs were read, so the
+/// rebuild reports history unavailable instead of committing an empty
+/// index, and nothing is finalized or deleted. Once the folder is back the
+/// migration finishes as usual.
+#[test]
+fn a_missing_log_folder_during_an_import_is_unavailable_history() {
+    let v8 = V8::load();
+    let logs = v8.root.path().join("log");
+    let aside = v8.root.path().join("log-aside");
+    fs::rename(&logs, &aside).unwrap();
+    let index = v8.index();
+
+    let error = index.recent(None, None, 32).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("artifact history is unavailable"),
+        "{error:#}"
+    );
+    assert_ne!(v8.legacy_import(), vec![vec![text("done")]]);
+    assert!(index.regenerate_dirty().is_err());
+    assert!(v8.file(V8_REPO_FILE).exists());
+
+    fs::rename(&aside, &logs).unwrap();
+    assert!(!index.recent(None, None, 32).unwrap().0.is_empty());
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    assert_eq!(dirty(&v8), vec![vec![text(V8_DIRTY)]]);
+    index.regenerate_dirty().unwrap();
+    assert!(v8.file(V8_REPO_FILE).exists());
+}
+
+/// A format 8 host that publishes its JSON cache while the migration's
+/// rebuild is still running wrote files the import never read: the marker
+/// records the files as the import found them, so the newer ones still
+/// count, and a later migration (after `index.db` is lost) imports them.
+#[test]
+fn a_legacy_publish_during_the_migration_is_not_marked_imported() {
+    let v8 = V8::load();
+    let index = v8.index();
+    SCAN_LIMIT.with(|limit| limit.set(1));
+    let first = index.artifact(V8_DIRTY);
+    assert!(
+        format!("{:#}", first.unwrap_err()).contains(INCOMPLETE_CATCH_UP),
+        "the migration finished in one pass"
+    );
+    let mut state: serde_json::Value = serde_json::from_slice(&v8.legacy_state()).unwrap();
+    state["next_sequence"] = 987_654_321.into();
+    fs::write(v8.state_path(), serde_json::to_vec(&state).unwrap()).unwrap();
+    let mut passes = 0;
+    while index.artifact(V8_DIRTY).is_err() {
+        passes += 1;
+        assert!(passes < 10, "the migration never finished");
+    }
+    SCAN_LIMIT.with(|limit| limit.set(MAX_SCAN_BYTES));
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+
+    remove_database(&index);
+    assert!(index.artifact(V8_DIRTY).unwrap().is_some());
+    assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    assert_eq!(
+        v8.rows("SELECT value FROM brauser_meta WHERE key = 'next_sequence'"),
+        vec![vec![text("987654321")]]
+    );
+}

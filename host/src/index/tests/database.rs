@@ -317,7 +317,7 @@ fn no_legacy_writer_remains() {
     }
     assert_eq!(legacy.matches("atomic_write(").count(), 1);
     assert!(
-        legacy.contains("atomic_write(\n                &self.legacy_file(IMPORTED_MARKER),"),
+        legacy.contains("atomic_write(&self.legacy_file(IMPORTED_MARKER),"),
         "legacy.rs writes something other than its import marker"
     );
 }

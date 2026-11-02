@@ -229,7 +229,8 @@ pub(super) fn pass(
 
 /// Stage one logged body at its position. The same body seen again keeps
 /// its earliest position; a new body for an ID that already has
-/// `MAX_STAGED_BODIES` is dropped (it could never win).
+/// `MAX_STAGED_BODIES` is dropped (it could never win), unless it is the
+/// previous winner in `brauser_events`.
 fn stage_event(tx: &Transaction<'_>, event: &CachedEvent, position: &(PathBuf, u64)) -> Result<()> {
     let (id, artifact_id) = event_identity(event);
     let body = store::body_of(event)?;
@@ -240,7 +241,9 @@ fn stage_event(tx: &Transaction<'_>, event: &CachedEvent, position: &(PathBuf, u
              FROM brauser_stage_events WHERE event_id = ?1",
         )?
         .query_row(params![id, sha], |row| Ok((row.get(0)?, row.get(1)?)))?;
-    if present == 0 && known >= MAX_STAGED_BODIES {
+    // The previous winner is kept beyond the cap, so finalize's join can
+    // still prefer it however many other bodies earlier logs hold.
+    if present == 0 && known >= MAX_STAGED_BODIES && !previous_winner(tx, &id, &sha)? {
         return Ok(());
     }
     let (path, line) = position;
@@ -265,6 +268,15 @@ fn stage_event(tx: &Transaction<'_>, event: &CachedEvent, position: &(PathBuf, u
         sha,
     ])?;
     Ok(())
+}
+
+/// Whether `sha` is the body the live store holds for event `id`.
+fn previous_winner(tx: &Transaction<'_>, id: &str, sha: &[u8]) -> Result<bool> {
+    Ok(tx
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM brauser_events WHERE event_id = ?1 AND body_sha256 = ?2)",
+        )?
+        .query_row(params![id, sha], |row| row.get(0))?)
 }
 
 /// One `artifacts` row as stored, to tell whether a re-derive changed it.

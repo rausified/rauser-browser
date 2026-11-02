@@ -158,8 +158,12 @@ pub(super) fn catch_up_into(
         return Ok(CatchUp::Rebuilding);
     }
     let stored = watermarks_in(tx, target)?;
-    let Some((logs, log_dir, stats)) = stat_logs(storage, root_identity, !stored.is_empty())?
-    else {
+    // A stage has read nothing yet, but a migration's imported v8 history
+    // was read from these logs: their folder going missing is unavailable
+    // history then, not an empty one.
+    let read_before =
+        !stored.is_empty() || (target == Target::Stage && legacy::imported_history(tx)?);
+    let Some((logs, log_dir, stats)) = stat_logs(storage, root_identity, read_before)? else {
         return Ok(CatchUp::Caught {
             logs_read: 0,
             complete: true,
