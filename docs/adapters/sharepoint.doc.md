@@ -1,8 +1,9 @@
 # SharePoint and OneDrive for work document starter draft
 
-Status: development draft. The adapter grammar and recorded examples were
-verified by both adapter-template engines on 2026-10-28. A live SharePoint and
-OneDrive UI check is still required before this draft is release-certified.
+Status: release-certified 2026-11-02. John checked this draft against the live
+SharePoint and OneDrive UI on macOS with real Chrome on 2026-11-02, after both
+adapter-template engines verified its grammar and recorded examples on
+2026-10-28.
 
 Brauser offers this draft on exact HTTPS `*.sharepoint.com` origins, including
 OneDrive for work tenants served from `<tenant>-my.sharepoint.com`. It covers
