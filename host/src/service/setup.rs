@@ -22,6 +22,7 @@ use super::harness_api::{
     HarnessRegistry, HarnessRunner, OutputSchema, ProcessSlot, RunSpec, TurnOutcome,
 };
 use super::server::checked_knowledge_base;
+use super::shell_env;
 use crate::config::{
     self, ConfigStore, DEFAULT_SUMMARIES_DIR, DEFAULT_SUMMARY_TIMEOUT_SECS, HarnessCommit,
     SUMMARY_TIMEOUT_SECS, StoredSummarizer,
@@ -156,12 +157,16 @@ fn answer_is_ok(answer: &str) -> bool {
 /// revision. Detection and the probe run with no lock held; the commit then
 /// takes the config lock and checks `expected_revision` again, so a save
 /// during the probe is a conflict. `env` is the run environment: the
-/// service's own overlaid with `agent.env`.
+/// service's own overlaid with `agent.env`. After a failed probe,
+/// `shell_names` gives the variable names the user's login shell sets
+/// ([`shell_env::login_shell_names`] in the service), so the error can name
+/// the provider variables the run did not get.
 pub fn set_up(
     config: &mut ConfigStore,
     registry: &HarnessRegistry,
     request: &SetUpHarnessRequest,
     env: Vec<(OsString, OsString)>,
+    shell_names: &shell_env::ShellNames,
 ) -> Result<(ConfigSnapshot, String), (ErrorCode, String)> {
     let refuse = |code, message: &str| (code, message.to_owned());
     if config.refresh().is_err() {
@@ -276,13 +281,23 @@ pub fn set_up(
         PROBE_TIMEOUT,
     )
     .map_err(|reason| {
-        (
-            ErrorCode::InvalidConfig,
-            format!(
-                "{name} failed its test run ({}); summaries stay off",
-                bounded(reason, MAX_PROBLEM_BYTES)
-            ),
-        )
+        let mut message = format!(
+            "{name} failed its test run ({}); summaries stay off",
+            bounded(reason, MAX_PROBLEM_BYTES)
+        );
+        let missing = shell_names(&spec.env)
+            .map(|names| shell_env::missing_provider_names(&names, &spec.env))
+            .unwrap_or_default();
+        if let Some(hint) = shell_env::hint(&missing) {
+            // Names only, never values: the hint is shown in settings.
+            tracing::info!(
+                missing = missing.len(),
+                "probe failed with shell variables missing"
+            );
+            message.push_str(". ");
+            message.push_str(&hint);
+        }
+        (ErrorCode::InvalidConfig, message)
     })?;
 
     let agent = agent(now()?);
@@ -404,7 +419,7 @@ mod tests {
             };
             let registry = self.registry();
             let env = self.run_env();
-            set_up(&mut self.config, &registry, &request, env)
+            set_up(&mut self.config, &registry, &request, env, &|_| None)
         }
     }
 
@@ -529,8 +544,10 @@ mod tests {
         };
         let registry = setup.registry();
         let env = setup.run_env();
-        let (code, message) =
-            set_up(&mut setup.config, &registry, &request, env.clone()).unwrap_err();
+        let (code, message) = set_up(&mut setup.config, &registry, &request, env.clone(), &|_| {
+            None
+        })
+        .unwrap_err();
         assert_eq!(code, ErrorCode::InvalidConfig);
         assert!(message.contains("content folders are fixed"), "{message}");
         assert_eq!(fs::read(&setup.path).unwrap(), before);
@@ -538,7 +555,7 @@ mod tests {
         assert!(!setup.runner.with_extension("ran").exists());
 
         request.summaries_dir = Some("summaries".into());
-        let (config, _) = set_up(&mut setup.config, &registry, &request, env).unwrap();
+        let (config, _) = set_up(&mut setup.config, &registry, &request, env, &|_| None).unwrap();
         assert_eq!(
             config.storage.as_ref().unwrap().summaries_dir.as_deref(),
             Some("summaries")
@@ -568,6 +585,71 @@ mod tests {
             assert_eq!(fs::read(&setup.path).unwrap(), before);
             assert_eq!(setup.config.agent_status().state, AgentState::NotSetUp);
         }
+    }
+
+    #[test]
+    fn a_failed_probe_names_shell_variables_the_run_did_not_get() {
+        let mut setup = setup("echo 'Not logged in' >&2; exit 1");
+        setup.config.refresh().unwrap();
+        let request = SetUpHarnessRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "r1".into(),
+            expected_revision: setup.config.revision().to_owned(),
+            harness: HarnessId::Claude,
+            timeout_secs: None,
+            summaries_dir: None,
+        };
+        let registry = setup.registry();
+        let env = setup.run_env();
+        // PATH reaches the run, so only the two provider names are missing.
+        let shell = |run: &[(OsString, OsString)]| {
+            assert!(
+                run.iter().any(|(key, _)| key == "PROBE_MARK"),
+                "the run environment"
+            );
+            Some(vec![
+                "CLAUDE_CODE_USE_BEDROCK".to_owned(),
+                "ANTHROPIC_MODEL".to_owned(),
+                "PATH".to_owned(),
+                "EDITOR".to_owned(),
+            ])
+        };
+        let (code, message) =
+            set_up(&mut setup.config, &registry, &request, env, &shell).unwrap_err();
+        assert_eq!(code, ErrorCode::InvalidConfig);
+        assert!(
+            message.starts_with("Claude Code failed its test run ("),
+            "{message}"
+        );
+        assert!(
+            message.ends_with(&format!(
+                "summaries stay off. Your login shell sets ANTHROPIC_MODEL and CLAUDE_CODE_USE_BEDROCK, \
+                 which {}'s service does not see; add them to agent.env",
+                crate::app_name!()
+            )),
+            "{message}"
+        );
+        assert_eq!(setup.config.agent_status().state, AgentState::NotSetUp);
+    }
+
+    #[test]
+    fn a_passing_probe_never_asks_the_login_shell() {
+        let mut setup = setup("echo OK");
+        setup.config.refresh().unwrap();
+        let request = SetUpHarnessRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "r1".into(),
+            expected_revision: setup.config.revision().to_owned(),
+            harness: HarnessId::Claude,
+            timeout_secs: None,
+            summaries_dir: None,
+        };
+        let registry = setup.registry();
+        let env = setup.run_env();
+        set_up(&mut setup.config, &registry, &request, env, &|_| {
+            panic!("the login shell is read only after a failed probe")
+        })
+        .unwrap();
     }
 
     #[test]
@@ -636,7 +718,7 @@ mod tests {
         fs::write(&setup.runner, "#!/bin/sh\n: > \"$0.ran\"\necho OK\n").unwrap();
         let registry = setup.registry();
         let env = setup.run_env();
-        let (code, _) = set_up(&mut setup.config, &registry, &request, env).unwrap_err();
+        let (code, _) = set_up(&mut setup.config, &registry, &request, env, &|_| None).unwrap_err();
         assert_eq!(code, ErrorCode::Conflict);
         assert!(!setup.runner.with_extension("ran").exists());
     }
@@ -655,7 +737,8 @@ mod tests {
             };
             let registry = setup.registry();
             let env = setup.run_env();
-            let (code, _) = set_up(&mut setup.config, &registry, &request, env).unwrap_err();
+            let (code, _) =
+                set_up(&mut setup.config, &registry, &request, env, &|_| None).unwrap_err();
             assert_eq!(code, ErrorCode::InvalidRequest, "{timeout_secs}");
         }
     }

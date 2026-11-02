@@ -28,6 +28,7 @@ use super::open::{list_agent_env, open_target};
 use super::paths::{self, ServicePaths};
 use super::record::{TaskStatus, check_start_run, check_task_instruction};
 use super::setup;
+use super::shell_env;
 use super::supervisor::{CwdCheck, EnvSource, ListQuery, ServiceOptions, StartRun, Supervisor};
 use crate::capture_site::exact_origin;
 use crate::config::{ConfigLock, ConfigStore, SUMMARY_TIMEOUT_SECS, default_summary_vocabulary};
@@ -581,7 +582,13 @@ impl Server {
             }
         };
         let mut config = lock(&self.config).reopen();
-        match setup::set_up(&mut config, self.supervisor.registry(), &value, env) {
+        match setup::set_up(
+            &mut config,
+            self.supervisor.registry(),
+            &value,
+            env,
+            &shell_env::login_shell_names,
+        ) {
             Ok((config, revision)) => Response::ConfigUpdated(ConfigUpdated {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,

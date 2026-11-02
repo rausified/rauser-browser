@@ -51,3 +51,5 @@ to agent.env"). The name-only rule for `agent.env` still holds. Also log the
 program as `claude`, not its version: Claude runs log `program: "2.1.316"` in
 `harness spawned`. Where: `host/src/service/setup.rs`, `host/src/harness.rs`,
 and the settings harness section.
+
+- Done 2026-11-02: `host/src/service/shell_env.rs` and `LineChild::spawn_as` (this PR, branch `feat/harness-env-hint`).
