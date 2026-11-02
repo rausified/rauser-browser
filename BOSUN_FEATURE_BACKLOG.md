@@ -119,7 +119,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 <!-- END GENERATED section=gated -->
 - **M3 — Related** (FTS5 in `brauser reindex`, related pages, read later),
   **M4 — Omnibar** (built-in commands, free text, custom commands), and
-  **M5 — Release** (installer, store listing, signing and provenance, docs)
+  **M5 — Release** (self-registering app, store listing, signing and provenance, docs)
   follow M2, per the §12 table. M5 signing and store work is **[human]**.
 
 ### Focused quality follow-up
