@@ -83,6 +83,7 @@ export interface ConfigSnapshot {
   strip_params: string[];
   agent: AgentConfig | null;
   summary_vocabulary: SummaryVocabulary;
+  auto_summary: AutoSummaryConfig;
   adapters: AdapterDocument;
 }
 
@@ -413,6 +414,7 @@ export interface ContainedArtifactView {
 }
 
 export interface SummaryView {
+  overview?: string;
   summarized_at: string;
   document_type: string;
   category: string;
@@ -591,13 +593,18 @@ export type RunErrorKind = "harness_failed" | "timed_out" | "canceled" | "servic
 export type ImportanceLevel = "high" | "medium" | "low";
 
 export interface RunAnswer {
+  overview?: string;
   document_type: string;
   category: string;
   importance: ImportanceLevel;
   importance_reason: string;
+  access?: AnswerAccess;
 }
 
+export type AnswerAccess = "ok" | "sign_in" | "denied" | "not_found";
+
 export interface RunView {
+  no_page?: boolean;
   run_id: string;
   state: RunState;
   harness: HarnessId;
@@ -624,12 +631,14 @@ export interface RunView {
 }
 
 export interface StartRunRequest {
+  no_page?: boolean;
   type: "start_run";
   protocol_version: 8;
   request_id: string;
   url: string;
   title: string;
   content: string;
+  capture_truncated?: boolean;
   selection: string | null;
   harness: HarnessId | null;
   record_key: RecordKey | null;
@@ -790,13 +799,40 @@ export interface StartSiteDraftRequest {
   requested_at: string;
 }
 
-export interface StartTaskRequest {
-  type: "start_task";
+export interface AutoSummaryConfig {
+  enabled: boolean;
+  dwell_secs: number;
+}
+
+export interface StartAutoSummaryRequest {
+  type: "start_auto_summary";
   protocol_version: 8;
   request_id: string;
   url: string;
   title: string;
   content: string;
+  capture_truncated?: boolean;
+  requested_at: string;
+}
+
+export type AutoSummarySkipReason = "disabled" | "not_set_up" | "not_an_artifact" | "already_summarized";
+
+export interface AutoSummarySkippedResponse {
+  type: "auto_summary_skipped";
+  protocol_version: 8;
+  request_id: string;
+  reason: AutoSummarySkipReason;
+}
+
+export interface StartTaskRequest {
+  no_page?: boolean;
+  type: "start_task";
+  protocol_version: 8;
+  request_id: string;
+  url?: string;
+  title?: string;
+  content?: string;
+  capture_truncated?: boolean;
   selection: string | null;
   instruction: string;
   harness: HarnessId | null;
@@ -943,6 +979,6 @@ export interface SiteDraftChecked {
   preview: PreviewRowView[];
 }
 
-export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | CheckSiteDraftRequest | WorklogReportRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
+export type Request = HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
 
-export type Response = PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;
+export type Response = PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;

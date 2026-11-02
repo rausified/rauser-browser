@@ -62,6 +62,46 @@ test("clicking Summarize extracts in every frame then sends start_run with no re
   await until(() => /Readable title.*Queued/.test(page.el("run-area").textContent), "the run card");
 });
 
+test("Summarize carries truncation from the chosen content frame, not discarded frame text", async () => {
+  for (const truncated of [true, false]) {
+    const page = await summarizePanel({
+      local: new Map([[WARNING_SEEN_KEY, true]]),
+      executeScript: async (injection) => injection.files ? [] : [
+        { frameId: 0, result: { title: "Viewer", content: "chrome", selection: null,
+          truncated: !truncated, readable: false, href: ARTICLE_URL } },
+        { frameId: 3, result: { title: "Document", content: "Document excerpt ".repeat(20), selection: null,
+          truncated, readable: true, href: "https://frame.example/doc" } },
+      ],
+    });
+    await until(() => page.el("summarize").disabled === false, "the button to enable");
+    page.el("summarize").click();
+    await until(() => page.sent("start_run").length === 1, "start_run");
+    const [request] = page.sent("start_run");
+    assert.equal(request.content, "Document excerpt ".repeat(20));
+    assert.equal(request.capture_truncated ?? false, truncated);
+    teardown.splice(0).forEach((listener) => listener());
+  }
+});
+
+test("Summarize preserves truncation when borrowing a highlighted selection", async () => {
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    executeScript: async (injection) => injection.files ? [] : [
+      { frameId: 0, result: { title: "Article", content: "Complete article ".repeat(30), selection: null,
+        truncated: false, readable: true, href: ARTICLE_URL } },
+      { frameId: 2, result: { title: "Embed", content: "Small embed", selection: "Capped highlight",
+        truncated: true, readable: true, href: "https://frame.example/" } },
+    ],
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  const [request] = page.sent("start_run");
+  assert.equal(request.content, "Complete article ".repeat(30));
+  assert.equal(request.selection, "Capped highlight");
+  assert.equal(request.capture_truncated, true);
+});
+
 test("an executeScript failure shows \"can't read this page\"", async () => {
   const page = await summarizePanel({
     local: new Map([[WARNING_SEEN_KEY, true]]),

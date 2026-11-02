@@ -56,7 +56,7 @@
         <div class="field">
           <h3>Starter drafts</h3>
           <p>Start from a readable template for common work tools, then inspect its rules and examples before you save it. These development templates use recorded fixtures and are not release-certified until their documentation records a live-tool check.</p>
-          <div id="starter-gallery" class="starter-gallery"><p>Enter a Jira Cloud, SharePoint/OneDrive, or GitHub site address above to see starter drafts.</p></div>
+          <div id="starter-gallery" class="starter-gallery"><p>Enter an Atlassian Cloud (Jira or Confluence), SharePoint/OneDrive, GitHub, or Miro site address above to see starter drafts.</p></div>
         </div>
 
         <div id="adapter-overlaps" class="adapter-notices" role="status"></div>
@@ -146,6 +146,15 @@
           <label for="vocab-categories">Categories</label>
           <textarea id="vocab-categories" rows="7" spellcheck="false"></textarea>
           <button id="save-vocabulary" type="button" class="secondary" disabled>Save vocabulary</button>
+        </div>
+
+        <div class="field">
+          <h3>Automatic summaries</h3>
+          <small>When this is on, {{APP_NAME}} summarizes each recognized artifact you open that has no summary yet, one at a time in the order you opened them. Summarize &amp; log still works on any page.</small>
+          <label class="check-label"><input id="auto-summary-enabled" type="checkbox" /> Summarize recognized artifacts automatically</label>
+          <label for="auto-summary-dwell">Wait before summarizing (seconds of the tab in front; 0 = right away)</label>
+          <input id="auto-summary-dwell" type="number" min="0" max="3600" step="1" inputmode="numeric" />
+          <button id="save-auto-summary" type="button" class="secondary" disabled>Save automatic summaries</button>
         </div>
       </section>
 

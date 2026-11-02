@@ -228,6 +228,27 @@ mod tests {
         assert!(matches!(s.submit(SUMMARY, &k1, e), Submit::New));
     }
 
+    /// Auto-summary adds no queue rules: a burst of artifact summaries, then
+    /// a manual one, run in the order they arrived and none is dropped.
+    #[test]
+    fn auto_runs_queue_in_arrival_order() {
+        let mut s = Scheduler::default();
+        let ids: Vec<Uuid> = (0..21).map(|_| Uuid::new_v4()).collect();
+        for (n, id) in ids.iter().enumerate() {
+            assert_eq!(
+                s.submit(SUMMARY, &artifact(&format!("gdoc:{n}")), *id),
+                Submit::New
+            );
+        }
+        let mut order = Vec::new();
+        while let Some(id) = s.next_ready() {
+            order.push(id);
+            s.finished(id);
+        }
+        assert_eq!(order, ids);
+        assert!(s.is_idle());
+    }
+
     #[test]
     fn url_and_artifact_keys_with_the_same_value_are_distinct() {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());

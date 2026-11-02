@@ -116,6 +116,7 @@ export const CONFIG = {
   strip_params: [],
   agent: null,
   summary_vocabulary: { document_types: ["report"], categories: ["news"] },
+  auto_summary: { enabled: true, dwell_secs: 0 },
   adapters: { format: 1, artifacts: [] },
 };
 
@@ -465,6 +466,9 @@ export async function install({
     // The panel's window gets an event, such as focus.
     windowEvent(type) {
       for (const listener of type === "pagehide" ? [] : windowListeners.get(type) ?? []) listener({ type });
+    },
+    documentEvent(type, init = {}) {
+      for (const listener of documentListeners.get(type) ?? []) listener({ type, ...init });
     },
     // The panel is hidden (another side panel, a minimized window) or shown
     // again; Chrome fires visibilitychange either way.

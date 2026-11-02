@@ -84,10 +84,18 @@ test("an unrecognized page says what the site captures, and the chip stays the h
 });
 
 test("a Jira page that is not an issue names Jira issues with no accounts", async () => {
-  const jira = withAdapters(starterOffersFor("https://acme.atlassian.net", []).map((offer) => offer.adapter));
+  const jira = withAdapters(starterOffersFor("https://acme.atlassian.net", [])
+    .filter((offer) => offer.artifact_type === "jira.issue").map((offer) => offer.adapter));
   const page = await explained("https://acme.atlassian.net/jira/your-work", jira);
   assert.equal(page.el("capture-explanation-text").textContent,
     "acme.atlassian.net captures Jira issues; this page isn't one of them. Only matching pages are remembered.");
+});
+
+test("an Atlassian site with both starters names Jira issues and Confluence pages", async () => {
+  const both = withAdapters(starterOffersFor("https://acme.atlassian.net", []).map((offer) => offer.adapter));
+  const page = await explained("https://acme.atlassian.net/wiki/spaces/ENG/overview", both);
+  assert.equal(page.el("capture-explanation-text").textContent,
+    "acme.atlassian.net captures Jira issues and Confluence pages; this page isn't one of them. Only matching pages are remembered.");
 });
 
 test("custom types, long account lists and mixed scope read as configured", async () => {

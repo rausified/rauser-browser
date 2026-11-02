@@ -264,6 +264,19 @@ The Tasks page keyboard-focus regression triggers
 the existing hide/show refresh handler and waits for a rendered status pill
 or new row, so both focus assertions avoid racing the real polling interval.
 
+## Capped browser captures
+
+The existing extraction, task and built-panel summarize tests cover the
+extractor's combined text/selection truncation flag through manual summaries,
+automatic summaries and tasks. Frame-choice fixtures distinguish a capped
+chosen frame from discarded frame text and a borrowed highlight. Protocol
+wire tests pin missing/true/false compatibility. Rust page-file tests cover
+ordinary, Office and Miro pages with and without Incoming navigation; supervisor
+fixtures verify both initial prompts and queued recovery use stored provenance,
+including a page that forges a completeness notice. The agent boundary is a
+recording fake: these tests prove the context delivered to an agent, not that a
+real agent fetched a full artifact or selected the right reading scope.
+
 ## Panel status and artifact refresh coverage
 
 The built-panel tests assert adapter-based capture wording with zero and some
@@ -391,8 +404,9 @@ smoke step, real dialog or protocol changed for recovery.
 
 `npm run test:extension` builds on the extension build from the development
 checks. `extension/tests/capture-site.test.mjs` exercises the existing starter
-catalog through the new plan builder: real Jira, SharePoint/OneDrive and GitHub
-URL forms, independent PR/issue scopes, current-page misses, all 27 fixed
+catalog through the new plan builder: real Jira, Confluence, SharePoint/OneDrive
+and GitHub URL forms (Jira issues and Confluence pages chosen together or
+alone on one Atlassian origin), independent PR/issue scopes, current-page misses, all 27 fixed
 probes, invalid inputs, full-document limits and preservation of other sites.
 `extension/tests/panel/capture-site.test.mjs` loads the shipped panel markup and JavaScript
 with a scripted native client, worker and Chrome APIs. It covers review/save,
@@ -522,7 +536,39 @@ in its run directory; and that the same Save writes the draft. This proves
 the real Chrome, host and service path with a fake agent; it does not judge
 a real agent's drafts.
 
+## Auto-summary
+
+- Pure candidate logic: `extension/tests/auto-summary.test.mjs` (dwell 0 and
+  dwell counting only focused time, replacement on another artifact, one
+  submission per artifact across tabs, the 500-entry submitted cap, FIFO
+  order, the next-due time).
+- Worker wiring: `extension/tests/worker.test.mjs` "Auto-summary" tests drive
+  the fake Chrome: one `start_auto_summary` per recognized open, none for an
+  unrecognized page, a paused capture, a disabled setting or a lease without
+  the field, no second ask after `already_summarized`, a dropped candidate
+  after `not_set_up` (no re-ask on tab switches until the lease revision
+  changes), a refusal that skips only its artifact, a started artifact asked
+  again once its short skip ends, a route change that waits for its title, a
+  kept candidate and a retry alarm after `service_unavailable`, and focus kept
+  in session storage with a dwell alarm. Each test answers every request it causes: the worker runs one
+  drain at a time, so an unanswered request stalls the next test's drain.
+- Host: `native::tests::run_proxy` (each skip reason before connecting, the
+  forwarded summary `start_run`, manual Summarize ignoring an existing summary,
+  `summary_blocks_auto` dates and read scopes), `service::queue`
+  (`auto_runs_queue_in_arrival_order`), `service::finisher`
+  (`a_sign_in_answer_writes_nothing`), `config` (defaults, round trip, the
+  3600 s bound), and `protocol/tests/wire_auto_summary.rs`.
+- Headless smoke: `step("Automatic summaries turn off from settings")` before
+  harness setup keeps every later summary step's counts exact (a new install
+  defaults to on), and `step("An automatic summary runs once for a recognized
+  artifact with none")` turns it on, opens `/allowed/auto`, waits for exactly
+  one `smoke.page` summary event, checks a reopen adds none, and turns it off.
+
 ## Agent tasks, task bar
+
+Task entry tests live beside the existing task-bar tests: `worker.test.mjs` verifies that the command and context menu call `sidePanel.open` before any await, publish only a fixed focus notice and never start/read a task. `panel/task-bar.test.mjs` covers stored/live focus, startup and read-only deferral, duplicate/stale/future/wrong-tab notices, editable-key behavior, full instruction recall and cancellation after typing, Reuse, submission or teardown. `task-recall.test.mjs` covers lazy paging, full-record retrieval, draft/entry edits, pruned records, host failures, duplicate IDs and traversal bounds.
+
+The real-browser keyboard journey in `a11y/keyboard.test.mjs` covers slash focus, history arrows, draft restoration, a live focus notice, and literal slash entry in text fields without implicit submission. `enterPanelTab` in `a11y/fixture.mjs` enters the selected tab through Tab and selects its sibling with Home/End; an inactive tab has `tabindex=-1` and cannot be a direct Tab destination. Browser sandbox skips do not prove this journey passed; the driver and platform CI must run it in real Chromium. Chrome command binding and native context-menu behavior still need an interactive platform check.
 
 A task is a third run kind, `task` (DESIGN.md §4.5, §5.7). Each risk the plan
 (`docs/superpowers/plans/2026-10-28-task-bar.md` "Review focus") names is
@@ -856,6 +902,19 @@ production engines' evaluation-time checks. Successful runs still compare
 every result and report the generated case counts. Engine crashes, invalid
 JSON and incomplete result sets fail. Deterministic runner/probe regressions
 run in `npm run test:scripts`, including denial in required CI mode.
+
+For an additional offline comparison when child pipes are denied, write
+requests from the exported `genCase(seed, index)` in
+`scripts/adapter-templates-diff.mjs` to a JSON Lines file under `target/`.
+Escape U+2028/U+2029 in input JSON strings as the standard runner does.
+Run `target/debug/brauser adapters eval < requests.jsonl > rust.jsonl` and
+`node scripts/adapter-templates-eval.mjs < requests.jsonl > ts.jsonl`
+sequentially after building both engines, then compare parsed JSON rows.
+Split outputs on literal `\n`, not Unicode line separators that can occur
+inside JSON strings. This exercises engine agreement using regular files;
+the standard command's child-pipe check remains skipped until the external
+gate or CI runs it. Fuzz-target compilation also needs `libfuzzer-sys` in the
+Cargo cache; an uncached offline dependency is unavailable, not a passing check.
 
 ## UI-free end-to-end: the recipe
 
@@ -1440,7 +1499,6 @@ These tests use no browser or harness and do not establish panel Re-learn or
 migration acceptance. POSIX symlink fixtures state their Windows exclusion;
 all other planning tests are portable.
 
-
 `cargo test --locked -p brauser --lib rekey_projection` exercises the shared
 index projection against owned log fixtures: joined measures/days, original
 summary ownership and both-side paths, chains, move-back, pairwise unalias,
@@ -1459,3 +1517,42 @@ revisions, supplied aliases, foreign proposals, apply flags and damaged logs.
 This proves read-only preview only: durable apply, note storage selection,
 artifact stubs, replay from applied home history and panel review remain
 separate acceptance work on brwr-dbp/brwr-6x2.
+
+## Recorded incoming navigation in summaries
+
+`cargo test --locked -p brauser --lib incoming_navigation` exercises the host-owned
+summary context and file list: real log/index trails, cache deletion and failed
+lookup, five-row bounds, rejected unsafe URLs and invalid dates, hostile titles
+and Unicode line separators, plain/Office/Miro section boundaries, legacy run
+records, queued snapshot persistence, restart with an in-process fake runner,
+and byte-identical Retry save. Empty snapshots omit both the section and the
+prompt paragraph. The existing Office/Miro prompt tests retain their retrieval
+checks; malformed SUMMARY.md tests include the new conditional block.
+
+`npm run test:markdown-neutralizer` now also puts every hostile corpus value
+into Incoming source titles and destinations across both summary profiles.
+These are offline tests: they do not fetch a source or run a real harness.
+The private run record's optional `incoming` field is omitted when empty;
+older services cannot read records containing it. Before rollback, leave no
+queued/running runs; preserved newer records remain unreadable to that build.
+
+## Tasks without a page
+
+`brwr-qin` adds explicit scope tests, all using temporary files or mocked
+Chrome/native transport. `wire_tasks` checks legacy and no-page shapes; native
+`run_proxy::task_without_a_page*` checks host-built identity, mixed page fields,
+stale requests, and bypass attempts. `service::server::tests::no_page_admission*`
+checks actual admission before setup without a socket, so it runs inside the
+sandbox. Record tests check exact service input shape, scope persistence, legacy
+defaults and omission of `page.md`. Supervisor tests use the in-process recording
+harness to prove reports, knowledge-base cwd, independent runs and no page file.
+Prompt tests cover the absence of both page-reading exemptions, retrieval
+sections and truncation claims while retaining protected paths and `agent.env`.
+
+Built task, handoff, task-bar and Tasks-page tests cover non-web starts, explicit
+web-page opt-out, scope labels and Reuse without navigation. The existing
+unreadable/moved-page tests continue to refuse extraction failures. The real
+keyboard journey `task page scope can be changed by keyboard` checks the new
+checkbox with Space, draft preservation, exact submitted shape and axe; sandbox
+browser skips are not browser acceptance. No smoke steps or native dialog counts
+change; macOS Chrome command/menu checks remain separate.

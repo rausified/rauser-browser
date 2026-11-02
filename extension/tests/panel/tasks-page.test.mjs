@@ -485,6 +485,34 @@ test("the page shows the service setup text with Open settings when the service 
   assert.equal(page.calls("openOptionsPage"), 1);
 });
 
+for (const hadHint of [true, false]) {
+  test(`a dismissed summary stays reachable after panel restore and harness removal (${hadHint ? "existing" : "missing"} hint)`, async () => {
+    const { instruction: _instruction, task_report: _report, ...summary } = task(1, {
+      kind: "summary", title: "Retained summary",
+    });
+    const local = new Map([[DISMISSED_KEY, [summary.run_id]]]);
+    if (hadHint) local.set(RUNS_MAY_EXIST_KEY, 1);
+    const panel = await install({
+      tab: { id: 1, url: ARTICLE_URL, title: "Tab title" }, agentStatus: READY, config: SET_UP, local,
+      intercept: (request) => request.type === "list_runs"
+        ? { type: "runs_listed", runs: request.kind === "summary" ? [summary] : [], more: false }
+        : null,
+    });
+    await until(() => panel.sent("list_runs").some((request) => request.kind === "summary"), "panel summary restore");
+    await settle();
+    assert.equal(panel.el("run-area").textContent, "", "dismissal hides the panel card");
+    teardown.splice(0).forEach((listener) => listener());
+
+    const page = await openTasks({ runs: [summary], local, agentStatus: NOT_SET_UP });
+    await settle();
+    assert.ok(page.sent("list_runs").some((request) => request.kind === "summary"), "history lists without a harness");
+    page.el("tasks-show-dismissed").checked = true;
+    page.el("tasks-show-dismissed").dispatch("change");
+    await until(() => page.rows().length === 1, "the retained summary");
+    assert.match(page.rows()[0].textContent, /Summary · Retained summary/);
+  });
+}
+
 test("the page lists tasks once a harness is set up and the page is shown again", async () => {
   const page = await openTasks({ agentStatus: NOT_SET_UP });
   await until(() => page.el("tasks-status").textContent === TASK_NEEDS_HARNESS_MESSAGE, "the setup text");
@@ -781,6 +809,20 @@ test("arrow keys move the selection", async () => {
   const third = page.rows()[2];
   page.el("tasks-list").dispatch("keydown", { key: "Enter", target: third, preventDefault() {} });
   assert.deepEqual(page.selected(), [runId(3)]);
+});
+
+test("a task without a page labels its scope, omits Open page and reuses without navigation", async () => {
+  const run = task(1, { no_page: true, url: "brauser:task-without-page", title: "" });
+  const page = await openTasks({ runs: [run], windowId: 9 });
+  await listed(page);
+  await until(() => buttonIn(page.el("tasks-detail"), "Reuse"), "Reuse button");
+  assert.match(page.el("tasks-detail").textContent, /No page/);
+  assert.equal(buttonIn(page.el("tasks-detail"), "Open page"), null);
+  buttonIn(page.el("tasks-detail"), "Reuse").click();
+  await until(() => page.state.session.get(storageKey("task_reuse_v1")), "Reuse handoff");
+  assert.equal(page.state.session.get(storageKey("task_reuse_v1")).no_page, true);
+  assert.deepEqual(page.state.created, []);
+  assert.deepEqual(page.state.sidePanelOpens, [{ windowId: 9 }]);
 });
 
 test("Open page opens the task's own URL and Reuse opens the side panel and hands off the instruction", async () => {

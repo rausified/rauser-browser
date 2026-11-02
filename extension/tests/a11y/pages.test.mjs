@@ -60,6 +60,24 @@ for (const state of ["disconnected", "error"]) {
   });
 }
 
+for (const colorScheme of ["light", "dark"]) {
+  test(`panel ${colorScheme}: the redesigned header and page card have measured, passing contrast`, async (t) => {
+    const page = await browserFixture(t, "panel", "configured", { colorScheme });
+    if (!page) return;
+    // The design's glass surfaces stay solid behind text, so axe measures
+    // every pair instead of leaving it for manual review.
+    const background = await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundColor);
+    assert.match(background, /^rgb\(/, `expected an opaque ${colorScheme} canvas, got ${background}`);
+    const results = await audit(t, page, `panel/redesign/${colorScheme}`);
+    assert.deepEqual(results.incomplete.filter(({ id }) => id === "color-contrast").flatMap(({ nodes }) => nodes.map(({ target }) => target)), [],
+      "no panel text may sit on a surface axe cannot measure");
+    const measured = results.passes.find(({ id }) => id === "color-contrast")?.nodes.map(({ target }) => String(target)) ?? [];
+    for (const selector of ["#capture-pill-label", "#page-title", "#page-url", ".brand-mark", "#task-run"]) {
+      assert.ok(measured.some((target) => target.includes(selector)), `${selector} contrast must be measured and pass`);
+    }
+  });
+}
+
 test("a seeded serious violation fails the same gate used for every state", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

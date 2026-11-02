@@ -119,6 +119,17 @@ revision-checked `update_config`; global pauses stay set. No page URL, title,
 content, folder path or save token is part of this pair. Historical title/ref
 extraction is not available. The host retains all existing identity guards.
 
+Version 8 (additive): `start_run`, `start_task` and `start_auto_summary`
+accept optional boolean `capture_truncated`. The extension sends it only when
+true: the extractor capped page text or highlighted selection. Missing/false
+means no reported cut. The native host forwards it into the summary/task run;
+the service stores it and uses it for a page-file disclosure and fixed prompt
+notice, including queued recovery. This grants no retrieval authority. Host
+and extension deploy together: an older host rejects the field. Roll back the
+service only with no queued/running run; older services reject status records
+containing true and cannot recover their process groups. Those records remain
+unreadable to the older service until pruned. See DESIGN.md §4.5.
+
 Version 8: incoming navigation. `ArtifactView.incoming_trails` is required
 and holds up to five `IncomingTrailView` entries: `source` is an
 `ArtifactRefView`, `transition` is a known Chrome transition other than
@@ -265,7 +276,8 @@ and `finished_at`, `error` and `error_kind` (`harness_failed`, `timed_out`,
 `can_retry_save`, and `answer`. Once the agent's answer has passed
 validation, `answer` is a `RunAnswer` (`document_type`, `category`,
 `importance` as an `ImportanceLevel` of `high`, `medium`, or `low`, and
-`importance_reason`); before that, or when validation failed, it is null.
+`importance_reason`, plus optional `overview`); before that, or when
+validation failed, it is null.
 `summary_path` is the home-relative path of the summary file a save
 wrote (`summaries/<note stem>.summary.md`): set when a save succeeds, and
 also when a `save_failed` save wrote the file before failing (the daily log
@@ -415,13 +427,15 @@ same wording as `open_path`. These messages and `summary_path` were added in ver
 requested it, at most 32 characters), `document_type` and `category` (1 to 64
 characters), `importance` (an `ImportanceLevel`), `summary_path` (relative to
 the home folder, `/` separators, at most 1,024 bytes), and `harness` (a
-`HarnessId`). It is read from the daily log's `summary` events, which are not
+`HarnessId`), plus optional `overview` (1 to 300 Unicode characters). It is
+read from the daily log's `summary` events, which are not
 protocol messages but use the same owned-marker scheme as `activity` and
 `why`: the marker is `kind=summary data=<hex JSON>`, and the JSON has
 `event_id` (the run ID), `url` (normalized by the host), `title`,
 `occurred_at`, `document_type`, `category`, `importance`, `summary_path`,
 `record_key` (a `RecordKey`), `artifact_type`, `harness`, and the
-host-derived `artifact_id`, with no other field. A `url` record key is the
+host-derived `artifact_id`, plus optional `overview`, with no other field.
+A `url` record key is the
 page's own `web.page` artifact (`web:<host>/<url_id>`, and the key must be
 that URL's hash); an `artifact` key names the adapter artifact itself, never
 a `web:` ID, with a type other than `web.page`. Any other combination is
@@ -548,7 +562,7 @@ the panel cannot copy a stale report after that refusal.
 ### Agent tasks (added within version 8)
 
 The side panel's task bar runs the configured harness on the user's typed
-instruction, with the open page as untrusted context. All of it is additive.
+instruction, with optional open-page context. All of it is additive.
 
 - `start_task` carries `url`, `title`, `content`, `selection` (the same bounds
   as `start_run`), `instruction` (1 to 4,096 characters), the nullable
@@ -582,6 +596,46 @@ asks for a host rebuild. An extension built before them rejects a
 `runs_listed` or `run_fetched` that holds a task view, so the extension and
 the host deploy together.
 
+A task can omit its page by sending `no_page: true`, `selection: null`, and
+no `url`, `title`, `content` or `capture_truncated`. Missing/false `no_page`
+keeps the existing complete page-task shape; missing page fields then fail the
+native semantic check. Mixed page/no-page payloads are refused. Instruction and
+click-time validation still apply. The host forwards `no_page: true` with the
+reserved `brauser:task-without-page` URL and URL key, empty title/content, and no
+selection; the service accepts that exact shape only for tasks, before the
+ordinary task setup. The extension cannot send this flag through `start_run`.
+No page is inferred from a URL alone, and a failed extraction never falls back.
+
+Only no-page tasks project `RunView.no_page: true`, from the stored TaskStatus
+scope. They create no `page.md`, grant no page-reading/retrieval paragraph, and
+keep normal task cwd, protected paths, limits, report and restart behavior.
+History and Reuse preserve this explicit scope and never open the internal
+marker. Older services cannot read records containing the new scope field;
+leave no active tasks before rollback. Older hosts reject the new start-task
+shape and older extensions reject its new view field: deploy both together.
+
+### Auto-summary (added within version 8)
+
+The extension summarizes recognized artifacts on its own, through the same
+service queue as Summarize & log. All of it is additive.
+
+- `ConfigSnapshot` gains the required `auto_summary` object: `enabled`
+  (boolean) and `dwell_secs` (0 to 3,600). An older `config.toml` without it
+  reads as `{ enabled: true, dwell_secs: 0 }`.
+- `start_auto_summary` carries `url`, `title`, `content` (the same bounds as
+  `start_run`) and `requested_at`. It has no `selection`, `harness`, `kind`,
+  `record_key` or `instruction`. The host answers `auto_summary_skipped` with a
+  `reason`, before contacting the service, when auto-summary is off
+  (`disabled`), no harness is set up (`not_set_up`), the page's record key is
+  URL-keyed (`not_an_artifact`), or the artifact already has a summary
+  (`already_summarized`). Otherwise it forwards a summary `start_run` with the
+  record key it resolved, answered with the existing `run_started` (which joins
+  a queued or running run for the same key).
+
+An extension built before these additions rejects a `config_result` that
+holds `auto_summary`, and an older host answers `invalid_request` for
+`start_auto_summary`, so the extension and the host deploy together.
+
 ### Task history (added within version 8)
 
 The Tasks page pages back through one kind's runs with `list_runs`. All of it
@@ -609,3 +663,19 @@ A version 8 host built before these additions answers `invalid_request`
 ("invalid or unsupported request JSON") for a `list_runs` carrying `kind` or
 `before`, and the page then asks for a host rebuild. The host and the
 extension deploy together.
+
+### Summary overview (additive within version 8)
+
+`SummaryView` and `RunAnswer` carry the validated answer's one-sentence
+`overview` when present. The host also keeps it in the summary log event and
+cache. Older events and run results omit it and keep their previous UI text;
+it is never sent as null or an empty string. The event validator bounds it
+to 300 Unicode characters and refuses control characters. Cache format 8
+remains readable without a rebuild. Retry save of an append journaled before
+this field was added completes the original bytes, keeping its event without
+an overview; all other payload and identity checks still apply.
+Deploy host and extension together:
+older extensions reject the new reply field. Downgrading the host after
+recording new summaries is unsupported: older hosts reject summary events
+with the new field and can omit them on rebuild. Re-upgrade and run
+`brauser reindex` to recover those summaries from the unchanged logs.

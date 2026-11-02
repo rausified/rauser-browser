@@ -292,3 +292,52 @@
 - **Brauser — Detect Re-learn collisions across origins (2026-11-02):** All-origin log, owned-note/summary and verified implicit-container keys now protect sources and destinations from hidden cross-site merges (`brwr-r62`). The report remains scoped to the reviewed site, all contracts bind the token, and fresh approval refuses conflicts. The assigned pair adds seven tests; the complete local gate passes, with explicit IPC/browser sandbox skips. Durable apply and the panel remain open.
 
 - **Brauser — Preview corrected history before applying Re-learn (2026-11-02):** Host-only `adapters relearn-preview` shows corrected artifact totals, Recent/worklog rows, resolved links and container roll-ups from fresh owned evidence using one shared alias resolver. Original summary ownership/paths, logs, notes, config and caches stay untouched. Thirteen new offline regressions and the complete required/README gate pass (1,327 workspace Rust-reported outcomes; explicit IPC/browser sandbox guards). This completes prerequisite brwr-ruwj only; durable apply, note storage selection/stubs and panel Re-learn remain on assigned brwr-dbp/brwr-6x2.
+
+- **Brauser — Preserve recorded incoming navigation in summaries (2026-11-02):** Summary runs freeze up to five host-derived incoming source/transition pairs, share that bounded untrusted context with the agent, and host-render a measured Incoming list with safe title links and last-recorded dates. The snapshot survives queueing, restart and Retry save; absent/legacy context adds nothing and grants no source retrieval. Ten new offline tests and the complete required/README gate pass (1,331 Rust-reported outcomes, including 92 IPC guard skips; 40 extension test files; both Clippy builds; 10,696 inert renderings). New nonempty run snapshots require the newer service. Assigned Re-learn work remains blocked on held PR #238, not included in this cycle.
+
+- Brauser (2026-11-02, brwr-sm3): panel saved summaries and Recent now show
+  the one-sentence overview with the document type, and summary run results
+  lead with it. Older records retain their labels; the optional overview
+  survives cache reopen/reindex. Deploy host and extension together; host
+  downgrade after new summary events is unsupported.
+- Brauser (2026-11-02, brwr-tsh1): retained summary history remains reachable
+  after panel restore and harness removal, including dismissed summaries and
+  summaries too old for panel cards. Tasks can still reveal dismissed runs.
+
+- 2026-11-02 — Brauser (`brwr-tp1`): custom title capture rules and
+  tab-title alias suggestions now retain up to two trailing base64 `=` in
+  identifiers, matching URL behavior in both engines. Malformed padding and
+  length overflow still reject the title entry; `=` is no longer a valid token
+  delimiter. Added 26 shared vectors and verified 2,024 offline comparisons;
+  full local gate passed with explicit sandbox skips. Fuzz compilation needs
+  its uncached dependency and platform/browser evidence remains CI/human work.
+
+
+- 2026-11-02 — Brauser (`brwr-sm7`): automatic summaries require the original
+  page URL to match a current adapter, checked under the native configuration
+  lock. Removed/narrowed rules still preserve existing notes and explicit
+  summaries. An offline saved-note regression covers both changes.
+- 2026-11-02 — Brauser (`brwr-sm9`): already-summarized suppression now expires
+  by local calendar day, so viewer-only summaries can retry while Chrome stays
+  open. Same-day suppression, pending dwell and retry state remain intact;
+  the host continues deciding which saved summaries block another run.
+
+- 2026-11-02 — Brauser (`brwr-sm5`): summary and task agents now learn when
+  browser page text or selection was capped, including automatic summaries and
+  queued recovery. Summaries must retrieve the full artifact or report partial/
+  viewer-only reading; a page cannot forge the stored provenance. Host and
+  extension deploy together, and service rollback requires no queued/running
+  runs because older services reject the new true status flag.
+
+- 2026-11-02 — Brauser (`brwr-2b5`): added the task-bar Chrome shortcut
+  (Ctrl/Command+Shift+8), **Ask Brauser…** context menu and panel-local `/` focus.
+  They preserve drafts and only focus the field; Enter/Run remains the start
+  gesture. Short-lived tab-specific notices retain focus through panel startup.
+
+- 2026-11-02 — Brauser (`brwr-18u`): ArrowUp/ArrowDown browse full retained task
+  instructions and restore the unsent draft and recalled edits. History is read
+  lazily from the service with no second persistent instruction store; late
+  replies cannot replace typing, Reuse or a submitted task. Recall targets the
+  current page; Tasks-page Reuse also reopens the original page.
+
+- **Brauser — tasks without a page (2026-11-02, brwr-qin).** The task bar now works on non-web tabs, and Include this page lets a user run a knowledge-base instruction without attaching the active web page. Explicit scope is checked by host and service, omits page.md and page-reading permissions, and survives Tasks history/Reuse without navigation. Local required/README gates pass; real browser/IPC acceptance and publication remain driver/platform work. Brauser project documentation remains in this repository.

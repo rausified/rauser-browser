@@ -344,6 +344,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::DiscoverHarnesses(_) => "discover_harnesses",
         Request::SetUpHarness(_) => "set_up_harness",
         Request::StartRun(_) => "start_run",
+        Request::StartAutoSummary(_) => "start_auto_summary",
         Request::GetRun(_) => "get_run",
         Request::ListRuns(_) => "list_runs",
         Request::CancelRun(_) => "cancel_run",
@@ -774,6 +775,8 @@ fn dispatch(
         Request::StartRun(value) => start_run(value, config, context.service),
         #[cfg(unix)]
         Request::StartTask(value) => start_task(value, config, context.service),
+        #[cfg(unix)]
+        Request::StartAutoSummary(value) => start_auto_summary(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup
         // detects and probes on the service's PATH and environment, and
         // agent.env and run threads live in the service's directory.
@@ -786,6 +789,16 @@ fn dispatch(
         | Request::SetUpHarness(_)
         | Request::OpenPath(_)
         | Request::GetAgentEnv(_)) => forward(&request, context.service),
+        // There is no service off Unix, so nothing is ever summarized on its
+        // own; a skip (not an error) keeps the extension from retrying.
+        #[cfg(not(unix))]
+        Request::StartAutoSummary(value) => {
+            Response::AutoSummarySkipped(brauser_protocol::AutoSummarySkippedResponse {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                reason: brauser_protocol::AutoSummarySkipReason::NotSetUp,
+            })
+        }
         #[cfg(not(unix))]
         Request::StartRun(_)
         | Request::StartSiteDraft(_)
@@ -831,6 +844,13 @@ fn start_run(
             "kind is chosen by the host",
         );
     }
+    if value.no_page.is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "no_page is sent with start_task",
+        );
+    }
     if value.instruction.is_some() {
         return error(
             &value.request_id,
@@ -859,6 +879,150 @@ fn start_run(
     forward(&Request::StartRun(value), service)
 }
 
+/// Start the automatic summary of a recognized artifact, unless auto-summary
+/// is off, no harness is ready, the page is not an artifact, or the artifact
+/// already has a summary. Every skip answers before connecting to the
+/// service; otherwise the host forwards an ordinary summary `start_run` with
+/// the key it resolved, which joins a queued or running run for that key.
+#[cfg(unix)]
+fn start_auto_summary(
+    value: brauser_protocol::StartAutoSummaryRequest,
+    config: &mut ConfigStore,
+    service: Option<&ServiceLink>,
+) -> Response {
+    use brauser_protocol::AutoSummarySkipReason as Skip;
+    let skipped = |reason: Skip| {
+        tracing::info!(reason = ?reason, "auto summary skipped");
+        Response::AutoSummarySkipped(brauser_protocol::AutoSummarySkippedResponse {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id.clone(),
+            reason,
+        })
+    };
+    // Eligibility and note identity must see the same current policy. Drop
+    // this lock before IPC: the service takes it to read its configuration.
+    let config_lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let _ = config.refresh();
+    if !config.snapshot().auto_summary.enabled {
+        return skipped(Skip::Disabled);
+    }
+    if config.agent_status().state != brauser_protocol::AgentState::Ready {
+        return skipped(Skip::NotSetUp);
+    }
+    let page = RunPage {
+        url: &value.url,
+        title: &value.title,
+        content: &value.content,
+        selection: None,
+        requested_at: &value.requested_at,
+    };
+    let key = match check_run_page(&page).and_then(|()| resolve_record_key(config, page.url)) {
+        Ok(key) => key,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    // Retired contracts preserve notes, but cannot authorize automatic runs.
+    // Evaluate the original URL before strip_params removes match inputs.
+    if key.kind != RecordKeyKind::Artifact || config.adapter_match(&value.url, None).is_err() {
+        return skipped(Skip::NotAnArtifact);
+    }
+    match existing_summary(config, &key.value) {
+        Ok(Some(view)) => {
+            let home = config
+                .snapshot()
+                .storage
+                .as_ref()
+                .map(|storage| std::path::PathBuf::from(&storage.root));
+            let today = crate::capture::parse_event_time(&value.requested_at)
+                .ok()
+                .map(time::OffsetDateTime::date);
+            let blocks = match (home, today) {
+                (Some(home), Some(today)) => summary_blocks_auto(&view, &home, &key, today),
+                _ => true,
+            };
+            if blocks {
+                return skipped(Skip::AlreadySummarized);
+            }
+        }
+        Ok(None) => {}
+        Err(cause) => {
+            warn_cause(&cause, "auto summary: history unavailable");
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "history is unavailable",
+            );
+        }
+    }
+    let request = brauser_protocol::StartRunRequest {
+        no_page: None,
+        protocol_version: value.protocol_version,
+        request_id: value.request_id.clone(),
+        url: value.url,
+        title: value.title,
+        content: value.content,
+        capture_truncated: value.capture_truncated,
+        selection: None,
+        harness: None,
+        record_key: Some(key),
+        requested_at: value.requested_at,
+        kind: Some(brauser_protocol::RunKind::Summary),
+        instruction: None,
+    };
+    drop(config_lock);
+    forward(&Request::StartRun(request), service)
+}
+
+/// Whether an artifact's latest summary stops an automatic one. Only a
+/// summary whose file records `read_scope: page_only` and that was made on an
+/// earlier local day (in its own offset) does not, so a viewer-only summary
+/// is retried at most once a day. A file that is missing, unreadable or not
+/// this record's, or a timestamp that does not parse, blocks.
+#[cfg(unix)]
+fn summary_blocks_auto(
+    view: &brauser_protocol::SummaryView,
+    home: &std::path::Path,
+    key: &RecordKey,
+    today: time::Date,
+) -> bool {
+    let Ok(summarized) = time::OffsetDateTime::parse(
+        &view.summarized_at,
+        &time::format_description::well_known::Rfc3339,
+    ) else {
+        return true;
+    };
+    let Ok(file) = std::fs::read(home.join(&view.summary_path)) else {
+        return true;
+    };
+    let page_only =
+        crate::summary::recorded_read_scope(&file, key) == Some(crate::answer::ReadScope::PageOnly);
+    !(page_only && summarized.date() < today)
+}
+
+/// The artifact's latest summary in the index, if it has one.
+#[cfg(unix)]
+fn existing_summary(
+    config: &ConfigStore,
+    artifact_id: &str,
+) -> Result<Option<brauser_protocol::SummaryView>> {
+    let storage = config
+        .snapshot()
+        .storage
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no home folder"))?;
+    let cache_dir = config.cache_dir()?;
+    open_index(config, storage, &cache_dir)?.summary_for(artifact_id)
+}
+
 /// Build a task-bar run: the user's instruction, bounded as the service
 /// bounds it, with the page as untrusted context. The kind and the record
 /// key are the host's; every refusal happens before connecting, and none
@@ -869,34 +1033,83 @@ fn start_task(
     config: &mut ConfigStore,
     service: Option<&ServiceLink>,
 ) -> Response {
+    let id = value.request_id.clone();
     if let Err(message) = crate::service::record::check_task_instruction(&value.instruction) {
         return error(&value.request_id, ErrorCode::InvalidRequest, message);
     }
-    let page = RunPage {
-        url: &value.url,
-        title: &value.title,
-        content: &value.content,
-        selection: value.selection.as_deref(),
-        requested_at: &value.requested_at,
+    let request = match task_request(value, config) {
+        Ok(request) => request,
+        Err((code, message)) => return error(&id, code, &message),
     };
-    let key = match page_record_key(page, config) {
-        Ok(key) => key,
-        Err((code, message)) => return error(&value.request_id, code, &message),
+    forward(&Request::StartRun(request), service)
+}
+
+/// Build the privileged service request without connecting or starting a harness.
+#[cfg(unix)]
+fn task_request(
+    value: brauser_protocol::StartTaskRequest,
+    config: &mut ConfigStore,
+) -> Result<brauser_protocol::StartRunRequest, Refusal> {
+    let no_page = value.no_page.unwrap_or(false);
+    let (url, title, content, selection, key) = if no_page {
+        if value.url.is_some()
+            || value.title.is_some()
+            || value.content.is_some()
+            || value.selection.is_some()
+            || value.capture_truncated.is_some()
+        {
+            return Err((
+                ErrorCode::InvalidRequest,
+                "a task without a page cannot carry page fields".into(),
+            ));
+        }
+        check_requested_at(&value.requested_at)?;
+        let marker = crate::service::record::NO_PAGE_TASK;
+        (
+            marker.into(),
+            String::new(),
+            String::new(),
+            None,
+            RecordKey {
+                kind: RecordKeyKind::Url,
+                value: marker.into(),
+            },
+        )
+    } else {
+        let (Some(url), Some(title), Some(content)) = (value.url, value.title, value.content)
+        else {
+            return Err((
+                ErrorCode::InvalidRequest,
+                "a page task needs url, title and content".into(),
+            ));
+        };
+        let key = page_record_key(
+            RunPage {
+                url: &url,
+                title: &title,
+                content: &content,
+                selection: value.selection.as_deref(),
+                requested_at: &value.requested_at,
+            },
+            config,
+        )?;
+        (url, title, content, value.selection, key)
     };
-    let request = brauser_protocol::StartRunRequest {
+    Ok(brauser_protocol::StartRunRequest {
+        no_page: no_page.then_some(true),
         protocol_version: value.protocol_version,
         request_id: value.request_id,
-        url: value.url,
-        title: value.title,
-        content: value.content,
-        selection: value.selection,
+        url,
+        title,
+        content,
+        selection,
+        capture_truncated: value.capture_truncated,
         harness: value.harness,
         record_key: Some(key),
         requested_at: value.requested_at,
         kind: Some(brauser_protocol::RunKind::Task),
         instruction: Some(value.instruction),
-    };
-    forward(&Request::StartRun(request), service)
+    })
 }
 
 /// The page fields a summary or a task run starts from.
@@ -910,13 +1123,31 @@ struct RunPage<'a> {
     requested_at: &'a str,
 }
 
-/// Check a run's page against the schema's bounds and its `requested_at`
-/// against the event window, then resolve the page's record key.
+/// Check a run's page and timestamp, then resolve its key under the config lock.
 #[cfg(unix)]
 fn page_record_key(page: RunPage<'_>, config: &mut ConfigStore) -> Result<RecordKey, Refusal> {
+    check_run_page(&page)?;
+    // Release before forwarding: the service also takes the config lock.
+    match config.lock_current() {
+        Ok(_config_lock) => resolve_record_key(config, page.url),
+        Err(lock_error) => {
+            warn_cause(&lock_error, "config lock failed");
+            Err((ErrorCode::Internal, "configuration is unavailable".into()))
+        }
+    }
+}
+
+/// Bounds and event-window checks shared by manual and automatic runs.
+#[cfg(unix)]
+fn check_run_page(page: &RunPage<'_>) -> Result<(), Refusal> {
     crate::service::record::check_start_run(page.url, page.title, page.content, page.selection)
         .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
-    if crate::capture::parse_event_time(page.requested_at)
+    check_requested_at(page.requested_at)
+}
+
+#[cfg(unix)]
+fn check_requested_at(requested_at: &str) -> Result<(), Refusal> {
+    if crate::capture::parse_event_time(requested_at)
         .and_then(crate::capture::check_event_window)
         .is_err()
     {
@@ -925,16 +1156,7 @@ fn page_record_key(page: RunPage<'_>, config: &mut ConfigStore) -> Result<Record
             "requested_at must be a current RFC 3339 timestamp".into(),
         ));
     }
-    // Resolve under the same lock as note loading so a config update cannot
-    // interleave; release it before forwarding, since the service takes it
-    // too when it reads the run's working directory.
-    match config.lock_current() {
-        Ok(_config_lock) => resolve_record_key(config, page.url),
-        Err(lock_error) => {
-            warn_cause(&lock_error, "config lock failed");
-            Err((ErrorCode::Internal, "configuration is unavailable".into()))
-        }
-    }
+    Ok(())
 }
 
 /// Send a run message to the service and return its answer as is.
@@ -3101,6 +3323,7 @@ id = "work:{host}/{id}"
                     strip_params: Vec::new(),
                     agent: None,
                     summary_vocabulary: crate::config::default_summary_vocabulary(),
+                    auto_summary: crate::config::default_auto_summary(),
                     adapters: crate::config::empty_config().adapters,
                 },
                 picker_token: None,
@@ -3361,6 +3584,7 @@ id = "work:{host}/{id}"
                 strip_params: Vec::new(),
                 agent: None,
                 summary_vocabulary: crate::config::default_summary_vocabulary(),
+                auto_summary: crate::config::default_auto_summary(),
                 adapters: crate::config::empty_config().adapters,
             };
             let update = dispatch(
@@ -6017,6 +6241,7 @@ id = "work:{host}/{id}"
             strip_params: &config.snapshot().strip_params,
         };
         let summary = crate::summary::PageSummary {
+            overview: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             url: url.into(),
             title: "A summarized page".into(),
@@ -6047,6 +6272,7 @@ id = "work:{host}/{id}"
 
     fn expected_summary(event: &crate::summary::SummaryEvent) -> brauser_protocol::SummaryView {
         brauser_protocol::SummaryView {
+            overview: event.overview.clone(),
             summarized_at: event.occurred_at.clone(),
             document_type: "specification".into(),
             category: "technical specification".into(),
@@ -9141,10 +9367,12 @@ title = "{title} - Jira"
 
         fn start_run(url: &str, record_key: Option<RecordKey>, requested_at: &str) -> Request {
             Request::StartRun(StartRunRequest {
+                no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "run-1".into(),
                 url: url.into(),
                 title: "A page".into(),
+                capture_truncated: None,
                 content: "Some text".into(),
                 selection: None,
                 harness: None,
@@ -9436,10 +9664,14 @@ title = "{title} - Jira"
             let dir = fake::short_dir();
             let socket = fake::socket_in(&dir);
             let service = echoing_service(&socket);
+            let Request::StartRun(mut request) = start_run(url, None, &now()) else {
+                unreachable!();
+            };
+            request.capture_truncated = Some(true);
             let response = call(
                 &mut config,
                 &link(socket, never),
-                start_run(url, None, &now()),
+                Request::StartRun(request),
             );
             match response {
                 Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
@@ -9452,6 +9684,7 @@ title = "{title} - Jira"
                     assert_eq!(forwarded.record_key.as_ref(), Some(&expected));
                     assert_eq!(forwarded.url, url);
                     assert_eq!(forwarded.content, "Some text");
+                    assert_eq!(forwarded.capture_truncated, Some(true));
                 }
                 other => panic!("expected start_run, got {other:?}"),
             }
@@ -9712,11 +9945,13 @@ title = "{title} - Jira"
             requested_at: &str,
         ) -> StartTaskRequest {
             StartTaskRequest {
+                no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "task-1".into(),
-                url: url.into(),
-                title: "A page".into(),
-                content: "Some text".into(),
+                url: Some(url.into()),
+                title: Some("A page".into()),
+                capture_truncated: None,
+                content: Some("Some text".into()),
                 selection: Some("a selection".into()),
                 instruction: instruction.into(),
                 harness: Some(brauser_protocol::HarnessId::Claude),
@@ -9726,6 +9961,68 @@ title = "{title} - Jira"
 
         fn start_task(url: &str, instruction: &str, requested_at: &str) -> Request {
             Request::StartTask(start_task_request(url, instruction, requested_at))
+        }
+
+        fn no_page_request() -> StartTaskRequest {
+            StartTaskRequest {
+                no_page: Some(true),
+                url: None,
+                title: None,
+                content: None,
+                selection: None,
+                capture_truncated: None,
+                ..start_task_request("https://example.com/", TASK_INSTRUCTION, &now())
+            }
+        }
+
+        #[test]
+        fn task_without_a_page_is_built_by_the_host_and_carries_no_page_data() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let request = super::super::task_request(no_page_request(), &mut config).unwrap();
+            assert_eq!(request.kind, Some(brauser_protocol::RunKind::Task));
+            assert_eq!(request.no_page, Some(true));
+            assert_eq!(request.instruction.as_deref(), Some(TASK_INSTRUCTION));
+            assert_eq!(request.url, crate::service::record::NO_PAGE_TASK);
+            assert_eq!(request.record_key.as_ref().unwrap().value, request.url);
+            assert!(request.title.is_empty());
+            assert!(request.content.is_empty());
+            assert_eq!(request.selection, None);
+        }
+
+        #[test]
+        fn task_without_a_page_refuses_mixed_inputs_and_stale_requests_before_connecting() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            let changes: &[fn(&mut StartTaskRequest)] = &[
+                |r| r.url = Some("https://example.com/".into()),
+                |r| r.title = Some(String::new()),
+                |r| r.content = Some("page instruction".into()),
+                |r| r.selection = Some("selected".into()),
+                |r| r.capture_truncated = Some(false),
+                |r| r.requested_at = "2020-01-01T00:00:00Z".into(),
+                |r| r.instruction = String::new(),
+                |r| r.no_page = None,
+                |r| r.no_page = Some(false),
+            ];
+            for change in changes {
+                let mut request = no_page_request();
+                change(&mut request);
+                let response = call(&mut config, &link, Request::StartTask(request));
+                assert_eq!(
+                    refused(&response).0,
+                    ErrorCode::InvalidRequest,
+                    "{response:?}"
+                );
+            }
+            let mut request = super::super::task_request(no_page_request(), &mut config).unwrap();
+            request.kind = None;
+            request.instruction = None;
+            request.record_key = None;
+            let response = call(&mut config, &link, Request::StartRun(request));
+            assert_eq!(refused(&response).0, ErrorCode::InvalidRequest);
         }
 
         /// The host chooses the kind and the record key; the instruction and
@@ -9743,10 +10040,12 @@ title = "{title} - Jira"
             let socket = fake::socket_in(&dir);
             let service = echoing_service(&socket);
             let requested_at = now();
+            let mut request = start_task_request(url, TASK_INSTRUCTION, &requested_at);
+            request.capture_truncated = Some(true);
             let response = call(
                 &mut config,
                 &link(socket, never),
-                start_task(url, TASK_INSTRUCTION, &requested_at),
+                Request::StartTask(request),
             );
             match response {
                 Response::RunStarted(started) => {
@@ -9761,10 +10060,12 @@ title = "{title} - Jira"
             assert_eq!(
                 requests[1],
                 Request::StartRun(StartRunRequest {
+                    no_page: None,
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "task-1".into(),
                     url: url.into(),
                     title: "A page".into(),
+                    capture_truncated: Some(true),
                     content: "Some text".into(),
                     selection: Some("a selection".into()),
                     harness: Some(brauser_protocol::HarnessId::Claude),
@@ -9887,12 +10188,12 @@ title = "{title} - Jira"
                 Request::StartTask(value)
             };
             for request in [
-                oversized(&|value| value.title = "t".repeat(2049)),
+                oversized(&|value| value.title = Some("t".repeat(2049))),
                 oversized(&|value| {
-                    value.url = format!("https://example.com/{}", "a".repeat(8192));
+                    value.url = Some(format!("https://example.com/{}", "a".repeat(8192)));
                 }),
-                oversized(&|value| value.url = "https://example.com/\u{7}".into()),
-                oversized(&|value| value.content = "c".repeat(1024 * 1024 + 1)),
+                oversized(&|value| value.url = Some("https://example.com/\u{7}".into())),
+                oversized(&|value| value.content = Some("c".repeat(1024 * 1024 + 1))),
                 oversized(&|value| value.selection = Some("s".repeat(64 * 1024 + 1))),
             ] {
                 let response = call(&mut config, &link, request);
@@ -9908,12 +10209,14 @@ title = "{title} - Jira"
         /// and `key` set) serializes to `target` bytes.
         fn start_task_sized(url: &str, key: RecordKey, target: usize) -> StartTaskRequest {
             let mut value = start_task_request(url, TASK_INSTRUCTION, &now());
-            value.content = String::new();
+            value.content = Some(String::new());
             let forwarded = StartRunRequest {
+                no_page: None,
                 protocol_version: value.protocol_version,
                 request_id: value.request_id.clone(),
-                url: value.url.clone(),
-                title: value.title.clone(),
+                url: value.url.clone().unwrap(),
+                title: value.title.clone().unwrap(),
+                capture_truncated: None,
                 content: String::new(),
                 selection: value.selection.clone(),
                 harness: value.harness,
@@ -9926,9 +10229,14 @@ title = "{title} - Jira"
                 .unwrap()
                 .len();
             let bytes = target - base;
-            value.content = format!("{}{}", "😀".repeat(bytes / 4), "x".repeat(bytes % 4));
+            value.content = Some(format!(
+                "{}{}",
+                "😀".repeat(bytes / 4),
+                "x".repeat(bytes % 4)
+            ));
             assert!(
-                value.content.chars().count() <= crate::service::record::MAX_CONTENT_CHARS,
+                value.content.as_ref().unwrap().chars().count()
+                    <= crate::service::record::MAX_CONTENT_CHARS,
                 "the content must pass check_start_run"
             );
             value
@@ -10060,8 +10368,8 @@ title = "{title} - Jira"
             let request = |id: &str, instruction: String| {
                 let mut value = start_task_request(&url, &instruction, &now());
                 value.request_id = id.into();
-                value.title = format!("Title {TITLE}");
-                value.content = format!("Content {CONTENT}");
+                value.title = Some(format!("Title {TITLE}"));
+                value.content = Some(format!("Content {CONTENT}"));
                 value.selection = Some(format!("Selected {CONTENT}"));
                 serde_json::to_vec(&Request::StartTask(value)).unwrap()
             };
@@ -10114,6 +10422,377 @@ title = "{title} - Jira"
             for sentinel in [INSTRUCTION, TITLE, CONTENT, PATH] {
                 assert!(!text.contains(sentinel), "{sentinel} was logged: {text}");
             }
+        }
+
+        const GDOC_ADAPTER: &str = r#"[[artifacts]]
+type = "gdoc"
+origin = "https://docs.google.com"
+unscoped = "acknowledged"
+match = [{ path = "/document/d/{id:token(20,64)}/{mode?:(edit|view|preview)}" }]
+modes = { edit = "edit", view = "view", preview = "view" }
+id = "gdoc:{host}/{id}"
+"#;
+        const GDOC_URL: &str = "https://docs.google.com/document/d/abcdefghijklmnopqrst/edit";
+
+        /// A home folder with the gdoc adapter, a set-up harness unless
+        /// `harness` is false, and `auto` as the `[auto_summary]` table.
+        fn auto_store(folder: &std::path::Path, harness: bool, auto: &str) -> ConfigStore {
+            let root = folder.join("notes");
+            std::fs::create_dir_all(&root).unwrap();
+            let path = folder.join("config.toml");
+            let agent = if harness {
+                config::fixtures::agent_table(std::path::Path::new(
+                    &config::fixtures::absent_binary("claude"),
+                ))
+            } else {
+                String::new()
+            };
+            config::fixtures::write(
+                &path,
+                &root,
+                "artifacts_dir = \"artifacts\"",
+                "capture_enabled = true",
+                &format!("{auto}\n{agent}\n[adapters]\nformat = 1\n\n{GDOC_ADAPTER}"),
+            );
+            let mut store = ConfigStore::for_test(path);
+            store.refresh().unwrap();
+            store
+        }
+
+        fn start_auto(url: &str, request_id: &str) -> Request {
+            Request::StartAutoSummary(brauser_protocol::StartAutoSummaryRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.into(),
+                url: url.into(),
+                title: "A doc".into(),
+                content: "Some text".into(),
+                capture_truncated: None,
+                requested_at: now(),
+            })
+        }
+
+        fn skipped(response: &Response) -> brauser_protocol::AutoSummarySkipReason {
+            match response {
+                Response::AutoSummarySkipped(value) => value.reason,
+                other => panic!("expected auto_summary_skipped, got {other:?}"),
+            }
+        }
+
+        /// A link whose socket has no listener: a skip must never connect.
+        fn unreachable_link(dir: &tempfile::TempDir) -> ServiceLink {
+            link(fake::socket_in(dir), never)
+        }
+
+        #[test]
+        fn auto_summary_skips_when_disabled() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(
+                folder.path(),
+                true,
+                "[auto_summary]\nenabled = false\ndwell_secs = 0\n",
+            );
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                start_auto(GDOC_URL, "a"),
+            );
+            assert_eq!(
+                skipped(&response),
+                brauser_protocol::AutoSummarySkipReason::Disabled
+            );
+            assert_eq!(response.request_id(), "a");
+        }
+
+        #[test]
+        fn auto_summary_skips_when_no_harness() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), false, "");
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                start_auto(GDOC_URL, "a"),
+            );
+            assert_eq!(
+                skipped(&response),
+                brauser_protocol::AutoSummarySkipReason::NotSetUp
+            );
+        }
+
+        #[test]
+        fn auto_summary_skips_for_a_url_keyed_page() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                start_auto("https://example.com/plain", "a"),
+            );
+            assert_eq!(
+                skipped(&response),
+                brauser_protocol::AutoSummarySkipReason::NotAnArtifact
+            );
+        }
+
+        #[test]
+        fn auto_summary_requires_current_rules_while_retired_rules_keep_the_note() {
+            for replacement in [
+                String::new(),
+                GDOC_ADAPTER.replace("token(20,64)", "token(21,64)"),
+            ] {
+                let folder = tempfile::tempdir().unwrap();
+                let mut config = auto_store(folder.path(), true, "");
+                let note = note_load(&mut config, GDOC_URL);
+                assert_eq!(note.key.kind, RecordKeyKind::Artifact);
+                assert!(matches!(
+                    note_save(
+                        &mut config,
+                        GDOC_URL,
+                        "Keep my note",
+                        &note.revision,
+                        note.key.clone()
+                    ),
+                    Response::NoteSaved(_)
+                ));
+                let path = folder.path().join("config.toml");
+                let original = std::fs::read_to_string(&path).unwrap();
+                std::fs::write(&path, original.replace(GDOC_ADAPTER, &replacement)).unwrap();
+
+                let kept = note_load(&mut config, GDOC_URL);
+                assert_eq!(kept.key, note.key);
+                assert_eq!(kept.body, "Keep my note");
+                assert!(config.adapter_match(GDOC_URL, None).is_err());
+                let dir = fake::short_dir();
+                let response = call(
+                    &mut config,
+                    &unreachable_link(&dir),
+                    start_auto(GDOC_URL, "a"),
+                );
+                assert_eq!(
+                    skipped(&response),
+                    brauser_protocol::AutoSummarySkipReason::NotAnArtifact
+                );
+
+                // Explicit summaries still pass page/key validation and reach
+                // the forwarding boundary, even without a current adapter.
+                let Request::StartRun(request) = start_run(GDOC_URL, None, &now()) else {
+                    unreachable!()
+                };
+                let manual = crate::native::start_run(request, &mut config, None);
+                assert_eq!(refused(&manual).0, ErrorCode::ServiceUnavailable);
+            }
+        }
+
+        #[test]
+        fn auto_summary_skips_when_the_artifact_has_a_summary() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let key = resolve_record_key(&mut config, GDOC_URL).unwrap();
+            record_page_summary(&config, GDOC_URL, key, "gdoc");
+            let dir = fake::short_dir();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                start_auto(GDOC_URL, "a"),
+            );
+            assert_eq!(
+                skipped(&response),
+                brauser_protocol::AutoSummarySkipReason::AlreadySummarized
+            );
+        }
+
+        #[test]
+        fn auto_summary_refuses_a_stale_requested_at_like_start_run() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let dir = fake::short_dir();
+            let Request::StartAutoSummary(mut request) = start_auto(GDOC_URL, "a") else {
+                unreachable!()
+            };
+            request.requested_at = "2001-01-01T00:00:00Z".into();
+            let response = call(
+                &mut config,
+                &unreachable_link(&dir),
+                Request::StartAutoSummary(request),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::InvalidRequest);
+        }
+
+        #[test]
+        fn auto_summary_forwards_a_summary_run_for_a_new_artifact() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let expected = resolve_record_key(&mut config, GDOC_URL).unwrap();
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let service = echoing_service(&socket);
+            let Request::StartAutoSummary(mut request) = start_auto(GDOC_URL, "a") else {
+                unreachable!();
+            };
+            request.capture_truncated = Some(true);
+            let response = call(
+                &mut config,
+                &link(socket, never),
+                Request::StartAutoSummary(request),
+            );
+            match response {
+                Response::RunStarted(started) => assert_eq!(started.run.record_key, expected),
+                other => panic!("expected run_started, got {other:?}"),
+            }
+            let requests = service.requests();
+            assert_eq!(requests.len(), 2, "{requests:?}");
+            let Request::StartRun(forwarded) = &requests[1] else {
+                panic!("{requests:?}")
+            };
+            assert_eq!(forwarded.kind, Some(RunKind::Summary));
+            assert_eq!(forwarded.capture_truncated, Some(true));
+            assert_eq!(forwarded.record_key, Some(expected));
+            assert_eq!(forwarded.harness, None);
+            assert_eq!(forwarded.selection, None);
+            assert_eq!(forwarded.instruction, None);
+            assert_eq!(forwarded.url, GDOC_URL);
+        }
+
+        fn page_only_view(summarized_at: &str) -> brauser_protocol::SummaryView {
+            brauser_protocol::SummaryView {
+                summarized_at: summarized_at.into(),
+                overview: None,
+                document_type: "report".into(),
+                category: "news".into(),
+                importance: brauser_protocol::ImportanceLevel::Low,
+                summary_path: "summaries/a.summary.md".into(),
+                harness: brauser_protocol::HarnessId::Claude,
+            }
+        }
+
+        /// A minimal summary file of `key` recording `scope`.
+        fn write_summary_file(home: &std::path::Path, key: &RecordKey, scope: &str) {
+            let id = match key.kind {
+                RecordKeyKind::Url => "url_id",
+                RecordKeyKind::Artifact => "artifact_id",
+            };
+            let dir = home.join("summaries");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("a.summary.md"),
+                format!(
+                    "---\nbrauser:\n  kind: summary\n  canonical_url: \"{GDOC_URL}\"\n  {id}: \"{}\"\nread_scope: {scope}\n---\nBody\n",
+                    key.value
+                ),
+            )
+            .unwrap();
+        }
+
+        fn gdoc_key() -> RecordKey {
+            RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "gdoc:docs.google.com/abcdefghijklmnopqrst".into(),
+            }
+        }
+
+        fn today() -> time::Date {
+            time::Date::from_calendar_date(2026, time::Month::November, 2).unwrap()
+        }
+
+        #[test]
+        fn a_page_only_summary_from_yesterday_does_not_block() {
+            let home = tempfile::tempdir().unwrap();
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            let view = page_only_view("2026-11-01T23:30:00-07:00");
+            assert!(!summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        #[test]
+        fn a_page_only_summary_from_today_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            // Its own offset's date is today, though UTC's is tomorrow.
+            let view = page_only_view("2026-11-02T20:00:00-07:00");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        #[test]
+        fn a_whole_summary_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            for scope in ["whole", "partial"] {
+                write_summary_file(home.path(), &gdoc_key(), scope);
+                let view = page_only_view("2026-10-01T09:00:00Z");
+                assert!(
+                    summary_blocks_auto(&view, home.path(), &gdoc_key(), today()),
+                    "{scope}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_missing_summary_file_blocks() {
+            let home = tempfile::tempdir().unwrap();
+            let view = page_only_view("2026-10-01T09:00:00Z");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+            // So does another record's file, or an unreadable timestamp.
+            write_summary_file(home.path(), &url_record_key_for_test(), "page_only");
+            assert!(summary_blocks_auto(
+                &view,
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+            write_summary_file(home.path(), &gdoc_key(), "page_only");
+            assert!(summary_blocks_auto(
+                &page_only_view("yesterday"),
+                home.path(),
+                &gdoc_key(),
+                today()
+            ));
+        }
+
+        fn url_record_key_for_test() -> RecordKey {
+            RecordKey {
+                kind: RecordKeyKind::Url,
+                value: "https://example.com/".into(),
+            }
+        }
+
+        /// Only an automatic summary checks for an existing one: Summarize &
+        /// log always runs.
+        #[test]
+        fn manual_start_run_ignores_an_existing_summary() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = auto_store(folder.path(), true, "");
+            let key = resolve_record_key(&mut config, GDOC_URL).unwrap();
+            record_page_summary(&config, GDOC_URL, key, "gdoc");
+            let dir = fake::short_dir();
+            let socket = fake::socket_in(&dir);
+            let _service = echoing_service(&socket);
+            let response = call(
+                &mut config,
+                &link(socket, never),
+                start_run(GDOC_URL, None, &now()),
+            );
+            assert!(matches!(response, Response::RunStarted(_)), "{response:?}");
         }
 
         #[test]
@@ -10263,6 +10942,7 @@ title = "{title} - Jira"
             crate::service::record::LIST_INSTRUCTION_CHARS + 1
         );
         let view = brauser_protocol::RunView {
+            no_page: None,
             run_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
             state: RunState::Succeeded,
             harness: HarnessId::Codex,

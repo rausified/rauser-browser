@@ -19,6 +19,7 @@ export const SELECT_KEY = storageKey("tasks_select_v1");
 
 interface ReuseValue {
   instruction: string;
+  no_page?: boolean;
   window_id: number | null;
   at: number;
 }
@@ -31,6 +32,7 @@ interface SelectValue {
 function isReuseValue(value: unknown): value is ReuseValue {
   return typeof value === "object" && value !== null &&
     typeof (value as ReuseValue).instruction === "string" &&
+    ((value as ReuseValue).no_page === undefined || typeof (value as ReuseValue).no_page === "boolean") &&
     ((value as ReuseValue).window_id === null || typeof (value as ReuseValue).window_id === "number") &&
     typeof (value as ReuseValue).at === "number";
 }
@@ -51,9 +53,9 @@ export function parseSelectSignal(value: unknown): string | null {
  * when the side panel opened for a known window, or to any window
  * (null) when it did not. */
 export async function sendReuse(
-  storage: Pick<ChromeStorageArea, "set">, instruction: string, windowId: number | null,
+  storage: Pick<ChromeStorageArea, "set">, instruction: string, windowId: number | null, noPage = false,
 ): Promise<void> {
-  await storage.set({ [REUSE_KEY]: { instruction, window_id: windowId, at: Date.now() } satisfies ReuseValue });
+  await storage.set({ [REUSE_KEY]: { instruction, ...(noPage ? { no_page: true } : {}), window_id: windowId, at: Date.now() } satisfies ReuseValue });
 }
 
 /** Takes the stored instruction for `windowId`: a value named to no window
@@ -62,12 +64,12 @@ export async function sendReuse(
  * opening in the same window at the same moment may both read a
  * null-window value before either removes it; both would then fill their
  * bar with the same instruction, which is accepted. */
-export async function takeReuse(storage: ChromeStorageArea, windowId: number): Promise<string | null> {
+export async function takeReuse(storage: ChromeStorageArea, windowId: number): Promise<{ instruction: string; no_page: boolean } | null> {
   const stored = (await storage.get(REUSE_KEY))[REUSE_KEY];
   if (!isReuseValue(stored)) return null;
   if (stored.window_id !== null && stored.window_id !== windowId) return null;
   await storage.remove?.(REUSE_KEY);
-  return stored.instruction;
+  return { instruction: stored.instruction, no_page: stored.no_page === true };
 }
 
 /** Opens the Tasks page on `runId` (or the newest task, for null): focuses

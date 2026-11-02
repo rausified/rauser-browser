@@ -35,6 +35,10 @@
             "news"
           ]
         },
+        "auto_summary": {
+          "enabled": true,
+          "dwell_secs": 0
+        },
         "adapters": {
           "format": 0,
           "artifacts": [
@@ -102,6 +106,10 @@
             "research paper",
             "news"
           ]
+        },
+        "auto_summary": {
+          "enabled": true,
+          "dwell_secs": 0
         },
         "adapters": {
           "format": 1,
@@ -810,6 +818,10 @@
             "research paper",
             "news"
           ]
+        },
+        "auto_summary": {
+          "enabled": true,
+          "dwell_secs": 0
         },
         "adapters": {
           "format": 1,

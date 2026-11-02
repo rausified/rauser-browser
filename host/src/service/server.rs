@@ -489,12 +489,35 @@ impl Server {
         };
         // The host checks these too; a direct socket peer is bounded the
         // same way.
-        if let Err(message) = check_start_run(
-            &value.url,
-            &value.title,
-            &value.content,
-            value.selection.as_deref(),
-        ) {
+        let no_page = value.no_page.unwrap_or(false);
+        if (value.no_page.is_some() && kind != RunKind::Task)
+            || (!no_page && value.url == super::record::NO_PAGE_TASK)
+        {
+            return error(
+                &id,
+                ErrorCode::InvalidRequest,
+                "no_page is only for a task without a page",
+            );
+        }
+        let checked = if no_page {
+            super::record::check_no_page_task(
+                kind,
+                &value.url,
+                &value.title,
+                &value.content,
+                value.selection.as_deref(),
+                value.capture_truncated.unwrap_or(false),
+                &record_key,
+            )
+        } else {
+            check_start_run(
+                &value.url,
+                &value.title,
+                &value.content,
+                value.selection.as_deref(),
+            )
+        };
+        if let Err(message) = checked {
             return error(&id, ErrorCode::InvalidRequest, message);
         }
         // The refusal texts are fixed, so the request log never quotes the
@@ -527,7 +550,7 @@ impl Server {
             return error(&id, ErrorCode::InvalidRequest, message);
         }
         let setup = match kind {
-            RunKind::Summary => self.run_setup(value.harness),
+            RunKind::Summary => self.run_setup(value.harness, &value.url),
             RunKind::SiteDraft => self.site_draft_setup(value.harness),
             RunKind::Task => self.task_setup(value.harness),
         };
@@ -541,13 +564,16 @@ impl Server {
             return error(&id, ErrorCode::InvalidConfig, &env_error.to_string());
         }
         let task = value.instruction.map(|instruction| TaskStatus {
+            no_page,
             instruction,
             protected: setup.protected,
         });
         match self.supervisor.start_run(StartRun {
+            incoming: setup.incoming,
             kind,
             url: value.url,
             title: value.title,
+            capture_truncated: value.capture_truncated.unwrap_or(false),
             content: value.content,
             selection: value.selection,
             harness: Some(setup.harness),
@@ -608,6 +634,7 @@ impl Server {
     fn run_setup(
         &self,
         requested: Option<HarnessId>,
+        url: &str,
     ) -> Result<RunSetup, (ErrorCode, &'static str)> {
         let mut config = lock(&self.config);
         let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
@@ -618,6 +645,7 @@ impl Server {
             timeout,
             vocabulary: config.snapshot().summary_vocabulary.clone(),
             protected: Vec::new(),
+            incoming: super::section::recorded_incoming(&config, url),
         })
     }
 
@@ -640,6 +668,7 @@ impl Server {
             timeout: timeout.map(task_timeout),
             vocabulary: config.snapshot().summary_vocabulary.clone(),
             protected,
+            incoming: Vec::new(),
         })
     }
 
@@ -661,6 +690,7 @@ impl Server {
             timeout,
             vocabulary: default_summary_vocabulary(),
             protected: Vec::new(),
+            incoming: Vec::new(),
         })
     }
 }
@@ -797,6 +827,7 @@ pub(crate) fn checked_knowledge_base(
 
 /// What [`Server::run_setup`] resolved for a new run.
 struct RunSetup {
+    incoming: Vec<brauser_protocol::IncomingTrailView>,
     harness: HarnessId,
     cwd: PathBuf,
     timeout: Option<Duration>,
@@ -1057,10 +1088,12 @@ mod tests {
 
         fn start_run(&self, record_key: Option<RecordKey>) -> Response {
             self.call(&Request::StartRun(StartRunRequest {
+                no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "start".into(),
                 url: "https://example.com/a".into(),
                 title: "Page A".into(),
+                capture_truncated: None,
                 content: "Body text".into(),
                 selection: None,
                 harness: None,
@@ -1272,10 +1305,12 @@ mod tests {
         let lines = capture(|| {
             let service = world.start(Duration::from_millis(300));
             let started = world.call(&Request::StartRun(StartRunRequest {
+                no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "req-start-1".into(),
                 url: url.clone(),
                 title: TITLE.into(),
+                capture_truncated: None,
                 content: PAGE.into(),
                 selection: None,
                 harness: None,
@@ -1480,10 +1515,12 @@ mod tests {
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.call(&Request::StartRun(StartRunRequest {
+            no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "big".into(),
             url: "https://example.com/a".into(),
             title: "t".repeat(64 * 1024),
+            capture_truncated: None,
             content: "Body text".into(),
             selection: None,
             harness: None,
@@ -1686,10 +1723,12 @@ mod tests {
 
     fn named_start_run(harness: HarnessId) -> StartRunRequest {
         StartRunRequest {
+            no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "named".into(),
             url: "https://example.com/a".into(),
             title: "Page A".into(),
+            capture_truncated: None,
             content: "Body text".into(),
             selection: None,
             harness: Some(harness),
@@ -1708,10 +1747,12 @@ mod tests {
 
     fn site_draft_start(origin: &str) -> StartRunRequest {
         StartRunRequest {
+            no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "site".into(),
             url: origin.into(),
             title: format!("Capture Site: {origin}"),
+            capture_truncated: None,
             content: crate::service::prompt::site_draft_input(
                 origin,
                 &[("/docs/{num}".to_string(), 2)],
@@ -2105,10 +2146,12 @@ mod tests {
     /// A start_run for a task, as the native host forwards one.
     fn task_start(instruction: Option<&str>) -> StartRunRequest {
         StartRunRequest {
+            no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "task".into(),
             url: "https://example.com/a".into(),
             title: "Page A".into(),
+            capture_truncated: None,
             content: "Body text".into(),
             selection: None,
             harness: None,
@@ -2193,6 +2236,67 @@ mod tests {
     }
 
     #[test]
+    fn no_page_admission_is_task_only_and_checked_before_setup_without_a_socket() {
+        let world = World::unconfigured("");
+        let config = world.config();
+        let options = World::options(
+            &world.paths,
+            &config,
+            Duration::from_secs(1),
+            DEFAULT_RUN_TIMEOUT,
+        );
+        let server = Server {
+            paths: world.paths.clone(),
+            supervisor: Supervisor::new(
+                RunStore::open(world.paths.runs()).unwrap(),
+                HarnessRegistry::of(vec![]),
+                Box::new(KindFinisher::new(SummaryFinisher::new(
+                    world.support.join("config.toml"),
+                ))),
+                options,
+            ),
+            config: Mutex::new(config),
+            build_id: "test".into(),
+            last_arrival: Mutex::new(Instant::now()),
+            opener: crate::open::default_opener(),
+        };
+        let mut request = task_start(Some(INSTRUCTION));
+        request.no_page = Some(true);
+        request.url = super::super::record::NO_PAGE_TASK.into();
+        request.record_key.as_mut().unwrap().value = request.url.clone();
+        request.title.clear();
+        request.content.clear();
+        request.selection = None;
+        // A valid no-page shape still needs the same picked folder and agent.
+        assert_eq!(
+            error_of(server.start_run(request.clone())).0,
+            ErrorCode::NotConfigured
+        );
+        let changes: &[fn(&mut StartRunRequest)] = &[
+            |r| r.kind = Some(RunKind::Summary),
+            |r| r.kind = Some(RunKind::SiteDraft),
+            |r| r.no_page = None,
+            |r| r.no_page = Some(false),
+            |r| r.url = "https://example.com/".into(),
+            |r| r.title = "A page".into(),
+            |r| r.content = "page text".into(),
+            |r| r.selection = Some(String::new()),
+            |r| r.capture_truncated = Some(true),
+            |r| r.record_key.as_mut().unwrap().value = "https://example.com/".into(),
+            |r| r.record_key.as_mut().unwrap().kind = RecordKeyKind::Artifact,
+        ];
+        for change in changes {
+            let mut changed = request.clone();
+            change(&mut changed);
+            assert_eq!(
+                error_of(server.start_run(changed)).0,
+                ErrorCode::InvalidRequest
+            );
+        }
+        assert!(server.supervisor.list_runs().is_empty());
+    }
+
+    #[test]
     fn a_start_task_sent_to_the_service_socket_is_not_a_service_request() {
         if crate::ipc_test_guard::ipc_denied() {
             return;
@@ -2200,11 +2304,13 @@ mod tests {
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let request = Request::StartTask(brauser_protocol::StartTaskRequest {
+            no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "direct-task".into(),
-            url: "https://example.com/a".into(),
-            title: "Page A".into(),
-            content: "Body text".into(),
+            url: Some("https://example.com/a".into()),
+            title: Some("Page A".into()),
+            capture_truncated: None,
+            content: Some("Body text".into()),
             selection: None,
             instruction: INSTRUCTION.into(),
             harness: None,
@@ -2493,10 +2599,12 @@ mod tests {
         let url = format!("https://example.com/{PATH}?q={PATH}");
         let request = |request_id: &str, instruction: &str| {
             Request::StartRun(StartRunRequest {
+                no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: request_id.into(),
                 url: url.clone(),
                 title: TITLE.into(),
+                capture_truncated: None,
                 content: PAGE.into(),
                 selection: None,
                 harness: None,

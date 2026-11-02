@@ -61,6 +61,7 @@ export function installChrome({ state, runs, pageUrl, pageName }) {
       capture_enabled: configured, strip_params: [],
       agent: configured ? { harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: "2026-11-01T12:00:00Z" } : null,
       summary_vocabulary: { document_types: ["report"], categories: ["work"] },
+      auto_summary: { enabled: true, dwell_secs: 0 },
       adapters: { format: 1, artifacts: [] },
     },
   };
@@ -250,4 +251,14 @@ export async function activate(page, target, key = "Enter") {
 
 export async function focused(page, selector) {
   assert.equal(await page.locator(selector).evaluate((node) => node === document.activeElement), true, `${selector} should hold focus`);
+}
+
+/** Composite entry: only the selected panel tab participates in Tab order. */
+export async function enterPanelTab(page, id) {
+  assert.ok(["tab-page", "tab-recent"].includes(id));
+  await activate(page, page.locator('[role="tab"][aria-selected="true"]'), null);
+  await page.keyboard.press(id === "tab-page" ? "Home" : "End");
+  await focused(page, `#${id}`);
+  assert.equal(await page.locator(`#${id}`).getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator(`#${id}`).getAttribute("tabindex"), "0");
 }

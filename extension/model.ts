@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, AdapterDocument, OverflowMarker, VisitEvent, VisitOutcome,
+  ActivityEvent, AdapterDocument, AutoSummaryConfig, OverflowMarker, VisitEvent, VisitOutcome,
 } from "../protocol/ts/generated.js";
 import {
   compileDocument,
@@ -36,6 +36,7 @@ export const PANEL_NOTICE_MAX_AGE_MS = 2 * 60_000;
 export const SITE_ACCESS_ORIGINS = ["http://*/*", "https://*/*"];
 
 export type PanelNotice =
+  | { kind: "focus_task"; tab_id: number; at: number }
   | { kind: "run_started"; run_id: string; tab_id: number; at: number }
   | { kind: "summarize_failed"; message: string; tab_id: number; at: number };
 
@@ -46,7 +47,8 @@ export function isPanelNotice(value: unknown): value is PanelNotice {
       typeof notice.at !== "number" || !Number.isFinite(notice.at)) {
     return false;
   }
-  return (notice.kind === "run_started" && typeof notice.run_id === "string") ||
+  return notice.kind === "focus_task" ||
+    (notice.kind === "run_started" && typeof notice.run_id === "string") ||
     (notice.kind === "summarize_failed" && typeof notice.message === "string");
 }
 
@@ -56,6 +58,8 @@ export interface PolicyLease {
   capture_enabled: boolean;
   // Capture origins are the adapter origins; a v5 lease's `sites` is ignored.
   adapters: AdapterDocument;
+  // Missing in a lease stored before auto-summary: off until it is renewed.
+  auto_summary?: AutoSummaryConfig;
 }
 
 export interface QueuedVisit {

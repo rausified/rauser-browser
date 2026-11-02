@@ -81,6 +81,7 @@
         { "$ref": "#/$defs/DraftSiteRequest" },
         { "$ref": "#/$defs/StartSiteDraftRequest" },
         { "$ref": "#/$defs/StartTaskRequest" },
+        { "$ref": "#/$defs/StartAutoSummaryRequest" },
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
         { "$ref": "#/$defs/WorklogReportRequest" },
         { "$ref": "#/$defs/CheckCaptureSiteRequest" },
@@ -141,6 +142,7 @@
           "$ref": "#/$defs/HarnessesDiscovered"
         },
         { "$ref": "#/$defs/RunStarted" },
+        { "$ref": "#/$defs/AutoSummarySkippedResponse" },
         { "$ref": "#/$defs/RunFetched" },
         { "$ref": "#/$defs/RunsListed" },
         { "$ref": "#/$defs/RunUpdated" },
@@ -533,6 +535,7 @@
         "strip_params",
         "agent",
         "summary_vocabulary",
+        "auto_summary",
         "adapters"
       ],
       "properties": {
@@ -570,6 +573,9 @@
         },
         "summary_vocabulary": {
           "$ref": "#/$defs/SummaryVocabulary"
+        },
+        "auto_summary": {
+          "$ref": "#/$defs/AutoSummaryConfig"
         },
         "adapters": {
           "$ref": "#/$defs/AdapterDocument"
@@ -1550,6 +1556,7 @@
       "description": "An artifact's latest summary, from its summary log event. summarized_at is RFC 3339 in the offset of the click that requested it; summary_path is relative to the home folder.",
       "required": ["summarized_at", "document_type", "category", "importance", "summary_path", "harness"],
       "properties": {
+        "overview": { "type": "string", "minLength": 1, "maxLength": 300 },
         "summarized_at": { "type": "string", "maxLength": 32 },
         "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
         "category": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -1989,11 +1996,18 @@
       "description": "The validated summary answer's headline fields, kept in the run's result.",
       "required": ["document_type", "category", "importance", "importance_reason"],
       "properties": {
+        "overview": { "type": "string", "minLength": 1, "maxLength": 300 },
         "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
         "category": { "type": "string", "minLength": 1, "maxLength": 64 },
         "importance": { "$ref": "#/$defs/ImportanceLevel" },
-        "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 }
+        "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "access": { "description": "Optional; missing means ok (an older service's answer). Anything but ok means the agent met a wall and the run saved no summary.", "$ref": "#/$defs/AnswerAccess" }
       }
+    },
+    "AnswerAccess": {
+      "type": "string",
+      "description": "Whether the summary agent could see the artifact, or met a sign-in, no-access or not-found wall instead.",
+      "enum": ["ok", "sign_in", "denied", "not_found"]
     },
     "RunView": {
       "type": "object",
@@ -2001,6 +2015,7 @@
       "description": "One agent run as the Brauser service reports it. Timestamps are RFC 3339. answer is filled once the run has a validated answer.",
       "required": ["run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd", "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id", "summary_path", "stream_bytes", "can_retry_save", "answer"],
       "properties": {
+        "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 },
         "state": { "$ref": "#/$defs/RunState" },
         "harness": { "$ref": "#/$defs/HarnessId" },
@@ -2032,12 +2047,14 @@
       "description": "Start, or join, the summary run for a page. content and selection bounds are characters; the host frame cap is the binding byte limit. The extension always sends record_key null; the host resolves it.",
       "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "harness", "record_key", "requested_at"],
       "properties": {
+        "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "type": { "const": "start_run" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "title": { "type": "string", "maxLength": 2048 },
         "content": { "type": "string", "maxLength": 1048576 },
+        "capture_truncated": { "description": "Optional; missing or false means no reported cut. True when the extractor capped page text or highlighted selection. The service persists this provenance and discloses it in page.md and the prompt.", "type": "boolean" },
         "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
         "record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
@@ -2306,18 +2323,63 @@
         "requested_at": { "description": "The user's local click time with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
       }
     },
+    "AutoSummaryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Automatic summaries of recognized artifacts. When enabled, the extension sends start_auto_summary for an artifact once its page has loaded and its tab has been focused for dwell_secs in total (0: as soon as it loads, in the background too).",
+      "required": ["enabled", "dwell_secs"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "dwell_secs": { "type": "integer", "minimum": 0, "maximum": 3600 }
+      }
+    },
+    "StartAutoSummaryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start the automatic summary of a recognized artifact. The host refuses it with auto_summary_skipped, before contacting the service, when auto_summary is off, no harness is set up, the page is not an artifact, or the artifact already has a summary (one recording read_scope page_only from an earlier local day does not count); otherwise it forwards a summary start_run with the record key it resolves. Answers run_started or auto_summary_skipped.",
+      "required": ["type", "protocol_version", "request_id", "url", "title", "content", "requested_at"],
+      "properties": {
+        "type": { "const": "start_auto_summary" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "type": "string", "maxLength": 2048 },
+        "content": { "type": "string", "maxLength": 1048576 },
+        "capture_truncated": { "description": "Optional; missing or false means no reported cut. True when the extractor capped page text or highlighted selection. The service persists this provenance and discloses it in page.md and the prompt.", "type": "boolean" },
+        "requested_at": { "description": "When the artifact became due, with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
+      }
+    },
+    "AutoSummarySkipReason": {
+      "type": "string",
+      "description": "Why the host did not start an automatic summary.",
+      "enum": ["disabled", "not_set_up", "not_an_artifact", "already_summarized"]
+    },
+    "AutoSummarySkippedResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "start_auto_summary was refused before anything was sent to the service.",
+      "required": ["type", "protocol_version", "request_id", "reason"],
+      "properties": {
+        "type": { "const": "auto_summary_skipped" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reason": { "$ref": "#/$defs/AutoSummarySkipReason" }
+      }
+    },
     "StartTaskRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Start a task-bar run: the user's typed instruction, with the page as untrusted context. The host bounds the instruction (not blank; no control characters but newline and tab), resolves the record key, and forwards a start_run with kind task. Answers run_started; existing is always false.",
-      "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "instruction", "harness", "requested_at"],
+      "description": "Start a task-bar run: the user's typed instruction, with optional page context. no_page true requires url, title, content and capture_truncated to be absent and selection null; otherwise the existing complete page payload is required. The host bounds the instruction (not blank; no control characters but newline and tab), resolves the record key, and forwards a start_run with kind task. Answers run_started; existing is always false.",
+      "required": ["type", "protocol_version", "request_id", "selection", "instruction", "harness", "requested_at"],
       "properties": {
+        "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "type": { "const": "start_task" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "title": { "type": "string", "maxLength": 2048 },
         "content": { "type": "string", "maxLength": 1048576 },
+        "capture_truncated": { "description": "Optional; missing or false means no reported cut. True when the extractor capped page text or highlighted selection. The service persists this provenance and discloses it in page.md and the prompt.", "type": "boolean" },
         "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
         "instruction": { "description": "The user's typed instruction, in characters. The host also refuses one that is blank after trimming or holds a control character other than newline and tab.", "type": "string", "minLength": 1, "maxLength": 4096 },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },

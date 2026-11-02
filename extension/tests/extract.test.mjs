@@ -7,7 +7,7 @@ import vm from "node:vm";
 // it in the page, so each test runs its source text in a fresh context that
 // holds only the fakes it is given.
 const { EXTRACT_LIMITS, extractReadablePage } = await import("../dist/extract.js");
-const { readTab, summarizeTab, isOfficeDocumentUrl, isMiroBoardUrl, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
+const { autoSummarizeTab, readTab, summarizeTab, isOfficeDocumentUrl, isMiroBoardUrl, UNREADABLE_MESSAGE, PAGE_CHANGED_MESSAGE } = await import("../dist/summarize.js");
 
 // The host refuses a frame over this many bytes (`frame::MAX_INBOUND_BYTES`).
 const MAX_INBOUND_BYTES = 4 * 1024 * 1024;
@@ -195,6 +195,7 @@ test("extracts article blocks as text and drops images", () => {
     selection: "  picked words ",
     truncated: false,
     readable: true,
+    word: false,
     href: PAGE_URL,
   });
 });
@@ -277,13 +278,13 @@ test("falls back to body text when Readability finds no article", () => {
   const result = run(scope);
   assert.equal(seen.parsed, 1);
   assert.deepEqual({ ...result }, {
-    title: "Doc title", content: "Body line one\nBody line two", selection: null, truncated: false, readable: false,
+    title: "Doc title", content: "Body line one\nBody line two", selection: null, truncated: false, readable: false, word: false,
     href: PAGE_URL,
   });
   // An article that holds no text falls back as well.
   const empty = page({ title: "Doc title", article: el("div", el("img")), bodyText: "Body" });
   assert.deepEqual({ ...run(empty.scope) }, {
-    title: "Doc title", content: "Body", selection: null, truncated: false, readable: false, href: PAGE_URL,
+    title: "Doc title", content: "Body", selection: null, truncated: false, readable: false, word: false, href: PAGE_URL,
   });
 });
 
@@ -425,12 +426,12 @@ test("lone surrogates in page text, selection and title become U+FFFD", () => {
 test("an empty page is unreadable, not an empty run", () => {
   const { scope } = page({ title: "", article: el("div", el("p", "  "), el("img")), bodyText: " \n\t " });
   assert.deepEqual({ ...run(scope) }, {
-    title: "", content: "", selection: null, truncated: false, readable: false, href: PAGE_URL,
+    title: "", content: "", selection: null, truncated: false, readable: false, word: false, href: PAGE_URL,
   });
   const nobody = page({ bodyText: "" });
   nobody.scope.document.body = null;
   assert.deepEqual({ ...run(nobody.scope) }, {
-    title: "Page title", content: "", selection: null, truncated: false, readable: false, href: PAGE_URL,
+    title: "Page title", content: "", selection: null, truncated: false, readable: false, word: false, href: PAGE_URL,
   });
 });
 
@@ -473,9 +474,12 @@ test("the vendored license ships with the bundle", () => {
 
 // Summarize reads every frame: Word for the web and similar editors render
 // the document in a cross-origin iframe, so the top frame holds no text.
-const TAB = { id: 9, url: "https://cisco-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=x", title: "Plan.docx" };
+// An Office document address of no particular kind, so it is read once
+// (WORD_TAB, a Word address, waits for Word's paragraphs).
+const TAB = { id: 9, url: "https://cisco-my.sharepoint.com/personal/u/_layouts/15/WopiFrame.aspx?sourcedoc=x", title: "Plan.docx" };
+const WORD_TAB = { id: 9, url: "https://cisco-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=x", title: "Plan.docx" };
 const framePage = (fields) => ({
-  title: "", content: "", selection: null, truncated: false, readable: false, href: TAB.url, ...fields,
+  title: "", content: "", selection: null, truncated: false, readable: false, word: false, href: TAB.url, ...fields,
 });
 // An ordinary page: with no text it is unreadable, unlike an Office document.
 const PLAIN_TAB = { id: 9, url: "https://read.example/article", title: "Article" };
@@ -509,6 +513,25 @@ function framesDeps(frames, { readability = async () => [] } = {}) {
   };
 }
 
+test("automatic summaries preserve the chosen frame's truncation flag", async () => {
+  for (const truncated of [true, false, undefined]) {
+    const { deps, requests } = framesDeps([
+      { frameId: 0, result: framePage({ content: "Viewer", truncated: true }) },
+      { frameId: 3, result: framePage({ content: "Document excerpt", truncated }) },
+    ]);
+    deps.host.callAny = async (request) => {
+      requests.push(request);
+      return { type: "auto_summary_skipped", reason: "already_summarized" };
+    };
+    assert.equal(await autoSummarizeTab(TAB, deps), "already_summarized");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].type, "start_auto_summary");
+    assert.equal(requests[0].content, "Document excerpt");
+    assert.equal(requests[0].capture_truncated, truncated === true ? true : undefined);
+    assert.equal("selection" in requests[0], false);
+  }
+});
+
 test("summarizeTab injects Readability and the extractor into every frame", async () => {
   const { deps, injections } = framesDeps([{ frameId: 0, result: framePage({ content: "Body" }) }]);
   await summarizeTab(TAB, deps);
@@ -526,15 +549,15 @@ test("readTab reads the page summarizeTab would send, and sends nothing", async 
   ];
   const read = framesDeps(frames);
   const page = await readTab(TAB, read.deps);
-  assert.deepEqual(page, { url: TAB.url, title: "Top\uFFFD title", content: "Office text\uFFFD", selection: "picked" });
+  assert.deepEqual(page, { url: TAB.url, title: "Top\uFFFD title", content: "Office text\uFFFD", selection: "picked", truncated: false });
   assert.equal(read.requests.length, 0);
   assert.deepEqual(read.injections.map((injection) => injection.files ?? injection.args), [
     ["vendor/readability.js"], [EXTRACT_LIMITS],
   ]);
   const summarized = framesDeps(frames);
   await summarizeTab(TAB, summarized.deps);
-  const { url, title, content, selection } = summarized.requests[0];
-  assert.deepEqual({ url, title, content, selection }, page);
+  const { url, title, content, selection, capture_truncated = false } = summarized.requests[0];
+  assert.deepEqual({ url, title, content, selection, truncated: capture_truncated }, page);
 
   const untitled = framesDeps([{ frameId: 0, result: framePage({ title: "", content: "Body" }) }]);
   assert.equal((await readTab(TAB, untitled.deps)).title, TAB.title);
@@ -828,4 +851,93 @@ test("a hung Readability injection is given up on and the page is read without i
 test("the all-frames timeout is ten seconds", async () => {
   const { ALL_FRAMES_TIMEOUT_MS } = await import("../dist/summarize.js");
   assert.equal(ALL_FRAMES_TIMEOUT_MS, 10_000);
+});
+
+// Word for the web shows a splash ("Word is starting.") before it renders the
+// document's paragraphs; run 92dcfad9 on 2026-11-01 read the splash as the page.
+const SPLASH = "Word is starting.";
+const WORD_FRAME = "https://word-edit.officeapps.live.com/we/wordeditorframe.aspx?ui=en-US";
+const splashFrames = [
+  { frameId: 0, result: framePage({ title: "Plan.docx", href: WORD_TAB.url }) },
+  { frameId: 3, result: framePage({ content: SPLASH, href: WORD_FRAME }) },
+];
+const wordDoc = "# Plan\n\nThe document body.";
+const loadedFrames = [
+  { frameId: 0, result: framePage({ title: "Plan.docx", href: WORD_TAB.url }) },
+  { frameId: 3, result: framePage({ content: wordDoc, readable: true, word: true, href: WORD_FRAME }) },
+];
+const extractorCalls = (injections) => injections.filter((injection) => injection.func === extractReadablePage).length;
+
+test("the extractor says whether it read Word paragraphs", () => {
+  assert.equal(run(page({ rendered: true, wordParagraphs: [wordParagraph(["Text"])] }).scope).word, true);
+  assert.equal(run(page({ rendered: true, bodyText: SPLASH }).scope).word, false);
+  assert.equal(run(page({ article: el("p", "Article body"), rendered: true, wordParagraphs: [wordParagraph(["\u00a0"])] }).scope).word, false);
+});
+
+test("a Word document still on its splash is read again once its paragraphs render", async () => {
+  let calls = 0;
+  const { deps, requests, injections } = framesDeps(() => (++calls < 3 ? splashFrames : loadedFrames));
+  Object.assign(deps, { wordWaitMs: 1_000, wordPollMs: 5 });
+  await summarizeTab(WORD_TAB, deps);
+  assert.equal(requests[0].content, wordDoc);
+  assert.equal(requests[0].title, "Plan.docx");
+  assert.equal(extractorCalls(injections), 3);
+  // Readability is injected once, not on every poll.
+  assert.equal(injections.filter((injection) => injection.files).length, 1);
+});
+
+test("a Word document that never renders its paragraphs sends empty content, never the splash", async () => {
+  const { deps, requests, injections } = framesDeps(splashFrames);
+  Object.assign(deps, { wordWaitMs: 60, wordPollMs: 10 });
+  const started = Date.now();
+  await summarizeTab(WORD_TAB, deps);
+  assert.ok(Date.now() - started < 1_000);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].content, "");
+  assert.doesNotMatch(JSON.stringify(requests[0]), /Word is starting/);
+  assert.equal(requests[0].url, WORD_TAB.url);
+  assert.ok(extractorCalls(injections) >= 2);
+  // The task bar reads pages the same way.
+  const read = framesDeps(splashFrames);
+  Object.assign(read.deps, { wordWaitMs: 30, wordPollMs: 10 });
+  assert.equal((await readTab(WORD_TAB, read.deps)).content, "");
+});
+
+test("only a Word document address waits for paragraphs", async () => {
+  const sheet = { id: 9, url: "https://contoso.sharepoint.com/:x:/r/sites/t/_layouts/15/Doc.aspx?sourcedoc=x&file=B.xlsx", title: "B.xlsx" };
+  for (const [tab, content] of [[PLAIN_TAB, "Short page text"], [sheet, "Sheet1"]]) {
+    const { deps, injections } = framesDeps([{ frameId: 0, result: framePage({ content, href: tab.url }) }]);
+    Object.assign(deps, { wordWaitMs: 60_000, wordPollMs: 60_000 });
+    assert.equal((await readTab(tab, deps)).content, content);
+    assert.equal(extractorCalls(injections), 1);
+  }
+});
+
+test("a Word tab that navigates while waiting is page_changed at once", async () => {
+  let calls = 0;
+  const moved = [{ frameId: 0, result: framePage({ href: "https://cisco-my.sharepoint.com/other" }) }];
+  const { deps, requests } = framesDeps(() => (++calls < 2 ? splashFrames : moved));
+  Object.assign(deps, { wordWaitMs: 60_000, wordPollMs: 5 });
+  await assert.rejects(summarizeTab(WORD_TAB, deps), (error) => error.code === "page_changed");
+  assert.equal(calls, 2);
+  assert.equal(requests.length, 0);
+});
+
+test("officeDocumentKind agrees with the host's shared vectors", async () => {
+  const { officeDocumentKind } = await import("../dist/summarize.js");
+  const vectors = JSON.parse(readFileSync(new URL("../../host/tests/fixtures/office-document-urls.json", import.meta.url), "utf8"));
+  for (const { url, office, kind } of vectors.cases) assert.equal(officeDocumentKind(url), office ? kind : null, url);
+  assert.equal(officeDocumentKind(WORD_TAB.url), "word");
+  assert.equal(officeDocumentKind(TAB.url), "unknown");
+});
+
+test("a frame that read Word paragraphs wins over a longer top frame", async () => {
+  const chrome = "Suite bar Sign in Footer ".repeat(40);
+  const { deps, requests, injections } = framesDeps([
+    { frameId: 0, result: framePage({ title: "Plan.docx", content: chrome, readable: true, href: WORD_TAB.url }) },
+    { frameId: 3, result: framePage({ content: wordDoc, word: true, href: WORD_FRAME }) },
+  ]);
+  await summarizeTab(WORD_TAB, deps);
+  assert.equal(requests[0].content, wordDoc);
+  assert.equal(extractorCalls(injections), 1);
 });

@@ -58,16 +58,16 @@ impl BaseType {
         }
     }
 
-    /// The characters a title capture of this type takes. For `uuid` that is
+    /// The characters a title capture of this type takes, before validating
+    /// the whole run (including token padding placement). For `uuid` that is
     /// hex digits and `-`, without the braces, so a braced UUID in a title
     /// ends its run at the brace (SQ7).
     pub(crate) fn in_alphabet(self, c: char) -> bool {
         match self {
             BaseType::Int => c.is_ascii_digit(),
             BaseType::Hex => c.is_ascii_hexdigit(),
-            BaseType::Token | BaseType::JiraKey => {
-                c.is_ascii_alphanumeric() || c == '_' || c == '-'
-            }
+            BaseType::Token => c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '='),
+            BaseType::JiraKey => c.is_ascii_alphanumeric() || c == '_' || c == '-',
             BaseType::Name => c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'),
             BaseType::Uuid => c.is_ascii_hexdigit() || c == '-',
         }
@@ -87,12 +87,15 @@ impl BaseType {
                 .then(|| v.to_ascii_lowercase()),
             BaseType::Token => {
                 // Up to two trailing `=` are base64 padding (Miro board IDs).
+                // The title-run alphabet includes `=`; the body must not.
                 let body = v
                     .strip_suffix("==")
                     .or_else(|| v.strip_suffix('='))
                     .unwrap_or(v);
-                (in_len(v.len()) && !body.is_empty() && body.chars().all(|c| self.in_alphabet(c)))
-                    .then(|| v.to_owned())
+                (in_len(v.len())
+                    && !body.is_empty()
+                    && body.chars().all(|c| c != '=' && self.in_alphabet(c)))
+                .then(|| v.to_owned())
             }
             BaseType::Name => {
                 (in_len(v.len()) && v != "." && v != ".." && v.chars().all(|c| self.in_alphabet(c)))
