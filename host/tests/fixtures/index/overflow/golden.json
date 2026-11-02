@@ -1,0 +1,308 @@
+{
+  "reads": {
+    "artifacts": {
+      "work:example.com/GAP": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/GAP",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-21",
+              "focused_seconds": 125,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-21",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "Around the gap",
+              "url": "https://example.com/items/GAP",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/GAP"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/GAP"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/GAP"
+          ]
+        }
+      },
+      "work:example.com/never-recorded": {
+        "card": {
+          "ok": {
+            "artifact": null,
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": []
+        },
+        "urls": {
+          "ok": []
+        }
+      }
+    },
+    "recent": {
+      "type=None query=None limit=0": {
+        "ok": {
+          "items": [],
+          "truncated": true,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=1": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/GAP",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": null,
+              "title": "Around the gap",
+              "url": "https://example.com/items/GAP",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/GAP",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": null,
+              "title": "Around the gap",
+              "url": "https://example.com/items/GAP",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"no.such.type\") query=None limit=50": {
+        "ok": {
+          "items": [],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"work.item\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/GAP",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": null,
+              "title": "Around the gap",
+              "url": "https://example.com/items/GAP",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      }
+    },
+    "worklog": {
+      "2026-10-19..2026-10-25": {
+        "ok": {
+          "count": 1,
+          "gaps": [
+            {
+              "count": 4,
+              "first_occurred_at": "2026-10-20T23:00:00-07:00",
+              "last_occurred_at": "2026-10-22T01:00:00-07:00"
+            },
+            {
+              "count": 2,
+              "first_occurred_at": "2026-10-21T01:00:00-07:00",
+              "last_occurred_at": "2026-10-21T02:00:00-07:00"
+            }
+          ],
+          "gaps_truncated": false,
+          "text": "Opened 1 artifact, and focused on 0 left open from an earlier day.\nwork.item work:example.com/GAP: Around the gap — focused 2 min · 1 min in background · opened 1×"
+        }
+      },
+      "2026-10-20..2026-10-20": {
+        "ok": {
+          "count": 0,
+          "gaps": [
+            {
+              "count": 4,
+              "first_occurred_at": "2026-10-20T23:00:00-07:00",
+              "last_occurred_at": "2026-10-22T01:00:00-07:00"
+            }
+          ],
+          "gaps_truncated": false,
+          "text": "Opened 0 artifacts, and focused on 0 left open from an earlier day."
+        }
+      },
+      "2026-10-21..2026-10-21": {
+        "ok": {
+          "count": 1,
+          "gaps": [
+            {
+              "count": 4,
+              "first_occurred_at": "2026-10-20T23:00:00-07:00",
+              "last_occurred_at": "2026-10-22T01:00:00-07:00"
+            },
+            {
+              "count": 2,
+              "first_occurred_at": "2026-10-21T01:00:00-07:00",
+              "last_occurred_at": "2026-10-21T02:00:00-07:00"
+            }
+          ],
+          "gaps_truncated": false,
+          "text": "Opened 1 artifact, and focused on 0 left open from an earlier day.\nwork.item work:example.com/GAP: Around the gap — focused 2 min · 1 min in background · opened 1×"
+        }
+      },
+      "2026-10-23..2026-10-24": {
+        "ok": {
+          "count": 0,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 0 artifacts, and focused on 0 left open from an earlier day."
+        }
+      }
+    }
+  },
+  "relearn": {
+    "ok": {
+      "evidence": [
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/GAP"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/GAP"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/GAP"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/GAP"
+          }
+        }
+      ],
+      "revision": "eda54a5cbfbaf877666fb5c31207ba62fb632b3f39c25ea4fe6360cae6248ce6"
+    }
+  },
+  "tables": {
+    "artifacts": [
+      [
+        "work:example.com/GAP",
+        "work.item",
+        "example.com",
+        "Around the gap",
+        "https://example.com/items/GAP",
+        "2026-10-21",
+        "2026-10-21",
+        125,
+        61,
+        1,
+        1,
+        "view",
+        null
+      ]
+    ],
+    "dirty_artifacts": [
+      [
+        "work:example.com/GAP"
+      ]
+    ],
+    "edges": [],
+    "url_provenance": [
+      [
+        "00000000-0000-4000-8009-000000000001",
+        "work:example.com/GAP",
+        "mode:0",
+        "https://example.com/items/GAP",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8009-000000000001",
+        "work:example.com/GAP",
+        "url",
+        "https://example.com/items/GAP",
+        "[\"utm_source\"]"
+      ]
+    ],
+    "visits": [
+      [
+        "00000000-0000-4000-8009-000000000001",
+        "work:example.com/GAP",
+        "2026-10-21T09:00:00-07:00",
+        "2026-10-21",
+        125,
+        61,
+        1,
+        "view",
+        "Around the gap",
+        "https://example.com/items/GAP"
+      ]
+    ]
+  }
+}

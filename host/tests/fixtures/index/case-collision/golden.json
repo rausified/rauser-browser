@@ -1,0 +1,664 @@
+{
+  "reads": {
+    "artifacts": {
+      "work:Example.com/Abc": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:Example.com/Abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-16",
+              "focused_seconds": 125,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-16",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "Mixed",
+              "url": "https://example.com/items/Abc",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/Abc"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/Abc"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/Abc"
+          ]
+        }
+      },
+      "work:example.com/ABC": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/ABC",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-15",
+              "focused_seconds": 125,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-15",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "Upper",
+              "url": "https://example.com/items/ABC",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/ABC"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/ABC"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/ABC"
+          ]
+        }
+      },
+      "work:example.com/abc": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/abc",
+              "artifact_type": "work.item",
+              "background_seconds": 122,
+              "contained": [],
+              "days_opened": 2,
+              "first_seen": "2026-10-15",
+              "focused_seconds": 250,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-16",
+              "linked_count": 0,
+              "opens": 2,
+              "title": "Lower again",
+              "url": "https://example.com/items/abc",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/abc"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/abc"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/abc"
+          ]
+        }
+      },
+      "work:example.com/never-recorded": {
+        "card": {
+          "ok": {
+            "artifact": null,
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": []
+        },
+        "urls": {
+          "ok": []
+        }
+      }
+    },
+    "recent": {
+      "type=None query=None limit=0": {
+        "ok": {
+          "items": [],
+          "truncated": true,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=1": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "Lower again",
+              "url": "https://example.com/items/abc",
+              "why": null
+            }
+          ],
+          "truncated": true,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "Lower again",
+              "url": "https://example.com/items/abc",
+              "why": null
+            },
+            {
+              "artifact_id": "work:Example.com/Abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "Mixed",
+              "url": "https://example.com/items/Abc",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Lower again",
+              "url": "https://example.com/items/abc",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/ABC",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Upper",
+              "url": "https://example.com/items/ABC",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=Some(\"LOWER\") limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "Lower again",
+              "url": "https://example.com/items/abc",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Lower again",
+              "url": "https://example.com/items/abc",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=Some(\"upper\") limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/ABC",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Upper",
+              "url": "https://example.com/items/ABC",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"no.such.type\") query=None limit=50": {
+        "ok": {
+          "items": [],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"work.item\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "Lower again",
+              "url": "https://example.com/items/abc",
+              "why": null
+            },
+            {
+              "artifact_id": "work:Example.com/Abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "Mixed",
+              "url": "https://example.com/items/Abc",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/abc",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Lower again",
+              "url": "https://example.com/items/abc",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/ABC",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Upper",
+              "url": "https://example.com/items/ABC",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      }
+    },
+    "worklog": {
+      "2026-10-15..2026-10-16": {
+        "ok": {
+          "count": 3,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 3 artifacts, and focused on 0 left open from an earlier day.\nwork.item work:example.com/abc: Lower again — focused 4 min · 2 min in background · opened 2×\nwork.item work:Example.com/Abc: Mixed — focused 2 min · 1 min in background · opened 1×\nwork.item work:example.com/ABC: Upper — focused 2 min · 1 min in background · opened 1×"
+        }
+      }
+    }
+  },
+  "relearn": {
+    "ok": {
+      "evidence": [
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/ABC"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/ABC"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/ABC"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/ABC"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/abc"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/abc"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/abc"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/abc"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:Example.com/Abc"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/Abc"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:Example.com/Abc"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/Abc"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/abc"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/abc"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/abc"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/abc"
+          }
+        }
+      ],
+      "revision": "d5659f86d52dcf08cec0bcc05be870841004f70f3ad2e59439a04aa6d13028f4"
+    }
+  },
+  "tables": {
+    "artifacts": [
+      [
+        "work:Example.com/Abc",
+        "work.item",
+        "example.com",
+        "Mixed",
+        "https://example.com/items/Abc",
+        "2026-10-16",
+        "2026-10-16",
+        125,
+        61,
+        1,
+        1,
+        "view",
+        null
+      ],
+      [
+        "work:example.com/ABC",
+        "work.item",
+        "example.com",
+        "Upper",
+        "https://example.com/items/ABC",
+        "2026-10-15",
+        "2026-10-15",
+        125,
+        61,
+        1,
+        1,
+        "view",
+        null
+      ],
+      [
+        "work:example.com/abc",
+        "work.item",
+        "example.com",
+        "Lower again",
+        "https://example.com/items/abc",
+        "2026-10-15",
+        "2026-10-16",
+        250,
+        122,
+        2,
+        2,
+        "view",
+        null
+      ]
+    ],
+    "dirty_artifacts": [
+      [
+        "work:Example.com/Abc"
+      ],
+      [
+        "work:example.com/ABC"
+      ],
+      [
+        "work:example.com/abc"
+      ]
+    ],
+    "edges": [],
+    "url_provenance": [
+      [
+        "00000000-0000-4000-8002-000000000001",
+        "work:example.com/ABC",
+        "mode:0",
+        "https://example.com/items/ABC",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000001",
+        "work:example.com/ABC",
+        "url",
+        "https://example.com/items/ABC",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000002",
+        "work:example.com/abc",
+        "mode:0",
+        "https://example.com/items/abc",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000002",
+        "work:example.com/abc",
+        "url",
+        "https://example.com/items/abc",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000003",
+        "work:Example.com/Abc",
+        "mode:0",
+        "https://example.com/items/Abc",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000003",
+        "work:Example.com/Abc",
+        "url",
+        "https://example.com/items/Abc",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000004",
+        "work:example.com/abc",
+        "mode:0",
+        "https://example.com/items/abc",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000004",
+        "work:example.com/abc",
+        "url",
+        "https://example.com/items/abc",
+        "[\"utm_source\"]"
+      ]
+    ],
+    "visits": [
+      [
+        "00000000-0000-4000-8002-000000000001",
+        "work:example.com/ABC",
+        "2026-10-15T10:00:00Z",
+        "2026-10-15",
+        125,
+        61,
+        1,
+        "view",
+        "Upper",
+        "https://example.com/items/ABC"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000002",
+        "work:example.com/abc",
+        "2026-10-15T11:00:00Z",
+        "2026-10-15",
+        125,
+        61,
+        1,
+        "view",
+        "Lower",
+        "https://example.com/items/abc"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000003",
+        "work:Example.com/Abc",
+        "2026-10-16T09:00:00Z",
+        "2026-10-16",
+        125,
+        61,
+        1,
+        "view",
+        "Mixed",
+        "https://example.com/items/Abc"
+      ],
+      [
+        "00000000-0000-4000-8002-000000000004",
+        "work:example.com/abc",
+        "2026-10-16T10:00:00Z",
+        "2026-10-16",
+        125,
+        61,
+        1,
+        "view",
+        "Lower again",
+        "https://example.com/items/abc"
+      ]
+    ]
+  }
+}

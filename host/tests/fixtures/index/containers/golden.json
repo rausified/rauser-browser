@@ -1,0 +1,1111 @@
+{
+  "reads": {
+    "artifacts": {
+      "github.issue:github.com/acme-corp/widgets/3": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "github.issue:github.com/acme-corp/widgets/3",
+              "artifact_type": "github.issue",
+              "background_seconds": 10,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-15",
+              "focused_seconds": 200,
+              "incoming_trails": [],
+              "last_mode": null,
+              "last_seen": "2026-10-15",
+              "linked_count": 2,
+              "opens": 1,
+              "title": "Pagination is broken",
+              "url": "https://github.com/acme-corp/widgets/issues/3",
+              "why": null,
+              "within": {
+                "artifact_id": "github.repo:github.com/acme-corp/widgets",
+                "artifact_type": "github.repo",
+                "title": "acme-corp/widgets",
+                "url": "https://github.com/acme-corp/widgets"
+              }
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://github.com/acme-corp/widgets/issues/3"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://github.com/acme-corp/widgets/issues/3"
+          ]
+        }
+      },
+      "github.pr:github.com/acme-corp/widgets/1": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/1",
+              "artifact_type": "github.pr",
+              "background_seconds": 61,
+              "contained": [],
+              "days_opened": 2,
+              "first_seen": "2026-10-14",
+              "focused_seconds": 215,
+              "incoming_trails": [],
+              "last_mode": "review",
+              "last_seen": "2026-10-16",
+              "linked_count": 2,
+              "opens": 2,
+              "title": "PROJ-1 Fix SBOM export (v2)",
+              "url": "https://github.com/acme-corp/widgets/pull/1",
+              "why": null,
+              "within": {
+                "artifact_id": "github.repo:github.com/acme-corp/widgets",
+                "artifact_type": "github.repo",
+                "title": "acme-corp/widgets",
+                "url": "https://github.com/acme-corp/widgets"
+              }
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://github.com/acme-corp/widgets/pull/1"
+            },
+            {
+              "stripped_params": [
+                "utm_campaign"
+              ],
+              "url": "https://github.com/acme-corp/widgets/pull/1/files"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://github.com/acme-corp/widgets/pull/1",
+            "https://github.com/acme-corp/widgets/pull/1/files"
+          ]
+        }
+      },
+      "github.pr:github.com/acme-corp/widgets/2": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/2",
+              "artifact_type": "github.pr",
+              "background_seconds": 20,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-15",
+              "focused_seconds": 400,
+              "incoming_trails": [
+                {
+                  "last_seen": "2026-10-15",
+                  "source": {
+                    "artifact_id": "github.issue:github.com/acme-corp/widgets/3",
+                    "artifact_type": "github.issue",
+                    "title": "Pagination is broken",
+                    "url": "https://github.com/acme-corp/widgets/issues/3"
+                  },
+                  "transition": "link"
+                }
+              ],
+              "last_mode": null,
+              "last_seen": "2026-10-15",
+              "linked_count": 3,
+              "opens": 1,
+              "title": "Paginate exports",
+              "url": "https://github.com/acme-corp/widgets/pull/2",
+              "why": null,
+              "within": {
+                "artifact_id": "github.repo:github.com/acme-corp/widgets",
+                "artifact_type": "github.repo",
+                "title": "acme-corp/widgets",
+                "url": "https://github.com/acme-corp/widgets"
+              }
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://github.com/acme-corp/widgets/pull/2"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://github.com/acme-corp/widgets/pull/2"
+          ]
+        }
+      },
+      "github.pr:github.com/other-org/tools/9": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "github.pr:github.com/other-org/tools/9",
+              "artifact_type": "github.pr",
+              "background_seconds": 0,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-16",
+              "focused_seconds": 30,
+              "incoming_trails": [],
+              "last_mode": null,
+              "last_seen": "2026-10-16",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "Out of scope",
+              "url": "https://github.com/other-org/tools/pull/9",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://github.com/other-org/tools/pull/9"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://github.com/other-org/tools/pull/9"
+          ]
+        }
+      },
+      "github.repo:github.com/acme-corp/widgets": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "github.repo:github.com/acme-corp/widgets",
+              "artifact_type": "github.repo",
+              "background_seconds": 96,
+              "contained": [
+                {
+                  "artifact_id": "github.pr:github.com/acme-corp/widgets/2",
+                  "artifact_type": "github.pr",
+                  "focused_seconds": 400,
+                  "title": "Paginate exports",
+                  "url": "https://github.com/acme-corp/widgets/pull/2"
+                },
+                {
+                  "artifact_id": "github.pr:github.com/acme-corp/widgets/1",
+                  "artifact_type": "github.pr",
+                  "focused_seconds": 215,
+                  "title": "PROJ-1 Fix SBOM export (v2)",
+                  "url": "https://github.com/acme-corp/widgets/pull/1"
+                },
+                {
+                  "artifact_id": "github.issue:github.com/acme-corp/widgets/3",
+                  "artifact_type": "github.issue",
+                  "focused_seconds": 200,
+                  "title": "Pagination is broken",
+                  "url": "https://github.com/acme-corp/widgets/issues/3"
+                }
+              ],
+              "days_opened": 3,
+              "first_seen": "2026-10-14",
+              "focused_seconds": 865,
+              "incoming_trails": [],
+              "last_mode": null,
+              "last_seen": "2026-10-16",
+              "linked_count": 3,
+              "opens": 5,
+              "title": "acme-corp/widgets",
+              "url": "https://github.com/acme-corp/widgets",
+              "why": "Tracking the export work",
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": "Tracking the export work"
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://github.com/acme-corp/widgets"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://github.com/acme-corp/widgets"
+          ]
+        }
+      },
+      "jira:acme.atlassian.net/PROJ-1": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "jira:acme.atlassian.net/PROJ-1",
+              "artifact_type": "jira.issue",
+              "background_seconds": 0,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-14",
+              "focused_seconds": 300,
+              "incoming_trails": [],
+              "last_mode": null,
+              "last_seen": "2026-10-14",
+              "linked_count": 2,
+              "opens": 1,
+              "title": "PROJ-1 Export SBOM",
+              "url": "https://acme.atlassian.net/browse/PROJ-1",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://acme.atlassian.net/browse/PROJ-1"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://acme.atlassian.net/browse/PROJ-1"
+          ]
+        }
+      },
+      "work:example.com/never-recorded": {
+        "card": {
+          "ok": {
+            "artifact": null,
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": []
+        },
+        "urls": {
+          "ok": []
+        }
+      }
+    },
+    "recent": {
+      "type=None query=None limit=0": {
+        "ok": {
+          "items": [],
+          "truncated": true,
+          "types": [
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue"
+          ]
+        }
+      },
+      "type=None query=None limit=1": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "github.repo:github.com/acme-corp/widgets",
+              "artifact_type": "github.repo",
+              "background_seconds": 5,
+              "focused_seconds": 140,
+              "local_date": "2026-10-16",
+              "opens": 2,
+              "summary": null,
+              "title": "acme-corp/widgets",
+              "url": "https://github.com/acme-corp/widgets",
+              "why": "Tracking the export work"
+            }
+          ],
+          "truncated": true,
+          "types": [
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue"
+          ]
+        }
+      },
+      "type=None query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "github.repo:github.com/acme-corp/widgets",
+              "artifact_type": "github.repo",
+              "background_seconds": 5,
+              "focused_seconds": 140,
+              "local_date": "2026-10-16",
+              "opens": 2,
+              "summary": null,
+              "title": "acme-corp/widgets",
+              "url": "https://github.com/acme-corp/widgets",
+              "why": "Tracking the export work"
+            },
+            {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/1",
+              "artifact_type": "github.pr",
+              "background_seconds": 0,
+              "focused_seconds": 90,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "PROJ-1 Fix SBOM export (v2)",
+              "url": "https://github.com/acme-corp/widgets/pull/1",
+              "why": null
+            },
+            {
+              "artifact_id": "github.pr:github.com/other-org/tools/9",
+              "artifact_type": "github.pr",
+              "background_seconds": 0,
+              "focused_seconds": 30,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "Out of scope",
+              "url": "https://github.com/other-org/tools/pull/9",
+              "why": null
+            },
+            {
+              "artifact_id": "github.repo:github.com/acme-corp/widgets",
+              "artifact_type": "github.repo",
+              "background_seconds": 30,
+              "focused_seconds": 600,
+              "local_date": "2026-10-15",
+              "opens": 2,
+              "summary": null,
+              "title": "acme-corp/widgets",
+              "url": "https://github.com/acme-corp/widgets",
+              "why": "Tracking the export work"
+            },
+            {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/2",
+              "artifact_type": "github.pr",
+              "background_seconds": 20,
+              "focused_seconds": 400,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Paginate exports",
+              "url": "https://github.com/acme-corp/widgets/pull/2",
+              "why": null
+            },
+            {
+              "artifact_id": "github.issue:github.com/acme-corp/widgets/3",
+              "artifact_type": "github.issue",
+              "background_seconds": 10,
+              "focused_seconds": 200,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Pagination is broken",
+              "url": "https://github.com/acme-corp/widgets/issues/3",
+              "why": null
+            },
+            {
+              "artifact_id": "jira:acme.atlassian.net/PROJ-1",
+              "artifact_type": "jira.issue",
+              "background_seconds": 0,
+              "focused_seconds": 300,
+              "local_date": "2026-10-14",
+              "opens": 1,
+              "summary": null,
+              "title": "PROJ-1 Export SBOM",
+              "url": "https://acme.atlassian.net/browse/PROJ-1",
+              "why": null
+            },
+            {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/1",
+              "artifact_type": "github.pr",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-14",
+              "opens": 1,
+              "summary": null,
+              "title": "PROJ-1 Fix SBOM export (v2)",
+              "url": "https://github.com/acme-corp/widgets/pull/1",
+              "why": null
+            },
+            {
+              "artifact_id": "github.repo:github.com/acme-corp/widgets",
+              "artifact_type": "github.repo",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-14",
+              "opens": 1,
+              "summary": null,
+              "title": "acme-corp/widgets",
+              "url": "https://github.com/acme-corp/widgets",
+              "why": "Tracking the export work"
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue"
+          ]
+        }
+      },
+      "type=Some(\"github.pr\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/1",
+              "artifact_type": "github.pr",
+              "background_seconds": 0,
+              "focused_seconds": 90,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "PROJ-1 Fix SBOM export (v2)",
+              "url": "https://github.com/acme-corp/widgets/pull/1",
+              "why": null
+            },
+            {
+              "artifact_id": "github.pr:github.com/other-org/tools/9",
+              "artifact_type": "github.pr",
+              "background_seconds": 0,
+              "focused_seconds": 30,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "Out of scope",
+              "url": "https://github.com/other-org/tools/pull/9",
+              "why": null
+            },
+            {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/2",
+              "artifact_type": "github.pr",
+              "background_seconds": 20,
+              "focused_seconds": 400,
+              "local_date": "2026-10-15",
+              "opens": 1,
+              "summary": null,
+              "title": "Paginate exports",
+              "url": "https://github.com/acme-corp/widgets/pull/2",
+              "why": null
+            },
+            {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/1",
+              "artifact_type": "github.pr",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-14",
+              "opens": 1,
+              "summary": null,
+              "title": "PROJ-1 Fix SBOM export (v2)",
+              "url": "https://github.com/acme-corp/widgets/pull/1",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue"
+          ]
+        }
+      },
+      "type=Some(\"github.pr\") query=Some(\"sbom\") limit=1": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "github.pr:github.com/acme-corp/widgets/1",
+              "artifact_type": "github.pr",
+              "background_seconds": 0,
+              "focused_seconds": 90,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "PROJ-1 Fix SBOM export (v2)",
+              "url": "https://github.com/acme-corp/widgets/pull/1",
+              "why": null
+            }
+          ],
+          "truncated": true,
+          "types": [
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue"
+          ]
+        }
+      },
+      "type=Some(\"github.repo\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "github.repo:github.com/acme-corp/widgets",
+              "artifact_type": "github.repo",
+              "background_seconds": 5,
+              "focused_seconds": 140,
+              "local_date": "2026-10-16",
+              "opens": 2,
+              "summary": null,
+              "title": "acme-corp/widgets",
+              "url": "https://github.com/acme-corp/widgets",
+              "why": "Tracking the export work"
+            },
+            {
+              "artifact_id": "github.repo:github.com/acme-corp/widgets",
+              "artifact_type": "github.repo",
+              "background_seconds": 30,
+              "focused_seconds": 600,
+              "local_date": "2026-10-15",
+              "opens": 2,
+              "summary": null,
+              "title": "acme-corp/widgets",
+              "url": "https://github.com/acme-corp/widgets",
+              "why": "Tracking the export work"
+            },
+            {
+              "artifact_id": "github.repo:github.com/acme-corp/widgets",
+              "artifact_type": "github.repo",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-14",
+              "opens": 1,
+              "summary": null,
+              "title": "acme-corp/widgets",
+              "url": "https://github.com/acme-corp/widgets",
+              "why": "Tracking the export work"
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue"
+          ]
+        }
+      },
+      "type=Some(\"no.such.type\") query=None limit=50": {
+        "ok": {
+          "items": [],
+          "truncated": false,
+          "types": [
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue"
+          ]
+        }
+      },
+      "type=Some(\"work.item\") query=None limit=50": {
+        "ok": {
+          "items": [],
+          "truncated": false,
+          "types": [
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue"
+          ]
+        }
+      }
+    },
+    "worklog": {
+      "2026-10-14..2026-10-16": {
+        "ok": {
+          "count": 6,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 6 artifacts, and focused on 0 left open from an earlier day.\ngithub.repo github.repo:github.com/acme-corp/widgets: acme-corp/widgets — focused 14 min · 1 min in background · opened 5×. Why: Tracking the export work\ngithub.pr github.pr:github.com/acme-corp/widgets/2: Paginate exports — focused 6 min · <1 min in background · opened 1×\njira.issue jira:acme.atlassian.net/PROJ-1: PROJ-1 Export SBOM — focused 5 min · opened 1×\ngithub.pr github.pr:github.com/acme-corp/widgets/1: PROJ-1 Fix SBOM export (v2) — focused 3 min · 1 min in background · opened 2×\ngithub.issue github.issue:github.com/acme-corp/widgets/3: Pagination is broken — focused 3 min · <1 min in background · opened 1×\ngithub.pr github.pr:github.com/other-org/tools/9: Out of scope — focused <1 min · opened 1×"
+        }
+      },
+      "2026-10-15..2026-10-15": {
+        "ok": {
+          "count": 3,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 2 artifacts, and focused on 0 left open from an earlier day.\ngithub.repo github.repo:github.com/acme-corp/widgets: acme-corp/widgets — focused 10 min · <1 min in background · opened 2×. Why: Tracking the export work\ngithub.pr github.pr:github.com/acme-corp/widgets/2: Paginate exports — focused 6 min · <1 min in background · opened 1×\ngithub.issue github.issue:github.com/acme-corp/widgets/3: Pagination is broken — focused 3 min · <1 min in background · opened 1×"
+        }
+      }
+    }
+  },
+  "relearn": {
+    "ok": {
+      "evidence": [
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "jira:acme.atlassian.net/PROJ-1"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://acme.atlassian.net/browse/PROJ-1"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "github.pr:github.com/acme-corp/widgets/1"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://github.com/acme-corp/widgets/pull/1"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "github.pr:github.com/acme-corp/widgets/1"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_campaign"
+            ],
+            "url": "https://github.com/acme-corp/widgets/pull/1/files"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "github.issue:github.com/acme-corp/widgets/3"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://github.com/acme-corp/widgets/issues/3"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "github.pr:github.com/acme-corp/widgets/2"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://github.com/acme-corp/widgets/pull/2"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "github.repo:github.com/acme-corp/widgets"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://github.com/acme-corp/widgets"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "github.pr:github.com/acme-corp/widgets/1"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://github.com/acme-corp/widgets/pull/1"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "github.pr:github.com/other-org/tools/9"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://github.com/other-org/tools/pull/9"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "github.repo:github.com/acme-corp/widgets"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://github.com/acme-corp/widgets"
+          }
+        }
+      ],
+      "revision": "dbce538f215f216db8d657353c2c6baa00e3ab612e5a9ec715a0e2a3d70514f0"
+    }
+  },
+  "tables": {
+    "artifacts": [
+      [
+        "github.issue:github.com/acme-corp/widgets/3",
+        "github.issue",
+        "github.com",
+        "Pagination is broken",
+        "https://github.com/acme-corp/widgets/issues/3",
+        "2026-10-15",
+        "2026-10-15",
+        200,
+        10,
+        1,
+        1,
+        null,
+        null
+      ],
+      [
+        "github.pr:github.com/acme-corp/widgets/1",
+        "github.pr",
+        "github.com",
+        "PROJ-1 Fix SBOM export (v2)",
+        "https://github.com/acme-corp/widgets/pull/1",
+        "2026-10-14",
+        "2026-10-16",
+        215,
+        61,
+        2,
+        2,
+        "review",
+        null
+      ],
+      [
+        "github.pr:github.com/acme-corp/widgets/2",
+        "github.pr",
+        "github.com",
+        "Paginate exports",
+        "https://github.com/acme-corp/widgets/pull/2",
+        "2026-10-15",
+        "2026-10-15",
+        400,
+        20,
+        1,
+        1,
+        null,
+        null
+      ],
+      [
+        "github.pr:github.com/other-org/tools/9",
+        "github.pr",
+        "github.com",
+        "Out of scope",
+        "https://github.com/other-org/tools/pull/9",
+        "2026-10-16",
+        "2026-10-16",
+        30,
+        0,
+        1,
+        1,
+        null,
+        null
+      ],
+      [
+        "github.repo:github.com/acme-corp/widgets",
+        "github.repo",
+        "github.com",
+        "acme-corp/widgets",
+        "https://github.com/acme-corp/widgets",
+        "2026-10-14",
+        "2026-10-16",
+        865,
+        96,
+        5,
+        3,
+        null,
+        "Tracking the export work"
+      ],
+      [
+        "jira:acme.atlassian.net/PROJ-1",
+        "jira.issue",
+        "acme.atlassian.net",
+        "PROJ-1 Export SBOM",
+        "https://acme.atlassian.net/browse/PROJ-1",
+        "2026-10-14",
+        "2026-10-14",
+        300,
+        0,
+        1,
+        1,
+        null,
+        null
+      ]
+    ],
+    "dirty_artifacts": [
+      [
+        "github.issue:github.com/acme-corp/widgets/3"
+      ],
+      [
+        "github.pr:github.com/acme-corp/widgets/1"
+      ],
+      [
+        "github.pr:github.com/acme-corp/widgets/2"
+      ],
+      [
+        "github.pr:github.com/other-org/tools/9"
+      ],
+      [
+        "github.repo:github.com/acme-corp/widgets"
+      ],
+      [
+        "jira:acme.atlassian.net/PROJ-1"
+      ]
+    ],
+    "edges": [
+      [
+        "github.issue:github.com/acme-corp/widgets/3",
+        "github.pr:github.com/acme-corp/widgets/2",
+        "link",
+        1,
+        "2026-10-15"
+      ],
+      [
+        "github.issue:github.com/acme-corp/widgets/3",
+        "github.repo:github.com/acme-corp/widgets",
+        "within",
+        1,
+        "2026-10-15"
+      ],
+      [
+        "github.pr:github.com/acme-corp/widgets/1",
+        "github.repo:github.com/acme-corp/widgets",
+        "within",
+        2,
+        "2026-10-16"
+      ],
+      [
+        "github.pr:github.com/acme-corp/widgets/1",
+        "jira:acme.atlassian.net/PROJ-1",
+        "mentions",
+        1,
+        "2026-10-14"
+      ],
+      [
+        "github.pr:github.com/acme-corp/widgets/1",
+        "jira:acme.atlassian.net/UTF-8",
+        "mentions",
+        1,
+        "2026-10-14"
+      ],
+      [
+        "github.pr:github.com/acme-corp/widgets/2",
+        "github.repo:github.com/acme-corp/widgets",
+        "within",
+        1,
+        "2026-10-15"
+      ],
+      [
+        "jira:acme.atlassian.net/PROJ-1",
+        "github.pr:github.com/acme-corp/widgets/2",
+        "forward_back",
+        1,
+        "2026-10-15"
+      ]
+    ],
+    "url_provenance": [
+      [
+        "00000000-0000-4000-8003-000000000001",
+        "jira:acme.atlassian.net/PROJ-1",
+        "url",
+        "https://acme.atlassian.net/browse/PROJ-1",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000002",
+        "github.pr:github.com/acme-corp/widgets/1",
+        "mode:0",
+        "https://github.com/acme-corp/widgets/pull/1/files",
+        "[\"utm_campaign\"]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000002",
+        "github.pr:github.com/acme-corp/widgets/1",
+        "url",
+        "https://github.com/acme-corp/widgets/pull/1",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000003",
+        "github.issue:github.com/acme-corp/widgets/3",
+        "url",
+        "https://github.com/acme-corp/widgets/issues/3",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000004",
+        "github.pr:github.com/acme-corp/widgets/2",
+        "trail:0",
+        "https://github.com/acme-corp/widgets/issues/3",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000004",
+        "github.pr:github.com/acme-corp/widgets/2",
+        "trail:1",
+        "https://acme.atlassian.net/browse/PROJ-1",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000004",
+        "github.pr:github.com/acme-corp/widgets/2",
+        "url",
+        "https://github.com/acme-corp/widgets/pull/2",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000005",
+        "github.repo:github.com/acme-corp/widgets",
+        "url",
+        "https://github.com/acme-corp/widgets",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000006",
+        "github.pr:github.com/acme-corp/widgets/1",
+        "url",
+        "https://github.com/acme-corp/widgets/pull/1",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000007",
+        "github.pr:github.com/other-org/tools/9",
+        "url",
+        "https://github.com/other-org/tools/pull/9",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000008",
+        "github.repo:github.com/acme-corp/widgets",
+        "url",
+        "https://github.com/acme-corp/widgets",
+        "[]"
+      ]
+    ],
+    "visits": [
+      [
+        "00000000-0000-4000-8003-000000000001",
+        "jira:acme.atlassian.net/PROJ-1",
+        "2026-10-14T09:00:00Z",
+        "2026-10-14",
+        300,
+        0,
+        1,
+        null,
+        "PROJ-1 Export SBOM",
+        "https://acme.atlassian.net/browse/PROJ-1"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000002",
+        "github.pr:github.com/acme-corp/widgets/1",
+        "2026-10-14T10:00:00Z",
+        "2026-10-14",
+        125,
+        61,
+        1,
+        "review",
+        "PROJ-1 Fix SBOM export",
+        "https://github.com/acme-corp/widgets/pull/1"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000003",
+        "github.issue:github.com/acme-corp/widgets/3",
+        "2026-10-15T09:00:00Z",
+        "2026-10-15",
+        200,
+        10,
+        1,
+        null,
+        "Pagination is broken",
+        "https://github.com/acme-corp/widgets/issues/3"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000004",
+        "github.pr:github.com/acme-corp/widgets/2",
+        "2026-10-15T11:00:00Z",
+        "2026-10-15",
+        400,
+        20,
+        1,
+        null,
+        "Paginate exports",
+        "https://github.com/acme-corp/widgets/pull/2"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000005",
+        "github.repo:github.com/acme-corp/widgets",
+        "2026-10-16T08:00:00Z",
+        "2026-10-16",
+        50,
+        5,
+        1,
+        null,
+        "acme-corp/widgets",
+        "https://github.com/acme-corp/widgets"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000006",
+        "github.pr:github.com/acme-corp/widgets/1",
+        "2026-10-16T12:00:00Z",
+        "2026-10-16",
+        90,
+        0,
+        1,
+        null,
+        "PROJ-1 Fix SBOM export (v2)",
+        "https://github.com/acme-corp/widgets/pull/1"
+      ],
+      [
+        "00000000-0000-4000-8003-000000000007",
+        "github.pr:github.com/other-org/tools/9",
+        "2026-10-16T13:00:00Z",
+        "2026-10-16",
+        30,
+        0,
+        1,
+        null,
+        "Out of scope",
+        "https://github.com/other-org/tools/pull/9"
+      ]
+    ]
+  }
+}

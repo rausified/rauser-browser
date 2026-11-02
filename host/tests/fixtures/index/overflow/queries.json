@@ -1,0 +1,51 @@
+{
+  "artifacts": [
+    "work:example.com/GAP",
+    "work:example.com/never-recorded"
+  ],
+  "recent": [
+    {
+      "artifact_type": null,
+      "limit": 50,
+      "title_query": null
+    },
+    {
+      "artifact_type": null,
+      "limit": 1,
+      "title_query": null
+    },
+    {
+      "artifact_type": null,
+      "limit": 0,
+      "title_query": null
+    },
+    {
+      "artifact_type": "work.item",
+      "limit": 50,
+      "title_query": null
+    },
+    {
+      "artifact_type": "no.such.type",
+      "limit": 50,
+      "title_query": null
+    }
+  ],
+  "worklog": [
+    [
+      "2026-10-19",
+      "2026-10-25"
+    ],
+    [
+      "2026-10-20",
+      "2026-10-20"
+    ],
+    [
+      "2026-10-21",
+      "2026-10-21"
+    ],
+    [
+      "2026-10-23",
+      "2026-10-24"
+    ]
+  ]
+}

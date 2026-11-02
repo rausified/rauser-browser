@@ -1,0 +1,932 @@
+{
+  "reads": {
+    "artifacts": {
+      "work:example.com/BACK": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 244,
+              "contained": [],
+              "days_opened": 4,
+              "first_seen": "2026-10-10",
+              "focused_seconds": 500,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-21",
+              "linked_count": 0,
+              "opens": 4,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why",
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": "Current why"
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/BACK"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/BACK"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/BACK"
+          ]
+        }
+      },
+      "work:example.com/EARLY": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/EARLY",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-12",
+              "focused_seconds": 125,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-12",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "Early",
+              "url": "https://example.com/items/EARLY",
+              "why": "Context before any activity",
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": "Context before any activity"
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/EARLY"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/EARLY"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/EARLY"
+          ]
+        }
+      },
+      "work:example.com/EVE": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/EVE",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-19",
+              "focused_seconds": 125,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-19",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "Evening",
+              "url": "https://example.com/items/EVE",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/EVE"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/EVE"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/EVE"
+          ]
+        }
+      },
+      "work:example.com/WHYONLY": {
+        "card": {
+          "ok": {
+            "artifact": null,
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": "Saved before activity was delivered"
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/WHYONLY"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/WHYONLY"
+          ]
+        }
+      },
+      "work:example.com/never-recorded": {
+        "card": {
+          "ok": {
+            "artifact": null,
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": []
+        },
+        "urls": {
+          "ok": []
+        }
+      }
+    },
+    "recent": {
+      "type=None query=None limit=0": {
+        "ok": {
+          "items": [],
+          "truncated": true,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=1": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            }
+          ],
+          "truncated": true,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/EVE",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-19",
+              "opens": 1,
+              "summary": null,
+              "title": "Evening",
+              "url": "https://example.com/items/EVE",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/EARLY",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-12",
+              "opens": 1,
+              "summary": null,
+              "title": "Early",
+              "url": "https://example.com/items/EARLY",
+              "why": "Context before any activity"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-12",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-10",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=Some(\"title\") limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-12",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-10",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"no.such.type\") query=None limit=50": {
+        "ok": {
+          "items": [],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"work.item\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/EVE",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-19",
+              "opens": 1,
+              "summary": null,
+              "title": "Evening",
+              "url": "https://example.com/items/EVE",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/EARLY",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-12",
+              "opens": 1,
+              "summary": null,
+              "title": "Early",
+              "url": "https://example.com/items/EARLY",
+              "why": "Context before any activity"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-12",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            },
+            {
+              "artifact_id": "work:example.com/BACK",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-10",
+              "opens": 1,
+              "summary": null,
+              "title": "Newest title",
+              "url": "https://example.com/items/BACK",
+              "why": "Current why"
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      }
+    },
+    "worklog": {
+      "2026-10-09..2026-10-15": {
+        "ok": {
+          "count": 2,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 2 artifacts, and focused on 0 left open from an earlier day.\nwork.item work:example.com/BACK: Newest title — focused 4 min · 2 min in background · opened 2×. Why: Current why\nwork.item work:example.com/EARLY: Early — focused 2 min · 1 min in background · opened 1×. Why: Context before any activity"
+        }
+      },
+      "2026-10-16..2026-10-22": {
+        "ok": {
+          "count": 2,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 2 artifacts, and focused on 0 left open from an earlier day.\nwork.item work:example.com/BACK: Newest title — focused 4 min · 2 min in background · opened 2×. Why: Current why\nwork.item work:example.com/EVE: Evening — focused 2 min · 1 min in background · opened 1×"
+        }
+      },
+      "2026-10-19..2026-10-19": {
+        "ok": {
+          "count": 1,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 1 artifact, and focused on 0 left open from an earlier day.\nwork.item work:example.com/EVE: Evening — focused 2 min · 1 min in background · opened 1×"
+        }
+      },
+      "2026-10-20..2026-10-20": {
+        "ok": {
+          "count": 1,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 1 artifact, and focused on 0 left open from an earlier day.\nwork.item work:example.com/BACK: Newest title — focused 2 min · 1 min in background · opened 1×. Why: Current why"
+        }
+      }
+    }
+  },
+  "relearn": {
+    "ok": {
+      "evidence": [
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/EVE"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/EVE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/EVE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/EVE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/EARLY"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/EARLY"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/EARLY"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/EARLY"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/EARLY"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/EARLY"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/BACK"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/BACK"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/WHYONLY"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/WHYONLY"
+          }
+        }
+      ],
+      "revision": "068d368b060b45edb7b462618b5af9cc6d0c48b29e4c776c2fce438e2c377cc5"
+    }
+  },
+  "tables": {
+    "artifacts": [
+      [
+        "work:example.com/BACK",
+        "work.item",
+        "example.com",
+        "Newest title",
+        "https://example.com/items/BACK",
+        "2026-10-10",
+        "2026-10-21",
+        500,
+        244,
+        4,
+        4,
+        "view",
+        "Current why"
+      ],
+      [
+        "work:example.com/EARLY",
+        "work.item",
+        "example.com",
+        "Early",
+        "https://example.com/items/EARLY",
+        "2026-10-12",
+        "2026-10-12",
+        125,
+        61,
+        1,
+        1,
+        "view",
+        "Context before any activity"
+      ],
+      [
+        "work:example.com/EVE",
+        "work.item",
+        "example.com",
+        "Evening",
+        "https://example.com/items/EVE",
+        "2026-10-19",
+        "2026-10-19",
+        125,
+        61,
+        1,
+        1,
+        "view",
+        null
+      ]
+    ],
+    "dirty_artifacts": [
+      [
+        "work:example.com/BACK"
+      ],
+      [
+        "work:example.com/EARLY"
+      ],
+      [
+        "work:example.com/EVE"
+      ],
+      [
+        "work:example.com/WHYONLY"
+      ]
+    ],
+    "edges": [],
+    "url_provenance": [
+      [
+        "00000000-0000-4000-8007-000000000001",
+        "work:example.com/BACK",
+        "mode:0",
+        "https://example.com/items/BACK",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000001",
+        "work:example.com/BACK",
+        "url",
+        "https://example.com/items/BACK",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000002",
+        "work:example.com/BACK",
+        "mode:0",
+        "https://example.com/items/BACK",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000002",
+        "work:example.com/BACK",
+        "url",
+        "https://example.com/items/BACK",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000003",
+        "work:example.com/BACK",
+        "mode:0",
+        "https://example.com/items/BACK",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000003",
+        "work:example.com/BACK",
+        "url",
+        "https://example.com/items/BACK",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000004",
+        "work:example.com/BACK",
+        "mode:0",
+        "https://example.com/items/BACK",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000004",
+        "work:example.com/BACK",
+        "url",
+        "https://example.com/items/BACK",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000005",
+        "work:example.com/EVE",
+        "mode:0",
+        "https://example.com/items/EVE",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000005",
+        "work:example.com/EVE",
+        "url",
+        "https://example.com/items/EVE",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000006",
+        "work:example.com/EARLY",
+        "url",
+        "https://example.com/items/EARLY",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000007",
+        "work:example.com/EARLY",
+        "mode:0",
+        "https://example.com/items/EARLY",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000007",
+        "work:example.com/EARLY",
+        "url",
+        "https://example.com/items/EARLY",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000008",
+        "work:example.com/BACK",
+        "url",
+        "https://example.com/items/BACK",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000009",
+        "work:example.com/BACK",
+        "url",
+        "https://example.com/items/BACK",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000010",
+        "work:example.com/WHYONLY",
+        "url",
+        "https://example.com/items/WHYONLY",
+        "[]"
+      ]
+    ],
+    "visits": [
+      [
+        "00000000-0000-4000-8007-000000000001",
+        "work:example.com/BACK",
+        "2026-10-12T10:00:00Z",
+        "2026-10-12",
+        125,
+        61,
+        1,
+        "view",
+        "Old title",
+        "https://example.com/items/BACK"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000002",
+        "work:example.com/BACK",
+        "2026-10-20T10:00:00Z",
+        "2026-10-20",
+        125,
+        61,
+        1,
+        "view",
+        "Newest title",
+        "https://example.com/items/BACK"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000003",
+        "work:example.com/BACK",
+        "2026-10-10T10:00:00Z",
+        "2026-10-10",
+        125,
+        61,
+        1,
+        "view",
+        "Backdated title",
+        "https://example.com/items/BACK"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000004",
+        "work:example.com/BACK",
+        "2026-10-21T10:00:00Z",
+        "2026-10-21",
+        125,
+        61,
+        1,
+        "view",
+        "Untitled",
+        "https://example.com/items/BACK"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000005",
+        "work:example.com/EVE",
+        "2026-10-19T23:30:00-07:00",
+        "2026-10-19",
+        125,
+        61,
+        1,
+        "view",
+        "Evening",
+        "https://example.com/items/EVE"
+      ],
+      [
+        "00000000-0000-4000-8007-000000000007",
+        "work:example.com/EARLY",
+        "2026-10-12T11:00:00Z",
+        "2026-10-12",
+        125,
+        61,
+        1,
+        "view",
+        "Early",
+        "https://example.com/items/EARLY"
+      ]
+    ]
+  }
+}

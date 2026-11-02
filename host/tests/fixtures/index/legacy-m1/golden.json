@@ -1,0 +1,639 @@
+{
+  "reads": {
+    "artifacts": {
+      "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "contained": [],
+              "days_opened": 3,
+              "first_seen": "2026-10-18",
+              "focused_seconds": 0,
+              "incoming_trails": [],
+              "last_mode": null,
+              "last_seen": "2026-10-20",
+              "linked_count": 0,
+              "opens": 3,
+              "title": "The guide",
+              "url": "https://docs.example.org/guide",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": null,
+              "url": "https://docs.example.org/guide"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://docs.example.org/guide"
+          ]
+        }
+      },
+      "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-18",
+              "focused_seconds": 0,
+              "incoming_trails": [],
+              "last_mode": null,
+              "last_seen": "2026-10-18",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "A *starred* title",
+              "url": "https://news.example.org/item?id=7",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": null,
+              "url": "https://news.example.org/item?id=7"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://news.example.org/item?id=7"
+          ]
+        }
+      },
+      "work:example.com/M1": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/M1",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-19",
+              "focused_seconds": 125,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-19",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "Measured",
+              "url": "https://example.com/items/M1",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/M1"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/M1"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/M1"
+          ]
+        }
+      },
+      "work:example.com/never-recorded": {
+        "card": {
+          "ok": {
+            "artifact": null,
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": []
+        },
+        "urls": {
+          "ok": []
+        }
+      }
+    },
+    "recent": {
+      "type=None query=None limit=0": {
+        "ok": {
+          "items": [],
+          "truncated": true,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=1": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "The guide",
+              "url": "https://docs.example.org/guide",
+              "why": null
+            }
+          ],
+          "truncated": true,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "The guide",
+              "url": "https://docs.example.org/guide",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/M1",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-19",
+              "opens": 1,
+              "summary": null,
+              "title": "Measured",
+              "url": "https://example.com/items/M1",
+              "why": null
+            },
+            {
+              "artifact_id": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-19",
+              "opens": 1,
+              "summary": null,
+              "title": "The guide",
+              "url": "https://docs.example.org/guide",
+              "why": null
+            },
+            {
+              "artifact_id": "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-18",
+              "opens": 1,
+              "summary": null,
+              "title": "A *starred* title",
+              "url": "https://news.example.org/item?id=7",
+              "why": null
+            },
+            {
+              "artifact_id": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-18",
+              "opens": 1,
+              "summary": null,
+              "title": "The guide",
+              "url": "https://docs.example.org/guide",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=Some(\"*starred*\") limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-18",
+              "opens": 1,
+              "summary": null,
+              "title": "A *starred* title",
+              "url": "https://news.example.org/item?id=7",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"no.such.type\") query=None limit=50": {
+        "ok": {
+          "items": [],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"web.page\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "The guide",
+              "url": "https://docs.example.org/guide",
+              "why": null
+            },
+            {
+              "artifact_id": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-19",
+              "opens": 1,
+              "summary": null,
+              "title": "The guide",
+              "url": "https://docs.example.org/guide",
+              "why": null
+            },
+            {
+              "artifact_id": "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-18",
+              "opens": 1,
+              "summary": null,
+              "title": "A *starred* title",
+              "url": "https://news.example.org/item?id=7",
+              "why": null
+            },
+            {
+              "artifact_id": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-18",
+              "opens": 1,
+              "summary": null,
+              "title": "The guide",
+              "url": "https://docs.example.org/guide",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"work.item\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/M1",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-19",
+              "opens": 1,
+              "summary": null,
+              "title": "Measured",
+              "url": "https://example.com/items/M1",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      }
+    },
+    "worklog": {
+      "2026-10-18..2026-10-20": {
+        "ok": {
+          "count": 3,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 3 artifacts, and focused on 0 left open from an earlier day.\nwork.item work:example.com/M1: Measured — focused 2 min · 1 min in background · opened 1×\nweb.page web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9: The guide — opened 3×\nweb.page web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c: A *starred* title — opened 1×"
+        }
+      },
+      "2026-10-20..2026-10-20": {
+        "ok": {
+          "count": 1,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 1 artifact, and focused on 0 left open from an earlier day.\nweb.page web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9: The guide — opened 1×"
+        }
+      }
+    }
+  },
+  "relearn": {
+    "ok": {
+      "evidence": [
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/M1"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/M1"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/M1"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/M1"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://docs.example.org/guide"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://docs.example.org/guide"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://news.example.org/item?id=7"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://docs.example.org/guide"
+          }
+        }
+      ],
+      "revision": "5554c119fd14103711eba0a7349bbcf49eb26c4f661b96c0b38f54ea07cf98aa"
+    }
+  },
+  "tables": {
+    "artifacts": [
+      [
+        "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+        "web.page",
+        "docs.example.org",
+        "The guide",
+        "https://docs.example.org/guide",
+        "2026-10-18",
+        "2026-10-20",
+        0,
+        0,
+        3,
+        3,
+        null,
+        null
+      ],
+      [
+        "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c",
+        "web.page",
+        "news.example.org",
+        "A *starred* title",
+        "https://news.example.org/item?id=7",
+        "2026-10-18",
+        "2026-10-18",
+        0,
+        0,
+        1,
+        1,
+        null,
+        null
+      ],
+      [
+        "work:example.com/M1",
+        "work.item",
+        "example.com",
+        "Measured",
+        "https://example.com/items/M1",
+        "2026-10-19",
+        "2026-10-19",
+        125,
+        61,
+        1,
+        1,
+        "view",
+        null
+      ]
+    ],
+    "dirty_artifacts": [
+      [
+        "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9"
+      ],
+      [
+        "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c"
+      ],
+      [
+        "work:example.com/M1"
+      ]
+    ],
+    "edges": [],
+    "url_provenance": [
+      [
+        "00000000-0000-4000-8004-000000000001",
+        "work:example.com/M1",
+        "mode:0",
+        "https://example.com/items/M1",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8004-000000000001",
+        "work:example.com/M1",
+        "url",
+        "https://example.com/items/M1",
+        "[\"utm_source\"]"
+      ],
+      [
+        "04983797e38e527cb329d5f2779cecf4d523e3c442a69ba7050aee8d4aa6d6b7",
+        "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+        "url",
+        "https://docs.example.org/guide",
+        null
+      ],
+      [
+        "75dd893a1442eee79b2aff1277ae28f7c1766c6ad19c75eee4acae41f5dc684a",
+        "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+        "url",
+        "https://docs.example.org/guide",
+        null
+      ],
+      [
+        "8e4e40c4825631cca22deb47e05b2373f09c8109ac2ace90007a36fbb258d933",
+        "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c",
+        "url",
+        "https://news.example.org/item?id=7",
+        null
+      ],
+      [
+        "8f648114bd28fd2d832c89251d83d66b0cff50c5db7981de98a32fa2f24dd897",
+        "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+        "url",
+        "https://docs.example.org/guide",
+        null
+      ]
+    ],
+    "visits": [
+      [
+        "00000000-0000-4000-8004-000000000001",
+        "work:example.com/M1",
+        "2026-10-19T12:00:00Z",
+        "2026-10-19",
+        125,
+        61,
+        1,
+        "view",
+        "Measured",
+        "https://example.com/items/M1"
+      ],
+      [
+        "04983797e38e527cb329d5f2779cecf4d523e3c442a69ba7050aee8d4aa6d6b7",
+        "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+        "2026-10-20T09:00:00Z",
+        "2026-10-20",
+        0,
+        0,
+        1,
+        null,
+        "The guide",
+        "https://docs.example.org/guide"
+      ],
+      [
+        "75dd893a1442eee79b2aff1277ae28f7c1766c6ad19c75eee4acae41f5dc684a",
+        "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+        "2026-10-19T09:00:00Z",
+        "2026-10-19",
+        0,
+        0,
+        1,
+        null,
+        "The guide, revised",
+        "https://docs.example.org/guide"
+      ],
+      [
+        "8e4e40c4825631cca22deb47e05b2373f09c8109ac2ace90007a36fbb258d933",
+        "web:news.example.org/c9fbed9f99258c0afdaa077a2d4e60817fdc8f78d0dffed3ecc61eed0f04213c",
+        "2026-10-18T10:00:00Z",
+        "2026-10-18",
+        0,
+        0,
+        1,
+        null,
+        "A *starred* title",
+        "https://news.example.org/item?id=7"
+      ],
+      [
+        "8f648114bd28fd2d832c89251d83d66b0cff50c5db7981de98a32fa2f24dd897",
+        "web:docs.example.org/7b196f8b455c34592875985bc7407d4304e7171bea39dfe6ad6a1e2864cf5bf9",
+        "2026-10-18T09:00:00Z",
+        "2026-10-18",
+        0,
+        0,
+        1,
+        null,
+        "The guide",
+        "https://docs.example.org/guide"
+      ]
+    ]
+  }
+}
