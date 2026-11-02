@@ -188,6 +188,27 @@ pub(crate) enum Cleared {
     DroppedInPlace,
 }
 
+/// Serializes replacing a legacy `index.db` or creating a missing one.
+const OPEN_LOCK: &str = "index-open.lock";
+
+/// Take `<cache>/index-open.lock`, waiting while another host process is
+/// replacing or creating `index.db`. Released when the file is dropped.
+fn open_lock(cache_dir: &Path) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let lock = cache_dir.join(OPEN_LOCK);
+    let file = options
+        .open(&lock)
+        .map_err(|error| unavailable(&lock, error))?;
+    file.lock().map_err(|error| unavailable(&lock, error))?;
+    Ok(file)
+}
+
 pub(crate) fn db_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join(DB_FILE)
 }
@@ -204,6 +225,9 @@ fn open_with(
     remove: &mut dyn FnMut(&Path) -> io::Result<()>,
 ) -> Result<Option<Connection>> {
     let path = db_path(cache_dir);
+    // Held from deciding to create or replace the file until it is in WAL
+    // with its schema, so another host never sees it half made.
+    let mut replacing: Option<fs::File> = None;
     let state = match mode {
         Mode::IfExists => match detect_legacy(&path).map_err(|error| unavailable(&path, error))? {
             FileState::Missing | FileState::Empty => return Ok(None),
@@ -213,22 +237,38 @@ fn open_with(
         Mode::ReadWrite => {
             fs::create_dir_all(cache_dir).map_err(|error| unavailable(cache_dir, error))?;
             let state = detect_legacy(&path).map_err(|error| unavailable(&path, error))?;
-            let state = match state {
-                FileState::Legacy => confirm_legacy(&path)?,
-                state => state,
-            };
-            match state {
-                FileState::Legacy => {
-                    if clear_legacy(&path, remove)? == Cleared::Removed {
-                        precreate(&path).map_err(|error| unavailable(&path, error))?;
+            if matches!(
+                state,
+                FileState::Legacy | FileState::Missing | FileState::Empty
+            ) {
+                // Replacing or creating the file is serialized across host
+                // processes, and decided again under the lock: two first
+                // opens of a legacy file must not both clear it, or the
+                // second deletes the first's new database and its WAL
+                // (SQLITE_IOERR_DELETE_NOENT), and two must not both switch
+                // a new file to WAL, which SQLite answers with an immediate
+                // SQLITE_BUSY. A current file never waits.
+                replacing = Some(open_lock(cache_dir)?);
+                let state = detect_legacy(&path).map_err(|error| unavailable(&path, error))?;
+                let state = match state {
+                    FileState::Legacy => confirm_legacy(&path)?,
+                    state => state,
+                };
+                match state {
+                    FileState::Legacy => {
+                        if clear_legacy(&path, remove)? == Cleared::Removed {
+                            precreate(&path).map_err(|error| unavailable(&path, error))?;
+                        }
+                        FileState::Ours
                     }
-                    FileState::Ours
+                    FileState::Missing => {
+                        precreate(&path).map_err(|error| unavailable(&path, error))?;
+                        FileState::Empty
+                    }
+                    state => state,
                 }
-                FileState::Missing => {
-                    precreate(&path).map_err(|error| unavailable(&path, error))?;
-                    FileState::Empty
-                }
-                state => state,
+            } else {
+                state
             }
         }
     };
@@ -268,6 +308,7 @@ fn open_with(
         }
     }
     set_journal_mode(&conn)?;
+    drop(replacing);
     Ok(Some(conn))
 }
 
@@ -323,11 +364,29 @@ fn set_journal_mode(conn: &Connection) -> Result<()> {
     let mode = |value: &str| {
         conn.pragma_update_and_check(None, "journal_mode", value, |row| row.get::<_, String>(0))
     };
-    let refused = match mode("WAL") {
-        Ok(current) if current.eq_ignore_ascii_case("wal") => return Ok(()),
-        Ok(current) => current,
-        Err(error) if is_busy(&error) => return Err(DbError::Busy.into()),
-        Err(error) => error.to_string(),
+    // Switching to WAL takes an exclusive lock, and SQLite reports a
+    // conflicting switch as SQLITE_BUSY at once, without the busy handler.
+    // Another host's switch makes this one unnecessary, so a busy answer is
+    // retried within the busy timeout until the file reads as WAL.
+    let started = std::time::Instant::now();
+    let refused = loop {
+        match mode("WAL") {
+            Ok(current) if current.eq_ignore_ascii_case("wal") => return Ok(()),
+            Ok(current) => break current,
+            Err(error) if is_busy(&error) => {
+                let current = conn
+                    .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+                    .unwrap_or_default();
+                if current.eq_ignore_ascii_case("wal") {
+                    return Ok(());
+                }
+                if started.elapsed() >= BUSY_TIMEOUT {
+                    return Err(DbError::Busy.into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => break error.to_string(),
+        }
     };
     tracing::warn!(
         journal_mode = %refused,

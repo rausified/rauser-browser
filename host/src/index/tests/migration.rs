@@ -345,6 +345,36 @@ fn two_first_opens_converge() {
     assert_eq!(canonical(&v8.index()), reindexed(&v8));
 }
 
+/// Many hosts opening one legacy cache at once, repeatedly: none of them
+/// sees a deleted WAL (SQLITE_IOERR_DELETE_NOENT) or an immediate busy
+/// answer to the WAL switch, and they converge on one import.
+#[test]
+fn many_concurrent_first_opens_never_fail() {
+    for _ in 0..20 {
+        let v8 = V8::load();
+        let barrier = Barrier::new(4);
+        let results = std::thread::scope(|scope| {
+            (0..4)
+                .map(|_| {
+                    let index = v8.index();
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        index.artifact(V8_DIRTY)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|host| host.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        for result in results {
+            assert!(result.unwrap().is_some());
+        }
+        assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
+    }
+}
+
 /// A v8 cache derived under another adapter document: a directly visited
 /// artifact whose type is a container type under this host's document (so
 /// its file is now named for its ID) is dirty although nothing rolled up
