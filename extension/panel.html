@@ -40,8 +40,10 @@
 
       <section id="page-area" aria-labelledby="page-heading">
         <h2 id="page-heading" class="visually-hidden">Current page</h2>
-        <p id="page-title" class="page-title">No page yet</p>
-        <p id="page-url" class="page-url"></p>
+        <!-- The page's title and URL stay for assistive technology only; the
+             panel shows just the artifact status (2026-11-02). -->
+        <p id="page-title" class="page-title visually-hidden">No page yet</p>
+        <p id="page-url" class="page-url visually-hidden"></p>
         <p id="page-unusable" class="warning" hidden>{{APP_NAME}} can't use this tab. Switch to an http(s) page to see its note.</p>
         <p id="artifact-status" class="artifact-status"></p>
         <div id="capture-explanation" hidden>

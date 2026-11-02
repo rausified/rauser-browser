@@ -3,9 +3,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ARTICLE_URL, CAPTURING, artifact, buttonIn, descendants, install, noteLoaded,
+  ARTICLE_URL, CAPTURING, PANEL_HTML, artifact, buttonIn, descendants, install, noteLoaded,
   recognized, settle, until,
 } from "./harness.mjs";
+
+// --- The page area (2026-11-02) --------------------------------------------
+
+test("the page area shows only the artifact status; title and URL are screen-reader only", () => {
+  for (const id of ["page-title", "page-url"]) {
+    const tag = PANEL_HTML.match(new RegExp(`<p id="${id}"[^>]*>`))?.[0];
+    assert.ok(tag, `${id} stays in the panel`);
+    assert.match(tag, /class="[^"]*\bvisually-hidden\b/, `${id} is visually hidden`);
+  }
+  const status = PANEL_HTML.match(/<p id="artifact-status"[^>]*>/)?.[0];
+  assert.ok(status && !/visually-hidden|hidden/.test(status), "the artifact status stays visible");
+});
 
 // --- The page's existing summary (Task 51) ---------------------------------
 

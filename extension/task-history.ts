@@ -7,7 +7,7 @@
 // HTML or Markdown.
 import type { RunCursor, RunKind, RunView } from "../protocol/ts/generated.js";
 import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
-import { isTerminal } from "./run-card.js";
+import { isTerminal, newerRun } from "./run-card.js";
 
 /** Which tasks a filter keeps. "running" covers both queued and running. */
 export type StatusFilter = "all" | "running" | "done" | "failed" | "canceled";
@@ -131,6 +131,41 @@ export function mergeRuns(known: readonly RunView[], fresh: readonly RunView[]):
     if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
     return a.run_id < b.run_id ? 1 : -1;
   });
+}
+
+/** The summary runs whose file a newer run of the same page has since
+ * replaced: of the finished summary runs that wrote one file (a run keeps
+ * `summary_path` once it wrote it, a failed save that wrote it before the
+ * daily log refused its event included), every one but the latest to
+ * finish. The service saves when a run finishes and never lets an older
+ * answer replace a newer one (the finisher's ordering check), so the last
+ * writer to finish holds the file, even when two runs overlapped (a page
+ * whose record key changed mid-run) and the older one finished last. */
+export function supersededSummaries(runs: readonly RunView[]): Set<string> {
+  const wrote = (run: RunView): run is RunView & { summary_path: string } =>
+    runKind(run) === "summary" && isTerminal(run) && run.summary_path !== null;
+  const newest = new Map<string, RunView>();
+  for (const run of runs) {
+    if (!wrote(run)) continue;
+    const known = newest.get(run.summary_path);
+    if (!known || finishedLater(run, known)) newest.set(run.summary_path, run);
+  }
+  const superseded = new Set<string>();
+  for (const run of runs) {
+    if (!wrote(run)) continue;
+    const latest = newest.get(run.summary_path);
+    if (latest && latest.run_id !== run.run_id) superseded.add(run.run_id);
+  }
+  return superseded;
+}
+
+/** Whether `a` finished after `b`; a tie, or a missing or unparsable
+ * finish, falls back to which was created later. */
+function finishedLater(a: RunView, b: RunView): boolean {
+  const at = a.finished_at === null ? NaN : Date.parse(a.finished_at);
+  const bt = b.finished_at === null ? NaN : Date.parse(b.finished_at);
+  if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at > bt;
+  return newerRun(a, b);
 }
 
 /** Whether `run` is still queued or running. */

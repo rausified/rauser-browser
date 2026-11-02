@@ -2525,7 +2525,9 @@ async function run() {
         await onTasksPage((page) => cdp.send("Page.reload", {}, page.sessionId));
         await selectTaskRow(runIds.codex);
         const summary = await taskDetailIn(runIds.codex, ["Summarized"], 20_000);
-        requireCondition(/Importance: high/.test(summary.report) && summary.buttons.includes("Open summary"),
+        // The Claude run saved the same page's file after it, so the
+        // Codex run is superseded: its button opens the current file.
+        requireCondition(/Importance: high/.test(summary.report) && summary.buttons.includes("Open current summary"),
           `The Tasks page's Codex summary: ${JSON.stringify(summary)}`);
         for (const id of Object.values(taskRunIds)) {
           await selectTaskRow(id);

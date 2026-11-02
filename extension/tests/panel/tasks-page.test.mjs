@@ -947,13 +947,18 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   assert.deepEqual([...new Set(kinds)].sort(), ["summary", "task"]);
   assert.deepEqual(page.rows().map((row) => row.dataset.runId), [1, 2, 3, 4].map(runId));
   assert.match(page.rows()[0].textContent, /Summary · User story mapping\.docx/);
+  assert.doesNotMatch(page.rows()[0].textContent, /superseded/);
+  // The older runs wrote the same file, which the newest run replaced.
+  assert.match(page.rows()[1].textContent, /Summary · User story mapping\.docx · superseded/);
+  assert.match(page.rows()[3].textContent, /· superseded/);
   assert.match(page.rows()[2].textContent, /Task 3/);
 
   // The older summary, whose panel card a newer run replaced, opens here.
   page.rows()[1].click();
   await until(() => page.detailId() === runId(2), "the older summary's detail");
   const detail = page.el("tasks-detail");
-  await until(() => buttonIn(detail, "Open summary"), "the Open summary button");
+  await until(() => buttonIn(detail, "Open current summary"), "the Open current summary button");
+  assert.match(detail.textContent, /Superseded by a newer summary of this page\./);
   assert.match(detail.textContent, /Summary of User story mapping\.docx/);
   assert.match(detail.textContent, /Answer/);
   assert.match(detail.textContent, /Importance: medium — Adds detailed requirements\./);
@@ -961,7 +966,7 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   assert.equal(buttonIn(detail, "Copy report"), null);
   assert.ok(buttonIn(detail, "Open page"));
   assert.ok(buttonIn(detail, "Dismiss"));
-  buttonIn(detail, "Open summary").click();
+  buttonIn(detail, "Open current summary").click();
   await until(() => page.sent("open_summary").length === 1, "the open_summary request");
   assert.deepEqual(
     [page.sent("open_summary")[0].url, page.sent("open_summary")[0].summary_path],
@@ -972,6 +977,13 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   page.el("tasks-search").value = "story";
   page.el("tasks-search").dispatch("input", {});
   await until(() => page.rows().length === 3, "the three summaries");
+
+  // The newest run is the file's own: no note, plain Open summary.
+  page.el("tasks-search").value = "";
+  page.el("tasks-search").dispatch("input", {});
+  page.rows()[0].click();
+  await until(() => page.detailId() === runId(1) && buttonIn(page.el("tasks-detail"), "Open summary"), "the newest summary's detail");
+  assert.doesNotMatch(page.el("tasks-detail").textContent, /Superseded/);
 });
 
 test("a selected summary whose save was retried elsewhere shows its new state on refresh", async () => {
