@@ -14,7 +14,12 @@ export function buildId(commit, status) {
 }
 
 function gitOutput(dir, args, env) {
-  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", env });
+  // No optional index lock: a plain `git status` takes index.lock to refresh
+  // the index, and a killed build would leave that lock in the checkout.
+  const result = spawnSync("git", ["-C", dir, ...args], {
+    encoding: "utf8",
+    env: { ...env, GIT_OPTIONAL_LOCKS: "0" },
+  });
   return result.status === 0 ? result.stdout : null;
 }
 

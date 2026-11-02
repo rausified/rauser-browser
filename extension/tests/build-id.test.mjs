@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -51,6 +51,19 @@ test("gitBuildId_reads_the_checkout_commit_and_tracked_changes", async (t) => {
   assert.equal(gitBuildId(dir), commit);
   await writeFile(join(dir, "tracked.txt"), "two\n");
   assert.equal(gitBuildId(dir), `${commit}-dirty`);
+});
+
+test("gitBuildId_never_rewrites_the_index", async (t) => {
+  // A plain `git status` refreshes stale stat data by taking index.lock and
+  // rewriting the index; a build killed mid-way leaves that lock behind.
+  const dir = await scratchRepo(t);
+  const index = join(dir, ".git", "index");
+  const before = await readFile(index);
+  const future = new Date(Date.now() + 5000);
+  await utimes(join(dir, "tracked.txt"), future, future);
+  const commit = git(dir, "rev-parse", "--short=12", "HEAD");
+  assert.equal(gitBuildId(dir), commit);
+  assert.deepEqual(await readFile(index), before, "gitBuildId rewrote the index");
 });
 
 test("gitBuildId_outside_a_checkout_is_unknown", async (t) => {
