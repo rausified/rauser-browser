@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activate, audit, browserFixture, focused, task } from "./fixture.mjs";
+import { activate, audit, browserFixture, enterPanelTab, focused, task } from "./fixture.mjs";
 
 test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop", async (t) => {
   const page = await browserFixture(t, "panel");
@@ -8,7 +8,7 @@ test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop
   const tabs = page.getByRole("tab");
   assert.equal(await page.getByRole("tablist").count(), 1);
   assert.equal(await tabs.count(), 2);
-  await activate(page, "#tab-page");
+  await enterPanelTab(page, "tab-page");
   for (const [key, id, panel] of [["ArrowRight", "tab-recent", "recent-view"], ["Home", "tab-page", "page-view"], ["End", "tab-recent", "recent-view"], ["ArrowLeft", "tab-page", "page-view"]]) {
     await page.keyboard.press(key);
     await focused(page, `#${id}`);
@@ -84,6 +84,46 @@ test("task Run, Tasks and Summarize activate without a mouse and expose failure 
   await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
   await focused(page, "#summarize");
   await audit(t, page, "panel/agent-start-error");
+});
+
+test("task slash focus and history arrows preserve drafts and never submit implicitly", async (t) => {
+  const full = "Review the complete instruction " + "x".repeat(350);
+  const page = await browserFixture(t, "panel", "configured", { runs: [
+    { ...task(1), instruction: full }, { ...task(2), instruction: "Earlier request" },
+  ] });
+  if (!page) return;
+  await page.locator("#task-run:enabled").waitFor();
+  await enterPanelTab(page, "tab-recent");
+  await page.keyboard.press("/");
+  await focused(page, "#task-input");
+  assert.equal(await page.locator("#task-input").inputValue(), "");
+  await page.keyboard.type("My unsent draft");
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowUp");
+  await page.waitForFunction((text) => document.querySelector("#task-input").value === text, full);
+  // The recalled value keeps its caret at the start for repeated Up presses.
+  await page.keyboard.press("ArrowUp");
+  await page.waitForFunction(() => document.querySelector("#task-input").value === "Earlier request");
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowDown");
+  await page.waitForFunction((text) => document.querySelector("#task-input").value === text, full);
+  await page.keyboard.press("ArrowDown");
+  await page.waitForFunction(() => document.querySelector("#task-input").value === "My unsent draft");
+  await page.keyboard.type("/");
+  assert.equal(await page.locator("#task-input").inputValue(), "My unsent draft/");
+  await enterPanelTab(page, "tab-page");
+  await page.evaluate(() => chrome.runtime.onMessage.fire(
+    { kind: "focus_task", tab_id: 1, at: Date.now() }, { id: chrome.runtime.id },
+  ));
+  await focused(page, "#task-input");
+  assert.equal(await page.locator("#task-input").inputValue(), "My unsent draft/");
+  await activate(page, "#note-body", null);
+  await page.keyboard.type("A note/");
+  assert.equal(await page.locator("#note-body").inputValue(), "A note/");
+  assert.equal(await page.evaluate(() => fixture.requests.filter((request) => request.type === "start_task").length), 0);
+  await audit(t, page, "panel/task-keyboard-recall");
 });
 
 test("settings primary actions and adapter editor work from the keyboard", async (t) => {

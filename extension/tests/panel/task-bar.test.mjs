@@ -55,11 +55,15 @@ async function taskPanel(options = {}) {
   });
   await until(() => page.el("note-editor").hidden === false, "the page to show");
   await until(() => page.el("task-run").disabled === false, "the task bar to enable");
+  const input = page.el("task-input");
+  input.selectionStart = input.selectionEnd = input.value.length;
+  input.setSelectionRange = (start, end) => { input.selectionStart = start; input.selectionEnd = end; };
   return page;
 }
 
 function type(page, text) {
   page.el("task-input").value = text;
+  page.el("task-input").selectionStart = page.el("task-input").selectionEnd = text.length;
   page.el("task-input").dispatch("input");
 }
 
@@ -268,6 +272,165 @@ test("finished task history keeps the run record after an empty summary restore"
   await settle(20);
   assert.equal(tasksButton(page), "Tasks ↗", "no task is running");
   assert.ok(local.has(RUNS_MAY_EXIST_KEY), "the run record survives the empty summary restore");
+});
+
+function arrow(page, key, init = {}) {
+  let prevented = false;
+  page.el("task-input").dispatch("keydown", { key, preventDefault() { prevented = true; }, ...init });
+  return prevented;
+}
+
+test("task focus survives startup, deduplicates notices and preserves typed drafts", async () => {
+  const notice = { kind: "focus_task", tab_id: 1, at: Date.now() };
+  const session = new Map([[PANEL_NOTICE_KEY, notice]]);
+  const page = await taskPanel({ session });
+  await until(() => page.el("task-input").focused, "startup task focus");
+  await until(() => !session.has(PANEL_NOTICE_KEY), "focus notice consumed");
+  assert.equal(page.el("task-input").value, "");
+  assert.equal(page.sent("start_task").length, 0);
+  type(page, "Keep my draft");
+  page.el("task-input").focused = false;
+  page.notify(notice);
+  assert.equal(page.el("task-input").focused, false, "duplicate does not steal focus");
+  page.notify({ ...notice, at: Date.now() + 1_000_000 });
+  page.notify({ ...notice, at: Date.now() - 3 * 60_000 });
+  page.notify({ ...notice, tab_id: 2, at: Date.now() });
+  assert.equal(page.el("task-input").focused, false, "future, stale and wrong-tab notices ignored");
+  page.notify({ ...notice, at: Date.now(), instruction: "Page-originated text is ignored" });
+  assert.equal(page.el("task-input").value, "Keep my draft");
+  assert.equal(page.el("task-input").focused, true);
+  assert.equal(page.sent("start_task").length, 0);
+});
+
+test("task focus waits while a start makes the field read-only", async () => {
+  const start = held();
+  const session = new Map();
+  const page = await taskPanel({ session, intercept: (request) => request.type === "start_task" ? start.promise : startsTask()(request) });
+  type(page, "Run explicitly");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1, "explicit start");
+  const notice = { kind: "focus_task", tab_id: 1, at: Date.now() };
+  session.set(PANEL_NOTICE_KEY, notice);
+  page.el("task-input").focused = false;
+  page.notify(notice);
+  assert.equal(page.el("task-input").focused, false);
+  assert.ok(session.has(PANEL_NOTICE_KEY));
+  start.release({ type: "run_started", run: TASK_VIEW, existing: false });
+  await until(() => !session.has(PANEL_NOTICE_KEY), "focus consumed after start");
+  assert.equal(page.el("task-input").focused, true);
+  assert.equal(page.sent("start_task").length, 1);
+});
+
+test("slash focuses without submitting and leaves editable/composed/modified keys alone", async () => {
+  const page = await taskPanel();
+  type(page, "Keep draft");
+  const input = page.el("task-input");
+  const events = [
+    { target: input }, { target: page.el("note-body") }, { target: { tagName: "SELECT" } },
+    { target: { tagName: "SPAN", isContentEditable: true } },
+    { target: { tagName: "SPAN", closest: () => ({}) } },
+    { ctrlKey: true }, { altKey: true }, { metaKey: true }, { shiftKey: true },
+    { isComposing: true }, { keyCode: 229 }, { defaultPrevented: true }, { key: "x" },
+  ];
+  for (const init of events) {
+    input.focused = false;
+    let prevented = false;
+    page.documentEvent("keydown", { key: "/", target: page.el("tab-recent"), preventDefault() { prevented = true; }, ...init });
+    assert.equal(prevented, false);
+    assert.equal(input.focused, false);
+  }
+  let prevented = false;
+  page.documentEvent("keydown", { key: "/", target: page.el("tab-recent"), preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(input.focused, true);
+  assert.equal(input.value, "Keep draft");
+  assert.equal(page.sent("start_task").length, 0);
+});
+
+test("arrows recall full user instructions and restore edited history and the current draft", async () => {
+  const newest = { ...TASK_VIEW, state: "succeeded", instruction: "Preview only…", created_at: RECENT };
+  const older = { ...newest, run_id: "00000000-0000-4000-8000-000000000051", created_at: "2026-10-01T00:00:00Z" };
+  const full = "Full user instruction " + "x".repeat(350);
+  const page = await taskPanel({ intercept: (request) => {
+    if (request.type === "list_runs" && request.kind === "task") return { type: "runs_listed", runs: [newest, older], more: false };
+    if (request.type === "get_run") return { type: "run_fetched", run: { ...(request.run_id === newest.run_id ? newest : older), instruction: request.run_id === newest.run_id ? full : "Older instruction" }, stream_text: "", next_offset: 0, more: false };
+    return startsTask()(request);
+  } });
+  type(page, "Unsent draft");
+  assert.equal(arrow(page, "ArrowUp"), false, "caret inside text keeps native movement");
+  page.el("task-input").setSelectionRange(0, 0);
+  assert.equal(arrow(page, "ArrowUp"), true);
+  await until(() => page.el("task-input").value === full, "full instruction");
+  type(page, "Edited newest");
+  page.el("task-input").setSelectionRange(0, 0);
+  arrow(page, "ArrowUp");
+  await until(() => page.el("task-input").value === "Older instruction", "older instruction");
+  page.el("task-input").setSelectionRange(17, 17);
+  arrow(page, "ArrowDown");
+  await until(() => page.el("task-input").value === "Edited newest", "edited recalled instruction");
+  arrow(page, "ArrowDown");
+  await until(() => page.el("task-input").value === "Unsent draft", "original draft");
+  assert.equal(page.sent("start_task").length, 0);
+  for (const init of [{ shiftKey: true }, { isComposing: true }, { ctrlKey: true }, { keyCode: 229 }]) {
+    page.el("task-input").setSelectionRange(0, 0);
+    assert.equal(arrow(page, "ArrowUp", init), false);
+  }
+  page.el("task-input").setSelectionRange(0, 3);
+  assert.equal(arrow(page, "ArrowUp"), false, "selected text keeps native movement");
+});
+
+test("recall failure preserves the draft and a successful retry clears its error", async () => {
+  let fail = true;
+  const page = await taskPanel({ intercept: (request) => {
+    if (request.type === "list_runs" && request.kind === "task") return { type: "runs_listed", runs: [{ ...TASK_VIEW, state: "succeeded" }], more: false };
+    if (request.type === "get_run") {
+      if (fail) return { type: "error", code: "internal", message: "Temporary history failure" };
+      return { type: "run_fetched", run: { ...TASK_VIEW, state: "succeeded", instruction: "Recovered instruction" }, stream_text: "", next_offset: 0, more: false };
+    }
+    return startsTask()(request);
+  } });
+  type(page, "My draft");
+  page.el("task-input").setSelectionRange(0, 0);
+  arrow(page, "ArrowUp");
+  await until(() => /Could not recall earlier instructions/.test(page.el("task-run-area").textContent), "history failure");
+  assert.equal(page.el("task-input").value, "My draft");
+  fail = false;
+  arrow(page, "ArrowUp");
+  await until(() => page.el("task-input").value === "Recovered instruction", "retry succeeds");
+  assert.ok(!/Could not recall/.test(page.el("task-run-area").textContent));
+});
+
+test("pending recalled instructions cannot overwrite typing, Reuse, submission or teardown", async () => {
+  for (const action of ["typing", "reuse", "start", "close"]) {
+    const get = held();
+    const session = new Map();
+    const saved = { ...TASK_VIEW, state: "succeeded", created_at: RECENT };
+    const page = await taskPanel({ session, intercept: (request) => {
+      if (request.type === "list_runs" && request.kind === "task") return { type: "runs_listed", runs: [saved], more: false };
+      if (request.type === "get_run") return get.promise;
+      return startsTask()(request);
+    } });
+    arrow(page, "ArrowUp");
+    await until(() => page.sent("get_run").length === 1, "held recall");
+    if (action === "typing") type(page, "New typing");
+    if (action === "reuse") {
+      session.set(REUSE_KEY, { instruction: "New Reuse", window_id: 1, at: Date.now() });
+      page.reuseChanged();
+      await until(() => page.el("task-input").value === "New Reuse", "Reuse arrives");
+    }
+    if (action === "start") {
+      type(page, "Explicit request");
+      enter(page);
+      await until(() => page.sent("start_task").length === 1, "explicit task");
+      await until(() => page.el("task-input").value === "", "clear after start");
+    }
+    const before = page.el("task-input").value;
+    if (action === "close") page.close();
+    get.release({ type: "run_fetched", run: { ...saved, instruction: "Late old instruction" }, stream_text: "", next_offset: 0, more: false });
+    await settle(30);
+    assert.equal(page.el("task-input").value, before, action);
+    teardown.splice(0).forEach((listener) => listener());
+  }
 });
 
 test("Enter sends start_task, Shift+Enter does not, IME composition does not", async () => {

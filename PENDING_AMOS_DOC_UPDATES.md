@@ -327,3 +327,14 @@
   viewer-only reading; a page cannot forge the stored provenance. Host and
   extension deploy together, and service rollback requires no queued/running
   runs because older services reject the new true status flag.
+
+- 2026-11-02 — Brauser (`brwr-2b5`): added the task-bar Chrome shortcut
+  (Ctrl/Command+Shift+8), **Ask Brauser…** context menu and panel-local `/` focus.
+  They preserve drafts and only focus the field; Enter/Run remains the start
+  gesture. Short-lived tab-specific notices retain focus through panel startup.
+
+- 2026-11-02 — Brauser (`brwr-18u`): ArrowUp/ArrowDown browse full retained task
+  instructions and restore the unsent draft and recalled edits. History is read
+  lazily from the service with no second persistent instruction store; late
+  replies cannot replace typing, Reuse or a submitted task. Recall targets the
+  current page; Tasks-page Reuse also reopens the original page.

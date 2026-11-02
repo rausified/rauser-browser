@@ -16,6 +16,13 @@
     "open_in_tab": true
   },
   "commands": {
+    "task": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+8",
+        "mac": "Command+Shift+8"
+      },
+      "description": "Focus the {{APP_NAME}} task bar"
+    },
     "summarize": {
       "suggested_key": {
         "default": "Ctrl+Shift+9",
