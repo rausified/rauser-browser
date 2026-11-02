@@ -33,7 +33,8 @@ Usage:
     python3 scripts/render_backlog.py --check    # exit 1 when it is stale
     python3 scripts/render_backlog.py --resolve  # finish a merge/rebase conflict
     python3 scripts/render_backlog.py --install-merge-driver
-    python3 scripts/render_backlog.py --merge-jsonl BASE OURS THEIRS  # git driver
+    python3 scripts/render_backlog.py --merge-jsonl BASE OURS THEIRS    # git driver
+    python3 scripts/render_backlog.py --merge-backlog BASE OURS THEIRS  # git driver
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import pathlib
 import re
 import shlex
@@ -53,6 +55,7 @@ REQUIRED_SECTIONS = ("new", "in-progress", "shipped")
 QUEUE_PATH = ".beads/issues.jsonl"
 BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md"
 MERGE_DRIVER = "beads-jsonl"
+BACKLOG_DRIVER = "bosun-backlog"
 LEAD_LIMIT = 280
 
 BEGIN_PATTERN = re.compile(
@@ -350,9 +353,134 @@ def stale_sections(backlog: str, issues: dict[str, dict[str, object]]) -> list[s
 # Three-way merge of the JSONL queue, keyed by bead id
 
 
-def _records(text: str, label: str) -> tuple[list[str], dict[str, tuple[str, object]]]:
-    order: list[str] = []
-    records: dict[str, tuple[str, object]] = {}
+_MISSING = object()
+_GO_ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026", "\u2028": "\\u2028", "\u2029": "\\u2029"}
+_GO_ESCAPE_PATTERN = re.compile("[<>&\u2028\u2029]")
+
+
+def dump_record(record: dict[str, object]) -> str:
+    """Serialize a bead the way `bd export` (Go's encoding/json) writes it."""
+    text = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+    return _GO_ESCAPE_PATTERN.sub(lambda match: _GO_ESCAPES[match.group(0)], text)
+
+
+def export_order(record: dict[str, object]) -> object:
+    """`bd export`'s line order: priority, then newest `created_at`, then id."""
+    priority = record.get("priority")
+    created = record.get("created_at")
+    return (
+        priority if isinstance(priority, int) and not isinstance(priority, bool) else 1 << 30,
+        _Descending(created if isinstance(created, str) else ""),
+        str(record.get("id")),
+    )
+
+
+class _Descending:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __lt__(self, other: "_Descending") -> bool:
+        return self.value > other.value
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Descending) and self.value == other.value
+
+
+def _timestamp(record: dict[str, object] | None) -> str | None:
+    """A normalized `updated_at` that sorts in time order, or None."""
+    value = record.get("updated_at") if record else None
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})", value
+    )
+    if not match:
+        return None
+    import datetime  # local: only the merge path needs it
+
+    stamp = datetime.datetime.fromisoformat(
+        f"{match.group(1)}T{match.group(2)}.{(match.group(3) or '.')[1:].ljust(6, '0')[:6]}"
+        f"{'+00:00' if match.group(4) == 'Z' else match.group(4)}"
+    )
+    return stamp.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
+def _merge_values(base: object, ours: object, theirs: object, newer: str | None) -> tuple[object, bool]:
+    """Merge one field three ways. Returns (value, irreconcilable)."""
+    if ours == theirs:
+        return ours, False
+    if ours == base:
+        return theirs, False
+    if theirs == base:
+        return ours, False
+    if isinstance(ours, dict) and isinstance(theirs, dict) and (base is _MISSING or isinstance(base, dict)):
+        return _merge_objects(base if isinstance(base, dict) else {}, ours, theirs, newer)
+    if newer == "ours":
+        return ours, False
+    if newer == "theirs":
+        return theirs, False
+    return ours, True
+
+
+def _merge_objects(
+    base: dict[str, object], ours: dict[str, object], theirs: dict[str, object], newer: str | None
+) -> tuple[dict[str, object], bool]:
+    # Keep the struct's key order: the newer side's keys, with the other side's
+    # extra keys slotted in after the key that precedes them there.
+    first, second = (theirs, ours) if newer == "theirs" else (ours, theirs)
+    keys = list(first)
+    for index, key in enumerate(second):
+        if key not in keys:
+            previous = next((k for k in reversed(list(second)[:index]) if k in keys), None)
+            keys.insert(keys.index(previous) + 1 if previous is not None else 0, key)
+    merged: dict[str, object] = {}
+    irreconcilable = False
+    for key in keys:
+        value, bad = _merge_values(
+            base.get(key, _MISSING), ours.get(key, _MISSING), theirs.get(key, _MISSING), newer
+        )
+        irreconcilable = irreconcilable or bad
+        if value is not _MISSING:
+            merged[key] = value
+    return merged, irreconcilable
+
+
+def merge_record(
+    base: dict[str, object] | None, ours: dict[str, object], theirs: dict[str, object]
+) -> tuple[dict[str, object] | None, str]:
+    """Merge one bead edited on both sides, field by field.
+
+    A field changed on one side takes that side; `metadata` merges key by key
+    the same way. A field both sides changed differently takes the side with
+    the newer `updated_at`, and the result carries the newer `updated_at`.
+    Returns (record, note); record is None when both sides changed the same
+    field and their `updated_at` is equal or unreadable, which nothing can
+    order.
+    """
+    ours_time, theirs_time = _timestamp(ours), _timestamp(theirs)
+    if ours_time is None or theirs_time is None or ours_time == theirs_time:
+        newer = None
+    else:
+        newer = "theirs" if theirs_time > ours_time else "ours"
+    # Both sides carry the newer updated_at, so the field merge keeps it (in
+    # its struct position) instead of judging it.
+    stamp_source = theirs if newer == "theirs" else ours
+    ours, theirs = dict(ours), dict(theirs)
+    for side in (ours, theirs):
+        if "updated_at" in stamp_source:
+            side["updated_at"] = stamp_source["updated_at"]
+        else:
+            side.pop("updated_at", None)
+    merged, irreconcilable = _merge_objects(base or {}, ours, theirs, newer)
+    if irreconcilable:
+        return None, "both sides changed the same field, and updated_at cannot say which is newer"
+    if newer is None:
+        return merged, "both sides changed different fields; combined them"
+    return merged, f"combined both sides' fields; where both changed one, took {newer} (newer updated_at)"
+
+
+def _records(text: str, label: str) -> dict[str, tuple[str, dict[str, object]]]:
+    records: dict[str, tuple[str, dict[str, object]]] = {}
     for number, raw in enumerate(text.replace("\r\n", "\n").split("\n"), start=1):
         line = raw.strip()
         if not line:
@@ -364,28 +492,45 @@ def _records(text: str, label: str) -> tuple[list[str], dict[str, tuple[str, obj
         issue_id = record.get("id") if isinstance(record, dict) else None
         if not isinstance(issue_id, str) or not issue_id or issue_id in records:
             raise BacklogError(f"{label}:{number}: missing or duplicate id")
-        order.append(issue_id)
         records[issue_id] = (line, record)
-    return order, records
+    return records
 
 
-def merge_jsonl(base: str, ours: str, theirs: str) -> tuple[str, list[str]]:
-    """Merge three versions of the queue record by record.
+def merge_jsonl(base: str, ours: str, theirs: str) -> tuple[str, list[str], list[str]]:
+    """Merge three versions of the queue bead by bead.
 
-    A bead changed on one side only takes that side; the same change on both
-    is taken once; different changes to one bead (or a delete against a
-    change) are a conflict, written with ours/theirs markers on that bead's
-    lines only. Records compare as JSON, so key order never matters. Output
-    follows ours' line order, with beads only theirs has appended in theirs'
-    order; each kept line is copied byte for byte from the side it came from.
+    Returns (text, conflicts, notes). Per bead id:
+
+    - changed on one side only, or the same on both: that version;
+    - added on one side: kept; deleted on one side and unchanged on the
+      other: deleted;
+    - deleted on one side and changed on the other: the changed bead is kept
+      (and noted), so a delete never silently discards an edit;
+    - changed differently on both sides (or added on both): merged field by
+      field (`merge_record`); only two different values for one field with an
+      equal or unreadable `updated_at` is a conflict, written with
+      ours/theirs markers around that bead's two lines.
+
+    When only one side changed the file at all, that side's text is returned
+    byte for byte, as git itself would. Otherwise lines are written in `bd
+    export`'s order (priority, newest `created_at`, id); a bead taken whole
+    from one side keeps that side's exact bytes, and a combined bead is
+    serialized the way `bd export` writes it. Records compare as JSON, so key
+    order never matters. No bead is dropped unless one side deleted it and
+    the other left it as it was in base.
     """
-    _, base_records = _records(base, "base")
-    ours_order, ours_records = _records(ours, "ours")
-    theirs_order, theirs_records = _records(theirs, "theirs")
-    out: list[str] = []
+    if theirs == base or ours == theirs:
+        return ours, [], []
+    if ours == base:
+        return theirs, [], []
+    base_records = _records(base, "base")
+    ours_records = _records(ours, "ours")
+    theirs_records = _records(theirs, "theirs")
+    rows: list[tuple[object, list[str]]] = []
     conflicts: list[str] = []
+    notes: list[str] = []
 
-    def resolve(issue_id: str) -> None:
+    for issue_id in {*ours_records, *theirs_records, *base_records}:
         b = base_records.get(issue_id)
         o = ours_records.get(issue_id)
         t = theirs_records.get(issue_id)
@@ -396,25 +541,30 @@ def merge_jsonl(base: str, ours: str, theirs: str) -> tuple[str, list[str]]:
             chosen = t
         elif t_val == b_val:
             chosen = o
+        elif o is None or t is None:
+            chosen = o or t
+            side = "ours" if t is None else "theirs"
+            notes.append(f"{issue_id}: deleted on one side but changed on {side}; kept the changed bead")
         else:
-            conflicts.append(issue_id)
-            out.append("<<<<<<< ours")
-            if o:
-                out.append(o[0])
-            out.append("=======")
-            if t:
-                out.append(t[0])
-            out.append(">>>>>>> theirs")
-            return
+            record, note = merge_record(b_val, o[1], t[1])
+            if record is None:
+                conflicts.append(issue_id)
+                notes.append(f"{issue_id}: {note}")
+                lines = ["<<<<<<< ours", o[0], "=======", t[0], ">>>>>>> theirs"]
+                rows.append((export_order(o[1]), lines))
+                continue
+            notes.append(f"{issue_id}: {note}")
+            if record == o_val:
+                chosen = o
+            elif record == t_val:
+                chosen = t
+            else:
+                rows.append((export_order(record), [dump_record(record)]))
+                continue
         if chosen is not None:
-            out.append(chosen[0])
-
-    for issue_id in ours_order:
-        resolve(issue_id)
-    for issue_id in theirs_order:
-        if issue_id not in ours_records:
-            resolve(issue_id)
-    return "".join(line + "\n" for line in out), conflicts
+            rows.append((export_order(chosen[1]), [chosen[0]]))
+    rows.sort(key=lambda row: row[0])
+    return "".join(line + "\n" for _, lines in rows for line in lines), sorted(conflicts), notes
 
 
 # --------------------------------------------------------------------------
@@ -500,10 +650,12 @@ def resolve(root: pathlib.Path) -> int:
         git("add", "--", QUEUE_PATH, cwd=root)
         print(f"{QUEUE_PATH}: kept your resolution")
     elif QUEUE_PATH in conflicted:
-        text, conflicts = merge_jsonl(
+        text, conflicts, notes = merge_jsonl(
             stage(root, 1, QUEUE_PATH), stage(root, 2, QUEUE_PATH), stage(root, 3, QUEUE_PATH)
         )
         write(queue_file, text)
+        for note in notes:
+            print(f"{QUEUE_PATH}: {note}")
         if conflicts:
             print(
                 f"{QUEUE_PATH}: {len(conflicts)} bead(s) changed differently on both sides: "
@@ -516,7 +668,13 @@ def resolve(root: pathlib.Path) -> int:
 
     issues = load_issues(queue_file)
 
-    if BACKLOG_PATH in conflicted and hand_resolved(backlog_file):
+    # Likewise a backlog driver that never ran leaves ours' bytes behind.
+    backlog_untouched = (
+        backlog_file.is_file()
+        and backlog_file.read_text(encoding="utf-8") == stage(root, 2, BACKLOG_PATH)
+        and stage(root, 2, BACKLOG_PATH) != stage(root, 3, BACKLOG_PATH)
+    )
+    if BACKLOG_PATH in conflicted and hand_resolved(backlog_file) and not backlog_untouched:
         write(backlog_file, render(backlog_file.read_text(encoding="utf-8"), issues))
         git("add", "--", BACKLOG_PATH, cwd=root)
         print(f"{BACKLOG_PATH}: kept your resolution, generated sections re-rendered")
@@ -551,37 +709,207 @@ def resolve(root: pathlib.Path) -> int:
 
 
 def install_merge_driver(root: pathlib.Path) -> None:
+    """Register both merge drivers `.gitattributes` names, in this clone only.
+
+    Idempotent: rerunning rewrites the same two config entries (and picks up
+    a new interpreter path). Each driver falls back to git's ordinary line
+    merge when the branch being merged into has no renderer script, so a
+    failed driver can never leave only ours' side behind.
+    """
     python = shlex.quote(pathlib.Path(sys.executable).as_posix())
-    git("config", f"merge.{MERGE_DRIVER}.name", "beads JSONL merge, bead by bead", cwd=root)
-    # A branch from before the renderer has no script in its working tree; a
-    # failed driver would leave only ours' queue, so fall back to a line merge.
-    git(
-        "config", f"merge.{MERGE_DRIVER}.driver",
-        f"if test -f scripts/render_backlog.py; then "
-        f"{python} scripts/render_backlog.py --merge-jsonl %O %A %B; "
-        f"else git merge-file -L ours -L base -L theirs %A %O %B; fi",
-        cwd=root,
-    )
-    print(f"installed git merge driver '{MERGE_DRIVER}' for {QUEUE_PATH} in this clone")
+    fallback = "git merge-file -L ours -L base -L theirs %A %O %B"
+    for name, label, flag, path in (
+        (MERGE_DRIVER, "beads JSONL merge, bead by bead", "--merge-jsonl", QUEUE_PATH),
+        (BACKLOG_DRIVER, "backlog merge, generated sections re-rendered", "--merge-backlog", BACKLOG_PATH),
+    ):
+        git("config", f"merge.{name}.name", label, cwd=root)
+        git(
+            "config", f"merge.{name}.driver",
+            f"if test -f scripts/render_backlog.py; then "
+            f"{python} scripts/render_backlog.py {flag} %O %A %B; "
+            f"else {fallback}; fi",
+            cwd=root,
+        )
+        print(f"installed git merge driver '{name}' for {path} in this clone")
 
 
 def merge_driver(base: pathlib.Path, ours: pathlib.Path, theirs: pathlib.Path) -> int:
-    """`git merge` driver entry point: write the merge into OURS, exit 1 on conflict."""
+    """`git merge` driver for the queue: write the merge into OURS, exit 1 on conflict."""
     texts = [path.read_text(encoding="utf-8") for path in (base, ours, theirs)]
     try:
-        merged, conflicts = merge_jsonl(*texts)
+        merged, conflicts, notes = merge_jsonl(*texts)
     except BacklogError as error:
         # Not something we can merge record by record: fall back to the
         # ordinary line merge so neither side is silently dropped.
         print(f"beads-jsonl merge driver: {error}; using a line merge", file=sys.stderr)
-        result = subprocess.run(
-            ["git", "merge-file", "-L", "ours", "-L", "base", "-L", "theirs",
-             str(ours), str(base), str(theirs)],
-            capture_output=True, text=True,
-        )
-        return 0 if result.returncode == 0 else 1
+        return _line_merge(base, ours, theirs)
+    for note in notes:
+        print(f"beads-jsonl merge driver: {note}", file=sys.stderr)
     write(ours, merged)
+    if conflicts:
+        print(
+            f"beads-jsonl merge driver: {len(conflicts)} bead(s) need a hand merge: "
+            f"{', '.join(conflicts)}; then run python3 scripts/render_backlog.py --resolve",
+            file=sys.stderr,
+        )
     return 1 if conflicts else 0
+
+
+def _line_merge(base: pathlib.Path, ours: pathlib.Path, theirs: pathlib.Path) -> int:
+    result = subprocess.run(
+        ["git", "merge-file", "-L", "ours", "-L", "base", "-L", "theirs",
+         str(ours), str(base), str(theirs)],
+        capture_output=True, text=True,
+    )
+    return 0 if result.returncode == 0 else 1
+
+
+def _show(root: pathlib.Path, rev: str, path: str) -> str:
+    result = git("show", f"{rev}:{path}", cwd=root, check=False)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def _commit(root: pathlib.Path, name: str) -> str | None:
+    result = git("rev-parse", "-q", "--verify", f"{name}^{{commit}}", cwd=root, check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _candidates(root: pathlib.Path) -> list[tuple[str, str]]:
+    """Commits that may be the side being merged in, with how to find its base.
+
+    git tells a merge driver nothing about the commits it merges, only the
+    three versions of one file. `git merge` and `git pull` export the merged
+    head as GITHEAD_<oid> (older git) and name it in GIT_REFLOG_ACTION (a
+    pull merges FETCH_HEAD); a rebase lists the commit it is picking last in
+    rebase-merge/done. Each guess is checked against the driver's own input
+    before it is used.
+    """
+    found: list[tuple[str, str]] = []
+    for key in sorted(os.environ):
+        if key.startswith("GITHEAD_"):
+            found.append(("merge", key[len("GITHEAD_"):]))
+    action = os.environ.get("GIT_REFLOG_ACTION", "").split()
+    if action[:1] == ["merge"]:
+        found.extend(("merge", name) for name in action[1:] if not name.startswith("-"))
+    if action[:1] == ["pull"]:
+        found.append(("merge", "FETCH_HEAD"))
+    done = pathlib.Path(git("rev-parse", "--git-path", "rebase-merge/done", cwd=root).stdout.strip())
+    if not done.is_absolute():
+        done = root / done
+    if done.is_file():
+        steps = [line.split() for line in done.read_text(encoding="utf-8").splitlines()]
+        steps = [step for step in steps if step and not step[0].startswith("#")]
+        if steps and steps[-1][0] in {"pick", "p", "reword", "r", "edit", "e", "fixup", "f", "squash", "s"}:
+            names = [token for token in steps[-1][1:] if not token.startswith("-")]
+            if names:
+                found.append(("pick", names[0]))
+    return found
+
+
+def merge_sides(root: pathlib.Path, base: str, ours: str, theirs: str) -> tuple[str, str, str] | None:
+    """The base, ours and theirs queues behind the backlog git is merging.
+
+    Ours is HEAD in a merge, a rebase and a cherry-pick alike. Theirs and the
+    base are only accepted when that commit's backlog is byte for byte the
+    file git handed the driver (and there is exactly one merge base), so a
+    wrong guess falls back rather than rendering from the wrong queue.
+    Returns None when the commits cannot be established.
+    """
+    def same(rev: str, text: str) -> bool:
+        return _show(root, rev, BACKLOG_PATH).replace("\r\n", "\n") == text
+
+    if not same("HEAD", ours):
+        return None
+    for kind, name in _candidates(root):
+        commit = _commit(root, name)
+        if commit is None or not same(commit, theirs):
+            continue
+        if kind == "merge":
+            result = git("merge-base", "--all", "HEAD", commit, cwd=root, check=False)
+            bases = result.stdout.split() if result.returncode == 0 else []
+        else:
+            parent = _commit(root, f"{commit}^")
+            bases = [parent] if parent else []
+        if len(bases) == 1 and same(bases[0], base):
+            return tuple(_show(root, rev, QUEUE_PATH) for rev in (bases[0], "HEAD", commit))  # type: ignore[return-value]
+    return None
+
+
+def fill_blocks(skeleton: str, source: str) -> str:
+    """The skeleton with each generated block's lines copied from SOURCE."""
+    source_lines = split_lines(source)
+    bodies = {block.section: source_lines[block.start + 1 : block.end] for block in find_blocks(source_lines)}
+    lines = split_lines(skeleton)
+    out: list[str] = []
+    cursor = 0
+    for block in find_blocks(lines):
+        out.extend(lines[cursor : block.start + 1])
+        out.extend(bodies.get(block.section, []))
+        out.append(lines[block.end])
+        cursor = block.end + 1
+    out.extend(lines[cursor:])
+    return "\n".join(out)
+
+
+def merge_backlog(
+    base: str, ours: str, theirs: str, queues: tuple[str, str, str] | None, *, cwd: pathlib.Path
+) -> tuple[str, int, str | None]:
+    """Merge three backlogs: hand-written text three ways, generated blocks re-rendered.
+
+    The generated blocks are never text-merged. They are rendered from the
+    merged queue, which is `merge_jsonl` of the three queues behind this
+    merge (the same merge the queue's own driver makes). Returns (text,
+    status, why): status 0 is a clean merge; 1 leaves the file conflicted,
+    either for a hand-written conflict (markers in the text) or because the
+    merged queue is unknown or itself conflicted, in which case the blocks
+    hold ours' rendering and `--resolve` re-renders them.
+    """
+    base, ours, theirs = (text.replace("\r\n", "\n") for text in (base, ours, theirs))
+    skeletons = [strip_generated(text) for text in (base, ours, theirs)]
+    merged, prose_conflicts = merge_text(cwd, *skeletons)
+    issues = None
+    why = None
+    if queues is None:
+        why = "cannot tell which commits are being merged"
+    else:
+        try:
+            queue, conflicts, _ = merge_jsonl(*queues)
+            if conflicts:
+                why = f"bead(s) {', '.join(conflicts)} need a hand merge"
+            else:
+                issues = parse_issues(queue, QUEUE_PATH)
+        except BacklogError as error:
+            why = f"the queue does not merge bead by bead ({error})"
+    try:
+        if issues is not None:
+            return render(merged, issues), 1 if prose_conflicts else 0, None
+        return fill_blocks(merged, ours), 1, why
+    except BacklogError as error:
+        # A hand-written conflict that swallowed a GENERATED marker.
+        return merged, 1, f"a conflict crosses a GENERATED marker ({error})"
+
+
+def backlog_driver(base: pathlib.Path, ours: pathlib.Path, theirs: pathlib.Path) -> int:
+    """`git merge` driver for the backlog: write the merge into OURS, exit 1 on conflict."""
+    texts = [path.read_text(encoding="utf-8") for path in (base, ours, theirs)]
+    cwd = pathlib.Path.cwd()
+    try:
+        root = repo_root(cwd)
+        queues = merge_sides(root, *(text.replace("\r\n", "\n") for text in texts))
+        merged, status, why = merge_backlog(*texts, queues, cwd=root)
+    except (BacklogError, OSError) as error:
+        # Markers missing on one side (a branch from before the renderer) or
+        # git unusable: fall back to the line merge, never to ours alone.
+        print(f"bosun-backlog merge driver: {error}; using a line merge", file=sys.stderr)
+        return _line_merge(base, ours, theirs)
+    write(ours, merged)
+    if why:
+        print(
+            f"bosun-backlog merge driver: {why}; "
+            f"finish with python3 scripts/render_backlog.py --resolve",
+            file=sys.stderr,
+        )
+    return status
 
 
 # --------------------------------------------------------------------------
@@ -598,14 +926,18 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--resolve", action="store_true",
                       help="finish a conflicted merge/rebase of the queue and backlog")
     mode.add_argument("--install-merge-driver", action="store_true",
-                      help="register the bead-by-bead JSONL merge driver in this clone")
+                      help="register the queue and backlog merge drivers in this clone")
     mode.add_argument("--merge-jsonl", nargs=3, type=pathlib.Path,
+                      metavar=("BASE", "OURS", "THEIRS"), help=argparse.SUPPRESS)
+    mode.add_argument("--merge-backlog", nargs=3, type=pathlib.Path,
                       metavar=("BASE", "OURS", "THEIRS"), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     try:
         if args.merge_jsonl:
             return merge_driver(*args.merge_jsonl)
+        if args.merge_backlog:
+            return backlog_driver(*args.merge_backlog)
         if args.install_merge_driver:
             install_merge_driver(repo_root(pathlib.Path.cwd()))
             return 0

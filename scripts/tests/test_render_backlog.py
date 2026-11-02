@@ -252,7 +252,8 @@ class RenderTests(unittest.TestCase):
 
 class MergeJsonlTests(unittest.TestCase):
     def merge(self, base, ours, theirs):
-        return render_backlog.merge_jsonl(jsonl(*base), jsonl(*ours), jsonl(*theirs))
+        text, conflicts, _ = render_backlog.merge_jsonl(jsonl(*base), jsonl(*ours), jsonl(*theirs))
+        return text, conflicts
 
     def test_both_sides_add_different_beads_at_the_end(self) -> None:
         a, b, c = bead("brwr-a1"), bead("brwr-b2"), bead("brwr-c3")
@@ -261,11 +262,12 @@ class MergeJsonlTests(unittest.TestCase):
         self.assertEqual(text, jsonl(a, b, c))
 
     def test_one_side_changes_a_bead_the_other_reorders(self) -> None:
+        # Lines come out in bd export's order whatever order either side used.
         a, b = bead("brwr-a1"), bead("brwr-b2")
         a2 = dict(a, status="closed")
         text, conflicts = self.merge([a, b], [b, a], [a2, b])
         self.assertEqual(conflicts, [])
-        self.assertEqual(text, jsonl(b, a2))
+        self.assertEqual(text, jsonl(a2, b))
 
     def test_same_change_on_both_sides_is_not_a_conflict(self) -> None:
         a = bead("brwr-a1")
@@ -282,7 +284,7 @@ class MergeJsonlTests(unittest.TestCase):
         a, b = bead("brwr-a1"), bead("brwr-b2")
         self.assertEqual(self.merge([a, b], [a], [a, b]), (jsonl(a), []))
 
-    def test_conflicting_change_is_marked_and_reported(self) -> None:
+    def test_same_field_changed_without_updated_at_is_marked_and_reported(self) -> None:
         a = bead("brwr-a1")
         ours, theirs = dict(a, status="closed"), dict(a, status="blocked")
         text, conflicts = self.merge([a], [ours], [theirs])
@@ -290,10 +292,11 @@ class MergeJsonlTests(unittest.TestCase):
         self.assertIn("<<<<<<< ours\n" + json.dumps(ours) + "\n=======\n", text)
         self.assertIn(json.dumps(theirs) + "\n>>>>>>> theirs\n", text)
 
-    def test_delete_against_modify_conflicts(self) -> None:
+    def test_delete_against_modify_keeps_the_modified_bead(self) -> None:
         a = bead("brwr-a1")
-        text, conflicts = self.merge([a], [], [dict(a, status="closed")])
-        self.assertEqual(conflicts, ["brwr-a1"])
+        a2 = dict(a, status="closed")
+        self.assertEqual(self.merge([a], [], [a2]), (jsonl(a2), []))
+        self.assertEqual(self.merge([a], [a2], []), (jsonl(a2), []))
 
     def test_both_add_same_id_differently_conflicts(self) -> None:
         text, conflicts = self.merge([], [bead("brwr-a1")], [bead("brwr-a1", title="other")])

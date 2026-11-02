@@ -2,8 +2,17 @@
 # their line endings on checkout (Windows CI would otherwise see CRLF).
 host/tests/fixtures/** -text
 
-# The beads queue merges bead by bead (scripts/render_backlog.py
-# --install-merge-driver registers the driver; without it git does a normal
-# text merge). BOSUN_FEATURE_BACKLOG.md's generated blocks are re-rendered by
-# `python3 scripts/render_backlog.py --resolve` after a conflict.
+# Bookkeeping files every worker cycle, queue PR and human PR touches merge
+# without conflicts once the drivers are registered in a clone
+# (`sh scripts/install-merge-drivers.sh`; without them git does a normal text
+# merge, and `python3 scripts/render_backlog.py --resolve` finishes it):
+# - the beads queue merges bead by bead (newer updated_at wins a field both
+#   sides changed);
+# - BOSUN_FEATURE_BACKLOG.md merges its hand-written text and re-renders its
+#   generated blocks from the merged queue;
+# - the append-only logs keep both sides' new entries (git's built-in union
+#   driver, which needs no registration).
 .beads/issues.jsonl merge=beads-jsonl
+BOSUN_FEATURE_BACKLOG.md merge=bosun-backlog
+PENDING_AMOS_DOC_UPDATES.md merge=union
+CookieFeature.md merge=union
