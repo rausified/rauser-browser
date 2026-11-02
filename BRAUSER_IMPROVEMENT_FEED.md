@@ -283,3 +283,20 @@ its original page; page-specific instructions deserve a visible distinction
 before Run. Keep the draft, current-page context and Enter/Run boundary intact;
 never navigate automatically. Where: `extension/task-recall.ts`, the task-bar
 context in `extension/panel.ts`, and `extension/tests/panel/task-bar.test.mjs`.
+
+## 2026-11-02 — Stop docs/history.md from blocking PRs on append conflicts
+
+Change: decide how `docs/history.md` merges so that two PRs each adding a
+dated note no longer conflict. Either give it `merge=union` in
+`.gitattributes`, as the feed, `CookieFeature.md` and
+`PENDING_AMOS_DOC_UPDATES.md` already have, or, since history.md is sectioned
+and union would also silently keep both sides of a real mid-file edit, have
+new notes go to one append-only tail section that union can handle safely.
+Why: PR #246 (Word-loading fix) went DIRTY twice in one afternoon, once after
+Cookie's cycle-8 merge (#252). Both times the only real conflict was two new
+`2026-11-02` entries in history.md. A DIRTY PR runs no CI, so auto-merge sat
+for about four hours with nothing failing visibly, until a status check found
+it. Also: the PR owner check could flag a PR whose auto-merge is armed but
+whose state is DIRTY, so the owner hears about it. Where: `.gitattributes`,
+the AGENTS.md history.md rule, and `scripts/pr-owner.mjs` or a small hygiene
+job.
