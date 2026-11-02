@@ -627,7 +627,15 @@ fn detect_once(path: &Path) -> io::Result<FileState> {
         return Ok(FileState::NotRegular);
     }
     let mut header = Vec::with_capacity(100);
-    fs::File::open(path)?.take(100).read_to_end(&mut header)?;
+    // Another host may delete the file between the stat and the open (on
+    // Windows a delete pending makes that window wide): it is then missing,
+    // and a ReadWrite open goes through the locked create path.
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(FileState::Missing),
+        Err(error) => return Err(error),
+    };
+    file.take(100).read_to_end(&mut header)?;
     if header.is_empty() {
         return Ok(FileState::Empty);
     }
