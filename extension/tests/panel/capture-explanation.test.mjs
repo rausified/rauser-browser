@@ -16,8 +16,10 @@ const GITHUB_SCOPED = {
 const LIVE_POLICY = { policy_expires_at: Date.now() + 86_400_000 };
 
 for (const [name, url, options, expected] of [
-  ["outside scope", "https://github.com/personal/repo/pull/12", {}, /outside the workspaces or accounts/],
-  ["unmatched page", "https://github.com/search?q=work", {}, /does not match this site's capture rules/],
+  ["outside scope", "https://github.com/personal/repo/pull/12", {},
+    /^github\.com captures repositories, pull requests and issues for acme; this page belongs to another account\. Review this site's scope in settings\.$/],
+  ["unmatched page", "https://github.com/search?q=work", {},
+    /^github\.com captures repositories, pull requests and issues for acme; this page isn't one of them\. Only matching pages are remembered\.$/],
   ["host pause", "https://github.com/acme/repo/pull/12", { config: { ...GITHUB_SCOPED, capture_enabled: false } }, /Capture is paused\. Resume/],
   ["local pause", "https://github.com/acme/repo/pull/12", { workerStatus: { ...LIVE_POLICY, pause_pending: true } }, /paused in this browser/],
   ["pending removal", "https://github.com/acme/repo/pull/12", { workerStatus: { ...LIVE_POLICY, pending_removals: ["https://github.com"] } }, /removal is pending/],
@@ -43,6 +45,46 @@ for (const [name, url, options, expected] of [
     assert.equal(page.sent("draft_site").length, 0);
   });
 }
+
+async function explained(url, config, title = "Page") {
+  const page = await install({ tab: { id: 1, url, title }, config, workerStatus: LIVE_POLICY });
+  await noteLoaded(page);
+  await until(() => !page.el("capture-explanation-action").disabled, "capture explanation action");
+  assert.equal(page.el("capture-explanation").hidden, false);
+  return page;
+}
+const withAdapters = (artifacts) => ({ ...CAPTURING, adapters: { format: 1, artifacts } });
+
+test("an unrecognized page says what the site captures, and the chip stays the host's verdict", async () => {
+  const page = await explained("https://github.com/search?q=work", GITHUB_SCOPED);
+  assert.equal(page.el("capture-explanation-text").textContent,
+    "github.com captures repositories, pull requests and issues for acme; this page isn't one of them. Only matching pages are remembered.");
+  await until(() => page.el("artifact-status").textContent === "○ Not an artifact", "the host verdict chip");
+  assert.equal(page.el("capture-explanation-action").textContent, "Open settings");
+});
+
+test("a Jira page that is not an issue names Jira issues with no accounts", async () => {
+  const jira = withAdapters(starterOffersFor("https://acme.atlassian.net", []).map((offer) => offer.adapter));
+  const page = await explained("https://acme.atlassian.net/jira/your-work", jira);
+  assert.equal(page.el("capture-explanation-text").textContent,
+    "acme.atlassian.net captures Jira issues; this page isn't one of them. Only matching pages are remembered.");
+});
+
+test("custom types, long account lists and mixed scope read as configured", async () => {
+  const custom = { type: "example.page", origin: "https://example.com", match: [{ path: "/p/{id:int}" }], id: "example.page:{host}/{id}" };
+  let page = await explained("https://example.com/about", withAdapters([custom]));
+  assert.equal(page.el("capture-explanation-text").textContent,
+    "example.com captures example.page; this page isn't one of them. Only matching pages are remembered.");
+  const many = starterOffersFor("https://github.com", ["a", "b", "c", "d"]).map((offer) => offer.adapter);
+  page = await explained("https://github.com/search?q=work", withAdapters(many));
+  assert.match(page.el("capture-explanation-text").textContent, /issues for a, b, c and 1 more; this page isn't one of them\./);
+  const [pr, issue, repo] = many;
+  const { scope: _scope, ...unscopedIssue } = issue;
+  page = await explained("https://github.com/search?q=work", withAdapters([pr, { ...unscopedIssue, unscoped: "acknowledged" }, repo]));
+  assert.match(page.el("capture-explanation-text").textContent,
+    /^github\.com captures repositories, pull requests and issues; this page isn't one of them\./);
+  assert.equal(updates(page).length, 0);
+});
 
 test("an unknown site's explanation opens the existing Capture Site review", async () => {
   const page = await install({
@@ -79,7 +121,7 @@ test("capture explanation follows navigation and the latest policy revision and 
     config: GITHUB_SCOPED, workerStatus: LIVE_POLICY,
   });
   await noteLoaded(page);
-  assert.match(page.el("capture-explanation-text").textContent, /outside the workspaces/);
+  assert.match(page.el("capture-explanation-text").textContent, /for acme; this page belongs to another account/);
   page.state.config.adapters = {
     format: 1, artifacts: starterOffersFor("https://github.com", ["personal"]).map((offer) => offer.adapter),
   };
@@ -88,7 +130,7 @@ test("capture explanation follows navigation and the latest policy revision and 
   await until(() => page.el("capture-explanation").hidden, "new scope recognizes the current page");
   page.navigate("https://github.com/acme/repo/pull/12");
   await until(() => !page.el("capture-explanation").hidden, "the formerly included workspace is excluded");
-  assert.match(page.el("capture-explanation-text").textContent, /outside the workspaces/);
+  assert.match(page.el("capture-explanation-text").textContent, /for personal; this page belongs to another account/);
   page.navigate("chrome://settings/");
   await until(() => !page.el("page-unusable").hidden, "a non-web tab");
   assert.equal(page.el("capture-explanation").hidden, true);
@@ -110,7 +152,7 @@ test("link patterns cannot change a configured page's capture explanation", asyn
   page.el("site-pattern-review").click();
   await until(() => page.el("site-pattern-rows").children.length > 0, "link-pattern review");
   assert.equal(page.el("capture-explanation-text").textContent, explanation);
-  assert.match(explanation, /does not match/);
+  assert.match(explanation, /this page isn't one of them/);
   assert.equal(updates(page).length, 0);
 });
 

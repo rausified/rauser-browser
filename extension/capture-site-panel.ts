@@ -15,6 +15,7 @@ import { httpOrigin, type SampledShape } from "./site-patterns.js";
 import { githubOwnerFromUrl, parseTenantList, starterKind } from "./starter-adapters.js";
 import { SitePatternPanel, collectPagePatterns } from "./site-pattern-panel.js";
 import { draftHandoff, handoffKey, storeDraftHandoff } from "./capture-site-handoff.js";
+import { GITHUB_RECORD_LABELS, GITHUB_RECORD_ORDER, joinRecordedTypes } from "./site-coverage.js";
 
 export interface CapturePage {
   url: string;
@@ -148,22 +149,6 @@ interface RestorePlan {
   origin: string;
   document: AdapterDocument;
   startsCapture: boolean;
-}
-
-// The confirmation line names only what is actually checked, in this fixed
-// order, so the privacy-boundary scope line is never wider than the save.
-const GITHUB_RECORD_LABELS: Record<string, string> = {
-  "github.repo": "repositories",
-  "github.pr": "pull requests",
-  "github.issue": "issues",
-};
-const GITHUB_RECORD_ORDER = ["github.repo", "github.pr", "github.issue"];
-
-/** "A", "A and B", or "A, B and C" — no Oxford comma, matching this panel's
- * existing list copy (e.g. the "Remember: X and Y" summary line). */
-function joinRecordedTypes(labels: string[]): string {
-  if (labels.length < 2) return labels.join("");
-  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
 /** An in-panel, revision-bound review. All transient page URLs and scopes

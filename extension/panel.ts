@@ -14,6 +14,7 @@ import { ConfigSession, describe, element, leaseFor, setupProblem, worker } from
 import { evaluate } from "./adapter-templates.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
+import { coverageSentence, siteCoverage } from "./site-coverage.js";
 import { APP_NAME, storageKey } from "./brand.js";
 import { hostBuildText } from "./build-info.js";
 import { initDiag } from "./diag.js";
@@ -743,7 +744,7 @@ function renderCaptureExplanation(): void {
   } else {
     const lease = capturePolicy.restore(leaseFor(config, session.revision));
     const compiled = lease && capturePolicy.compiledFor(lease);
-    if (!compiled) {
+    if (!lease || !compiled) {
       reason = "Capture rules could not be read. Repair them in settings.";
     } else {
       const result = evaluate(compiled, currentPage.url, currentPage.title);
@@ -752,10 +753,15 @@ function renderCaptureExplanation(): void {
         captureExplanationText.textContent = "";
         return;
       }
+      const coverage = siteCoverage(lease.adapters.artifacts, currentPage.url);
       switch (result.reason) {
-        case "out_of_scope":
-          reason = "This page is outside the workspaces or accounts chosen for capture. Review this site's scope in settings.";
+        case "out_of_scope": {
+          const sentence = coverage && coverageSentence(coverage, "out_of_scope");
+          reason = sentence
+            ? `${sentence} Review this site's scope in settings.`
+            : "This page is outside the workspaces or accounts chosen for capture. Review this site's scope in settings.";
           break;
+        }
         case "no_adapter":
           reason = "This site has no capture rules. Review Capture Site to choose which pages to remember.";
           captureExplanationAction.textContent = "Review Capture Site";
@@ -763,7 +769,9 @@ function renderCaptureExplanation(): void {
           captureExplanationAction.disabled ||= element<HTMLButtonElement>("capture-site").disabled;
           break;
         case "no_rule":
-          reason = "This page does not match this site's capture rules. Only matching pages are remembered. Review the rules in settings.";
+          reason = coverage
+            ? `${coverageSentence(coverage, "no_rule")} Only matching pages are remembered.`
+            : "This page does not match this site's capture rules. Only matching pages are remembered. Review the rules in settings.";
           break;
         default:
           reason = "This page's address cannot safely match the capture rules. Review the rules in settings.";
