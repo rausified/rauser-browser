@@ -116,17 +116,166 @@ fn a_delivery_re_derives_only_its_groups() {
         "2026-10-14T13:00:00Z",
     );
     index.record_activity(&other, &[]).unwrap();
-    store::GROUP_DERIVES.with(|count| count.set(0));
-    store::EVENTS_LOADED.with(|count| count.set(0));
-    FULL_DERIVES.with(|count| count.set(0));
+    reset_counters();
+    // Backdated, so both groups take the exact re-derive.
     index
-        .record_activity(&github_pr(21, 3, "2026-10-15T12:00:00Z"), &[])
+        .record_activity(&github_pr(21, 3, "2026-10-13T12:00:00Z"), &[])
         .unwrap();
     assert_eq!(FULL_DERIVES.with(|count| count.get()), 0);
     // PR 3 and its repo; never the unrelated artifact.
     assert_eq!(store::GROUP_DERIVES.with(|count| count.get()), 2);
     // PR 3's two events, then the repo's 21 children.
     assert_eq!(store::EVENTS_LOADED.with(|count| count.get()), 2 + 21);
+}
+
+fn reset_counters() {
+    store::GROUP_DERIVES.with(|count| count.set(0));
+    store::EVENTS_LOADED.with(|count| count.set(0));
+    store::FAST_PATHS.with(|count| count.set(0));
+    FULL_DERIVES.with(|count| count.set(0));
+}
+
+fn counters() -> [u64; 4] {
+    [
+        store::FAST_PATHS.with(|count| count.get()),
+        store::GROUP_DERIVES.with(|count| count.get()),
+        store::EVENTS_LOADED.with(|count| count.get()),
+        FULL_DERIVES.with(|count| count.get()),
+    ]
+}
+
+/// A repo with twenty PRs, an unrelated page with a why, and a PR that
+/// mentions and is trailed to from it: history the fast path must carry.
+fn fast_path_history(index: &ArtifactIndex) {
+    let history = (1..=20)
+        .map(|n| github_pr(n, n % 4, "2026-10-14T12:00:00Z"))
+        .collect::<Vec<_>>();
+    index.record_activities(history.iter(), &[]).unwrap();
+    let other = activity(
+        "00000000-0000-4000-8000-000000000500",
+        "OTHER",
+        "Other",
+        "2026-10-14T13:00:00Z",
+    );
+    index.record_activity(&other, &[]).unwrap();
+    index
+        .record_why(
+            &WhyEvent {
+                event_id: "00000000-0000-4000-8000-000000000501".into(),
+                artifact_id: GITHUB_REPO_ID.into(),
+                url: "https://github.com/acme-corp/widgets".into(),
+                occurred_at: "2026-10-14T14:00:00Z".into(),
+                incognito: false,
+                text: "Reviewing the widgets".into(),
+            },
+            &[],
+        )
+        .unwrap();
+}
+
+#[test]
+fn in_order_delivery_takes_the_fast_path() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let document = github_document(true);
+    let index = index(&root, &cache).with_adapters(Some(&document));
+    fast_path_history(&index);
+    reset_counters();
+    // Newer than everything PR 3 and the repo hold: a trail from the other
+    // page, a mention of it, a mode, a new day and a later why.
+    let mut pull = github_pr(21, 3, "2026-10-15T12:00:00Z");
+    pull.trails.push(ActivityTrail {
+        from_artifact_id: Some("work:example.com/OTHER".into()),
+        from_url: Some("https://example.com/items/OTHER".into()),
+        transition: "link".into(),
+    });
+    pull.refs.push(ActivityRef {
+        artifact_type: "github.pr".into(),
+        value: "acme-corp/widgets#1".into(),
+    });
+    pull.modes.push(ActivityMode {
+        mode: "review".into(),
+        url: pull.url.clone(),
+    });
+    let later = github_pr(22, 3, "2026-10-15T12:30:00Z");
+    index.record_activities([&pull, &later], &[]).unwrap();
+    // PR 3 and its repo, each seeded from its stored rows: no group re-derive,
+    // no stored history read, no full derive. The oracle in `store::write`
+    // proved the rows equal a full derive.
+    assert_eq!(counters(), [2, 0, 0, 0]);
+    reset_counters();
+    index
+        .record_why(
+            &WhyEvent {
+                event_id: "00000000-0000-4000-8000-000000000502".into(),
+                artifact_id: GITHUB_REPO_ID.into(),
+                url: "https://github.com/acme-corp/widgets".into(),
+                occurred_at: "2026-10-16T09:00:00Z".into(),
+                incognito: false,
+                text: "Merging the widgets".into(),
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(counters(), [1, 0, 0, 0]);
+    assert_eq!(
+        sql::sql_rows(
+            &index.database_path(),
+            &format!(
+                "select why, days_opened from artifacts where artifact_id = '{GITHUB_REPO_ID}'"
+            ),
+        ),
+        [vec![
+            sql::Value::Text("Merging the widgets".into()),
+            sql::Value::Integer(2)
+        ]]
+    );
+}
+
+#[test]
+fn backdated_delivery_falls_back() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let document = github_document(true);
+    let index = index(&root, &cache).with_adapters(Some(&document));
+    fast_path_history(&index);
+    // At the same instant as PR 3's history but arriving later, it sorts
+    // after that history by sequence, so PR 3 takes the fast path; the repo
+    // holds a later why, so it re-derives.
+    reset_counters();
+    index
+        .record_activity(&github_pr(21, 3, "2026-10-14T12:00:00Z"), &[])
+        .unwrap();
+    let [fast, derives, _, full] = counters();
+    assert_eq!([fast, derives, full], [1, 1, 0]);
+    // At the instant of the repo's why, and so after it: both are suffixes.
+    reset_counters();
+    index
+        .record_activity(&github_pr(22, 2, "2026-10-14T14:00:00Z"), &[])
+        .unwrap();
+    assert_eq!(counters(), [2, 0, 0, 0]);
+    // Older than everything: both groups re-derive.
+    reset_counters();
+    index
+        .record_activity(&github_pr(23, 1, "2026-10-13T12:00:00Z"), &[])
+        .unwrap();
+    let [fast, derives, _, full] = counters();
+    assert_eq!([fast, derives, full], [0, 2, 0]);
+    // A first visit to a new artifact has no stored rows to seed.
+    reset_counters();
+    index
+        .record_activity(
+            &activity(
+                "00000000-0000-4000-8000-000000000600",
+                "NEW",
+                "New",
+                "2026-10-20T12:00:00Z",
+            ),
+            &[],
+        )
+        .unwrap();
+    let [fast, derives, _, _] = counters();
+    assert_eq!([fast, derives], [0, 1]);
 }
 
 #[test]
@@ -431,6 +580,7 @@ fn replay_event(n: u64, variant: u64) -> CachedEvent {
 #[test]
 fn random_replays_match_a_full_derive() {
     let document = replay_document();
+    reset_counters();
     for seed in 0..48u64 {
         let mut rng = Rng(seed);
         let cache = TempDir::new().unwrap();
@@ -471,17 +621,16 @@ fn random_replays_match_a_full_derive() {
                     (replay_event(n, variant), position)
                 })
                 .collect::<Vec<_>>();
+            // The fast path and its fallback, as a delivery takes them.
             store::write(&mut conn, Some(&document), |tx| {
                 let mut containers = Containers::new(Some(&document));
-                let mut groups = BTreeSet::new();
+                let mut changes = store::Changes::default();
                 for (event, position) in &batch {
                     let (outcome, touched) =
                         store::ingest(tx, &mut containers, event, position.as_ref())?;
-                    if matches!(outcome, store::Ingest::Inserted | store::Ingest::Moved) {
-                        groups.extend(touched);
-                    }
+                    changes.record(outcome, &event_identity(event).0, touched);
                 }
-                store::rederive_groups(tx, Some(&document), &groups)
+                store::apply(tx, Some(&document), &changes)
             })
             .unwrap_or_else(|error| panic!("seed {seed}: {error:#}"));
             for (event, position) in batch {
@@ -496,4 +645,10 @@ fn random_replays_match_a_full_derive() {
         );
         drop(conn);
     }
+    // The streams exercised both the seeded suffix and its fallback.
+    let [fast, derives, _, _] = counters();
+    assert!(
+        fast > 100 && derives > 100,
+        "{fast} fast paths, {derives} re-derives"
+    );
 }
