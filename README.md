@@ -13,7 +13,7 @@ Read the [design specification](DESIGN.md) for the architecture, security model,
 - Google Chrome Stable on macOS 15 or later (Intel and Apple silicon)
 - Edge and other browsers, and Linux, are out of scope; Windows was reinstated on 2026-10-16 and is not yet accepted (DESIGN.md §13, §14)
 
-The release plan calls for the browser extension to be distributed through the Chrome Web Store and a signed native-host installer to be provided for macOS. See [Distribution](DESIGN.md#11-distribution) for details.
+The release plan calls for the browser extension to be distributed through the Chrome Web Store and the native host to ship as a signed app that registers itself with Chrome when it is first opened. See [Distribution](DESIGN.md#11-distribution) for details.
 
 ## Development
 
@@ -109,7 +109,7 @@ For routine checks that put nothing on screen, build the test host with `cargo b
 
 To check the Chrome behavior M1.5a artifact logging relies on (new-tab events, transition types, worker stops, idle, and discarded or restored tabs; DESIGN.md §12.2 step 6.1), run `npm run probe:m15a`. It needs no build, runs headless Chrome on a temporary profile with nothing on screen, and exits 1 if Chrome disagrees with the design; `--only <probe>` runs one group and `--json <file>` saves the report.
 
-The development registration in step 3 changes only the current user's Chrome native-host entry. It is for development; the signed installers planned for M5 will own installation and uninstallation. A folder path previously entered directly in an M0 config must be selected again through the native picker before M1 can use it. The host backs up malformed or incompatible config files during a revision-checked repair.
+The development registration in step 3 changes only the current user's Chrome native-host entry. It is for development; the self-registering Brauser app planned for M5 will own registration and removal. A folder path previously entered directly in an M0 config must be selected again through the native picker before M1 can use it. The host backs up malformed or incompatible config files during a revision-checked repair.
 
 The host binds the chosen folder to its filesystem identity. If that folder is moved or replaced, choose it again before capture resumes. M1 keeps a synced visit-ID intent file in the OS config directory for each saved visit so retries can recover across log dates and interrupted appends. These files remain indefinitely in the development build; compacting the index is part of the public-release work.
 
