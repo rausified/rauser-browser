@@ -891,3 +891,16 @@ RunCursor.created_at now shares RunView's 20–64 character schema bounds
 (`brwr-0at`); this is length alignment, not syntax validation. The generator
 was run and both generated type files remain unchanged. The unknown-kind
 wire test checks schema rejection as well as serde rejection (`brwr-3wh`).
+
+### 2026-11-02 — Accessibility tests skip as blocked inside the Codex sandbox
+
+Cookie's cycle prompt runs `BRAUSER_REQUIRE_A11Y_TESTS=1 npm run test:a11y`
+as an in-sandbox health check, and `scripts/a11y-browser.mjs` turned the
+sandbox skip into a failure under that flag, so every cycle after the
+cycle-4 quarantine began red and idled (2 transport tests passed, 36 browser
+tests failed at the launch guard). Inside the sandbox
+(`CODEX_SANDBOX_NETWORK_DISABLED=1`) the launcher now tries Chromium once per
+process and, if it cannot start, skips every browser test with a
+`blocked by sandbox:` reason whatever the require flag says. Outside the
+sandbox a launch failure fails, and the require flag still fails a missing
+browser everywhere. Same shape as the IPC guard (PR #125).
