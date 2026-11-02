@@ -1,7 +1,395 @@
-//! Artifact file replacement, removal, roll-up file discovery and the
-//! temporary-file sweep used by regeneration.
+//! Regeneration (plan T12): the pass that renders each dirty artifact from
+//! its group's events, plus artifact file replacement, removal, roll-up file
+//! discovery and the temporary-file sweep.
+//!
+//! A pass holds `<cache>/index-regen.lock`, snapshots `dirty_artifacts`, and
+//! then for each marked artifact re-derives its group in a read snapshot,
+//! renders it, writes (or removes) its file, and commits a clear that is
+//! conditional on the snapshotted generation. Each artifact commits alone,
+//! so a pass killed midway keeps every clear it made, and a mark a delivery
+//! renews meanwhile (a fresh generation) survives the clear.
+
+use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::*;
+
+/// The lock file only one regenerator holds. It is never read or written:
+/// only the lock on it counts, and a crash releases it.
+pub(super) const REGEN_LOCK: &str = "index-regen.lock";
+
+/// Where a pass is, for each artifact: the test seam
+/// [`ArtifactIndex::regenerate_with`] observes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RegenStep {
+    /// The file was written, found unchanged or removed, and its clear has
+    /// not committed yet.
+    Written,
+    /// Its generation-conditional clear has committed.
+    Cleared,
+}
+
+/// One `dirty_artifacts` mark and the file regeneration last wrote for it.
+struct DirtyMark {
+    artifact_id: String,
+    generation: i64,
+    file_path: Option<String>,
+}
+
+/// What a pass did with a marked artifact's file.
+enum Settled {
+    /// Written or already current: where, and the SHA-256 of what it holds.
+    Rendered { path: String, sha256: Vec<u8> },
+    /// No record derives any more, and its file (if any) is gone.
+    Removed,
+}
+
+/// Take `<cache>/index-regen.lock`, waiting while another regenerator holds
+/// it. Released when the returned file is dropped.
+fn regen_lock(cache_dir: &Path) -> Result<fs::File> {
+    fs::create_dir_all(cache_dir).context("creating artifact index cache directory")?;
+    let mut options = StdOpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(cache_dir.join(REGEN_LOCK))
+        .context("opening the artifact regeneration lock")?;
+    file.lock()
+        .context("taking the artifact regeneration lock")?;
+    Ok(file)
+}
+
+/// `path` relative to the home folder with `/` separators, as stored in
+/// `brauser_group_state.file_path`.
+fn stored_path(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn dirty_marks(tx: &Transaction<'_>) -> Result<Vec<DirtyMark>> {
+    let marks = tx
+        .prepare_cached(
+            "SELECT d.artifact_id, d.generation, g.file_path FROM dirty_artifacts d
+               LEFT JOIN brauser_group_state g ON g.artifact_id = d.artifact_id
+             ORDER BY d.artifact_id",
+        )?
+        .query_map([], |row| {
+            Ok(DirtyMark {
+                artifact_id: row.get(0)?,
+                generation: row.get(1)?,
+                file_path: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(marks)
+}
+
+/// Clear `mark` if no delivery renewed it since the snapshot, and then
+/// record what its file now holds. Returns whether it was cleared.
+fn clear(tx: &Transaction<'_>, mark: &DirtyMark, settled: &Settled) -> Result<bool> {
+    let cleared = tx
+        .prepare_cached("DELETE FROM dirty_artifacts WHERE artifact_id = ?1 AND generation = ?2")?
+        .execute(params![mark.artifact_id, mark.generation])?
+        == 1;
+    if !cleared {
+        return Ok(false);
+    }
+    match settled {
+        Settled::Rendered { path, sha256 } => {
+            tx.prepare_cached(
+                "UPDATE brauser_group_state SET file_path = ?2, render_sha256 = ?3
+                 WHERE artifact_id = ?1",
+            )?
+            .execute(params![mark.artifact_id, path, sha256])?;
+        }
+        // The state row stayed only so this pass could find the file.
+        Settled::Removed => {
+            tx.prepare_cached(
+                "DELETE FROM brauser_group_state WHERE artifact_id = ?1
+                   AND NOT EXISTS (SELECT 1 FROM artifacts WHERE artifact_id = ?1)",
+            )?
+            .execute([&mark.artifact_id])?;
+        }
+    }
+    Ok(true)
+}
+
+/// The UTC offset of the newest group's latest activity, for the pass
+/// marker's local day.
+fn newest_offset(tx: &Transaction<'_>) -> Result<Option<UtcOffset>> {
+    let latest = tx
+        .prepare_cached(
+            "SELECT latest_at FROM brauser_group_state
+             WHERE artifact_id IN (SELECT artifact_id FROM artifacts)
+             ORDER BY latest_key DESC LIMIT 1",
+        )?
+        .query_row([], |row| row.get::<_, String>(0))
+        .optional()?;
+    Ok(latest
+        .and_then(|at| OffsetDateTime::parse(&at, &Rfc3339).ok())
+        .map(OffsetDateTime::offset))
+}
+
+/// The JSON cache's container bookkeeping (plan T15 removes it): every
+/// container the store derives, by `within` edge or declared type, with its
+/// file, plus any earlier container still marked dirty and, while it has no
+/// record, its file.
+fn container_bookkeeping(
+    tx: &Transaction<'_>,
+    adapters: Option<&Document>,
+    artifacts_dir: &str,
+    previous: &IndexState,
+    dirty: &BTreeSet<String>,
+) -> Result<(BTreeSet<String>, BTreeMap<String, PathBuf>)> {
+    let mut containers = BTreeSet::new();
+    let mut files = BTreeMap::new();
+    let types = Containers::new(adapters).types;
+    // A `within` edge exists only while some adapter declares a container.
+    if !types.is_empty() {
+        let mut found = tx
+            .prepare_cached(
+                "SELECT e.target_artifact_id, a.artifact_type, a.site FROM edges e
+                   LEFT JOIN artifacts a ON a.artifact_id = e.target_artifact_id
+                 WHERE e.kind = 'within'",
+            )?
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for artifact_type in &types {
+            let typed = tx
+                .prepare_cached("SELECT artifact_id, site FROM artifacts WHERE artifact_type = ?1")?
+                .query_map([artifact_type], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        Some((*artifact_type).to_owned()),
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            found.extend(typed);
+        }
+        for (id, artifact_type, site) in found {
+            if let (Some(artifact_type), Some(site)) = (artifact_type, site) {
+                let path = artifact_file(artifacts_dir, &id, &artifact_type, &site);
+                files.insert(id.clone(), path);
+            }
+            containers.insert(id);
+        }
+    }
+    for id in previous.containers.intersection(dirty) {
+        containers.insert(id.clone());
+    }
+    for (id, path) in &previous.container_files {
+        if dirty.contains(id) && !files.contains_key(id) {
+            let derives: bool = tx
+                .prepare_cached("SELECT EXISTS (SELECT 1 FROM artifacts WHERE artifact_id = ?1)")?
+                .query_row([id], |row| row.get(0))?;
+            if !derives {
+                files.insert(id.clone(), path.clone());
+            }
+        }
+    }
+    Ok((containers, files))
+}
+
+impl ArtifactIndex {
+    /// Publish `state` first when it differs from the published cache, then
+    /// run a regeneration pass over `dirty_artifacts`.
+    pub(super) fn regenerate_state(
+        &self,
+        state: IndexState,
+        publish: bool,
+    ) -> Result<RegenerationReport> {
+        if publish {
+            self.publish_state_and_database(&state)?;
+        }
+        self.regenerate_with(&state, |_, _| {})
+    }
+
+    /// One regeneration pass under `index-regen.lock`. `state` is the
+    /// published JSON cache, whose `container_files` still locate a
+    /// container file adopted by a rebuild until plan T10/T15 move that to
+    /// `brauser_group_state.file_path`. `after` (a test seam) sees each
+    /// artifact's steps.
+    pub(super) fn regenerate_with(
+        &self,
+        state: &IndexState,
+        mut after: impl FnMut(RegenStep, &str),
+    ) -> Result<RegenerationReport> {
+        let (root, _) =
+            open_selected_root(Path::new(&self.storage.root), Some(&self.root_identity))?;
+        // Lock order: the regen lock before any SQLite transaction.
+        let _lock = regen_lock(&self.cache_dir)?;
+        let adapters = self.adapters.as_deref();
+        let mut conn = store::open(&self.cache_dir)?;
+        let marks = db::read_txn(&mut conn, dirty_marks)?;
+        let mut report = RegenerationReport::default();
+        let fail = |report: &mut RegenerationReport, path: String, error: anyhow::Error| {
+            report.failed += 1;
+            report
+                .first_failure
+                .get_or_insert_with(|| format!("{path}: {error:#}"));
+            if report.failed_paths.len() < 64 {
+                report.failed_paths.push(path);
+            }
+        };
+        for mark in &marks {
+            let id = mark.artifact_id.as_str();
+            let row = db::read_txn(&mut conn, |tx| store::derived_row(tx, adapters, id))?;
+            let settled = match &row {
+                // A container whose only activity was a roll-up the adapters
+                // no longer make: its file would keep totals the index no
+                // longer has, so it is removed (only if still Brauser's).
+                None => {
+                    let path = mark
+                        .file_path
+                        .as_deref()
+                        .map(PathBuf::from)
+                        .or_else(|| state.container_files.get(id).cloned());
+                    if let Some(path) = path
+                        && let Err(error) = remove_artifact(&root, &path, id)
+                    {
+                        fail(&mut report, path.to_string_lossy().into_owned(), error);
+                        continue;
+                    }
+                    Settled::Removed
+                }
+                Some(artifact) => {
+                    let relative = artifact_path(&self.storage.artifacts_dir, artifact);
+                    let shown = || relative.to_string_lossy().into_owned();
+                    let rendered = render_artifact(&self.storage.artifacts_dir, artifact);
+                    match replace_artifact(&root, &self.storage.artifacts_dir, artifact, &rendered)
+                    {
+                        // A warning is post-publication work (temporary
+                        // cleanup, directory sync); the file is in place, so
+                        // it is written and not retried, as for page notes.
+                        Ok(OwnedWrite::Written(warnings)) => {
+                            for warning in warnings {
+                                let (step, error) = match warning {
+                                    PostPublishWarning::DirectorySync(error) => {
+                                        ("syncing its folder", error)
+                                    }
+                                    PostPublishWarning::TemporaryCleanup(error) => {
+                                        ("removing its temporary", error)
+                                    }
+                                };
+                                tracing::warn!(
+                                    path = %shown(),
+                                    step,
+                                    %error,
+                                    "artifact file written, but a later step failed"
+                                );
+                            }
+                            report.written += 1;
+                        }
+                        Ok(OwnedWrite::Unchanged) => report.unchanged += 1,
+                        Ok(OwnedWrite::Conflict) => {
+                            report.conflicts += 1;
+                            if report.conflict_paths.len() < 64 {
+                                report.conflict_paths.push(shown());
+                            }
+                            continue;
+                        }
+                        // One unwritable path (a locked file, a read-only
+                        // folder) stays dirty for the next pass without
+                        // blocking the rest.
+                        Err(error) => {
+                            fail(&mut report, shown(), error);
+                            continue;
+                        }
+                    }
+                    Settled::Rendered {
+                        path: stored_path(&relative),
+                        sha256: Sha256::digest(rendered.as_bytes()).to_vec(),
+                    }
+                }
+            };
+            after(RegenStep::Written, id);
+            store::write(&mut conn, adapters, |tx| clear(tx, mark, &settled))?;
+            after(RegenStep::Cleared, id);
+        }
+        self.record_pass(&mut conn);
+        self.publish_dirty(&mut conn)?;
+        Ok(report)
+    }
+
+    /// Bring the JSON cache's dirty set (and its container bookkeeping)
+    /// level with `dirty_artifacts` after a pass, so the next delivery's
+    /// `store::sync_dirty` does not restore the clears. The cache is read
+    /// again, not taken from before the pass, so a delivery made during the
+    /// pass keeps its events and marks. Plan T15 removes this.
+    fn publish_dirty(&self, conn: &mut rusqlite::Connection) -> Result<()> {
+        let Some((mut current, _)) = self.read_current_state() else {
+            return Ok(());
+        };
+        let adapters = self.adapters.as_deref();
+        let artifacts_dir = self.storage.artifacts_dir.as_str();
+        let (dirty, containers, container_files) = db::read_txn(conn, |tx| {
+            let dirty = tx
+                .prepare_cached("SELECT artifact_id FROM dirty_artifacts")?
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<BTreeSet<_>>>()?;
+            let (containers, files) =
+                container_bookkeeping(tx, adapters, artifacts_dir, &current, &dirty)?;
+            Ok((dirty, containers, files))
+        })?;
+        if current.dirty == dirty
+            && current.containers == containers
+            && current.container_files == container_files
+        {
+            return Ok(());
+        }
+        current.dirty = dirty;
+        current.containers = containers;
+        current.container_files = container_files;
+        self.write_state(&current)
+    }
+
+    /// Remember the local day this pass completed (`daily_pass_due`), in
+    /// the offset of the newest group's latest activity. Best effort: a lost
+    /// marker only means one extra pass.
+    fn record_pass(&self, conn: &mut rusqlite::Connection) {
+        let offset = match db::read_txn(conn, newest_offset) {
+            Ok(offset) => offset.unwrap_or(UtcOffset::UTC),
+            Err(error) => {
+                tracing::warn!(
+                    error = format!("{error:#}"),
+                    "could not read the latest activity for the artifact pass"
+                );
+                UtcOffset::UTC
+            }
+        };
+        let marker = PassMarker {
+            date: OffsetDateTime::now_utc()
+                .to_offset(offset)
+                .date()
+                .to_string(),
+            offset_seconds: offset.whole_seconds(),
+            root: self.storage.root.clone(),
+            root_identity: self.root_identity.clone(),
+            artifacts_dir: self.storage.artifacts_dir.clone(),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&marker)
+            && fs::read(self.pass_marker_path()).ok().as_deref() != Some(bytes.as_slice())
+            && let Err(error) = atomic_write(&self.pass_marker_path(), &bytes)
+        {
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not record artifact pass"
+            );
+        }
+    }
+}
 
 pub(super) fn replace_artifact(
     root: &Dir,
@@ -54,13 +442,6 @@ pub(super) fn remove_artifact(root: &Dir, relative: &Path, artifact_id: &str) ->
     dir.remove_file(filename)
         .context("removing artifact file")?;
     sync_directory(&dir).context("syncing artifact directory")
-}
-
-/// Each checkpoint rewrites the whole cache, so space them by at least four
-/// times the last one's cost: for a large index, checkpoints then take at
-/// most a fifth of the pass instead of dominating it.
-pub(super) fn checkpoint_interval(minimum: Duration, last_publish: Duration) -> Duration {
-    minimum.max(last_publish.saturating_mul(4))
 }
 
 /// Subdirectories of `dir`, not following symlinks.

@@ -3,6 +3,7 @@
 use super::*;
 use brauser_protocol::{ActivityMode, ActivityRef, ActivityTrail};
 use std::fs::File;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 mod catch_up;

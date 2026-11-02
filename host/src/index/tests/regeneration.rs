@@ -102,13 +102,32 @@ fn typed_activity(id: u32, native_id: &str, artifact_type: &str) -> ActivityEven
     event
 }
 
+/// The artifacts `dirty_artifacts` marks, which regeneration clears one
+/// artifact at a time.
 fn dirty_ids(index: &ArtifactIndex) -> Vec<String> {
-    read_state(&index.state_path())
-        .unwrap()
-        .unwrap()
-        .dirty
-        .into_iter()
-        .collect()
+    sql::sql_rows(
+        &index.database_path(),
+        "select artifact_id from dirty_artifacts order by artifact_id",
+    )
+    .into_iter()
+    .map(|row| match &row[0] {
+        sql::Value::Text(id) => id.clone(),
+        other => panic!("artifact_id is {other:?}"),
+    })
+    .collect()
+}
+
+fn generation_of(index: &ArtifactIndex, id: &str) -> Option<i64> {
+    sql::sql_rows(
+        &index.database_path(),
+        &format!("select generation from dirty_artifacts where artifact_id = '{id}'"),
+    )
+    .into_iter()
+    .next()
+    .map(|row| match row[0] {
+        sql::Value::Integer(generation) => generation,
+        ref other => panic!("generation is {other:?}"),
+    })
 }
 
 #[test]
@@ -137,8 +156,12 @@ fn an_unwritable_file_stays_dirty_while_the_pass_publishes_the_rest() {
     assert_eq!((report.written, report.unchanged, report.failed), (1, 0, 0));
 }
 
+// Ported from the checkpoint tests (`a_pass_killed_midway_resumes_after_
+// the_files_it_wrote`, `a_pass_ending_on_a_checkpoint_does_not_publish_twice`
+// and `checkpoints_back_off_when_publishing_the_cache_is_slow`): with no
+// cache-wide checkpoint left, each cleared artifact commits on its own.
 #[test]
-fn a_pass_killed_midway_resumes_after_the_files_it_wrote() {
+fn each_cleared_artifact_commits_alone() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
     let index = index(&root, &cache);
@@ -148,12 +171,11 @@ fn a_pass_killed_midway_resumes_after_the_files_it_wrote() {
         .map(|(name, id)| typed_activity(id, name, "work.item"))
         .collect::<Vec<_>>();
     index.record_activities(events.iter(), &[]).unwrap();
-    let (state, _) = index.load_current_state().unwrap();
     // Chrome kills a host whose port closed; a panic stands in for that
-    // here, after the first file, with the first checkpoint due at once.
+    // here, right after the first artifact's clear committed.
     let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        index.regenerate_state_with(state, false, std::time::Duration::ZERO, |written| {
-            assert!(written < 1, "killed");
+        index.regenerate_with(&index.load_current_state().unwrap().0, |step, _| {
+            assert!(step != RegenStep::Cleared, "killed");
         })
     }));
     assert!(killed.is_err());
@@ -167,43 +189,121 @@ fn a_pass_killed_midway_resumes_after_the_files_it_wrote() {
     );
     let report = index.regenerate_dirty().unwrap();
     assert_eq!((report.written, report.unchanged), (3, 0));
+    assert!(dirty_ids(&index).is_empty());
 }
 
 #[test]
-fn a_pass_ending_on_a_checkpoint_does_not_publish_twice() {
+fn a_crash_between_write_and_clear_leaves_it_dirty_and_the_rewrite_is_unchanged() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let event = typed_activity(1, "A", "work.item");
+    index.record_activity(&event, &[]).unwrap();
+    let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        index.regenerate_with(&index.load_current_state().unwrap().0, |step, _| {
+            assert!(step != RegenStep::Written, "killed");
+        })
+    }));
+    assert!(killed.is_err());
+    let files = artifact_files(root.path());
+    assert_eq!(files.len(), 1, "the file was written before the crash");
+    assert_eq!(dirty_ids(&index), std::slice::from_ref(&event.artifact_id));
+    let unrecorded = sql::sql_rows(
+        &index.database_path(),
+        "select file_path is null, render_sha256 is null from brauser_group_state",
+    );
+    assert_eq!(
+        unrecorded,
+        [[sql::Value::Integer(1), sql::Value::Integer(1)]]
+    );
+    let report = index.regenerate_dirty().unwrap();
+    assert_eq!((report.written, report.unchanged), (0, 1));
+    assert!(dirty_ids(&index).is_empty());
+    // The clear stores where the file is and what was rendered into it.
+    let relative = files[0]
+        .strip_prefix(root.path())
+        .unwrap()
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
+    let rendered = Sha256::digest(fs::read(&files[0]).unwrap()).to_vec();
+    assert_eq!(
+        sql::sql_rows(
+            &index.database_path(),
+            "select file_path, render_sha256 from brauser_group_state",
+        ),
+        [[sql::Value::Text(relative), sql::Value::Blob(rendered)]]
+    );
+}
+
+#[test]
+fn a_redirty_between_render_and_clear_survives() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let event = typed_activity(1, "A", "work.item");
+    index.record_activity(&event, &[]).unwrap();
+    let first = generation_of(&index, &event.artifact_id).unwrap();
+    let mut later = typed_activity(2, "A", "work.item");
+    later.title = Some("Renamed".into());
+    later.occurred_at = "2026-10-15T13:00:00-07:00".into();
+    let report = index
+        .regenerate_with(&index.load_current_state().unwrap().0, |step, _| {
+            if step == RegenStep::Written {
+                // Another delivery lands after the file was rendered and
+                // written, before its clear.
+                index.record_activity(&later, &[]).unwrap();
+            }
+        })
+        .unwrap();
+    assert_eq!(report.written, 1);
+    let second = generation_of(&index, &event.artifact_id).expect("the new mark survives");
+    assert!(second > first);
+    assert!(
+        read_state(&index.state_path())
+            .unwrap()
+            .unwrap()
+            .dirty
+            .contains(&event.artifact_id),
+        "the JSON cache keeps the mark too"
+    );
+    assert!(!only_file_text(root.path()).contains("Renamed"));
+    let report = index.regenerate_dirty().unwrap();
+    assert_eq!((report.written, report.unchanged), (1, 0));
+    assert!(only_file_text(root.path()).contains("title: \"Renamed\""));
+    assert!(dirty_ids(&index).is_empty());
+}
+
+fn only_file_text(root: &Path) -> String {
+    let files = artifact_files(root);
+    assert_eq!(files.len(), 1, "{files:?}");
+    fs::read_to_string(&files[0]).unwrap()
+}
+
+#[test]
+fn regeneration_holds_the_regen_lock() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
     let index = index(&root, &cache);
     index
         .record_activity(&typed_activity(1, "A", "work.item"), &[])
         .unwrap();
-    let (state, _) = index.load_current_state().unwrap();
-    PUBLICATIONS.with(|count| count.set(0));
+    let lock = cache.path().join("index-regen.lock");
+    let mut held = false;
     index
-        .regenerate_state_with(state, false, Duration::ZERO, |_| {})
+        .regenerate_with(&index.load_current_state().unwrap().0, |step, _| {
+            if step == RegenStep::Written {
+                let other = File::options().read(true).write(true).open(&lock).unwrap();
+                held = matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock));
+            }
+        })
         .unwrap();
-    assert_eq!(PUBLICATIONS.with(|count| count.get()), 1);
-    assert!(dirty_ids(&index).is_empty());
-    // Nothing dirty and nothing to repair: nothing to publish.
-    let (state, _) = index.load_current_state().unwrap();
-    PUBLICATIONS.with(|count| count.set(0));
-    index
-        .regenerate_state_with(state, false, REGENERATION_CHECKPOINT, |_| {})
-        .unwrap();
-    assert_eq!(PUBLICATIONS.with(|count| count.get()), 0);
-}
-
-#[test]
-fn checkpoints_back_off_when_publishing_the_cache_is_slow() {
-    let minimum = Duration::from_millis(500);
-    assert_eq!(
-        checkpoint_interval(minimum, Duration::from_millis(10)),
-        minimum
-    );
-    assert_eq!(
-        checkpoint_interval(minimum, Duration::from_millis(300)),
-        Duration::from_millis(1200)
-    );
+    assert!(held, "another handle could take index-regen.lock mid-pass");
+    // The lock is released after the pass and never read or written.
+    let other = File::options().read(true).write(true).open(&lock).unwrap();
+    other.try_lock().unwrap();
+    assert_eq!(fs::metadata(&lock).unwrap().len(), 0);
 }
 
 #[test]

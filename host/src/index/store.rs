@@ -722,6 +722,18 @@ pub(super) fn rederive_groups(
     Ok(())
 }
 
+/// The full derived record of `group` (its own events and, for a
+/// container, its children's), as regeneration renders it, or `None` when
+/// the group derives no row.
+pub(super) fn derived_row(
+    tx: &Transaction<'_>,
+    adapters: Option<&Document>,
+    group: &str,
+) -> Result<Option<ArtifactRow>> {
+    let events = group_events(tx, group)?;
+    Ok(fold_events(adapters, &events).artifacts.remove(group))
+}
+
 /// Mark each artifact dirty with a fresh generation, replacing an older
 /// mark, so a clear conditional on the older generation keeps this one.
 pub(super) fn mark_dirty<'a>(
