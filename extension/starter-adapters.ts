@@ -343,9 +343,17 @@ export function starterRuleUpdate(adapter: AdapterObject): StarterRuleUpdate | n
   const kept = savedRules.filter((rule) => !retired.has(canonicalJson(rule)));
   const removed = savedRules.filter((rule) => retired.has(canonicalJson(rule))) as AdapterRule[];
   if (kept.length + added.length > MAX_RULES) return null;
-  const updated: AdapterObject = { ...adapter, match: [...kept, ...added] };
-  const own = adapter.modes && typeof adapter.modes === "object" && !Array.isArray(adapter.modes)
-    ? adapter.modes as Record<string, unknown>
+  return withStarterModes({ ...adapter, match: [...kept, ...added] }, current, added, removed);
+}
+
+/** `updated` with `modes` gaining the entries each `added` rule's `mode`
+ * capture needs, taken from the current starter, when the adapter lacks
+ * them; then the update, when the result compiles on its own. */
+function withStarterModes(
+  updated: AdapterObject, current: AdapterObject, added: AdapterRule[], removed: AdapterRule[],
+): StarterRuleUpdate | null {
+  const own = updated.modes && typeof updated.modes === "object" && !Array.isArray(updated.modes)
+    ? updated.modes as Record<string, unknown>
     : {};
   const starterModes = (current.modes ?? {}) as Record<string, unknown>;
   const missingModes: Record<string, unknown> = {};
@@ -361,6 +369,28 @@ export function starterRuleUpdate(adapter: AdapterObject): StarterRuleUpdate | n
   }
   if (Object.keys(missingModes).length) updated.modes = { ...own, ...missingModes };
   return compileDocument({ format: 1, artifacts: [updated] }).ok ? { adapter: updated, added, removed } : null;
+}
+
+/**
+ * `adapter` with one rule of its current starter appended. The rule must be
+ * in the current starter's `match` (compared by canonical JSON, and the
+ * starter's own copy is the one added), absent from the adapter, keep the
+ * adapter within 16 rules, and compile. `modes` gains only what the rule's
+ * `mode` capture needs; nothing else about the adapter changes. Unlike
+ * `starterRuleUpdate` this is not gated by STARTER_HISTORY: it is offered per
+ * page and per rule, and confirmed in the editor, so a hand-narrowed adapter
+ * gains only the one rule that covers the page in front of the user.
+ */
+export function starterRuleAddition(adapter: AdapterObject, rule: AdapterRule): StarterRuleUpdate | null {
+  const current = matchingStarter(adapter)?.adapter;
+  if (!current || !Array.isArray(adapter.match) || !Array.isArray(current.match)) return null;
+  const key = canonicalJson(rule);
+  const starterRule = (current.match as AdapterRule[]).find((entry) => canonicalJson(entry) === key);
+  if (!starterRule) return null;
+  const savedRules = adapter.match as unknown[];
+  if (savedRules.some((entry) => canonicalJson(entry) === key)) return null;
+  if (savedRules.length + 1 > MAX_RULES) return null;
+  return withStarterModes({ ...adapter, match: [...savedRules, starterRule] }, current, [starterRule], []);
 }
 
 export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): boolean {

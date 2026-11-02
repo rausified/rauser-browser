@@ -151,7 +151,7 @@ The extension runs in a hostile environment (arbitrary web pages), and the host 
 
 ### 5.1 Artifact logging
 
-Brauser remembers the tickets and docs the user works on. It does not keep a list of visited URLs. The unit of history is the **artifact**, such as a Jira issue, a Confluence page, a Google Doc, or a GitHub pull request, identified by a canonical ID and not by a URL. Six URLs for the same Jira issue (the issue page, a board modal, a link with tracking parameters) resolve to one record. Pages that are not artifacts, such as search results, dashboards, and board views, are never logged.
+Brauser remembers the tickets and docs the user works on. It does not keep a list of visited URLs. The unit of history is the **artifact**, such as a Jira issue, a Confluence page, a Google Doc, or a GitHub pull request, identified by a canonical ID and not by a URL. Six URLs for the same Jira issue (the issue page, a board modal, a link with tracking parameters) resolve to one record. Pages that are not artifacts, such as search results, dashboards, and board views, are never logged. On an origin that has capture rules, the side panel explains such a page in terms of the artifact types the site captures (§5.7, "Capture exclusions").
 
 Artifact logging replaces M1's per-site automatic logging; the two do not run side by side. M1's capture machinery stays: the revisioned, host-sent policy lease (protocol v6), the buffer, event intents, and the append-only daily log. The exact-origin Chrome grant and the host's native confirmation that M1 also used are gone since open access (2026-10-26, §3.2 and §14). What changes is what qualifies for the log. A visit is recorded only when an enabled adapter (§7.2) recognizes its URL.
 
@@ -809,6 +809,42 @@ recompute it; unreadable/private tabs clear it. Page/link patterns never enter
 this decision, and the line neither enables capture nor changes the host's
 artifact/history verdict.
 
+For a page the rules do not match (`no_rule`) or a workspace/account outside
+scope (`out_of_scope`), the line says what the origin does capture, for
+example "github.com captures repositories, pull requests and issues for
+acme; this page isn't one of them." (`extension/site-coverage.ts`
+`siteCoverage`, `coverageSentence`). Types are GitHub record labels, a
+starter's label, or a custom adapter's `type`; accounts are named only when
+every adapter on the origin is scoped to the same accounts, at most three and
+then "and N more". An out-of-scope page reads "this page isn't one of them.
+If it should be, review this site's scope in settings.", never "belongs to
+another account": a host matcher also reads non-account routes such as
+GitHub's `/orgs/…` or `/settings/…` as an owner.
+After a `no_rule` verdict, `nearMiss` looks for a near-miss, with no
+hard-coded site list. A near-miss replaces "this page isn't one of them"
+with ", but none of this site's saved rules covers this address." When the
+adapter's current starter (the starter catalog) has a rule the adapter lacks
+that alone would match the page under the adapter's own scope, the line adds
+"The current <label> starter has a rule for pages like this one." and the
+button reads **Review rule**. When the page carries exactly one valid value
+for a rule's fixed-shape query capture (`uuid`, or `hex` of a fixed length of
+32 or more) that no rule accepted, the line adds "The address carries an ID
+Brauser recognizes, so a rule could cover it." and the button reads **Edit
+rules**; it does not say whether the route or another condition (a literal
+query value, an `absent` key) failed. Either
+button opens `options.html#adapter-review=` in a new tab carrying only the
+adapter identity (`[origin, type, id]`) and the starter rule or `null`, never
+the page's address, path, query value or title. Settings re-reads the
+adapter and opens the existing **Update to current rules** review when the
+rule is part of it, otherwise a one-rule **Add a rule to <adapter>** review
+(`starterRuleAddition`, not gated by the starter history, so a narrowed
+adapter gains only that rule), or Edit and preview for an identifier; a
+stale or crafted hand-off is refused. The panel never saves rules: the only
+save is the settings editor's **Save**, which the host re-validates. All of
+this is local, URL-only and lease-based, and never changes the chip or the
+host's verdict. Scope is never widened from the panel; an out-of-scope page
+is explained, not offered.
+
 **Incoming navigation (protocol v8).** The
 artifact card shows up to five recorded incoming source/transition pairs,
 newest local day first, with ties ordered by source ID then transition.
@@ -912,7 +948,7 @@ Each state changes one area rather than the layout:
 | Newer build on disk (2026-11-02) | A banner, "Brauser was updated", while the extension build on disk differs from the one Chrome is running: `chrome.runtime.getManifest().version_name`, which `extension/build.mjs` fills with the build ID, against an uncached fetch of the extension's own `manifest.json` (`extension/build-update.ts`). This happens after `scripts/dev/deploy-live` until the extension is reloaded; a packaged install reads back the manifest it runs, so it never shows. The panel checks at startup, when it is shown again, and on every status poll. **Reload Brauser** flushes the note and calls `chrome.runtime.reload()`, which closes the panel, only when nothing could be lost: an edit that did not save, a save that conflicted on that click (the edit goes to the copy-out box, so the user sees it before reloading; once its local recovery copy is kept, the next click reloads and the copy returns after the reload), or a copy-out whose local recovery copy could not be written (`NoteEditor.recoveryAtRisk`) each keep the panel and say why. Nothing else changes. |
 | Origin not enabled | Notes, `/log`, and summaries still work. The site-capture area shows **Capture Site** with "Remember work on this site without configuring rules by hand." On a Jira Cloud, SharePoint/OneDrive, GitHub or Miro origin it opens the starter review; on any other HTTP(S) origin it drafts rules with the structural drafter and shows the plain-language review inline (§5.1), with no Chrome prompt or native dialog. Without a home folder, or while config needs repair, the button is disabled with a pointer to settings. **As built (2026-10-28, `brwr-f45`):** a structural review, including the recurring-pages hint's, shows **Improve with AI**. Without a ready harness it is disabled, with the same setup hint Summarize & log shows. Once clicked, the review shows the run's progress (state, the agent's streamed text as text only, and Cancel), then re-renders as "Improved with AI (<harness>), checked by Brauser" with **Use basic draft**, or keeps the basic draft and says in one line why the AI draft was not used. |
 | Site access withdrawn in Chrome | One banner, "Brauser needs site access — re-enable in Chrome", with a button that opens Brauser's extension settings; shown only on HTTP(S) tabs. The note editor returns once access does. |
-| Enabled origin, page not an artifact | No artifact card; the chip reads `○ Not an artifact`. When the current page is unrecognized and the worker's sample holds an unrecognized shape with a route word visited at least three times, the site-capture area says "Looks like you have recurring pages on `<host>`." and offers **Draft rules for these pages**, which drafts from the sample and adds adapters only. Otherwise the area appears only on a configured starter origin, saying its rules are managed in settings. |
+| Enabled origin, page not an artifact | No artifact card; the chip reads `○ Not an artifact`. The capture explanation says what the origin captures ("`<host>` captures `<types>`[ for `<accounts>`]; this page isn't one of them."), and for a near-miss offers **Review rule** (a current starter rule) or **Edit rules** (a query identifier on an uncovered route), each opening the settings review in a new tab. When the current page is unrecognized and the worker's sample holds an unrecognized shape with a route word visited at least three times, the site-capture area says "Looks like you have recurring pages on `<host>`." and offers **Draft rules for these pages**, which drafts from the sample and adds adapters only. Otherwise the area appears only on a configured starter origin, saying its rules are managed in settings. |
 | No agent set up | **Summarize & log** is disabled with the tooltip "Set up a summary harness in settings first."; the task bar stays visible, runs nothing, and its hint says "Set up an agent (Codex or Claude Code) in settings to run tasks." with **Open settings**; no run cards are restored, and the panel does not call `list_runs`. Later milestones add the chip `✦ AI not set up` and slash commands that need no agent. |
 | Brauser service unavailable | The service setup instructions and the host's reason show as the line of the summary or task that failed (in its own run area), or, when cards are restored, as one notice with **Open settings** in the task run area, which shows on both tabs. Notes and capture are unaffected. |
 | Not an HTTP(S) page | The page area says Brauser can't use the tab; only Read later is active. |

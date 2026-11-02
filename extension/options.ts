@@ -49,7 +49,9 @@ import {
   matchingStarter,
   parseGitHubOrganizations,
   starterOffers,
+  starterRuleAddition,
   starterRuleUpdate,
+  type AdapterRule,
   withContainerLinks,
   type StarterOffer,
 } from "./starter-adapters.js";
@@ -837,6 +839,77 @@ function beginStarterUpdate(index: number): void {
   );
 }
 
+/** Open a saved starter adapter in the editor with one rule of its current
+ * starter appended, for the page the side panel offered it on. Saving is the
+ * usual edit of that adapter. */
+function beginStarterRuleAddition(index: number, rule: AdapterRule): void {
+  if (!session.config || busy) return;
+  const adapter = session.config.adapters.artifacts[index];
+  const addition = adapter ? starterRuleAddition(adapter, rule) : null;
+  const label = adapter ? matchingStarter(adapter)?.label : undefined;
+  if (!adapter || !addition || label === undefined) return;
+  openAdapterEditor(
+    { kind: "existing", identity: adapterIdentity(adapter)!, snapshot: adapterSnapshot(adapter), starterUpdate: true },
+    addition.adapter,
+    `Add a rule to ${adapterLabel(adapter, index)}`,
+    {
+      line: `Adds 1 rule from the current ${label} starter for the page you were on:`,
+      items: addition.added.map((added) => `Adds ${ruleDescription(added, null)}`),
+      example: { ...addition.adapter, match: [addition.added[0]] },
+    },
+  );
+}
+
+const ADAPTER_REVIEW_HASH = /^#adapter-review=(.{1,4096})$/;
+
+/** The `#adapter-review=` hand-off from the side panel's near-miss offer:
+ * an adapter identity and a starter rule (or null), never a page address. */
+function adapterReviewHandoff(hash: string): { identity: string; rule: AdapterRule | null } | null {
+  const match = ADAPTER_REVIEW_HASH.exec(hash);
+  if (!match) return null;
+  try {
+    const value: unknown = JSON.parse(decodeURIComponent(match[1]!));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const { adapter, rule } = value as Record<string, unknown>;
+    if (!Array.isArray(adapter) || adapter.length !== 3 || !adapter.every((part) => typeof part === "string")) return null;
+    if (rule !== null && (!rule || typeof rule !== "object" || Array.isArray(rule))) return null;
+    return { identity: JSON.stringify(adapter), rule: rule as AdapterRule | null };
+  } catch {
+    return null;
+  }
+}
+
+/** Open the review the side panel offered for a page its rules just miss.
+ * Only an existing review opens: the current starter update when the rule is
+ * part of it, a one-rule starter addition, or Edit and preview. Nothing saves
+ * until the editor's Save. The hash is cleared so a reload does not reopen. */
+function openHandedOffAdapterReview(): void {
+  const hash = typeof location === "undefined" ? "" : location.hash;
+  if (!hash.startsWith("#adapter-review=")) return;
+  if (typeof history !== "undefined") history.replaceState(null, "", `${location.pathname}${location.search}`);
+  const handoff = adapterReviewHandoff(hash);
+  if (!handoff || busy || !session.config) return;
+  const index = session.config.adapters.artifacts.findIndex((adapter) => adapterIdentity(adapter) === handoff.identity);
+  const adapter = session.config.adapters.artifacts[index];
+  if (!adapter) {
+    show("This site's rules changed since the panel offered this. Open the panel on the page again.", true);
+    return;
+  }
+  if (handoff.rule === null) {
+    beginAdapterEdit(index);
+    return;
+  }
+  const key = canonicalJson(handoff.rule);
+  if (starterRuleUpdate(adapter)?.added.some((rule) => canonicalJson(rule) === key)) {
+    beginStarterUpdate(index);
+  } else if (starterRuleAddition(adapter, handoff.rule)) {
+    beginStarterRuleAddition(index, handoff.rule);
+  } else {
+    show("This rule can no longer be added here; edit the rules by hand.", true);
+    beginAdapterEdit(index);
+  }
+}
+
 function focusAdapterOpener(opener: HTMLElement | null): void {
   // A save may have rebuilt the gallery/list that contained the opener.
   const target = opener?.isConnected && opener !== document.body ? opener : newAdapterButton;
@@ -1578,5 +1651,6 @@ void (async () => {
     updateControls();
   }
   if (session.connected) await openHandedOffDraft();
+  if (session.connected) openHandedOffAdapterReview();
   if (session.connected) await refreshAgentEnv();
 })();

@@ -14,6 +14,8 @@ import { ConfigSession, describe, element, leaseFor, setupProblem, worker } from
 import { evaluate } from "./adapter-templates.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
+import { coverageSentence, nearMiss, siteCoverage } from "./site-coverage.js";
+import type { AdapterRule } from "./starter-adapters.js";
 import { APP_NAME, storageKey } from "./brand.js";
 import { hostBuildText } from "./build-info.js";
 import { initDiag } from "./diag.js";
@@ -84,6 +86,9 @@ const captureExplanation = element<HTMLDivElement>("capture-explanation");
 const captureExplanationText = element<HTMLParagraphElement>("capture-explanation-text");
 const captureExplanationAction = element<HTMLButtonElement>("capture-explanation-action");
 const capturePolicy = new PolicyLeaseCache();
+// The review the capture explanation's button opens in settings: an adapter
+// identity ([origin, type, id]) and a starter rule, or null. Never a URL.
+let pendingAdapterReview: { adapter: [string, string, string]; rule: AdapterRule | null } | null = null;
 const artifactCard = element<HTMLElement>("artifact-card");
 const artifactHeading = element<HTMLHeadingElement>("artifact-heading");
 const artifactIdentity = element<HTMLParagraphElement>("artifact-identity");
@@ -715,6 +720,7 @@ function changing(): boolean {
  * state. Use the worker's compiler/evaluator; page links never enter this
  * decision. Recognition and history on the artifact card remain host-owned. */
 function renderCaptureExplanation(): void {
+  pendingAdapterReview = null;
   captureExplanationAction.dataset.action = "settings";
   captureExplanationAction.textContent = "Open settings";
   captureExplanationAction.disabled = changing();
@@ -743,7 +749,7 @@ function renderCaptureExplanation(): void {
   } else {
     const lease = capturePolicy.restore(leaseFor(config, session.revision));
     const compiled = lease && capturePolicy.compiledFor(lease);
-    if (!compiled) {
+    if (!lease || !compiled) {
       reason = "Capture rules could not be read. Repair them in settings.";
     } else {
       const result = evaluate(compiled, currentPage.url, currentPage.title);
@@ -752,19 +758,51 @@ function renderCaptureExplanation(): void {
         captureExplanationText.textContent = "";
         return;
       }
+      const coverage = siteCoverage(lease.adapters.artifacts, currentPage.url);
       switch (result.reason) {
-        case "out_of_scope":
-          reason = "This page is outside the workspaces or accounts chosen for capture. Review this site's scope in settings.";
+        case "out_of_scope": {
+          const sentence = coverage && coverageSentence(coverage, "out_of_scope");
+          reason = sentence
+            ? `${sentence} If it should be, review this site's scope in settings.`
+            : "This page is outside the workspaces or accounts chosen for capture. Review this site's scope in settings.";
           break;
+        }
         case "no_adapter":
           reason = "This site has no capture rules. Review Capture Site to choose which pages to remember.";
           captureExplanationAction.textContent = "Review Capture Site";
           captureExplanationAction.dataset.action = "capture-site";
           captureExplanationAction.disabled ||= element<HTMLButtonElement>("capture-site").disabled;
           break;
-        case "no_rule":
-          reason = "This page does not match this site's capture rules. Only matching pages are remembered. Review the rules in settings.";
+        case "no_rule": {
+          const miss = nearMiss(lease.adapters.artifacts, currentPage.url);
+          const adapter = miss && lease.adapters.artifacts[miss.adapter];
+          const identity = adapter && typeof adapter.origin === "string" && typeof adapter.type === "string" &&
+            typeof adapter.id === "string"
+            ? [adapter.origin, adapter.type, adapter.id] as [string, string, string]
+            : null;
+          // An offered near-miss is close to a captured type, so its sentence
+          // names the missing rule instead of saying the page is not one.
+          const sentence = coverage
+            ? coverageSentence(coverage, miss && identity ? "near_miss" : "no_rule")
+            : "This page does not match this site's capture rules.";
+          if (miss?.kind === "starter_rule" && identity) {
+            reason = `${sentence} The current ${miss.label} starter has a rule for pages like this one.`;
+            pendingAdapterReview = { adapter: identity, rule: miss.rule };
+            captureExplanationAction.textContent = "Review rule";
+          } else if (miss?.kind === "identifier" && identity) {
+            // The ID's rule may cover this route and fail on another
+            // condition, so the line does not say which part is missing.
+            reason = `${sentence} The address carries an ID Brauser recognizes, so a rule could cover it.`;
+            pendingAdapterReview = { adapter: identity, rule: null };
+            captureExplanationAction.textContent = "Edit rules";
+          } else {
+            reason = coverage
+              ? `${sentence} Only matching pages are remembered.`
+              : "This page does not match this site's capture rules. Only matching pages are remembered. Review the rules in settings.";
+          }
+          if (pendingAdapterReview) captureExplanationAction.dataset.action = "adapter-review";
           break;
+        }
         default:
           reason = "This page's address cannot safely match the capture rules. Review the rules in settings.";
       }
@@ -862,6 +900,14 @@ function retryWaitingHistory(): void {
   if (!session.connected || recentView.hidden) return;
   if (recentWaitingForHost) void loadRecent();
   if (worklogWaitingForHost) void loadWorklog();
+}
+
+/** Open settings on the review of one adapter's rules. The hash carries only
+ * config and catalog data; settings re-reads the adapter and saves nothing
+ * until its editor's Save. */
+function openAdapterReview(review: { adapter: [string, string, string]; rule: AdapterRule | null }): void {
+  const url = chrome.runtime.getURL(`options.html#adapter-review=${encodeURIComponent(JSON.stringify(review))}`);
+  void chrome.tabs.create({ url }).catch((error: unknown) => show(`Could not open settings: ${describe(error)}`, true));
 }
 
 function openSettings(): void {
@@ -1784,6 +1830,8 @@ captureExplanationAction.addEventListener("click", () => {
   if (captureExplanationAction.dataset.action === "capture-site") {
     selectView("page");
     element<HTMLButtonElement>("capture-site").click();
+  } else if (captureExplanationAction.dataset.action === "adapter-review" && pendingAdapterReview) {
+    openAdapterReview(pendingAdapterReview);
   } else openSettings();
 });
 setupSettingsButton.addEventListener("click", openSettings);
