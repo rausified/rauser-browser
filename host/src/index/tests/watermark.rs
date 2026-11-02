@@ -601,6 +601,22 @@ fn portable_paths_use_forward_slashes() {
     assert_eq!(catchup::portable_path(Path::new("../x.md")), None);
 }
 
+/// Messages name a log the way the goldens and every other host message
+/// do, with `/`, so on Windows (where `join` uses `\`) the
+/// `inspecting artifact log` error still reads `log/2026/10/...`.
+#[test]
+fn shown_logs_use_forward_slashes() {
+    let relative = Path::new("2026").join("10").join("2026-10-18.md");
+    assert_eq!(
+        catchup::shown_log(Path::new("log"), &relative),
+        "log/2026/10/2026-10-18.md"
+    );
+    assert_eq!(
+        catchup::shown_log(&Path::new("vault").join("log"), &relative),
+        "vault/log/2026/10/2026-10-18.md"
+    );
+}
+
 #[test]
 fn reconcile_reads_only_changed_logs_and_marks_only_new_events_dirty() {
     let root = TempDir::new().unwrap();

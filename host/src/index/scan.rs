@@ -53,7 +53,7 @@ impl LogScan {
         let mut files = Vec::new();
         collect_markdown(&logs, Path::new(""), 0, &mut files, strict)?;
         files.sort();
-        let shown = |relative: &Path| log_dir.join(relative).display().to_string();
+        let shown = |relative: &Path| catchup::shown_log(&log_dir, relative);
         let mut checkpoints = Vec::with_capacity(files.len());
         for relative in files {
             let metadata = logs

@@ -30,7 +30,16 @@ const ROWS_WRITTEN_BOUND: u64 = 40;
 /// The loose debug wall-clock ceilings. An in-order delivery is
 /// O(batch); a backdated child event re-derives its container,
 /// O(container) (open decision 4), so it is reported against its own.
+/// The counter assertions are what prove the bound; wall time only
+/// catches a gross regression.
+#[cfg(not(windows))]
 const IN_ORDER_CEILING: Duration = Duration::from_millis(500);
+/// Windows CI runners pay far more per commit (fsync on a slow virtual
+/// disk, Defender scanning each new `index.db-wal` page): a correctly
+/// bounded fresh-artifact delivery (11 rows, one transaction) took
+/// 521 ms there. Looser, but still far below an O(history) derive.
+#[cfg(windows)]
+const IN_ORDER_CEILING: Duration = Duration::from_secs(3);
 const BACKDATED_CEILING: Duration = Duration::from_secs(30);
 
 struct Year {
