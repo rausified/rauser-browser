@@ -69,8 +69,8 @@
           </div>
           <p id="why-paused-hint" class="page-url" hidden>Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.</p>
         </section>
-        <div class="page-actions">
-          <button id="summarize" type="button" class="secondary" hidden disabled>Summarize &amp; log</button>
+        <div id="page-actions" class="page-actions">
+          <button id="summarize" type="button" class="secondary" hidden disabled><svg class="icon summarize-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span id="summarize-label">Summarize &amp; log</span></button>
           <section id="capture-site-area" aria-label="Site capture" hidden>
         <p id="capture-site-hint"></p>
         <button id="capture-site" type="button">Capture Site</button>
@@ -137,7 +137,7 @@
           <textarea id="task-input" rows="1" maxlength="4000" autocomplete="off" spellcheck="true"
             title="Enter to run; Shift+Enter for a new line. ArrowUp at the start recalls earlier instructions; ArrowDown at the end returns to your draft. Press / outside a text field to focus here."
             placeholder="Tell the agent what to do…"></textarea>
-          <button id="task-run" type="submit" class="run-button" aria-label="Run task">Run</button>
+          <button id="task-run" type="submit" class="run-button" aria-label="Run task" title="Run task"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span id="task-run-label" class="visually-hidden">Run</span></button>
         </form>
         <label class="task-page-choice"><input id="task-use-page" type="checkbox" checked> Include this page</label>
         <div class="task-meta">
@@ -157,7 +157,7 @@
 
       <div id="page-view" role="tabpanel" aria-labelledby="tab-page">
       <div id="page-summary" class="card page-summary" hidden>
-        <div class="card-head">
+        <div id="page-summary-head" class="card-head">
           <p class="artifact-label">Summary</p>
           <span id="page-summary-time" class="mono-meta"></span>
           <button id="page-summary-open" type="button" class="link-button">Open summary <svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="11" height="11"><path d="M7 17 17 7M8 7h9v9"/></svg></button>
@@ -254,12 +254,12 @@
         <section class="card worklog-card" aria-labelledby="worklog-heading">
           <div class="card-head">
             <h2 id="worklog-heading" class="artifact-label">Worklog</h2>
-            <label for="worklog-period" class="visually-hidden">Worklog period</label>
-            <select id="worklog-period" class="compact-select">
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="week">This week</option>
-            </select>
+            <fieldset id="worklog-period" class="segmented">
+              <legend class="visually-hidden">Worklog period</legend>
+              <input id="worklog-today" type="radio" name="worklog-period" value="today" checked><label for="worklog-today">Today</label>
+              <input id="worklog-yesterday" type="radio" name="worklog-period" value="yesterday"><label for="worklog-yesterday">Yesterday</label>
+              <input id="worklog-week" type="radio" name="worklog-period" value="week"><label for="worklog-week">Week</label>
+            </fieldset>
           </div>
           <label class="check-label"><input id="worklog-curate" type="checkbox"> Choose work to share</label>
           <div id="worklog-choices-area" hidden>

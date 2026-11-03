@@ -445,6 +445,17 @@ body.panel-page {
    take full rows. */
 .panel-page #capture-site-area { display: contents; }
 .panel-page .page-actions button { flex: 1 1 0; min-width: 0; height: 30px; padding: 0 10px; white-space: nowrap; }
+/* #summarize: a text button in the action box, the Summary card's
+   re-summarize icon once the page has a summary. */
+.panel-page #summarize[data-place="actions"] .summarize-icon { display: none; }
+.panel-page #summarize[data-place="card"] {
+  display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; margin: 0; flex: none; border-radius: 8px;
+}
+.panel-page #summarize[data-place="card"][hidden] { display: none; }
+.panel-page #summarize[data-place="card"] #summarize-label {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+.panel-page #page-summary-head #page-summary-open { margin-left: auto; }
 .panel-page #capture-site-hint { order: -1; flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
 .panel-page #capture-site-review { flex-basis: 100%; }
 .panel-page #capture-site-review button { flex: none; height: auto; padding: 6px 12px; }
@@ -469,7 +480,11 @@ body.panel-page {
   flex: 1; min-width: 0; resize: none; font-size: 13px; line-height: 20px; min-height: 34px; max-height: 140px;
   field-sizing: content;
 }
-.panel-page button.run-button { height: 34px; padding: 0 14px; flex: none; border-radius: 9px; font-weight: 650; }
+/* Round arrow Run button; its label is visually hidden (#task-run-label). */
+.panel-page button.run-button {
+  display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; flex: none; border-radius: 50%;
+}
+.panel-page button.run-button .icon { stroke-width: 2.2; }
 .panel-page .task-page-choice { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
 .panel-page .task-page-choice input { margin: 0; width: auto; }
 .panel-page .task-meta { display: flex; align-items: center; gap: 8px; padding: 0 2px; }
@@ -588,6 +603,22 @@ body.panel-page {
 
 /* Worklog */
 .panel-page .worklog-card h2 { margin: 0; }
+/* Today / Yesterday / Week: a native radio group drawn as segments. */
+.panel-page fieldset.segmented {
+  display: inline-flex; gap: 2px; margin: 0; padding: 2px; min-width: 0;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--sunken);
+}
+.panel-page fieldset.segmented input {
+  position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none;
+}
+.panel-page fieldset.segmented label {
+  padding: 3px 9px; border-radius: 7px; font-size: 11px; font-weight: 550; color: var(--muted); cursor: pointer;
+}
+.panel-page fieldset.segmented label:hover { color: var(--text); }
+.panel-page fieldset.segmented input:checked + label {
+  background: var(--surface-2); color: var(--text); box-shadow: inset 0 1px 0 #ffffff14, 0 1px 2px #0000004d;
+}
+.panel-page fieldset.segmented input:focus-visible + label { outline: 2px solid var(--focus); outline-offset: 1px; }
 .panel-page .worklog-text {
   margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line);
   font: 11.5px/1.55 var(--mono); color: var(--text); max-height: 300px;

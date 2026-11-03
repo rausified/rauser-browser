@@ -4,10 +4,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ARTICLE_URL, CAPTURING, CONFIG, artifact, install, noteLoaded, recognized, settle, typeWhy, until,
+  ARTICLE_URL, CAPTURING, CONFIG, PANEL_HTML, artifact, install, noteLoaded, recognized, settle, typeWhy, until,
 } from "./harness.mjs";
 
 const PR_URL = "https://github.com/acme-corp/widgets/pull/7";
+
+test("Run and re-summarize are icon buttons that keep a text label for assistive technology", () => {
+  for (const [id, label, name] of [["task-run", "task-run-label", "Run task"], ["summarize", "summarize-label", null]]) {
+    const button = PANEL_HTML.match(new RegExp(`<button id="${id}"[^>]*>[\\s\\S]*?</button>`))?.[0];
+    assert.ok(button, id);
+    assert.match(button, /<svg class="icon[^"]*" aria-hidden="true" focusable="false"/, `${id} draws its icon decoratively`);
+    assert.match(button, new RegExp(`<span id="${label}"`), `${id} keeps its label`);
+    if (name) assert.match(button, new RegExp(`aria-label="${name}"`));
+  }
+  // Run shows only its arrow; its label is for screen readers.
+  assert.match(PANEL_HTML, /<span id="task-run-label" class="visually-hidden">Run<\/span>/);
+  // The Summary card head has a slot the button moves into.
+  assert.match(PANEL_HTML, /<div id="page-summary-head" class="card-head">/);
+  assert.match(PANEL_HTML, /<div id="page-actions" class="page-actions">/);
+});
 
 test("a recognized page shows its type's tile, kind chip and short measures", async () => {
   const page = await install({
@@ -25,7 +40,8 @@ test("a recognized page shows its type's tile, kind chip and short measures", as
   assert.equal(page.el("artifact-kind-label").textContent, "Pull request");
   assert.equal(page.el("artifact-measures-short").textContent, "42m focused · 3 opens");
   assert.equal(page.el("artifact-details").hidden, false, "the details row comes with the card");
-  assert.equal(page.el("summarize").textContent, "Summarize & log");
+  assert.equal(page.el("summarize-label").textContent, "Summarize & log");
+  assert.equal(page.el("summarize").dataset.place, "actions");
 });
 
 test("an unrecognized page offers Save Page through the same Summarize & log button", async () => {
@@ -39,7 +55,8 @@ test("an unrecognized page offers Save Page through the same Summarize & log but
   await until(() => page.el("artifact-status").textContent === "○ Not an artifact", "the verdict");
   assert.equal(page.el("artifact-card").hidden, true);
   assert.equal(page.el("artifact-details").hidden, true);
-  assert.equal(page.el("summarize").textContent, "Save Page");
+  assert.equal(page.el("summarize-label").textContent, "Save Page");
+  assert.equal(page.el("summarize").dataset.place, "actions");
   assert.equal(page.el("page-glyph").dataset.hue, "neutral");
 });
 
