@@ -196,7 +196,7 @@ queue".
 ## In Progress / This Iteration
 
 <!-- BEGIN GENERATED section=in-progress: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.** John approved the append-only re-key direction. Alias rehearsal, impact review and the journal are on this base; the shared projected-history preview (`brwr-ruwj`) remains in held PR #238 (`brwr-37ca`). Durable apply (`brwr-dbp`) and panel review follow its integration. No migration is enabled and ID freezing remains enforced.
+- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.** John approved the append-only re-key direction. Alias rehearsal, impact review, the decision journal and shared history projection are integrated. Physical note ownership/revisions are the current brwr-dbp slice; durable application and panel review remain. No migration is enabled and ordinary ID freezing stays enforced.
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   **Blocked on platform execution; implementation complete.** The built-page
   smoke covers artifact/context interactions, Recent filters, worklog Copy,
@@ -217,7 +217,7 @@ queue".
   action is to record current Windows and macOS green CI against a named
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
-- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** Blocked on held PR #238 (`brwr-37ca`), which contains the shared resolver/preview prerequisite `brwr-ruwj`. After it lands: physical note selection/revision, authoritative applied home history, exact config preparation and universal recovery/refusal, alias-aware access, old-path stubs and crash/reindex acceptance. Ordinary config saves keep the ID freeze.
+- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** The shared resolver/preview is integrated; brwr-c1bq adds the physical note ownership/revision contract. Remaining: authoritative applied home history, exact config preparation and universal recovery/refusal, replay-aware readers and summary/run identity, preserved alias-note viewing, old-path stubs and crash/reindex acceptance. Ordinary config saves keep the ID freeze.
 - [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2; assignee: john-index-lane)_
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2; assignee: john-index-lane)_
 <!-- END GENERATED section=in-progress -->
@@ -228,6 +228,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** New Capability. **Preserve original notes across resolved artifact keys (2026-11-03).** Native note requests share a logical-versus-physical ownership contract, retaining original filenames and provenance while preferring a canonical note and refusing ambiguous fallback. Affected revisions bind replay history and file selection; move-back, unalias and stale native conflicts preserve both files. This completes the internal brwr-dbp prerequisite only; ordinary requests still use empty replay and durable application/panel review remain unfinished. **Metrics:** 1,421 Rust-reported outcomes (+12; 94 explicit IPC skips), 44 extension files, both Clippy builds; 2 accessibility fixtures pass, 42 browser cases skip in sandbox.
+
 - **Category:** New Capability. **Repair capture rules without discarding the original (2026-11-02).** Settings offers copyable preserved values and a complete format-1 replacement with preview on every site. The host backs up the exact original config, preserves pause and other settings, refuses stale or invalid replacements and retains recorded identity checks. Future formats remain opaque and remove-all recovery stays available. **Metrics:** 4 new Rust/wire tests and 5 offline UI cases; 1,386 Rust-reported outcomes (94 IPC sandbox skips), 44 extension files and 95 settings cases pass; 2 accessibility fixtures pass, 41 browser cases explicitly skip in sandbox.
 
 - **Category:** New Capability. **Run tasks without attaching a browser page (2026-11-02).** The task bar works on non-web tabs and offers Include this page on web tabs. Host and service validate explicit scope, no page file or page-reading permission is created, and Tasks history/Reuse preserves the choice without navigation. Ordinary page extraction failures remain visible. **Metrics:** 8 new Rust/wire and 7 extension regressions; 1,382 Rust-reported outcomes (94 explicit IPC skips), all 44 extension files pass; 2 accessibility fixtures pass and 40 browser cases explicitly skip in sandbox.
@@ -2117,3 +2119,37 @@ rules before repair. Whole-document replacement is now recoverable, but a
 manual reconstruction still makes accidental omissions possible; future-format
 values must remain opaque in any comparison. The three assigned blockers and
 held PRs were left unchanged. `.bosun_commit_msg` holds the driver handoff.
+
+
+### Cycle observations (2026-11-03 — physical note ownership)
+
+Started clean on d6a8e705 with no quarantine report. The full baseline gate
+passed before building. Continued assigned brwr-dbp through direct prerequisite
+brwr-c1bq, now closed: ordinary native requests share the physical ownership
+contract exercised by host-built replay. Original note keys and paths survive
+resolved saves, canonical preference preserves both-side files, ambiguous
+fallback refuses, and replay-bound revisions protect stale selections and
+move-away/back. Ordinary calls still pass empty replay and keep old revisions.
+The parent apply and panel beads remain in progress, with their assigned labels
+unchanged; brwr-7lq remains dependency-blocked. Held-PR #238 wording was stale
+and is corrected in bead metadata, then regenerated here.
+
+Complete final required/README gate passes: 1,421 Rust-reported outcomes
+(+12 new; 94 explicit IPC skips), 44 extension files, both Clippy builds,
+2 accessibility fixture passes/42 sandbox browser skips, nine script files,
+221 Python cases/92 platform skips and 10,696 inert Markdown renderings.
+The complete diff was read manually and by one independent in-session Codex
+reviewer; no findings. A real codex exec harness/API call is forbidden in this
+offline run, so review used the available in-session reviewer instead.
+The initial focused compile exposed a private test-helper visibility error;
+it was corrected locally before focused tests and the complete gate passed.
+
+Next work is the actual authoritative history/config transaction and universal
+prepare recovery/refusal, then replay-aware ordinary readers, summary/run
+identity, preserved alias-note viewing, old-path artifact stubs and crash/reindex
+acceptance. The staged plan records the remaining recovery/history/downgrade
+decisions. Do not build another preview or relax ordinary ID freezing. Reinforced
+brwr-pgxz with concrete evidence: A/B notes in a chain to C need original owner
+keys and read-only inspection when C has no primary. Driver owns external
+verification, independent approval and publication. No live service, API,
+remote Git or real harness was used.

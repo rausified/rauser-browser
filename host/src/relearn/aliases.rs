@@ -8,7 +8,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Action {
     Confirm,
@@ -18,7 +18,7 @@ pub(crate) enum Action {
 
 /// Endpoints here have already been derived by the host, including type and
 /// scope. Native messages must never deserialize directly into this type.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct Event {
     pub(crate) event_id: String,
     pub(crate) action: Action,
@@ -155,12 +155,18 @@ pub(crate) fn replay(events: &[Event]) -> Result<Preview> {
 #[derive(Default)]
 pub(crate) struct Resolution {
     canonical: BTreeMap<String, String>,
+    // Bind note edits to replay history, not merely its final mapping. A
+    // move away and back must not revive an old editor's save authority.
+    history_revision: Option<String>,
 }
 
 impl Resolution {
     pub(crate) fn from_events(events: &[Event]) -> Result<Self> {
         let preview = replay(events)?;
         Ok(Self {
+            history_revision: (!events.is_empty())
+                .then(|| serde_json::to_vec(events).map(|bytes| super::hash(&bytes)))
+                .transpose()?,
             canonical: preview
                 .groups
                 .into_iter()
@@ -215,6 +221,24 @@ impl Resolution {
 
     pub(crate) fn canonical<'a>(&'a self, id: &'a str) -> &'a str {
         self.canonical.get(id).map(String::as_str).unwrap_or(id)
+    }
+
+    pub(crate) fn members<'a>(&'a self, id: &'a str) -> Vec<&'a str> {
+        let canonical = self.canonical(id);
+        if !self.canonical.contains_key(id) {
+            return vec![id];
+        }
+        self.canonical
+            .iter()
+            .filter_map(|(member, target)| (target == canonical).then_some(member.as_str()))
+            .collect()
+    }
+
+    pub(crate) fn history_revision(&self, id: &str) -> Option<&str> {
+        self.canonical
+            .contains_key(id)
+            .then_some(self.history_revision.as_deref())
+            .flatten()
     }
 }
 

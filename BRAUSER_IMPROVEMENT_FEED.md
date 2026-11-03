@@ -120,6 +120,11 @@ a person how to proceed. Where: host/src/relearn.rs, its strict index scan,
 and the future panel Re-learn review under brwr-6x2. Tracked as brwr-pgxz
 (discovered from both fixes); preserve read-only review and separate recovery.
 
+- +1 2026-11-03: `brwr-c1bq` proves that A→B→C with notes at A and B
+  must refuse an editor while C has no note. Include the original note keys
+  and read-only viewing in `brwr-pgxz`/panel Re-learn conflict evidence so a
+  person can resolve that case without guessing which file is being edited.
+
 ## 2026-11-02 — Bind the physical note location into Re-learn save revisions
 
 Change: give an alias-resolved note an internal logical key, physical ownership
@@ -132,6 +137,10 @@ Where: host/src/native.rs note context, host/src/note.rs load/save and the
 remaining brwr-dbp apply integration. Test stale saves across a move and a
 move back, both-side notes and URL copies; preserve copy-out-only browser
 recovery. This belongs to the assigned brwr-dbp work.
+
+- Done 2026-11-03: `brwr-c1bq` integrates physical ownership and history-bound
+  revisions into the shared native note path. Applied-history publication and
+  panel integration remain assigned under `brwr-dbp`/`brwr-6x2`.
 
 ## 2026-11-02 — A `brauser summary-check` command for iterating on SUMMARY.md
 

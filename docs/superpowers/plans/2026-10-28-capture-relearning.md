@@ -16,6 +16,13 @@ commit a replacement policy while preserving activity, notes and summaries.
   containers without direct visits. A shared source or occupied destination
   requires explicit conflict resolution; this stage supplies none and refuses
   approval. Other origins never become proposed migration rows.
+- Resolved by existing DESIGN.md §6.2, implemented by Cookie in `brwr-c1bq`
+  (2026-11-03): retain physical note ownership and creation filenames. An
+  existing canonical note supplies the editor; otherwise a sole owned alias
+  note can supply it. Multiple alias notes without a canonical note refuse
+  selection in this stage. URL copies remain separate. Affected editors use
+  an opaque revision bound to logical identity, physical ownership, content
+  and replay history; unaffected editors retain their existing revisions.
 
 ## Design challenge
 
@@ -46,13 +53,24 @@ projection from home history. brwr-ruwj implements the read-only shared
 resolver/index projection first; brwr-dbp retains the remaining transaction,
 physical-note selection, file-stub and durable-history integration.
 
+Note ownership design challenge (2026-11-03, reviewer
+`/root/note_contract_challenge`): adopt the existing canonical preference from
+§6.2 rather than invent a file winner or copy every note. Integrate the same
+location-aware wrappers into ordinary native reads, saves and key-change
+conflicts immediately, using empty replay until durable apply exists. Preserve
+raw revisions for unaffected keys, and bind affected revisions to replay
+history, including unalias. A hash of only the final map would revive an old
+edit after a move away and back; hash trusted replay instead. Whole-history
+invalidation is conservative but simple; component-specific generations can
+follow if real editing friction justifies them. Refuse an ambiguous fallback
+instead of adding an unreviewed note-selection UI.
+
 Open apply decisions remain: universal automatic recovery versus refusal
-until explicit recovery; physical-note selection/revision contract; durable
+until explicit recovery; durable
 unalias support; authoritative history location and downgrade contract. These
-are outside the read-only projection stage; no application is enabled while
-they remain open. Cookie resolves the current stage as a developer-only,
-read-only preview with a fresh host-derived plan, no worker-supplied mappings,
-and no cache, content or config publication.
+are outside the note-ownership slice; no application is enabled while they
+remain open. Ordinary note requests use empty replay; tests supply only
+host-built replay. Neither the worker nor a journal receipt supplies aliases.
 
 ## Ordered delivery
 
@@ -366,8 +384,48 @@ lock files may be created. Malformed requests and `--apply` refuse. This
 stage deliberately adds no persistent applied-history format or write path.
 
 brwr-ruwj is the shared resolver/index projection prerequisite of assigned
-brwr-dbp. The latter remains in progress: next define the physical-note
-selection/revision and universal prepare-recovery contracts above, then add
-host-owned durable history/config application, alias-aware note access,
-ownership-checked old-path stubs and cache/reindex replay. Panel review stays
-on brwr-6x2; do not close either assigned item based on preview tests.
+brwr-dbp. The latter remains in progress; the ownership slice below follows
+the preview. Panel review stays on brwr-6x2; do not close either assigned item
+based on prerequisite tests.
+
+## Physical note ownership contract
+
+`brwr-c1bq` integrates `note::NoteLocation` into ordinary native load/save and
+key-change conflict loading. Public response keys remain logical. Vault
+reads, ownership parsing, rendering, revision checks and replacements use the
+physical key. A sole alias note therefore saves in place with its original
+artifact ID, creation URL, stripped-parameter evidence and title. An existing
+canonical note takes precedence while other files stay untouched; a malformed
+or symlinked selected path refuses. Broken optional aliases do not hide an
+owned canonical primary. URL copies never select an artifact editor.
+
+The native request takes the config lock and recomputes the location for each
+load/save. `location-v1:<hash>` binds affected revisions to both keys, the raw
+content revision and the complete trusted replay history, including operations
+that later unalias a key. This detects changed physical selection while the
+logical key stays fixed and prevents a move away/back from reviving an old
+edit. An unrelated operation conservatively invalidates affected editors;
+keys never touched by replay keep existing raw revisions, including `missing`.
+The low-level writer repeats its physical ownership/version check. Key changes
+still produce `key_changed`; changed selection/history produces `stale`.
+Browser-local recovered copies remain copy-out only.
+
+This slice publishes no applied history and adds no native message or CLI.
+Ordinary native calls pass empty replay and retain existing behavior. Tests
+exercise the same native request handlers with host-built replay. Durable apply
+must load and bind authoritative replay under the locks before using this
+parameter; a historical approval cannot supply it. Remaining `brwr-dbp` work:
+resolve the prepare-recovery/downgrade contract, publish exact config plus
+authoritative home history, integrate replay into all readers and summary/run
+identity, expose preserved alias-note viewing, generate old-path artifact
+stubs and prove crash/reindex recovery. Panel review follows separately.
+
+
+Ownership-stage validation (2026-11-03): 12 new regressions pass, including
+native request handling with host-built replay. The complete required and
+README gates pass with 1,421 Rust-reported outcomes (94 explicit IPC skips),
+44 extension test files, both Clippy configurations, nine script test files,
+221 Python cases (92 platform skips) and 10,696 inert Markdown renderings.
+Accessibility passes two fixtures and explicitly skips 42 sandbox-blocked
+browser cases. This completes brwr-c1bq only; driver/platform validation,
+durable application and panel acceptance remain separate.

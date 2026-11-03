@@ -2296,7 +2296,29 @@ fn note_error(request_id: &str, error_value: note::NoteRequestError) -> Response
     }
 }
 
+fn current_note_location(
+    context: &NoteContext,
+    resolution: &crate::relearn::aliases::Resolution,
+) -> Result<note::NoteLocation, note::NoteRequestError> {
+    // Applied alias history is not published yet. Keep one ownership-aware
+    // path for ordinary reads, saves and key-change conflicts; durable apply
+    // must supply its checked replay here rather than change note filenames.
+    note::NoteLocation::resolve(&context.vault, &context.canonical, &context.key, resolution)
+}
+
 fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore) -> Response {
+    load_note_resolved(
+        value,
+        config,
+        &crate::relearn::aliases::Resolution::default(),
+    )
+}
+
+fn load_note_resolved(
+    value: brauser_protocol::LoadNoteRequest,
+    config: &mut ConfigStore,
+    resolution: &crate::relearn::aliases::Resolution,
+) -> Response {
     // Note identity lookup can catch up and publish the history cache.
     let _config_lock = match config.lock_current() {
         Ok(lock) => lock,
@@ -2313,12 +2335,11 @@ fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore)
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
-    match note::load_keyed_note(
-        &context.vault,
-        &context.canonical,
-        &context.key,
-        &context.older_urls,
-    ) {
+    let location = match current_note_location(&context, resolution) {
+        Ok(location) => location,
+        Err(err) => return note_error(&value.request_id, err),
+    };
+    match location.load(&context.vault, &context.canonical, &context.older_urls) {
         Ok(loaded) => Response::NoteLoaded(NoteLoaded {
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
@@ -2334,6 +2355,18 @@ fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore)
 }
 
 fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore) -> Response {
+    save_note_resolved(
+        value,
+        config,
+        &crate::relearn::aliases::Resolution::default(),
+    )
+}
+
+fn save_note_resolved(
+    value: brauser_protocol::SaveNoteRequest,
+    config: &mut ConfigStore,
+    resolution: &crate::relearn::aliases::Resolution,
+) -> Response {
     // Serialize with config updates and other note saves so the version check
     // below and the write it guards happen without a concurrent writer.
     let _config_lock = match config.lock_current() {
@@ -2354,13 +2387,12 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
-    if value.expected_key != context.key {
-        return match note::load_keyed_note(
-            &context.vault,
-            &context.canonical,
-            &context.key,
-            &context.older_urls,
-        ) {
+    let location = match current_note_location(&context, resolution) {
+        Ok(location) => location,
+        Err(err) => return note_error(&value.request_id, err),
+    };
+    if value.expected_key != *location.key() {
+        return match location.load(&context.vault, &context.canonical, &context.older_urls) {
             Ok(current) => Response::NoteConflict(NoteConflict {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -2374,13 +2406,12 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             Err(note_error_value) => note_error(&value.request_id, note_error_value),
         };
     }
-    match note::save_keyed_note_with_provenance(
+    match location.save(
         &context.vault,
         &crate::url_provenance::StoredUrl {
             url: context.canonical.clone(),
             stripped_params: context.stripped_params.clone(),
         },
-        &context.key,
         &value.title,
         &value.body,
         &value.expected_revision,
@@ -2395,7 +2426,7 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             outcome,
             revision,
             relative_path,
-            key: context.key,
+            key: location.key().clone(),
         }),
         Ok(note::SaveOutcome::Stale {
             revision,
@@ -2409,7 +2440,7 @@ fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore)
             revision,
             title,
             body,
-            key: context.key,
+            key: location.key().clone(),
             reason: "stale".into(),
         }),
         Err(note_error_value) => note_error(&value.request_id, note_error_value),
@@ -4099,6 +4130,160 @@ id = "work:{host}/{id}"
             },
             config,
         )
+    }
+
+    #[test]
+    fn resolved_note_requests_keep_logical_keys_and_refuse_changed_physical_selection() {
+        use crate::relearn::{
+            Identity,
+            aliases::{Action, Event, Resolution},
+        };
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("home");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }]
+id = "old:{host}/{id}"
+"#,
+        );
+        let mut config = loaded(&path);
+        let url = "https://work.example/items/1";
+        let original = note_load(&mut config, url);
+        assert_eq!(original.revision, "missing");
+        assert!(matches!(
+            note_save(
+                &mut config,
+                url,
+                "original",
+                &original.revision,
+                original.key.clone()
+            ),
+            Response::NoteSaved(_)
+        ));
+        let identity = |id: &str| Identity {
+            artifact_type: "work.item".into(),
+            artifact_id: id.into(),
+        };
+        let target = identity("new:work.example/1");
+        let event = Event {
+            event_id: "one".into(),
+            action: Action::Confirm,
+            from: identity(&original.key.value),
+            to: target.clone(),
+        };
+        let resolution = Resolution::from_events(std::slice::from_ref(&event)).unwrap();
+        let load = || brauser_protocol::LoadNoteRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "load".into(),
+            url: url.into(),
+        };
+        let current = match load_note_resolved(load(), &mut config, &resolution) {
+            Response::NoteLoaded(note) => note,
+            other => panic!("expected note_loaded, got {other:?}"),
+        };
+        assert_eq!(current.key.value, target.artifact_id);
+        assert_eq!(current.body, "original");
+        let save = |key: RecordKey, revision: &str| brauser_protocol::SaveNoteRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "save".into(),
+            url: url.into(),
+            title: "Unused".into(),
+            body: "updated".into(),
+            expected_key: key,
+            expected_revision: revision.into(),
+        };
+        // An old editor names the old logical key, even if its physical file
+        // is still the one selected. Conflict data must name the logical key.
+        match save_note_resolved(
+            save(original.key.clone(), &original.revision),
+            &mut config,
+            &resolution,
+        ) {
+            Response::NoteConflict(conflict) => {
+                assert_eq!(conflict.reason, "key_changed");
+                assert_eq!(conflict.key, current.key);
+                assert_eq!(conflict.body, "original");
+            }
+            other => panic!("expected key conflict, got {other:?}"),
+        }
+        let saved = match save_note_resolved(
+            save(current.key.clone(), &current.revision),
+            &mut config,
+            &resolution,
+        ) {
+            Response::NoteSaved(note) => note,
+            other => panic!("expected saved, got {other:?}"),
+        };
+        assert_eq!(saved.key, current.key);
+        let vault = Vault::open(config.snapshot().storage.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            saved.relative_path,
+            vault
+                .note_relative_path(&original.key, url)
+                .unwrap()
+                .to_string_lossy()
+        );
+        let old_bytes = vault.read_note(&original.key, url).unwrap().unwrap();
+        // Another owned canonical file changes physical selection while the
+        // logical key stays the same. An in-flight edit must become stale.
+        note::save_keyed_note(
+            &vault,
+            url,
+            &current.key,
+            "Canonical",
+            "canonical",
+            "missing",
+        )
+        .unwrap();
+        let canonical_bytes = vault.read_note(&current.key, url).unwrap().unwrap();
+        match save_note_resolved(
+            save(current.key.clone(), &saved.revision),
+            &mut config,
+            &resolution,
+        ) {
+            Response::NoteConflict(conflict) => {
+                assert_eq!(conflict.reason, "stale");
+                assert_eq!(conflict.key, current.key);
+                assert_eq!(conflict.body, "canonical");
+            }
+            other => panic!("expected selection conflict, got {other:?}"),
+        }
+        let back = Resolution::from_events(&[
+            event,
+            Event {
+                event_id: "two".into(),
+                action: Action::Confirm,
+                from: target,
+                to: identity(&original.key.value),
+            },
+        ])
+        .unwrap();
+        match save_note_resolved(
+            save(current.key.clone(), &saved.revision),
+            &mut config,
+            &back,
+        ) {
+            Response::NoteConflict(conflict) => {
+                assert_eq!(conflict.reason, "key_changed");
+                assert_eq!(conflict.key, original.key);
+                assert_eq!(conflict.body, "updated");
+            }
+            other => panic!("expected move-back conflict, got {other:?}"),
+        }
+        assert_eq!(
+            vault.read_note(&original.key, url).unwrap().unwrap(),
+            old_bytes
+        );
+        assert_eq!(
+            vault.read_note(&current.key, url).unwrap().unwrap(),
+            canonical_bytes
+        );
     }
 
     #[test]
