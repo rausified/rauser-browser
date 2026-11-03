@@ -157,6 +157,11 @@ These rules exist because repeated review passes, main moving under open PRs, an
 - **Batch small same-shape changes into one PR.** Every PR pays one macOS CI run (about 40 minutes) and one merge wait, whatever its size, so two or three new starters, or a starter plus its docs follow-ups, go in one PR rather than one PR each. Stop batching when the PR would pass about ten files of non-generated code or touch a shared seam; that PR needs the `final-stretch` label (above).
 - **Overlap per-task review with the next task** in multi-task plans: review task N while task N+1 is being built, unless N+1 depends on code the review may change. Batch small, low-risk tasks (docs, wiring) into one review.
 - **Check scope before a large build.** See "Before building" below: open decisions are resolved and the design is challenged before task 1, not in review.
+- **Land a rewrite of shared code in small steps on main, behind a switch.** Reworking a shared module (the index, `capture.rs`, `native.rs`, `service/`, the protocol) never lives on one long branch. The 2026-11-02 index rewrite (#253) ran 16 hours on one branch while about 25 PRs landed. Two of them built on the file the branch deleted and had to be ported at the end. CI first saw the work after all 8 waves, so the Windows issues surfaced one 20-minute round at a time. Instead:
+  - **Merge the mechanical prerequisites the same day**: a module split, a moved type, a new seam with no behaviour change. Other lanes then build on the new layout, so nothing needs porting later.
+  - **Branch by abstraction.** Put the old and new implementations behind one interface, and select the new one with a switch (a config or build flag, off by default). Each step then merges green while the old path keeps serving users. Flip the switch in its own PR, after the real-data check, and delete the old path in a later PR.
+  - **Stack the steps as small PRs.** Each one is reviewable alone and branches from the previous one; merge them in order.
+  - **Open a draft PR on the first commit and push every step**, so both CI platforms see the work continuously. Only CI runs Windows, so waiting until the end turns every Windows issue into a separate round.
 
 ## Before building
 
