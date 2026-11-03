@@ -3,9 +3,16 @@
 // and either repairs them or says so on the PR.
 //
 // Repair merges main into the PR branch with main's merge rules and main's
-// copy of the bookkeeping tools (never the PR's), then resolves only:
-//   - .beads/issues.jsonl and BOSUN_FEATURE_BACKLOG.md, through the repo's
-//     merge drivers and `render_backlog.py --resolve`;
+// copy of the queue tools (never the PR's), then resolves only:
+//   - .beads/issues.jsonl and BOSUN_FEATURE_BACKLOG.md, which left git: the
+//     queue lives in bd's Dolt database, synced through refs/dolt/data
+//     (AGENTS.md "Work queue"). A PR that still edits them conflicts as
+//     modify/delete. The doctor applies the PR's bead edits to the database as
+//     field-level updates through bd and syncs (`work_queue.py adopt`, in the
+//     bootstrapped workspace $BRAUSER_QUEUE_WORKSPACE), merges the PR's
+//     hand-written backlog edits into docs/backlog/frame.md, and drops both
+//     files from the PR. An edit that conflicts is left to a person, with
+//     instructions;
 //   - Markdown conflicts where both sides only inserted text at the same point
 //     (a diff3 hunk with an empty base), keeping main's text first, then the PR's.
 // Anything else (code, a changed line, a file added on both sides) is left to
@@ -15,8 +22,9 @@
 // otherwise the doctor reports what it would do.
 //
 // Usage: node scripts/pr-doctor.mjs --tools <dir> [--dry-run]
-//   <dir> holds main's render_backlog.py. Run from a full clone of the repo
-//   whose `origin` is GitHub; GH_TOKEN and GITHUB_REPOSITORY must be set.
+//   <dir> holds main's work_queue.py, render_backlog.py and
+//   check_queue_consistency.py. Run from a full clone of the repo whose
+//   `origin` is GitHub; GH_TOKEN and GITHUB_REPOSITORY must be set.
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -27,8 +35,11 @@ import { pathToFileURL } from "node:url";
 export const MARKER = "<!-- pr-doctor -->";
 export const LABEL = "needs-merge";
 export const SKIP_LABEL = "pr-doctor:skip";
-const QUEUE_PATH = ".beads/issues.jsonl";
-const BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md";
+export const QUEUE_PATH = ".beads/issues.jsonl";
+export const BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md";
+export const QUEUE_FILES = Object.freeze([QUEUE_PATH, BACKLOG_PATH]);
+export const FRAME_PATH = "docs/backlog/frame.md";
+const QUEUE_HELP = "the work queue is no longer in git (it lives in bd's Dolt database): note the branch tip and its merge base with main, `git rm` both queue files and commit, `git merge -Xfind-renames=100% origin/main` (exact renames only, or git pairs the old backlog with the new frame), then run `scripts/dev/queue adopt --from <old tip> --base <merge base>`: it applies the PR's bead edits through bd and carries its backlog prose into docs/backlog/frame.md; commit the frame";
 
 // --- Pure parts (scripts/tests/pr-doctor.test.mjs) ---------------------------
 
@@ -81,15 +92,6 @@ export function resolveAppendOnly(text) {
     : { resolved: false, remaining, text };
 }
 
-/** The backlog with every generated block emptied (render_backlog.py's
- * strip_generated), so its rendered queue never takes part in a merge. */
-export function stripGenerated(text) {
-  return text.replace(
-    /^(<!-- BEGIN GENERATED section=(\S+?)[: ][^\n]*-->\n)[\s\S]*?^(<!-- END GENERATED section=\2 -->)$/gm,
-    "$1$3",
-  );
-}
-
 /** "skip", "pending" (GitHub has not computed mergeability), "conflicting" or "clean". */
 export function classifyPr(pr) {
   if (pr.baseRefName !== "main" || pr.isDraft || pr.isCrossRepository) return "skip";
@@ -107,12 +109,12 @@ export function commentBody({ outcome, files = [], sha = "", autoMerge = false, 
   const waiting = autoMerge ? " Auto-merge is armed and waits until this is fixed, because a conflicting PR runs no CI." : " A conflicting PR runs no CI.";
   switch (outcome) {
     case "repaired":
-      return head + `Merged \`main\` into this branch as ${sha}. The conflicts were only in bookkeeping or both-sides-appended Markdown, resolved with main's text first:\n\n${list(files)}\n\nCI runs on the new commit. Pull before pushing again.`;
+      return head + `Merged \`main\` into this branch as ${sha}. The conflicts were only in the work queue (its bead edits applied through bd, its backlog prose moved to \`${FRAME_PATH}\`, and the files dropped from this PR) or both-sides-appended Markdown, resolved with main's text first:\n\n${list(files)}\n\nCI runs on the new commit. Pull before pushing again.`;
     case "needs-person":
-      return head + `This PR conflicts with \`main\` in files the doctor does not resolve on its own.${waiting} The files:\n\n${list(files)}\n\nMerge \`main\` into the branch and resolve these by hand (bookkeeping files: \`python3 scripts/render_backlog.py --resolve\`). The \`${LABEL}\` label clears on the next run after the PR merges cleanly.`;
+      return head + `This PR conflicts with \`main\` in files the doctor does not resolve on its own.${waiting} The files:\n\n${list(files)}\n\nMerge \`main\` into the branch and resolve these by hand. For \`${QUEUE_PATH}\` or \`${BACKLOG_PATH}\`: ${QUEUE_HELP}. The \`${LABEL}\` label clears on the next run after the PR merges cleanly.`;
     case "report-only":
       return head + `This PR conflicts with \`main\`.${waiting}\n\n${resolvable
-        ? `The doctor could resolve it (bookkeeping or both-sides-appended Markdown only) but has no push token (\`PR_DOCTOR_TOKEN\`), so it did not:`
+        ? `The doctor could resolve it (work-queue files or both-sides-appended Markdown only) but has no push token (\`PR_DOCTOR_TOKEN\`), so it did not:`
         : "Files needing a person:"}\n\n${list(files)}\n\nMerge \`main\` into the branch to unblock it.`;
     case "resolved":
       return head + "The conflict with `main` is gone.";
@@ -152,17 +154,23 @@ function settle(repo, pr) {
 
 const unmerged = () => git(["diff", "--name-only", "--diff-filter=U"]).stdout.split("\n").filter(Boolean);
 
-function configureDrivers(tools) {
-  // Main's copy of the tools, so no code from the PR branch runs here.
+/** Main's copy of the queue tool, so no code from the PR branch runs here. */
+function workQueue(tools, args) {
   const python = process.env.PR_DOCTOR_PYTHON || "python3";
-  for (const [name, flag] of [["beads-jsonl", "--merge-jsonl"], ["bosun-backlog", "--merge-backlog"]]) {
-    git(["config", `merge.${name}.driver`, `${python} ${join(tools, "render_backlog.py")} ${flag} %O %A %B`]);
-  }
+  return sh(python, [join(tools, "work_queue.py"), "--repo", ".", ...args], { check: false });
 }
 
-function renderBacklog(tools, args) {
-  const python = process.env.PR_DOCTOR_PYTHON || "python3";
-  return sh(python, [join(tools, "render_backlog.py"), ...args], { check: false });
+/** `work_queue.py adopt` arguments: apply the PR's committed queue edits
+ * (`from` against `base`) through bd and sync, or only check them (`push`
+ * false, or `frame` given: a check against main's frame before the merge). */
+export function adoptArgs({ from, base, push, frame = null }) {
+  return ["adopt", "--from", from, "--base", base, ...(frame ? ["--frame", frame] : []), ...(push ? [] : ["--dry-run"])];
+}
+
+function adopt(tools, args) {
+  const result = workQueue(tools, adoptArgs(args));
+  const detail = (result.stdout + result.stderr).trim().split("\n").filter((line) => line && !line.startsWith("Warning:")).at(-1) ?? "";
+  return { ok: result.code === 0, detail };
 }
 
 function stage(number, file) {
@@ -170,8 +178,11 @@ function stage(number, file) {
   return result.code === 0 ? result.stdout : null;
 }
 
-/** Merges main into the PR branch in this clone; { ok, files, sha? }. */
-function tryRepair(pr, tools) {
+const exists = (spec) => git(["cat-file", "-e", spec], { check: false }).code === 0;
+
+/** Merges main into the PR branch in this clone; { ok, files, sha? }.
+ * Queue edits are synced to refs/dolt/data only when `canPush`. */
+export function tryRepair(pr, tools, canPush) {
   const branch = pr.headRefName;
   git(["fetch", "-q", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
   git(["checkout", "-q", "-f", "-B", "pr-doctor/work", `origin/${branch}`]);
@@ -181,51 +192,73 @@ function tryRepair(pr, tools) {
   mkdirSync(join(gitDir, "info"), { recursive: true });
   writeFileSync(join(gitDir, "info", "attributes"), git(["show", "origin/main:.gitattributes"], { check: false }).stdout);
 
-  const message = `Merge main into ${branch} (PR doctor)\n\nAutomatic: bookkeeping and both-sides-appended Markdown conflicts only (scripts/pr-doctor.mjs).`;
-  const merge = git(["-c", "merge.conflictStyle=diff3", "merge", "-q", "--no-ff", "-m", message, "origin/main"], { check: false });
-  const resolved = [];
-  if (merge.code !== 0) {
-    let files = unmerged();
-    if (files.length === 0) {
-      git(["merge", "--abort"], { check: false });
-      return { ok: false, files: ["(git merge failed without conflicts)"] };
+  // A PR cut before the queue left git still edits the committed files.
+  // Check its edits against the database and main's frame first, then drop
+  // the files on the PR side before merging, so the merge never sees them.
+  const tip = git(["rev-parse", "HEAD"]).stdout.trim();
+  const base = git(["merge-base", "HEAD", "origin/main"]).stdout.trim();
+  const queueMoved = !exists(`origin/main:${QUEUE_PATH}`) && exists(`origin/main:${FRAME_PATH}`);
+  const carried = queueMoved ? QUEUE_FILES.filter((file) => exists(`HEAD:${file}`)) : [];
+  const tmp = mkdtempSync(join(tmpdir(), "pr-doctor-"));
+  try {
+    if (carried.length > 0) {
+      writeFileSync(join(tmp, "frame.md"), git(["show", `origin/main:${FRAME_PATH}`]).stdout);
+      const checked = adopt(tools, { from: tip, base, push: false, frame: join(tmp, "frame.md") });
+      if (!checked.ok) return { ok: false, files: carried.map((file) => `${file} (${checked.detail || "adopt failed"})`) };
+      git(["rm", "-q", "--", ...carried]);
+      git(["commit", "-q", "-m", "Drop the work-queue files (PR doctor)\n\nTheir edits are applied through bd in the merge that follows (AGENTS.md \"Work queue\")."]);
     }
-    if (files.includes(QUEUE_PATH) || files.includes(BACKLOG_PATH)) {
-      const before = new Set(files);
-      renderBacklog(tools, ["--resolve"]);
-      files = unmerged();
-      for (const file of before) if (!files.includes(file)) resolved.push(file);
+
+    const message = `Merge main into ${branch} (PR doctor)\n\nAutomatic: work-queue and both-sides-appended Markdown conflicts only (scripts/pr-doctor.mjs).`;
+    // Exact renames only: main's frame is most of the old backlog's text, and
+    // git would otherwise pair them and conflict on the frame.
+    const merge = git(["-c", "merge.conflictStyle=diff3", "merge", "-q", "--no-ff", "--no-commit", "-Xfind-renames=100%", "-m", message, "origin/main"], { check: false });
+    const resolved = [];
+    if (merge.code !== 0) {
+      const files = unmerged();
+      if (files.length === 0) {
+        git(["merge", "--abort"], { check: false });
+        return { ok: false, files: ["(git merge failed without conflicts)"] };
+      }
+      for (const file of files) {
+        if (!file.endsWith(".md")) continue;
+        const stages = [1, 2, 3].map((number) => stage(number, file));
+        if (stages.some((text) => text === null)) continue;
+        const [mergeBase, ours, theirs] = stages;
+        for (const [name, text] of Object.entries({ ours, base: mergeBase, theirs })) writeFileSync(join(tmp, name), text);
+        const merged = git(["merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs",
+          join(tmp, "ours"), join(tmp, "base"), join(tmp, "theirs")], { check: false }).stdout;
+        const result = resolveAppendOnly(merged);
+        if (!result.resolved) continue;
+        writeFileSync(file, result.text);
+        git(["add", "--", file]);
+        if (!unmerged().includes(file)) resolved.push(file);
+      }
+      const left = unmerged();
+      if (left.length > 0) {
+        git(["merge", "--abort"], { check: false });
+        return { ok: false, files: left };
+      }
     }
-    const tmp = mkdtempSync(join(tmpdir(), "pr-doctor-"));
-    for (const file of files) {
-      if (!file.endsWith(".md")) continue;
-      const stages = [1, 2, 3].map((number) => stage(number, file));
-      if (stages.some((text) => text === null)) continue;
-      const [base, ours, theirs] = file === BACKLOG_PATH ? stages.map(stripGenerated) : stages;
-      const paths = { ours, base, theirs };
-      for (const [name, text] of Object.entries(paths)) writeFileSync(join(tmp, name), text);
-      const merged = git(["merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs",
-        join(tmp, "ours"), join(tmp, "base"), join(tmp, "theirs")], { check: false }).stdout;
-      const result = resolveAppendOnly(merged);
-      if (!result.resolved) continue;
-      writeFileSync(file, result.text);
-      if (file === BACKLOG_PATH) renderBacklog(tools, ["--resolve"]);
-      else git(["add", "--", file]);
-      if (!unmerged().includes(file)) resolved.push(file);
+    if (carried.length > 0) {
+      // The merge tree has main's frame now; adopt merges the PR's backlog
+      // prose into it and applies the bead edits through bd.
+      const applied = adopt(tools, { from: tip, base, push: canPush });
+      if (!applied.ok) {
+        git(["merge", "--abort"], { check: false });
+        return { ok: false, files: carried.map((file) => `${file} (${applied.detail || "adopt failed"})`) };
+      }
+      git(["add", "--", FRAME_PATH]);
+      for (const file of carried) resolved.push(`${file} (edits applied through bd; prose in ${FRAME_PATH})`);
     }
+    if (git(["rev-parse", "-q", "--verify", "MERGE_HEAD"], { check: false }).code === 0) git(["commit", "-q", "--no-edit"]);
+    const kept = resolved.filter((file) => !/ \(/.test(file));
+    const markers = kept.length === 0 ? "" : git(["grep", "-l", "-E", "^(<{7}|>{7}) (ours|theirs)", "--", ...kept], { check: false }).stdout.trim();
+    if (markers) return { ok: false, files: markers.split("\n") };
+    return { ok: true, files: resolved.length ? resolved : ["(merged cleanly)"], sha: git(["rev-parse", "--short=12", "HEAD"]).stdout.trim() };
+  } finally {
     rmSync(tmp, { recursive: true, force: true });
-    const left = unmerged();
-    if (left.length > 0) {
-      git(["merge", "--abort"], { check: false });
-      return { ok: false, files: left };
-    }
-    git(["commit", "-q", "--no-edit"]);
   }
-  const check = renderBacklog(tools, ["--check", "--issues", QUEUE_PATH, "--backlog", BACKLOG_PATH]);
-  if (check.code !== 0) return { ok: false, files: [`${BACKLOG_PATH} (render_backlog.py --check failed after the merge)`] };
-  const markers = git(["grep", "-l", "-E", "^(<{7}|>{7}) (ours|theirs)", "--", ...resolved], { check: false }).stdout.trim();
-  if (resolved.length > 0 && markers) return { ok: false, files: markers.split("\n") };
-  return { ok: true, files: resolved.length ? resolved : ["(merged cleanly with the repo's merge drivers)"], sha: git(["rev-parse", "--short=12", "HEAD"]).stdout.trim() };
 }
 
 function stickyComment(repo, number) {
@@ -252,9 +285,8 @@ function main() {
   const tools = toolsAt >= 0 ? args[toolsAt + 1] : null;
   const repo = process.env.GITHUB_REPOSITORY;
   if (!tools || !repo) throw new Error("usage: GITHUB_REPOSITORY=owner/name node scripts/pr-doctor.mjs --tools <dir> [--dry-run]");
-  readFileSync(join(tools, "render_backlog.py"));
+  for (const file of ["work_queue.py", "render_backlog.py", "check_queue_consistency.py"]) readFileSync(join(tools, file));
   const canPush = process.env.PR_DOCTOR_PUSH === "1" && !dryRun;
-  configureDrivers(tools);
   if (!dryRun) {
     gh(["label", "create", LABEL, "--repo", repo, "--color", "d93f0b", "--force",
       "--description", "Conflicts with main; the PR doctor could not resolve it alone"], { check: false });
@@ -278,7 +310,7 @@ function main() {
         rows.push([pr.number, stale ? "resolved" : "clean", ""]);
         continue;
       }
-      const result = tryRepair(pr, tools);
+      const result = tryRepair(pr, tools, canPush);
       let outcome;
       if (!result.ok) outcome = canPush ? "needs-person" : "report-only";
       else if (!canPush) outcome = "report-only";

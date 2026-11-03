@@ -1,0 +1,83 @@
+name: Queue check
+
+# The work queue is not in git: bd keeps it in Dolt, synced through this
+# repository's refs/dolt/data (AGENTS.md "Work queue"). PRs no longer carry
+# it, so no PR job checks it. Instead this bootstraps the queue from
+# refs/dolt/data on a schedule (and by hand), runs the consistency check
+# against main's backlog frame, and opens (or comments on) one `queue-check`
+# issue when it fails. On a PR that changes the queue tooling it only proves
+# that bd installs and, once the remote is seeded, that the check runs.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/queue-check.yml
+      - scripts/install-bd.sh
+      - scripts/work_queue.py
+      - scripts/render_backlog.py
+      - scripts/check_queue_consistency.py
+      - docs/backlog/**
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: queue-check-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Queue consistency (refs/dolt/data)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install bd
+        run: |
+          sh scripts/install-bd.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Is the queue seeded?
+        id: seeded
+        run: |
+          if git ls-remote --exit-code origin refs/dolt/data > /dev/null; then
+            echo "seeded=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "seeded=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::origin has no refs/dolt/data yet (scripts/dev/queue seed); nothing to check."
+          fi
+      - name: Bootstrap the queue and check it
+        id: check
+        if: steps.seeded.outputs.seeded == 'true'
+        env:
+          BD_NON_INTERACTIVE: "1"
+        run: |
+          bd bootstrap
+          python scripts/check_queue_consistency.py | tee "$RUNNER_TEMP/queue-check.txt"
+      - name: Open or update the queue-check issue
+        if: failure() && steps.check.conclusion == 'failure' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "The scheduled queue check failed on the queue in refs/dolt/data ($RUN_URL)."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/queue-check.txt" 2>/dev/null || echo "(no check output: bootstrap failed; see the run log)"
+            echo '```'
+            echo
+            echo "Fix the beads with bd, or the prose under docs/backlog/, then run scripts/dev/queue sync (AGENTS.md, Work queue)."
+          } > "$RUNNER_TEMP/body.md"
+          gh label create queue-check --color d93f0b --description "The Dolt work queue fails its consistency check" --force
+          open=$(gh issue list --label queue-check --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --title "Work queue fails its consistency check" --label queue-check --body-file "$RUNNER_TEMP/body.md"
+          fi
