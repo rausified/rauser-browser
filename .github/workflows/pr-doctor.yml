@@ -1,0 +1,65 @@
+name: PR doctor
+
+# A PR that conflicts with main runs no CI, so auto-merge waits on it forever
+# with nothing failing. This finds those PRs, merges main into the ones whose
+# conflicts are only bookkeeping or both-sides-appended Markdown, and labels
+# and comments on the rest (AGENTS.md "PR doctor", scripts/pr-doctor.mjs).
+#
+# Repairs are pushed only with the PR_DOCTOR_TOKEN secret (a fine-grained
+# token with Contents and Pull requests write on this repository): a push
+# made with the workflow's own GITHUB_TOKEN starts no workflows, so the
+# repaired commit would get no CI. Without the secret the doctor reports only.
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report in the job summary only; no pushes, labels or comments"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-doctor
+  cancel-in-progress: false
+
+jobs:
+  doctor:
+    name: PR doctor
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          # The push credential: the secret when set, so repaired commits get CI.
+          token: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Keep main's tools outside the working tree
+        # The repair checks out PR branches; only main's copies ever run.
+        run: |
+          mkdir -p "$RUNNER_TEMP/pr-doctor"
+          cp scripts/pr-doctor.mjs scripts/render_backlog.py "$RUNNER_TEMP/pr-doctor/"
+          git config user.name "PR doctor"
+          git config user.email "pr-doctor@users.noreply.github.com"
+      - name: Run the PR doctor
+        env:
+          GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          PR_DOCTOR_PUSH: ${{ secrets.PR_DOCTOR_TOKEN != '' && '1' || '0' }}
+          PR_DOCTOR_PYTHON: python
+        run: >-
+          node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor"
+          ${{ inputs.dry_run && '--dry-run' || '' }}
