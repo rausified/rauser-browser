@@ -3,9 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+  # Also the Mergify queue's draft PRs (`mergify/merge-queue/<hex>` heads, main
+  # plus the queued PR; .mergify.yml): no head-branch filter may skip them,
+  # because the queue merges only once these checks pass on the draft.
   pull_request:
-  # The merge queue builds each entry on a temporary merge_group commit; every
-  # required check must report there too (AGENTS.md "Review and merge cadence").
+  # GitHub's own merge queue (merge_group commits) needs an organization-owned
+  # repository; this trigger is unused today and harmless.
   merge_group:
 
 permissions:

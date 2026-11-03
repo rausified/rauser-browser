@@ -82,11 +82,11 @@ test("every comment carries the sticky marker", () => {
   }
 });
 
-test("a needs-person comment lists the files and says auto-merge is waiting", () => {
-  const body = commentBody({ outcome: "needs-person", files: ["host/src/x.rs", "DESIGN.md"], autoMerge: true });
+test("a needs-person comment lists the files and says the queued PR is waiting", () => {
+  const body = commentBody({ outcome: "needs-person", files: ["host/src/x.rs", "DESIGN.md"], queued: true });
   assert.match(body, /host\/src\/x\.rs/);
   assert.match(body, /DESIGN\.md/);
-  assert.match(body, /auto-merge/i);
+  assert.match(body, /labeled `queue` and waits/);
   assert.doesNotMatch(body, /@\w/, "the comment never mentions anyone");
 });
 

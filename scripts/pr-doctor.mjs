@@ -1,5 +1,5 @@
 // PR doctor (AGENTS.md "PR doctor"): finds open PRs into main that GitHub
-// reports as conflicting, which run no CI and so stall auto-merge silently,
+// reports as conflicting, which run no CI and so stall the merge queue silently,
 // and either repairs them or says so on the PR.
 //
 // Repair merges main into the PR branch with main's merge rules and main's
@@ -35,6 +35,8 @@ import { pathToFileURL } from "node:url";
 export const MARKER = "<!-- pr-doctor -->";
 export const LABEL = "needs-merge";
 export const SKIP_LABEL = "pr-doctor:skip";
+// The Mergify queue label (.mergify.yml): a PR waiting to merge.
+const QUEUE_LABEL = "queue";
 export const QUEUE_PATH = ".beads/issues.jsonl";
 export const BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md";
 export const QUEUE_FILES = Object.freeze([QUEUE_PATH, BACKLOG_PATH]);
@@ -104,9 +106,9 @@ export function classifyPr(pr) {
 const list = (files) => files.map((file) => `- \`${file}\``).join("\n");
 
 /** The sticky comment for an outcome; never mentions anyone. */
-export function commentBody({ outcome, files = [], sha = "", autoMerge = false, resolvable = false }) {
+export function commentBody({ outcome, files = [], sha = "", queued = false, resolvable = false }) {
   const head = `${MARKER}\n<!-- pr-doctor outcome=${outcome} -->\n**PR doctor**\n\n`;
-  const waiting = autoMerge ? " Auto-merge is armed and waits until this is fixed, because a conflicting PR runs no CI." : " A conflicting PR runs no CI.";
+  const waiting = queued ? " It is labeled `queue` and waits until this is fixed: a conflicting PR runs no CI and the Mergify queue cannot take it." : " A conflicting PR runs no CI.";
   switch (outcome) {
     case "repaired":
       return head + `Merged \`main\` into this branch as ${sha}. The conflicts were only in the work queue (its bead edits applied through bd, its backlog prose moved to \`${FRAME_PATH}\`, and the files dropped from this PR) or both-sides-appended Markdown, resolved with main's text first:\n\n${list(files)}\n\nCI runs on the new commit. Pull before pushing again.`;
@@ -297,7 +299,7 @@ function main() {
     try {
       if (classifyPr(pr) === "pending") pr = settle(repo, pr);
       const kind = classifyPr(pr);
-      const autoMerge = pr.autoMergeRequest != null;
+      const queued = pr.autoMergeRequest != null || (pr.labels ?? []).some((item) => item.name === QUEUE_LABEL);
       if (kind === "skip" || kind === "pending") {
         rows.push([pr.number, kind, ""]);
         continue;
@@ -322,7 +324,7 @@ function main() {
         }
         outcome = "repaired";
       }
-      const body = commentBody({ outcome, files: result.files, sha: result.sha, autoMerge, resolvable: result.ok });
+      const body = commentBody({ outcome, files: result.files, sha: result.sha, queued, resolvable: result.ok });
       report(repo, pr, body, { dryRun, label: outcome !== "repaired" });
       rows.push([pr.number, outcome + (outcome === "report-only" && result.ok ? " (resolvable)" : ""), result.files.join(", ")]);
     } catch (error) {
