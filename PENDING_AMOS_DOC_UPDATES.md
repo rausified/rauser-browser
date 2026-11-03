@@ -481,3 +481,12 @@
 - **Brauser — Continue through Recent (2026-11-09).** Load more reaches matching artifact-days beyond the first 32 while preserving title, type and saved-summary reading filters. Snapshot checks refuse changed history; explicit Reload results and keyboard focus handling support safe continuation. Includes offline host/wire/panel regressions and browser keyboard cases for the external gate. Re-learn apply remains separately blocked on coordinator decisions.
 
 - **Brauser — recover the Recent pagination gate (2026-11-09).** Restored the quarantined pagination change and aligned the existing disconnect regression with the deliberate stale-row clearing contract. The test still verifies page-summary disabling and now verifies fresh Recent reload and summary-button recovery. Testing guidance records both behaviors; reading-position follow-up is brwr-0401.
+
+- **Brauser — selected passage evidence (2026-11-03, brwr-edn4):** The
+  selection-only **Keep passage with Brauser** menu saves an immutable local
+  card with host-derived source/key/time, exact UTF-8 text and SHA-256 digest.
+  Exact retries retain the first card; changed text gets a separate card;
+  conflicts and invalid sources refuse. It performs no extraction, agent run,
+  network request or direct AMOS write. Full offline gates pass; real browser
+  and platform acceptance remain separate. Brauser-owned instructions and
+  design remain in this repository.

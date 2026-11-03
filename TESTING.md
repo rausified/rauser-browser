@@ -2044,3 +2044,18 @@ Settings-change regressions also hold `get_config` across the reload debounce:
 both initial and continuation replies must be discarded as soon as the policy
 notice arrives. Even an unchanged revision must restart at offset zero after
 the reload completes.
+
+### Selected passage evidence
+
+`cargo test --locked -p brauser --lib evidence::tests` exercises exact UTF-8
+and CRLF preservation, idempotence, changed selections, hostile markup,
+immutable-file conflicts, symlink refusal and concurrent publication.
+`cargo test --locked -p brauser --lib native::tests::evidence_` tests real
+native dispatch with host-derived keys, source canonicalization and a context
+with no service link. Protocol coverage is in `protocol/tests/wire_evidence.rs`.
+After building the extension, the Keep passage cases in
+`extension/tests/worker.test.mjs` prohibit scripting and fetch and inspect the
+only sent native request. `extension/tests/panel/evidence.test.mjs` checks
+plain-text receipts and failures without starting an agent. These are offline
+fixtures; real Chrome context-menu/selection behavior and primary-platform
+interaction still require separate browser acceptance.

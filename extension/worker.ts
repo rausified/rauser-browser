@@ -1897,6 +1897,50 @@ function taskFromGesture(tab: ChromeTab | undefined): void {
     diag.warn("task focus notice failed", { error }));
 }
 
+/** Only Chrome's explicit selection gesture supplies text. Never read the
+ * page, query a selection with scripting, or send this text to a harness. */
+function evidenceFromGesture(info: ChromeContextMenuClickInfo, tab: ChromeTab | undefined): void {
+  if (tab?.id === undefined || tab.incognito !== false) return;
+  const tabId = tab.id;
+  void chrome.sidePanel.open({ tabId }).catch((error: unknown) =>
+    diag.warn("could not open the side panel", { error }));
+  const capture = async (): Promise<PanelNotice> => {
+    const failed = (message: string): PanelNotice =>
+      ({ kind: "evidence_result", message, failed: true, tab_id: tabId, at: Date.now() });
+    const selection = info.selectionText;
+    if (typeof selection !== "string" || !selection.trim() || new TextEncoder().encode(selection).length > 32768) {
+      return failed("Select nonblank text of at most 32768 UTF-8 bytes to keep as evidence.");
+    }
+    // A frame's text belongs to that frame, even when its URL is unusable.
+    const url = info.frameUrl ?? info.pageUrl ?? tab.url;
+    if (typeof url !== "string") return failed("Evidence needs a valid HTTP(S) source page.");
+    try {
+      const parsed = new URL(url);
+      if (!isHttpUrl(parsed) || parsed.username || parsed.password) throw new Error("invalid source");
+    } catch {
+      return failed("Evidence needs a valid HTTP(S) source page without URL credentials.");
+    }
+    const host = new HostClient();
+    try {
+      const saved = await host.call({
+        type: "save_evidence", protocol_version: PROTOCOL_VERSION,
+        request_id: newRequestId(), url, selection,
+      }, "evidence_saved");
+      return {
+        kind: "evidence_result", tab_id: tabId, at: Date.now(), failed: saved.warnings.length > 0,
+        message: `${saved.already_saved ? "Passage already saved" : "Passage saved"}: ${saved.relative_path}` +
+          (saved.warnings.length ? ` — ${saved.warnings.join(" ")}` : ""),
+      };
+    } catch (error) {
+      return failed(`Could not keep the passage: ${error instanceof Error ? error.message : String(error)}. Repeat the same capture to retry safely.`);
+    } finally {
+      host.disconnect();
+    }
+  };
+  void capture().then(publishNotice).catch((error: unknown) =>
+    diag.warn("evidence notice failed", { error }));
+}
+
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command === "summarize") summarizeFromGesture(tab);
   if (command === "task") taskFromGesture(tab);
@@ -1905,6 +1949,7 @@ chrome.commands.onCommand.addListener((command, tab) => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === SUMMARIZE_MENU_ID) summarizeFromGesture(tab);
   if (info.menuItemId === "brauser-task") taskFromGesture(tab);
+  if (info.menuItemId === "brauser-evidence") evidenceFromGesture(info, tab);
 });
 
 function runMigration(): Promise<void> {
@@ -1923,6 +1968,13 @@ chrome.runtime.onInstalled.addListener((details) => {
       () => {
         const error = chrome.runtime.lastError;
         if (error) diag.warn("context menu setup failed", { error: error.message });
+      },
+    );
+    chrome.contextMenus.create(
+      { id: "brauser-evidence", title: `Keep passage with ${APP_NAME}`, contexts: ["selection"] },
+      () => {
+        const error = chrome.runtime.lastError;
+        if (error) diag.warn("evidence context menu setup failed", { error: error.message });
       },
     );
     chrome.contextMenus.create(

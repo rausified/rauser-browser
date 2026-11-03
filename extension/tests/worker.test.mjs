@@ -2857,11 +2857,73 @@ test("with site access withdrawn, the shortcut points to Brauser's site access",
   }
 });
 
+test("Keep passage sends only Chrome's selected text and frame source, with no extraction or run", async () => {
+  sessionValues.clear(); broadcasts.length = 0; panelOpens.length = 0;
+  const before = ports.length;
+  const realScript = executeScript;
+  const realFetch = globalThis.fetch;
+  let scriptCalls = 0;
+  let networkCalls = 0;
+  globalThis.fetch = async () => { networkCalls++; throw new Error("must not fetch"); };
+  executeScript = async () => { scriptCalls++; throw new Error("must not extract"); };
+  try {
+    const selection = "  Exact decision 🚀\r\n<img src=x>  ";
+    onMenuClicked({ menuItemId: "brauser-evidence", selectionText: selection,
+      pageUrl: "https://top.example/page", frameUrl: "https://frame.example/document" },
+    { id: 11, url: SUMMARY_URL, title: "Unrelated tab metadata", incognito: false });
+    assert.deepEqual(panelOpens, [{ tabId: 11 }]);
+    let port;
+    await until(() => (port = ports.slice(before).find((port) => port.sent.some((r) => r.type === "save_evidence"))), "save_evidence");
+    const request = port.sent.find((request) => request.type === "save_evidence");
+    assert.deepEqual(Object.keys(request).sort(), ["protocol_version", "request_id", "selection", "type", "url"]);
+    assert.equal(request.url, "https://frame.example/document");
+    assert.equal(request.selection, selection);
+    assert.equal(scriptCalls, 0);
+    const relative_path = `notes/evidence/${"a".repeat(64)}.md`;
+    port.reply({ type: "evidence_saved", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+      relative_path, key: { kind: "url", value: "key" }, canonical_url: request.url,
+      captured_at: "2026-11-03T00:00:00Z", selection_sha256: "b".repeat(64), already_saved: false, warnings: [] });
+    await until(() => broadcasts.length === 1, "evidence notice");
+    assert.equal(broadcasts[0].kind, "evidence_result");
+    assert.equal(broadcasts[0].failed, false);
+    assert.equal(broadcasts[0].message, `Passage saved: ${relative_path}`);
+    assert.ok(!JSON.stringify([...sessionValues]).includes(selection));
+    assert.equal(scriptCalls, 0);
+    assert.equal(port.sent.filter((r) => r.type === "start_run" || r.type === "start_task").length, 0);
+    assert.equal(networkCalls, 0);
+    await until(() => port.closed, "evidence port closes");
+  } finally { executeScript = realScript; globalThis.fetch = realFetch; }
+});
+
+test("Keep passage refuses bad frame attribution and blank/oversized selections without a host", async () => {
+  for (const info of [
+    { frameUrl: "https://user:secret@frame.example/page", selectionText: "decision" },
+    { frameUrl: "about:blank", selectionText: "decision" },
+    { frameUrl: "invalid", selectionText: "decision" },
+    { selectionText: " \t\n" }, { selectionText: "é".repeat(16385) }, {},
+  ]) {
+    sessionValues.clear(); broadcasts.length = 0;
+    const before = ports.length;
+    onMenuClicked({ menuItemId: "brauser-evidence", pageUrl: SUMMARY_URL, ...info },
+      { id: 11, url: SUMMARY_URL, incognito: false });
+    await until(() => broadcasts.length === 1, "evidence refusal");
+    assert.equal(broadcasts[0].kind, "evidence_result");
+    assert.equal(broadcasts[0].failed, true);
+    assert.equal(ports.length, before);
+  }
+  broadcasts.length = 0;
+  onMenuClicked({ menuItemId: "brauser-evidence", selectionText: "private" },
+    { id: 11, url: SUMMARY_URL, incognito: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(broadcasts.length, 0);
+});
+
 test("context menu item is registered on install", async () => {
   onInstalled({ reason: "install" });
-  await until(() => menus.length === 2, "the context menu items");
+  await until(() => menus.length === 3, "the context menu items");
   assert.deepEqual(menus, [
     { id: "brauser-summarize", title: "Summarize with Brauser", contexts: ["page", "selection"] },
+    { id: "brauser-evidence", title: "Keep passage with Brauser", contexts: ["selection"] },
     { id: "brauser-task", title: "Ask Brauser…", contexts: ["page", "selection"] },
   ]);
 

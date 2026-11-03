@@ -899,6 +899,42 @@ Steps 5 and 6 of the older M2 design below still define the summary file's ident
 - A page note holds only the user's thoughts. Agent output never goes into a note; it goes to the page's separate summary file (§5.2) or wherever a command sends it (§5.6).
 - Notes created by M1 load into the editor normally. M1 review drafts are left in place and are not merged.
 
+### 5.3a Selected passage evidence
+
+**Keep passage with Brauser** is a selection-only Chrome context-menu gesture.
+It sends only Chrome's supplied selected text and source address to the native
+host: the frame address when present, otherwise the page address. An invalid
+frame address refuses rather than falling back to the top page. Incognito
+selections are ignored. There is no page extraction, harness, network request,
+activity event or change to the editable page note. Capture can be paused and
+the source need not have an adapter; a confirmed home folder is required.
+
+The host derives the canonical URL and record key with the page-note/run
+resolver under the config lock, rejects invalid or credential-bearing URLs,
+and records its own UTC capture time. Blank or more than 32,768 UTF-8 bytes of
+selection refuse without truncation. Cards live in
+`notes/evidence/<sha256>.md`; the digest binds a versioned serialized tuple of
+record key, canonical URL and exact selection. Repeating that identity returns
+the original card and capture time, including after a lost reply; changed text
+creates a separate card. Later identity changes may produce a new card.
+
+Each format-1 card holds the host-derived key, canonical URL, capture time,
+SHA-256 of the exact selected UTF-8 bytes and a lossless `selection_utf8_hex`
+scalar. Its readable passage uses the shared Markdown neutralizer; metadata
+uses JSON-compatible YAML escaping with code/math/fence characters escaped.
+Source metadata stores no raw pre-normalization URL or removed parameter values. The card
+is evidence of browser-supplied text at capture, not page verification or a
+promise to relocate the selection. Cards are outside page-note discovery and
+Re-learn's editable-note inventory; existing snapshots remain immutable.
+
+Publication fsyncs a temporary file then hard-links it without replacement.
+An existing regular bounded card must match the complete expected bytes using
+its valid original timestamp; edited/unowned files, symlinks and directories
+are conflicts. An identical concurrent winner counts as an existing save.
+Directory-sync failure after publication returns a saved receipt with a
+warning; repeating the capture retries durability. The panel shows the saved
+relative path or failure as plain text, without an agent setup warning.
+
 ### 5.4 Read later
 
 - `/save` writes a read-later entry, one per record key (§6.2); saving an already-saved artifact from another of its URLs reports it as already saved. It may link to the page's summary file (§5.2); the summary itself is never copied into the entry.
@@ -1283,6 +1319,7 @@ The user chooses one **home folder** at setup with the native folder picker (`st
 ```
 <home folder>/                   chosen by the user, no default
   notes/<slug>.md                page note: user text and explicitly saved task reports
+  notes/evidence/<sha256>.md      immutable selected passage and source
   logs/2026/09/2026-09-27.md     daily artifact log: append-only source of truth
   artifacts/<type>/<site>/<slug>.md  one Brauser-owned file per artifact, regenerated from the log (M1.5a)
   summaries/<slug>.summary.md    one Brauser-owned summary per page (M2)

@@ -505,6 +505,13 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         typeof value.title === "string" && typeof value.body === "string" &&
         isRecordKey(value.key) && Array.isArray(value.older_notes) &&
         value.older_notes.length <= 24 && value.older_notes.every(isOlderNote);
+    case "evidence_saved":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "relative_path", "key", "canonical_url", "captured_at", "selection_sha256", "already_saved", "warnings"]) &&
+        typeof value.relative_path === "string" && /^notes\/evidence\/[a-f0-9]{64}\.md$/.test(value.relative_path) &&
+        isRecordKey(value.key) && isBoundedString(value.canonical_url, 8192, 1) &&
+        isBoundedString(value.captured_at, 64, 1) && typeof value.selection_sha256 === "string" &&
+        /^[a-f0-9]{64}$/.test(value.selection_sha256) && typeof value.already_saved === "boolean" &&
+        isBoundedList(value.warnings, 2, (warning) => isBoundedString(warning, 256));
     case "note_saved":
       return ["created", "replaced", "created_with_warning", "replaced_with_warning"]
         .includes(String(value.outcome)) &&

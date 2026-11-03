@@ -1830,3 +1830,22 @@ ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
 formatting, protocol generation, typecheck, lint, script tests, Markdown safety
 and queue consistency pass. Development tools pass 254 tests with 94 skips;
 accessibility passes two tests with 55 Chromium sandbox skips.
+
+## 2026-11-03 — Selected passage evidence cards
+
+Assigned `brwr-edn4` adds the selection-only **Keep passage with Brauser**
+context menu and additive-v8 `save_evidence`/`evidence_saved` messages. The
+native host's existing key resolver supplies canonical source identity under
+the config lock; `host/src/evidence.rs` publishes immutable cards beneath
+`notes/evidence/` using a synced temporary and no-clobber hard link. Full-byte
+validation of an existing card preserves the first timestamp on exact retry.
+The card stores exact selected UTF-8 as hex plus SHA-256, with a neutralized
+readable passage. Frame attribution, invalid inputs, conflicting/symlinked
+files, Unicode/CRLF, concurrency and no-extractor/no-agent/no-fetch behavior
+have offline coverage. `extension/worker.ts` handles only the Chrome gesture;
+`extension/panel.ts` shows text receipts without the harness warning. This
+freezes browser-supplied text and capture-time identity; it does not verify
+live page contents or enter editable-note migration. Current rule: DESIGN.md
+§5.3a. Full gate: 1,418 Rust-reported outcomes (+9), 45 extension files (+5
+cases), both Clippy builds, README checks; accessibility 2 pass / 42 sandbox
+browser skips. Driver owns independent publication/platform validation.

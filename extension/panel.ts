@@ -1756,6 +1756,10 @@ function showNotice(notice: PanelNotice): boolean {
     return true;
   }
   shownNotice = id;
+  if (notice.kind === "evidence_result") {
+    showRunLine(runArea, notice.tab_id, notice.message, notice.failed);
+    return true;
+  }
   // The shortcut and the context menu start a summary without the panel's
   // button, so the one-time warning (spec §6.1) shows here for them.
   void showSetupWarningOnce(runArea);

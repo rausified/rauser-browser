@@ -86,6 +86,37 @@ impl Vault {
         })
     }
 
+    /// Evidence is separate from editable notes. Refuse symlinked parents.
+    pub(crate) fn evidence_dir(&self) -> Result<Dir> {
+        if self.pages_dir != Path::new(crate::layout::NOTES_DIR) {
+            bail!("evidence cards require the fixed home-folder layout");
+        }
+        fn child(parent: &Dir, name: &str) -> Result<Dir> {
+            match parent.create_dir(name) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            let inspected = parent.symlink_metadata(name)?;
+            if inspected.file_type().is_symlink() || !inspected.is_dir() {
+                bail!("evidence parent is not a plain directory");
+            }
+            let dir = parent.open_dir(name)?;
+            #[cfg(unix)]
+            {
+                use cap_std::fs::MetadataExt;
+                let opened = dir.dir_metadata()?;
+                if (opened.dev(), opened.ino()) != (inspected.dev(), inspected.ino()) {
+                    bail!("evidence directory changed while opening it");
+                }
+            }
+            sync_directory(parent)?;
+            Ok(dir)
+        }
+        let notes = child(&self.root, crate::layout::NOTES_DIR)?;
+        child(&notes, "evidence")
+    }
+
     /// Atomically replace (or create) the whole note. The filename is derived
     /// from the URL, never from an extension path. Callers must already have
     /// checked the caller's expected version and Brauser ownership of any
@@ -884,7 +915,7 @@ fn replace_owned_file_with(
 /// The bytes of the regular file at `name`, read only when the opened handle
 /// is the file `inspected` (taken without following symlinks) described:
 /// `None` when the name now holds something else or more than 4 MiB.
-fn read_inspected_occupant(
+pub(crate) fn read_inspected_occupant(
     dir: &Dir,
     name: &std::ffi::OsStr,
     inspected: &cap_std::fs::Metadata,

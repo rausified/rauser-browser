@@ -340,6 +340,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::RecordWhy(_) => "record_why",
         Request::LoadNote(_) => "load_note",
         Request::SaveNote(_) => "save_note",
+        Request::SaveEvidence(_) => "save_evidence",
         Request::UseArtifactNote(_) => "use_artifact_note",
         Request::ViewOlderNote(_) => "view_older_note",
         Request::ListPreservedNotes(_) => "list_preserved_notes",
@@ -951,6 +952,7 @@ fn dispatch(
         Request::RecordWhy(value) => record_why(value, config),
         Request::LoadNote(value) => load_note(value, config),
         Request::SaveNote(value) => save_note(value, config),
+        Request::SaveEvidence(value) => save_evidence(value, config),
         Request::UseArtifactNote(value) => use_artifact_note(value, config),
         Request::ViewOlderNote(value) => view_older_note(value, config),
         Request::ListPreservedNotes(value) => list_preserved_notes(value, config),
@@ -2470,6 +2472,63 @@ fn current_note_location(
     // path for ordinary reads, saves and key-change conflicts; durable apply
     // must supply its checked replay here rather than change note filenames.
     note::NoteLocation::resolve(&context.vault, &context.canonical, &context.key, resolution)
+}
+
+fn save_evidence(
+    value: brauser_protocol::SaveEvidenceRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    if value.url.len() > 8192 || !crate::evidence::valid_selection(&value.selection) {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "select nonblank text of at most 32768 UTF-8 bytes from a valid web page",
+        );
+    }
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(cause) => {
+            warn_cause(&cause, "evidence config lock failed");
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    let parts = match resolve_key_parts(config, &value.url) {
+        Ok(parts) => parts,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    // Parsing can expand Unicode into percent-encoded bytes. Refuse before
+    // publication if the canonical source cannot fit its receipt contract.
+    if parts.canonical.len() > 8192 {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "the canonical source URL exceeds 8192 UTF-8 bytes",
+        );
+    }
+    match crate::evidence::save(
+        &parts.vault,
+        &parts.key,
+        &parts.canonical,
+        &value.selection,
+        value.request_id.clone(),
+    ) {
+        Ok(saved) => Response::EvidenceSaved(saved),
+        Err(cause) if cause.is::<crate::evidence::Conflict>() => {
+            error(&value.request_id, ErrorCode::Conflict, &cause.to_string())
+        }
+        Err(cause) => {
+            warn_cause(&cause, "evidence save failed");
+            error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "could not save the selected passage; repeat the capture to retry",
+            )
+        }
+    }
 }
 
 fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore) -> Response {
@@ -4360,6 +4419,148 @@ id = "work:{host}/{id}"
             assert_eq!(std::fs::read(&path).unwrap(), before);
             assert_eq!(config.revision(), revision);
         }
+    }
+
+    #[test]
+    fn evidence_gesture_freezes_host_identity_and_exact_text_without_a_service() {
+        use sha2::{Digest, Sha256};
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            folder.path(),
+            "",
+            "capture_enabled = false\nstrip_params = [\"utm_*\"]",
+            r#"
+[adapters]
+format = 1
+[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+id = "work:{host}/{id}"
+[[artifacts.match]]
+path = "/items/{id:int}"
+"#,
+        );
+        let before = std::fs::read(&path).unwrap();
+        let mut config = ConfigStore::load_from(path.clone());
+        let url = "https://work.example/items/7?utm_source=removed-secret#section";
+        let text = "  Keep this exact decision 🚀\r\nNext line. ";
+        let request = serde_json::json!({"type":"save_evidence","protocol_version":8,
+            "request_id":"evidence","url":url,"selection":text});
+        let call = |config: &mut ConfigStore, request: &serde_json::Value| {
+            dispatch_json(
+                &serde_json::to_vec(request).unwrap(),
+                config,
+                &mut ConsentAuthority::new(),
+                &SetupContext::new(),
+            )
+        };
+        let Response::EvidenceSaved(saved) = call(&mut config, &request) else {
+            panic!("expected evidence card");
+        };
+        assert_eq!(
+            saved.key,
+            RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "work:work.example/7".into()
+            }
+        );
+        assert_eq!(saved.canonical_url, "https://work.example/items/7");
+        assert_eq!(
+            saved.selection_sha256,
+            hex::encode(Sha256::digest(text.as_bytes()))
+        );
+        assert!(!saved.already_saved);
+        let card = folder.path().join(&saved.relative_path);
+        let bytes = std::fs::read(&card).unwrap();
+        let raw = String::from_utf8(bytes.clone()).unwrap();
+        assert!(!raw.contains("removed-secret"));
+        assert!(!raw.contains("utm_source"));
+        assert!(raw.contains(&hex::encode(text.as_bytes())));
+        let Response::EvidenceSaved(retried) = call(&mut config, &request) else {
+            panic!("expected retry");
+        };
+        assert!(retried.already_saved);
+        assert_eq!(retried.captured_at, saved.captured_at);
+        assert_eq!(std::fs::read(&card).unwrap(), bytes);
+        // Plain pages retain their own URL key, even on an unconfigured site.
+        let mut plain = request.clone();
+        plain["url"] = serde_json::json!("https://other.example/page?utm_x=discard");
+        let Response::EvidenceSaved(plain) = call(&mut config, &plain) else {
+            panic!("expected URL card");
+        };
+        assert_eq!(
+            plain.key,
+            crate::vault::url_record_key("https://other.example/page").unwrap()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        for dir in ["logs", "artifacts", "summaries", "later", "runs"] {
+            assert!(!folder.path().join(dir).exists(), "unexpected {dir}");
+        }
+        let mut forged = request.clone();
+        forged["key"] = serde_json::json!(saved.key);
+        assert!(
+            matches!(call(&mut config, &forged), Response::Error(value) if value.code == ErrorCode::InvalidRequest)
+        );
+        // Cards never become editable page notes or note-recovery inputs.
+        let Response::NoteLoaded(note) = load_note(
+            brauser_protocol::LoadNoteRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "load".into(),
+                url: url.into(),
+            },
+            &mut config,
+        ) else {
+            panic!("expected empty page note");
+        };
+        assert!(!note.exists);
+        assert_eq!(std::fs::read(card).unwrap(), bytes);
+    }
+
+    #[test]
+    fn evidence_refuses_invalid_sources_and_text_before_writing_content() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = configured_store(folder.path());
+        let expanded_url = format!("https://work.example/{}", "é".repeat(2000));
+        for url in [
+            expanded_url.as_str(),
+            "not a url",
+            "file:///tmp/secret",
+            "javascript:alert(1)",
+            "https://user:password@work.example/page",
+            "https://user@work.example/page",
+        ] {
+            let response = save_evidence(
+                brauser_protocol::SaveEvidenceRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "r".into(),
+                    url: url.into(),
+                    selection: "decision".into(),
+                },
+                &mut config,
+            );
+            assert!(
+                matches!(response, Response::Error(value) if value.code == ErrorCode::InvalidRequest)
+            );
+        }
+        for text in [String::new(), " \t\n".into(), "é".repeat(16385)] {
+            assert!(
+                matches!(save_evidence(brauser_protocol::SaveEvidenceRequest {
+                protocol_version: PROTOCOL_VERSION, request_id: "r".into(),
+                url: "https://work.example/page".into(), selection: text,
+            }, &mut config), Response::Error(value) if value.code == ErrorCode::InvalidRequest)
+            );
+        }
+        assert!(!folder.path().join("notes").exists());
+        let missing = tempfile::tempdir().unwrap();
+        let mut unconfigured = ConfigStore::for_test(missing.path().join("config.toml"));
+        assert!(
+            matches!(save_evidence(brauser_protocol::SaveEvidenceRequest {
+            protocol_version: PROTOCOL_VERSION, request_id: "r".into(),
+            url: "https://work.example/page".into(), selection: "decision".into(),
+        }, &mut unconfigured), Response::Error(value) if value.code == ErrorCode::NotConfigured)
+        );
     }
 
     fn configured_store(root: &std::path::Path) -> ConfigStore {

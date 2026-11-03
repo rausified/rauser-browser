@@ -12,8 +12,108 @@
     }
   ],
   "$defs": {
+    "SaveEvidenceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "url",
+        "selection"
+      ],
+      "properties": {
+        "type": {
+          "const": "save_evidence"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "selection": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768
+        }
+      }
+    },
+    "EvidenceSaved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "relative_path",
+        "key",
+        "canonical_url",
+        "captured_at",
+        "selection_sha256",
+        "already_saved",
+        "warnings"
+      ],
+      "properties": {
+        "type": {
+          "const": "evidence_saved"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "key": {
+          "$ref": "#/$defs/RecordKey"
+        },
+        "canonical_url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "captured_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "selection_sha256": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "already_saved": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "maxLength": 256
+          }
+        }
+      }
+    },
     "Request": {
       "oneOf": [
+        { "$ref": "#/$defs/SaveEvidenceRequest" },
         { "$ref": "#/$defs/GetAdapterRepairRequest" },
         { "$ref": "#/$defs/ReplaceAdaptersRequest" },
         {
@@ -100,6 +200,7 @@
     },
     "Response": {
       "oneOf": [
+        { "$ref": "#/$defs/EvidenceSaved" },
         { "$ref": "#/$defs/TaskCommandsListed" },
         { "$ref": "#/$defs/TaskCommandSettings" },
         { "$ref": "#/$defs/AdapterRepairLoaded" },

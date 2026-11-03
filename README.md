@@ -107,6 +107,19 @@ per-run snapshot, so summaries resumed after a rollback use their defaults.
 
 The panel updates when settings change, can send pending activity and pause capture, and follows whichever tab is active. On any HTTP(S) page it shows the address and title, loads that page's note (if any), and autosaves what you type. Recognized artifact pages also show measured activity and one-line context; **Recent** combines artifacts across tools and generates a copyable worklog. Brauser holds HTTP(S) site access from install; if you withdraw it in Chrome, the panel shows one banner with a button that opens Brauser's Chrome extension settings so you can turn it back on.
 
+Select a passage on any HTTP(S) page, right-click, and choose **Keep passage
+with Brauser** to save it as a local evidence card. The panel shows the path
+under your home folder's `notes/evidence/`. Each card keeps the source URL,
+host-derived artifact or URL key, first capture time and a SHA-256 digest,
+with a readable passage and exact UTF-8 text encoded in `selection_utf8_hex`.
+Repeating the same capture returns the existing card; changing the passage
+creates another. Brauser reads only Chrome's supplied selection for this
+action, runs no agent and makes no network request. A confirmed home folder
+is required; capture may be paused and the page needs no adapter. Invalid
+sources, URL credentials, blank text and selections over 32,768 UTF-8 bytes
+refuse. Existing or edited unrelated files are never replaced. Rebuild the
+host and extension together for this additive protocol-v8 action.
+
 In **Recent**, the worklog shows known capture gaps beside the preview, with
 the reported missing activity-hour records and their full date/time ranges.
 Counts can span several dates and overlap; they are never added to work totals.
