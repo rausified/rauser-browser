@@ -232,6 +232,18 @@ which the task bar sets as it starts. Plan:
 
 ## §7.1 Agent harnesses — history
 
+**Personal summary style (2026-11-03, `brwr-sm4`).** Users can guide language,
+emphasis and presentation with a fixed `SUMMARY_STYLE.md` in the picked Brauser
+home. The host reads at most 8192 bytes, refuses invalid/nonregular/symlink files,
+and snapshots guidance in a private `summary-style.json` before publishing a
+queued summary. New and restarted runs render only that snapshot through the
+existing one-pass `SUMMARY.md` template, as one JSON value. Missing/blank means
+defaults. Tasks and site drafts never read it. A design challenge replaced a
+new strict status field with this sidecar so rollback keeps process-group
+recovery; older hosts ignore it and resume using their defaults. The compiled
+instructions and answer validator remain in place; full-access tool restrictions
+are still prompt-level. Settings and README explain examples, limits and edits.
+
 > **Rewritten for open access PR 3 (2026-10-26).** Agents run in the Brauser service with full access (§4.5, §14). The M2 step 1 lockdown this section used to describe (per-harness argument templates with no tools and a read-only sandbox, `--help` and `codex features list` flag checks, reviewed Codex feature tables, an emptied environment with an allowlist, a host-owned work directory per run, the Codex event allowlist, the §7.1 canary, and the native setup confirmation and harness token) is gone from the code and from this section.
 
 ## §7.2 Artifact adapters — history

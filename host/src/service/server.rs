@@ -570,6 +570,7 @@ impl Server {
         });
         match self.supervisor.start_run(StartRun {
             incoming: setup.incoming,
+            summary_style: setup.summary_style,
             kind,
             url: value.url,
             title: value.title,
@@ -639,7 +640,10 @@ impl Server {
         let mut config = lock(&self.config);
         let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
         let (harness, timeout) = agent_setup(&config, requested)?;
+        let summary_style = super::summary_style::from_home(&config)
+            .map_err(|message| (ErrorCode::InvalidConfig, message))?;
         Ok(RunSetup {
+            summary_style,
             harness,
             cwd: knowledge_base,
             timeout,
@@ -663,6 +667,7 @@ impl Server {
         let (harness, timeout) = agent_setup(&config, requested)?;
         let protected = configured_protected(&config)?;
         Ok(RunSetup {
+            summary_style: None,
             harness,
             cwd: knowledge_base,
             timeout: timeout.map(task_timeout),
@@ -684,6 +689,7 @@ impl Server {
         let _config_lock = locked_config(&mut config)?;
         let (harness, timeout) = agent_setup(&config, requested)?;
         Ok(RunSetup {
+            summary_style: None,
             harness,
             // Ignored for a site draft; see `StartRun`.
             cwd: PathBuf::new(),
@@ -827,6 +833,7 @@ pub(crate) fn checked_knowledge_base(
 
 /// What [`Server::run_setup`] resolved for a new run.
 struct RunSetup {
+    summary_style: Option<String>,
     incoming: Vec<brauser_protocol::IncomingTrailView>,
     harness: HarnessId,
     cwd: PathBuf,
@@ -1668,6 +1675,68 @@ mod tests {
         for id in &ids[..2] {
             world.wait_finished(id);
         }
+    }
+
+    #[test]
+    fn summary_setup_reads_only_the_home_style_and_other_run_kinds_ignore_it_without_a_socket() {
+        let world = World::new("");
+        let kb = world._temp.path().join("kb");
+        std::fs::create_dir(&kb).unwrap();
+        world.configure(Some(""), Some(&kb));
+        std::fs::write(kb.join("SUMMARY_STYLE.md"), "Wrong folder").unwrap();
+        let config = world.config();
+        let options = World::options(
+            &world.paths,
+            &config,
+            Duration::from_secs(1),
+            DEFAULT_RUN_TIMEOUT,
+        );
+        let server = Server {
+            paths: world.paths.clone(),
+            supervisor: Supervisor::new(
+                RunStore::open(world.paths.runs()).unwrap(),
+                HarnessRegistry::of(vec![]),
+                Box::new(KindFinisher::new(SummaryFinisher::new(
+                    world.support.join("config.toml"),
+                ))),
+                options,
+            ),
+            config: Mutex::new(config),
+            build_id: "test".into(),
+            last_arrival: Mutex::new(Instant::now()),
+            opener: crate::open::default_opener(),
+        };
+        assert_eq!(
+            server
+                .run_setup(None, "https://example.com")
+                .unwrap()
+                .summary_style,
+            None
+        );
+        let path = world.notes.join("SUMMARY_STYLE.md");
+        std::fs::write(&path, "Use French.").unwrap();
+        let first = server.run_setup(None, "https://example.com").unwrap();
+        assert_eq!(first.summary_style.as_deref(), Some("Use French."));
+        std::fs::write(&path, "Use Spanish.").unwrap();
+        assert_eq!(
+            server
+                .run_setup(None, "https://example.com")
+                .unwrap()
+                .summary_style
+                .as_deref(),
+            Some("Use Spanish.")
+        );
+        assert_eq!(first.summary_style.as_deref(), Some("Use French."));
+        std::fs::write(&path, [0xff]).unwrap();
+        assert!(matches!(
+            server.run_setup(None, "https://example.com"),
+            Err((
+                ErrorCode::InvalidConfig,
+                super::super::summary_style::HOME_ERROR
+            ))
+        ));
+        assert_eq!(server.task_setup(None).unwrap().summary_style, None);
+        assert_eq!(server.site_draft_setup(None).unwrap().summary_style, None);
     }
 
     #[test]
