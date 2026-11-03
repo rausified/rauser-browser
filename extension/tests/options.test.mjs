@@ -4,6 +4,9 @@ import { readFileSync } from "node:fs";
 
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
+const { setStarterFamiliesForTest } = await import("../dist/starter-adapters.js");
+const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
+const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY } = await import("./starter-fixtures.mjs");
 
 // Run after build:extension. Each test loads a fresh copy of the settings page
 // against a fake DOM, a scripted native host, a stub worker, and a
@@ -1074,6 +1077,66 @@ test("a missing starter offer cannot become available when scope changes", async
 
   assert.equal(pullRequest.dataset.available, "false");
   assert.equal(pullRequest.disabled, true);
+});
+
+test("the gallery hint joins the family display names", async () => {
+  install();
+  await openSettings();
+  assert.equal(
+    nodeText(env.elements.get("starter-gallery")).trim(),
+    "Enter an Atlassian Cloud (Jira or Confluence), SharePoint/OneDrive, GitHub, or Miro site address above to see starter drafts.",
+  );
+});
+
+test("gallery cards say whether each starter is certified", async () => {
+  install();
+  await openSettings();
+  typeSite("https://acme.atlassian.net");
+  const [jiraCard, confluenceCard] = env.elements.get("starter-gallery").querySelectorAll("article");
+  assert.match(nodeText(jiraCard), /Certified/);
+  assert.match(nodeText(confluenceCard), /Not yet checked on a real account/);
+});
+
+test("each scoped origin gets its own scope input", async (t) => {
+  setStarterFamiliesForTest([...STARTER_FAMILIES, EXAMPLE_TENANT_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const githubAdapter = {
+    type: "github.issue", origin: "https://github.com", scope: { owner: ["acme"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+    id: "github.issue:{host}/{owner}/{repo}/{number}",
+  };
+  const exampleAdapter = {
+    type: "example.item", origin: "https://example.test", scope: { workspace: ["acme"] },
+    match: [{ path: "/{workspace:name|lower}/item/{id:int}" }],
+    id: "example.item:{host}/{workspace}/{id}",
+  };
+  install({ adapters: [githubAdapter, exampleAdapter] });
+  await openSettings();
+  const gallery = env.elements.get("starter-gallery");
+  const labels = gallery.querySelectorAll("label");
+  assert.ok(labels.some((label) => label.textContent === "Work organizations (comma-separated)"));
+  assert.ok(labels.some((label) => label.textContent === "Workspaces (comma-separated)"));
+
+  const workspacesInput = labels.find((label) => label.textContent === "Workspaces (comma-separated)").children[0];
+  const prButton = gallery.querySelectorAll("button").find((button) => button.dataset.starterKey === "github.pr");
+  const before = prButton.dataset.available;
+
+  workspacesInput.value = "bad/name";
+  workspacesInput.dispatch("input");
+
+  assert.equal(prButton.dataset.available, before);
+});
+
+test("an unscoped card shows its notice and no input", async (t) => {
+  setStarterFamiliesForTest([EXAMPLE_UNSCOPED_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  install();
+  await openSettings();
+  typeSite(EXAMPLE_UNSCOPED_FAMILY.origin.origin);
+  const gallery = env.elements.get("starter-gallery");
+  assert.ok(nodeText(gallery).includes(EXAMPLE_UNSCOPED_FAMILY.scope.notice));
+  assert.match(nodeText(gallery), /Not yet checked on a real account/);
+  assert.equal(gallery.querySelectorAll("input").length, 0);
 });
 
 test("adapter workspace names overlaps and highlights a matching safety probe", async () => {
