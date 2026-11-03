@@ -1324,3 +1324,26 @@ Rust total is 1,382 reported outcomes (94 explicit IPC sandbox skips); all 44
 extension files pass. Real Chromium cannot launch here: two fixture checks pass
 and 40 browser cases explicitly skip, so the driver and platform CI still need
 to establish that acceptance before publication. No live service or API changed.
+
+## 2026-11-02 — Repair capture rules while keeping the original
+
+A damaged capture-rule document no longer leaves removing every rule as the
+only settings-page recovery. **Repair adapter document…** opens the preserved
+adapter values, including settings from a future format, in a copyable TOML
+view. Beside it is an explicitly authored complete format-1 JSON replacement
+with immediate validation and a match preview across all its sites. Nothing
+converts a future format automatically, and the original reset-all action stays
+available. This lets someone repair one broken rule while retaining the useful
+ones instead of rebuilding their entire capture setup.
+
+Saving sends only the reviewed configuration revision and replacement rules.
+The native host keeps the capture pause, chosen folders and agent settings,
+checks recorded identities and the complete replacement, and backs up the exact
+original file and comments beside config.toml before its atomic write. Another
+settings change makes the open draft stale, preserving both texts for copying
+and requiring a fresh review. The extension verifies the new host policy before
+publishing it to capture. Focused Rust, wire and offline settings tests cover
+future formats, malformed entries, exact backups, conflicts, identity refusal,
+preview and cancellation; the real-browser journey also checks keyboard focus
+return after saving. The driver's external gate remains the source of real
+Chrome and platform acceptance.

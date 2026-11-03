@@ -3,6 +3,31 @@ use brauser_protocol::{Request, Response};
 mod common;
 use common::{config, update};
 
+#[test]
+fn adapter_repair_is_revisioned_and_cannot_change_other_settings() {
+    use common::{assert_request_round_trips, assert_response_round_trips};
+    use serde_json::json;
+    let mut request = json!({"type":"get_adapter_repair", "protocol_version":8, "request_id":"repair", "expected_revision":"sha256:current"});
+    assert_request_round_trips("GetAdapterRepairRequest", &request);
+    request["type"] = json!("replace_adapters");
+    request["document"] = json!({"format":1,"artifacts":[]});
+    assert_request_round_trips("ReplaceAdaptersRequest", &request);
+    for key in ["config", "picker_token", "capture_enabled", "storage"] {
+        let mut unknown = request.clone();
+        unknown[key] = json!(null);
+        assert!(serde_json::from_value::<Request>(unknown).is_err(), "{key}");
+    }
+    request.as_object_mut().unwrap().remove("expected_revision");
+    assert!(serde_json::from_value::<Request>(request).is_err());
+    assert_response_round_trips(
+        "AdapterRepairLoaded",
+        &json!({
+            "type":"adapter_repair_loaded", "protocol_version":8, "request_id":"repair", "revision":"sha256:current",
+            "original_toml":"[adapters]\nformat = 2\nfuture_mode = 'semantic'\n"
+        }),
+    );
+}
+
 fn storage(summaries: Option<&str>) -> String {
     let summaries = summaries.map_or(String::new(), |value| {
         format!(r#","summaries_dir":{value}"#)

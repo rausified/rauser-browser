@@ -17,6 +17,7 @@ import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { APP_NAME } from "./brand.js";
 import { sitePatternControls } from "./site-pattern-settings.js";
 import { AdoptedStateControls } from "./adopted-state-settings.js";
+import { AdapterRepairControls } from "./adapter-repair-settings.js";
 import { hostBuildText } from "./build-info.js";
 import { DIAG_STORAGE_KEY, diag, diagnosticsText, initDiag } from "./diag.js";
 import {
@@ -29,6 +30,7 @@ import {
   vocabularyFromText,
 } from "./agent.js";
 import {
+  matchText,
   adapterLabel,
   adapterOrigin,
   exampleUrl,
@@ -153,6 +155,11 @@ const session = new ConfigSession(renderConfig, () => {
 // Assigned once the session exists; the session's first change can come first.
 let adoptedState: AdoptedStateControls | null = null;
 adoptedState = new AdoptedStateControls(session, show);
+let adapterRepair: AdapterRepairControls | null = null;
+adapterRepair = new AdapterRepairControls(session, show, () => busy, (value) => {
+  busy = value;
+  updateControls();
+});
 
 // The header names the host process that answered. Another one, possibly
 // from a rebuilt binary, starts on the next call after it exits.
@@ -223,7 +230,7 @@ function updateControls(): void {
   const connected = session.connected;
   // A base-config issue needs folder repair. An adapter-only issue keeps
   // unrelated controls live, but freezes individual adapter edits until the
-  // user removes the invalid document as one revisioned update.
+  // user replaces the invalid document as one revisioned update.
   const repairing = session.configIssue !== null;
   const repairingAdapters = session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
@@ -269,6 +276,7 @@ function updateControls(): void {
   for (const input of harnessList.querySelectorAll<HTMLInputElement>("input")) {
     input.disabled = !idle || input.dataset.ready !== "true";
   }
+  adapterRepair?.render();
 }
 
 /** A harness the service found and can use. */
@@ -715,16 +723,6 @@ function readAdapterCandidate(): CandidateResult {
 function adapterCandidate(): CandidateResult | null {
   const result = readAdapterCandidate();
   return result.ok ? result : null;
-}
-
-function matchText(result: { match: false; reason: string } | {
-  match: true; type: string; artifact_id: string; rule: number; title?: string; mode: string | null;
-}): string {
-  if (!result.match) return `No match (${result.reason})`;
-  const details = [`${result.type} rule ${result.rule + 1}`, result.artifact_id];
-  if (result.title) details.push(`title “${result.title}”`);
-  if (result.mode) details.push(`mode ${result.mode}`);
-  return `Matches ${details.join(" · ")}`;
 }
 
 function refreshAdapterEditor(): void {

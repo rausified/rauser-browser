@@ -4,7 +4,7 @@
 // another page has saved a different revision.
 import type {
   AdapterDocument, AdapterWarning, AdoptedState, AgentStatus, ConfigSnapshot, HarnessFound, HarnessId,
-  RunStarted, ShapeCount, SiteDraftChecked, SiteDrafted,
+  ConfigUpdated, RunStarted, ShapeCount, SiteDraftChecked, SiteDrafted,
 } from "../protocol/ts/generated.js";
 import type { DraftChecked } from "./capture-site.js";
 import {
@@ -255,6 +255,25 @@ export class ConfigSession {
       picker_token: pickerToken,
       knowledge_base_token: knowledgeBaseToken,
     }, "config_updated");
+    return this.acceptConfigUpdate(updated, onCommitted, resumeAfterConfirmation, resumeAfterPauseToken);
+  }
+
+  /** Adapter repair carries only a complete document and its reviewed revision.
+   * Call under the settings mutation lock, as with saveConfig. */
+  async replaceAdapters(document: AdapterDocument, expectedRevision: string): Promise<boolean> {
+    const updated = await this.host.call({
+      type: "replace_adapters", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      expected_revision: expectedRevision, document,
+    }, "config_updated");
+    return this.acceptConfigUpdate(updated);
+  }
+
+  private async acceptConfigUpdate(
+    updated: ConfigUpdated,
+    onCommitted?: () => void,
+    resumeAfterConfirmation = false,
+    resumeAfterPauseToken: string | null = null,
+  ): Promise<boolean> {
     this.config = updated.config;
     this.setRevision(updated.revision);
     onCommitted?.();

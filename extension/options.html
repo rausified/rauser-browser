@@ -73,8 +73,36 @@
         </div>
         <div id="adapter-list" class="adapter-list"><p>No adapters configured.</p></div>
         <button id="new-adapter" type="button" class="secondary" disabled>Add adapter…</button>
+        <button id="repair-adapters" type="button" class="secondary" hidden disabled>Repair adapter document…</button>
         <button id="reset-adapters" type="button" class="secondary" hidden disabled>Remove all adapter rules</button>
         <button id="refresh-artifacts" type="button" class="secondary" disabled>Update artifact files now</button>
+
+        <div id="adapter-repair" class="adapter-editor" hidden>
+          <h3 id="adapter-repair-heading" tabindex="-1">Repair the complete adapter document</h3>
+          <p>Keep the rules you need by writing a complete replacement below. Unsupported formats are never converted automatically. Saving backs up the original config beside config.toml, keeps your other settings, and removes unsupported adapter settings.</p>
+          <label for="adapter-repair-original">Preserved adapter values (TOML)</label>
+          <textarea id="adapter-repair-original" rows="10" readonly spellcheck="false"></textarea>
+          <p>This copy preserves values, including unknown settings, with fresh formatting. The backup keeps the exact original file and comments.</p>
+          <button id="adapter-repair-copy" type="button" class="secondary">Copy preserved values</button>
+          <label for="adapter-repair-json">Complete replacement (format-1 JSON)</label>
+          <textarea id="adapter-repair-json" rows="14" spellcheck="false" autocomplete="off"></textarea>
+          <p>Use <code>{"format": 1, "artifacts": [...]}</code>, including every adapter you want to keep in match order. An empty artifacts list removes all rules. Recorded artifact identities remain protected.</p>
+          <output id="adapter-repair-validation" class="adapter-validation" aria-live="polite"></output>
+          <div class="preview-grid">
+            <div class="field">
+              <label for="adapter-repair-url">Replacement example URL</label>
+              <input id="adapter-repair-url" type="url" spellcheck="false" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="adapter-repair-title">Replacement example title (optional)</label>
+              <input id="adapter-repair-title" type="text" spellcheck="false" autocomplete="off" />
+            </div>
+          </div>
+          <p>Match preview includes fixed non-artifact probes for each site. Review any highlighted matches before saving.</p>
+          <ul id="adapter-repair-preview" class="plain-list adapter-preview" tabindex="0" aria-label="Replacement match preview"></ul>
+          <button id="adapter-repair-save" type="button" disabled>Back up and replace all adapter rules</button>
+          <button id="adapter-repair-cancel" type="button" class="secondary">Cancel repair</button>
+        </div>
 
         <div id="adapter-editor" class="adapter-editor" hidden>
           <h3 id="adapter-editor-heading" tabindex="-1">Review adapter</h3>
