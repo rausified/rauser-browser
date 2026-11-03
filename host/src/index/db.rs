@@ -524,6 +524,14 @@ fn configure(conn: &Connection) -> rusqlite::Result<()> {
 /// redirected or network folder). Set after the schema exists, so a WAL-mode
 /// file always carries this cache's `application_id` in its header.
 fn set_journal_mode(conn: &Connection) -> Result<()> {
+    // An existing WAL file stays WAL: reading the mode takes no lock, while
+    // setting it can wait out the busy timeout behind another host's writer.
+    let current = conn
+        .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+        .unwrap_or_default();
+    if current.eq_ignore_ascii_case("wal") {
+        return Ok(());
+    }
     let mode = |value: &str| {
         conn.pragma_update_and_check(None, "journal_mode", value, |row| row.get::<_, String>(0))
     };
