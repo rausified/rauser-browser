@@ -908,13 +908,17 @@ export class CaptureSitePanel {
   private updatePreview(): void {
     if (!this.target || this.target.mode !== "starter" || !this.session.config || this.saving || !this.freshRulesAllowed) return;
     this.preview.replaceChildren();
+    // Bridge only: builds the choice from today's six static controls.
+    // Task 3 replaces this with the rendered starter choice view.
+    const types = new Set<string>();
+    if (this.repos.checked) types.add("github.repo");
+    if (this.prs.checked) types.add("github.pr");
+    if (this.issues.checked) types.add("github.issue");
+    if (this.jira.checked) types.add("jira.issue");
+    if (this.confluence.checked) types.add("confluence.page");
     const result = planCaptureSite(this.session.config, this.target.url, {
-      organizations: this.orgs.value,
-      repositories: this.repos.checked,
-      pullRequests: this.prs.checked,
-      issues: this.issues.checked,
-      jiraIssues: this.jira.checked,
-      confluencePages: this.confluence.checked,
+      types,
+      scopes: { github: this.orgs.value },
     });
     const target = this.target;
     const check = ++this.starterCheck;

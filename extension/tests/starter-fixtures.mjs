@@ -54,7 +54,13 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
   family: "everyone",
   display_name: "Everyone",
   review_prompt: null,
-  origin: { kind: "exact", origin: "https://everyone.test" },
+  // The real adapter-templates engine (extension/adapter-templates.ts
+  // `SHARED_ORIGINS`) only allows an `unscoped` marker on its five hardcoded
+  // shared origins; an unscoped family's fixture has to use one of them, not
+  // a synthetic test domain, or a full plan/validate round trip fails
+  // "unscoped_not_shared". Figma is in that set and claimed by no starter
+  // family or other fixture.
+  origin: { kind: "exact", origin: "https://www.figma.com" },
   scope: {
     kind: "unscoped",
     notice: "Records every Everyone page from every account in this Chrome profile.",

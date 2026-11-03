@@ -1,17 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { captureOrigin, planCaptureSite } = await import("../dist/capture-site.js");
+const { captureOrigin, chooseMessage, planCaptureSite } = await import("../dist/capture-site.js");
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
-const { starterOffers } = await import("../dist/starter-adapters.js");
+const { setStarterFamiliesForTest, starterOffers } = await import("../dist/starter-adapters.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
+const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY } = await import("./starter-fixtures.mjs");
 const CONFIG = {
   storage: { root: "/vault" }, capture_enabled: false,
   adapters: { format: 1, artifacts: [] },
 };
-const BOTH = {
+/** Builds a `CaptureChoice` from the old flat panel shape, so the choice
+ * literals below (unchanged since before the scope-kind registry) still
+ * drive the same checked types and GitHub scope text. */
+function choiceOf({ organizations = "", repositories, pullRequests, issues, jiraIssues, confluencePages }) {
+  const types = new Set();
+  if (repositories) types.add("github.repo");
+  if (pullRequests) types.add("github.pr");
+  if (issues) types.add("github.issue");
+  if (jiraIssues) types.add("jira.issue");
+  if (confluencePages) types.add("confluence.page");
+  return { types, scopes: { github: organizations } };
+}
+const BOTH = choiceOf({
   organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true, jiraIssues: true, confluencePages: true,
-};
+});
 const plan = (url, config = CONFIG, choice = BOTH) => {
   const result = planCaptureSite(config, url, choice);
   assert.equal(result.ok, true, result.message);
@@ -53,25 +66,35 @@ test("Atlassian sites plan Jira issues and Confluence pages together or alone", 
   assert.ok(both.examples.every((row) => row.result.match));
   assert.equal(match(both, "https://acme.atlassian.net/browse/OPS-12").artifact_id, "jira:acme.atlassian.net/OPS-12");
 
-  const confluenceOnly = plan(url, CONFIG, { ...BOTH, jiraIssues: false });
+  const confluenceOnly = plan(url, CONFIG, choiceOf({
+    organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true, jiraIssues: false, confluencePages: true,
+  }));
   assert.deepEqual(confluenceOnly.document.artifacts.map((adapter) => adapter.type), ["confluence.page"]);
   assert.equal(confluenceOnly.current.result.match, true);
   assert.equal(match(confluenceOnly, "https://acme.atlassian.net/browse/OPS-12").match, false);
 
-  const jiraOnly = plan(url, CONFIG, { ...BOTH, confluencePages: false });
+  const jiraOnly = plan(url, CONFIG, choiceOf({
+    organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true, jiraIssues: true, confluencePages: false,
+  }));
   assert.deepEqual(jiraOnly.document.artifacts.map((adapter) => adapter.type), ["jira.issue"]);
   assert.equal(jiraOnly.current.result.match, false, "the review warns that this page will not be captured");
 
-  const neither = planCaptureSite(CONFIG, url, { ...BOTH, jiraIssues: false, confluencePages: false });
+  const neither = planCaptureSite(CONFIG, url, choiceOf({
+    organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true, jiraIssues: false, confluencePages: false,
+  }));
   assert.deepEqual(neither, { ok: false, message: "Choose Jira issues, Confluence pages, or both." });
   // GitHub's choices never change an Atlassian plan, and the reverse.
-  assert.equal(plan(url, CONFIG, { ...BOTH, repositories: false, pullRequests: false, issues: false }).document.artifacts.length, 2);
-  assert.equal(plan(GITHUB_PR_URL, CONFIG, { ...BOTH, jiraIssues: false, confluencePages: false }).document.artifacts.length, 3);
+  assert.equal(plan(url, CONFIG, choiceOf({
+    organizations: "Acme-Corp", repositories: false, pullRequests: false, issues: false, jiraIssues: true, confluencePages: true,
+  })).document.artifacts.length, 2);
+  assert.equal(plan(GITHUB_PR_URL, CONFIG, choiceOf({
+    organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true, jiraIssues: false, confluencePages: false,
+  })).document.artifacts.length, 3);
 });
 
 test("one organization field scopes every checked GitHub type", () => {
   const result = plan("https://github.com/acme-corp/widget/pull/12/files", CONFIG,
-    { organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true });
+    choiceOf({ organizations: "Acme-Corp", repositories: true, pullRequests: true, issues: true }));
   assert.equal(result.current.result.mode, "review");
   for (const adapter of result.document.artifacts) assert.deepEqual(adapter.scope, { owner: ["acme-corp"] });
   assert.equal(match(result, "https://github.com/acme-corp/widget/pull/12").match, true);
@@ -81,14 +104,14 @@ test("one organization field scopes every checked GitHub type", () => {
   assert.equal(match(result, "https://github.com/personal/widget/issues/12").match, false);
   assert.ok(result.examples.every((row) => row.result.match));
   const issueOnly = plan("https://github.com/acme-corp/widget/pull/12", CONFIG,
-    { organizations: "acme-corp", repositories: false, pullRequests: false, issues: true });
+    choiceOf({ organizations: "acme-corp", repositories: false, pullRequests: false, issues: true }));
   assert.equal(issueOnly.document.artifacts.length, 1);
   assert.equal(issueOnly.current.result.match, false);
 });
 
 test("capture plan puts PR and issue before repo", () => {
   const result = plan("https://github.com/acme-corp/widget/pull/12/files", CONFIG,
-    { organizations: "acme-corp", repositories: true, pullRequests: true, issues: true });
+    choiceOf({ organizations: "acme-corp", repositories: true, pullRequests: true, issues: true }));
   assert.deepEqual(result.document.artifacts.map((adapter) => adapter.type), ["github.pr", "github.issue", "github.repo"]);
   assert.equal(result.current.result.type, "github.pr");
   assert.deepEqual(result.current.result.within, { type: "github.repo", artifact_id: "github.repo:github.com/acme-corp/widget" });
@@ -100,7 +123,7 @@ test("capture plan puts PR and issue before repo", () => {
 
 test("unchecking repositories leaves pull requests and issues unlinked", () => {
   const result = plan("https://github.com/acme-corp/widget/pull/12", CONFIG,
-    { organizations: "acme-corp", repositories: false, pullRequests: true, issues: true });
+    choiceOf({ organizations: "acme-corp", repositories: false, pullRequests: true, issues: true }));
   assert.deepEqual(result.document.artifacts.map((adapter) => adapter.type), ["github.pr", "github.issue"]);
   for (const adapter of result.document.artifacts) assert.equal(adapter.within, undefined);
   assert.equal(result.current.result.type, "github.pr");
@@ -109,10 +132,10 @@ test("unchecking repositories leaves pull requests and issues unlinked", () => {
 
 test("empty, invalid, or unselected GitHub scope cannot produce a save", () => {
   for (const choice of [
-    { organizations: "", repositories: true, pullRequests: false, issues: false },
-    { organizations: "acme", repositories: false, pullRequests: false, issues: false },
-    { organizations: "bad/org", repositories: false, pullRequests: true, issues: false },
-    { organizations: "*", repositories: false, pullRequests: true, issues: false },
+    choiceOf({ organizations: "", repositories: true, pullRequests: false, issues: false }),
+    choiceOf({ organizations: "acme", repositories: false, pullRequests: false, issues: false }),
+    choiceOf({ organizations: "bad/org", repositories: false, pullRequests: true, issues: false }),
+    choiceOf({ organizations: "*", repositories: false, pullRequests: true, issues: false }),
   ]) assert.equal(planCaptureSite(CONFIG, "https://github.com/acme/repo/pull/1", choice).ok, false);
 });
 
@@ -157,6 +180,53 @@ test("invalid future documents and the whole-document adapter limit refuse a pla
   assert.equal(planCaptureSite(future, "https://acme.atlassian.net", BOTH).ok, false);
   const artifacts = Array.from({ length: 64 }, (_, n) => starterOffers(`https://work${n}.atlassian.net`, [])[0].adapter);
   assert.equal(planCaptureSite({ ...CONFIG, adapters: { format: 1, artifacts } }, "https://acme.atlassian.net", BOTH).ok, false);
+});
+
+test("chooseMessage builds the at-least-one message from labels", () => {
+  assert.equal(chooseMessage(["Miro boards"]), "Choose Miro boards.");
+  assert.equal(chooseMessage(["Jira issues", "Confluence pages"]), "Choose Jira issues, Confluence pages, or both.");
+  assert.equal(
+    chooseMessage(["repositories", "pull requests", "issues"]),
+    "Choose repositories, pull requests, issues, or some combination.",
+  );
+});
+
+test("a tenant_name family plans through its parser", (t) => {
+  setStarterFamiliesForTest([EXAMPLE_TENANT_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const url = "https://example.test/acme/item/1";
+  const both = { types: new Set(["example.item", "example.note"]), scopes: {} };
+  const scoped = planCaptureSite(CONFIG, url, { ...both, scopes: { example: " Acme, acme ,PARTNER" } });
+  assert.equal(scoped.ok, true, scoped.message);
+  for (const adapter of scoped.plan.document.artifacts) assert.deepEqual(adapter.scope, { workspace: ["acme", "partner"] });
+  const invalid = {
+    ok: false, message: "Enter 1–4 comma-separated workspaces, or uncheck every Example page type.",
+  };
+  for (const scope of ["a,b,c,d,e", "bad/name", ""]) {
+    assert.deepEqual(planCaptureSite(CONFIG, url, { ...both, scopes: { example: scope } }), invalid, scope);
+  }
+  assert.deepEqual(
+    planCaptureSite(CONFIG, url, { types: new Set(), scopes: { example: "acme" } }),
+    { ok: false, message: "Choose Example items, Example notes, or both." },
+  );
+});
+
+test("an unscoped family plans without extra input", (t) => {
+  setStarterFamiliesForTest([EXAMPLE_UNSCOPED_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const result = planCaptureSite(CONFIG, "https://www.figma.com/p/1", { types: new Set(), scopes: {} });
+  assert.equal(result.ok, true, result.message);
+  for (const adapter of result.plan.document.artifacts) assert.equal(adapter.unscoped, "acknowledged");
+});
+
+test("example URLs come from example_path", () => {
+  const result = plan("https://github.com/acme-corp/widget/pull/12/files", CONFIG,
+    choiceOf({ organizations: "acme-corp", repositories: true, pullRequests: true, issues: true }));
+  assert.deepEqual(result.examples.map((row) => row.url), [
+    "https://github.com/acme-corp/example-repository/pull/123",
+    "https://github.com/acme-corp/example-repository/issues/123",
+    "https://github.com/acme-corp/example-repository",
+  ]);
 });
 
 // --- Drafted Capture Site (unknown sites) -----------------------------------

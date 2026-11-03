@@ -282,12 +282,14 @@ function starterLabel(type: StarterTypeData, origin: string): string {
 }
 
 /** The starter drafts for one site origin. A starter type whose family needs
- * a scope (today, GitHub's organizations) stays without an adapter until
- * `githubOrganizations` names at least one organization. */
+ * a scope value (today, GitHub's organizations; a `tenant_name` family's own
+ * list) stays without an adapter until `githubOrganizations` names at least
+ * one value. An `unscoped` family's scope is non-null but asks for no value,
+ * so it is excluded here too. */
 export function starterOffers(origin: string, githubOrganizations: string[]): StarterOffer[] {
   const family = starterFamily(origin);
   if (!family) return [];
-  const needsScope = family.scope !== null;
+  const needsScope = family.scope !== null && family.scope.kind !== "unscoped";
   return family.types.map((type) => ({
     // A function replacer, not a replacement string: String.replace treats
     // `$'`, `$&`, `$1`, etc. in a replacement string as special patterns, and
