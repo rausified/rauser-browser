@@ -72,3 +72,25 @@ fn artifact_queries_and_note_keys_have_complete_shapes() {
         .is_err()
     );
 }
+
+#[test]
+fn worklog_choices_are_a_bounded_independent_read_only_query() {
+    let request = json!({"type":"worklog_choices", "protocol_version":8, "request_id":"choose", "expected_revision":"sha256:config",
+        "start_date":"2026-11-01", "end_date":"2026-11-02"});
+    common::assert_request_round_trips("WorklogChoicesRequest", &request);
+    assert!(schema_subset::valid("WorklogChoicesRequest", &request));
+    let row = json!({"artifact_id":"doc:example/1", "local_date":"2026-11-01",
+        "text":"Release plan — focused 2 min", "url":"https://example.com/1"});
+    let mut response = json!({"type":"worklog_choices_result", "protocol_version":8, "request_id":"choose",
+        "start_date":"2026-11-01", "end_date":"2026-11-02", "choices":[row.clone()], "truncated":false,
+        "gaps":[], "gaps_truncated":false});
+    common::assert_response_round_trips("WorklogChoicesResult", &response);
+    assert!(schema_subset::valid("WorklogChoicesResult", &response));
+    response["choices"] = json!(vec![row.clone(); 200]);
+    assert!(schema_subset::valid("WorklogChoicesResult", &response));
+    response["choices"] = json!(vec![row; 201]);
+    assert!(!schema_subset::valid("WorklogChoicesResult", &response));
+    let mut invalid = request;
+    invalid["selected"] = json!(["doc:example/1"]);
+    assert!(serde_json::from_value::<Request>(invalid).is_err());
+}

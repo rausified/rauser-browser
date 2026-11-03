@@ -79,7 +79,7 @@ fn mentions_resolve_through_the_adapter_document() {
 
 const GITHUB_PR_ID: &str = "github.pr:github.com/acme-corp/widgets/7";
 
-fn github_blob(n: u32, at: &str) -> ActivityEvent {
+pub(super) fn github_blob(n: u32, at: &str) -> ActivityEvent {
     github_activity(
         n,
         ("github.repo", GITHUB_REPO_ID),

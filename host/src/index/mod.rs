@@ -23,7 +23,7 @@ use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
     IncomingTrailView, OverflowMarker, RecordKey, RecordKeyKind, StorageConfig, SummaryView,
-    WhyEvent,
+    WhyEvent, WorklogChoice,
 };
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
@@ -1011,6 +1011,17 @@ impl ArtifactIndex {
         end: Date,
     ) -> Result<(String, usize, Vec<OverflowMarker>, bool)> {
         self.read(|tx| query::worklog(tx, start, end))
+    }
+
+    /// Independent artifact-day rows for sharing. Use only direct visits and
+    /// their own day's context: global titles/Why and container roll-ups can
+    /// disclose work the user excluded from the selection.
+    pub fn worklog_choices(
+        &self,
+        start: Date,
+        end: Date,
+    ) -> Result<(Vec<WorklogChoice>, bool, Vec<OverflowMarker>, bool)> {
+        self.read(|tx| query::worklog_choices(tx, start, end))
     }
 
     /// Run one read in a single `read_txn` over `index.db`'s committed

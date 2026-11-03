@@ -69,8 +69,9 @@ export function installChrome({ state, runs, pageUrl, pageName }) {
   const status = {
     queued: 0, next_retry_at: null, overflow_count: 0, rejected_count: 0, last_error: null,
     retry_error: null, policy_expires_at: null, pause_pending: false, pause_token: null,
-    pending_removals: [], live_activity: 0, host_error: null,
+    pending_removals: [], live_activity: 0, host_error: null, delivered_batches: 0,
   };
+  fixture.workerStatus = status;
   function reply(request) {
     switch (request.type) {
       case "hello": return { type: "hello_result", host_version: "fixture", configured, config_issue: null };
@@ -99,6 +100,13 @@ export function installChrome({ state, runs, pageUrl, pageName }) {
       case "check_capture_site": return { type: "capture_site_checked", revision: fixture.revision };
       case "get_agent_env": return { type: "agent_env_listed", names: [], problem: null };
       case "list_artifacts": return { type: "artifact_list_result", items: [], artifact_types: [], truncated: false };
+      case "worklog_choices": return {
+        type: "worklog_choices_result", start_date: request.start_date, end_date: request.end_date,
+        choices: ["Release update", "Private research"].map((title, n) => ({
+          artifact_id: `doc:${n}`, local_date: request.start_date,
+          text: `${title} — focused 2 min · opened 1×`, url: `https://work.example/${n}`,
+        })), truncated: false, gaps: [], gaps_truncated: false,
+      };
       case "worklog_report": return {
         type: "worklog_reported", start_date: request.start_date, end_date: request.end_date,
         text: "No recorded artifacts.", artifact_count: 0, gaps: [], gaps_truncated: false,
@@ -240,7 +248,11 @@ export async function audit(t, page, label) {
   return results;
 }
 
-/** Reach by Tab, assert visible keyboard focus, and activate by Enter. */
+/**
+ * Reach by Tab, assert visible keyboard focus, and activate by Enter.
+ * For roving-tabindex composites, Tab reaches the selected child only;
+ * use the composite's arrow keys to reach its other tabs/options.
+ */
 export async function activate(page, target, key = "Enter") {
   const locator = typeof target === "string" ? page.locator(target) : target;
   for (let n = 0; n < 150; n++) {

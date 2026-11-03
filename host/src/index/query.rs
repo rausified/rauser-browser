@@ -526,6 +526,133 @@ pub(super) fn worklog_text(rows: BTreeMap<String, WorklogRow>) -> (String, usize
     (text, ordered.len())
 }
 
+/// The most rows one worklog-choices answer lists.
+const MAX_WORKLOG_CHOICES: usize = 200;
+
+/// Independent artifact-day rows for sharing, newest day first and then by
+/// artifact ID, from the direct `visits` rows only (a container's copies
+/// are never stored there) and each day's own latest title, URL and
+/// summary, never the artifact's global title or why. At most
+/// `MAX_WORKLOG_CHOICES` rows and `MAX_WORKLOG_BYTES` of serialized JSON;
+/// the flag says whether any row was left out.
+pub(super) fn worklog_choices(
+    tx: &Transaction<'_>,
+    start: Date,
+    end: Date,
+) -> Result<(Vec<WorklogChoice>, bool, Vec<OverflowMarker>, bool)> {
+    struct Day {
+        focused: u64,
+        background: u64,
+        opens: u64,
+        summary: Option<SummaryEvent>,
+        title: String,
+        url: String,
+    }
+    let (gaps, gaps_truncated) = worklog_gaps(tx, start, end)?;
+    // In `order_key` order, stably by instant: a full derive's visit order,
+    // with durable append order for ties.
+    let mut statement = tx.prepare_cached(
+        "SELECT v.local_date, v.artifact_id, v.occurred_at, v.focused_secs, v.background_secs,
+           v.opens, v.title, v.url, CASE WHEN e.kind = 'summary' THEN e.body END
+         FROM visits v JOIN brauser_events e ON e.event_id = v.event_id
+         WHERE v.local_date BETWEEN ?1 AND ?2
+         ORDER BY e.order_key",
+    )?;
+    let mut visits = statement
+        .query_map([start.to_string(), end.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                count(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+                count(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
+                count(row.get::<_, Option<i64>>(5)?.unwrap_or(0)),
+                row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(8)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    visits.sort_by(|a, b| timestamp_order(&a.2, &b.2));
+    let mut rows = BTreeMap::<(String, String), Day>::new();
+    for (local_date, artifact_id, _, focused, background, opens, title, url, summary) in visits {
+        let Ok(date) = parse_date(&local_date) else {
+            continue;
+        };
+        if date < start || date > end {
+            continue;
+        }
+        let summary = match summary {
+            Some(body) => match event_body(&body)?.data {
+                EventData::Summary(summary) => Some(summary),
+                _ => None,
+            },
+            None => None,
+        };
+        let row = rows
+            .entry((local_date, artifact_id))
+            .or_insert_with(|| Day {
+                focused: 0,
+                background: 0,
+                opens: 0,
+                summary: None,
+                title: String::new(),
+                url: String::new(),
+            });
+        row.focused = row.focused.saturating_add(focused);
+        row.background = row.background.saturating_add(background);
+        row.opens = row.opens.saturating_add(opens);
+        if summary.is_some() {
+            row.summary = summary;
+        }
+        row.title = title;
+        row.url = url;
+    }
+    let mut ordered = rows.into_iter().collect::<Vec<_>>();
+    ordered.sort_by(|a, b| b.0.0.cmp(&a.0.0).then(a.0.1.cmp(&b.0.1)));
+    let mut choices = Vec::new();
+    let mut bytes = 2usize; // JSON array brackets; count escaped fields too.
+    let mut truncated = false;
+    for ((local_date, artifact_id), row) in ordered {
+        if choices.len() == MAX_WORKLOG_CHOICES {
+            truncated = true;
+            break;
+        }
+        let mut text = format!("{}: {}", artifact_id, plain_text(&row.title));
+        if row.summary.is_none() || row.focused > 0 || row.background > 0 || row.opens > 0 {
+            text.push_str(&format!(
+                " — {}",
+                measures(row.focused, row.background, row.opens)
+            ));
+        }
+        if let Some(summary) = row.summary {
+            text.push_str(&format!(
+                " · Summarized: {}, {} importance",
+                plain_text(&summary.document_type),
+                crate::summary::importance_str(summary.importance)
+            ));
+        }
+        let choice = WorklogChoice {
+            artifact_id,
+            local_date,
+            text,
+            url: row.url,
+        };
+        let size = serde_json::to_vec(&choice)?.len().saturating_add(1);
+        if choice.artifact_id.chars().count() > 2048
+            || choice.text.chars().count() > 8192
+            || choice.url.chars().count() > 8192
+            || bytes.saturating_add(size) > MAX_WORKLOG_BYTES
+        {
+            truncated = true;
+            continue;
+        }
+        bytes = bytes.saturating_add(size);
+        choices.push(choice);
+    }
+    Ok((choices, truncated, gaps, gaps_truncated))
+}
+
 /// The overflow notices whose span intersects the range, oldest first, at
 /// most `MAX_WORKLOG_GAPS`, and whether more did.
 fn worklog_gaps(

@@ -256,7 +256,7 @@ fn forged_summary_markers_are_ignored() {
     assert!(!root.path().join("artifacts").exists());
 }
 
-fn web_summary(url: &str, at: &str) -> SummaryEvent {
+pub(super) fn web_summary(url: &str, at: &str) -> SummaryEvent {
     SummaryEvent {
         overview: None,
         event_id: uuid::Uuid::new_v4().to_string(),

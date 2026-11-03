@@ -8,6 +8,7 @@ use tempfile::TempDir;
 
 mod bounds;
 mod catch_up;
+mod choices;
 mod containers;
 mod database;
 mod gaps;

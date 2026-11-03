@@ -77,6 +77,17 @@
 
 **Sync caution (removed 2026-10-26).** Earlier builds warned in the first adapter's confirmation when the folder was inside a known sync location; protocol v6 removed that warning with the native confirmation (§14).
 
+**2026-11-02 — Curated worklog preview (`brwr-ppn`).** Added a separate read-only
+`worklog_choices` query and explicit panel selection. The design challenge
+replaced globally latest artifact context with each chosen day's latest direct
+visit and excluded rolled-up container copies and global Why, preventing an
+excluded day or child from supplying shared context. Revision checks bind the
+query to the panel's home-folder configuration. In-memory selections survive
+same-period refresh only for still-visible identities; period/storage/port
+changes invalidate both selection and pending replies. Ordinary worklogs and
+source logs/notes are unchanged. Implementation and validation details:
+[worklog curation plan](superpowers/plans/2026-11-02-worklog-curation.md).
+
 ## §5.2 Summaries — history
 
 > **Superseded in part (2026-10-26).** Summaries move to a per-user Brauser service with full-access Codex or Claude Code runs, polling instead of streaming, and no denylist or `activeTab` trigger; see [the open-access spec](superpowers/specs/2026-10-26-open-access-and-agent-service-design.md) §5–§7. The Summarize & log flow below is as built in PRs 3 and 4; steps 1–3 of the older numbered list after it (the `activeTab` triggers, the denylist checks, and streamed chunks) no longer apply. Of its steps 4–7, PR 4 replaced step 4 (the write now follows the configuration current at finish, a changed key included, rather than discarding the output) and step 7 (save outcomes are the run card's Retry save, not `summary_result`); of steps 5 and 6, only the summary file's identity and ownership rules and the Markdown neutralizer still describe what was built (step 5's denylist and its "the host writes" wording no longer apply: the service's `SummaryFinisher` writes the file, step 7 above).
@@ -1244,3 +1255,26 @@ invalid adapter document kept the worker lease suspended. Opening repair now
 reloads host settings after a conflict, matching the save path, so the next
 explicit attempt uses the current revision. The offline settings regression
 requires the read fixture to enforce the real host's revision check.
+
+## 2026-11-02 — PR doctor for PRs that stall on conflicts
+
+A PR that conflicts with main runs no CI, so auto-merge on it waits forever
+with nothing failing. On 2026-11-02 four of five open PRs were in that state,
+three of them with auto-merge armed (#238, #249, #255, all Cookie's), and #246
+stalled for about four hours before a status check found it. The conflicts
+were almost all in bookkeeping and append-only files: since 2026-11-01 main's
+commits touched `.beads/issues.jsonl` 50 times, `BOSUN_FEATURE_BACKLOG.md` 47,
+`DESIGN.md` 42, `TESTING.md` 24 and `docs/history.md` 23, against at most 13
+for any code file. Two more findings shaped the fix. GitHub's mergeability
+check does not run the custom merge drivers (#253 merged cleanly here while
+GitHub reported it conflicting). And git takes merge attributes from the branch
+being merged into, so a branch older than a `.gitattributes` rule (the feed's
+`merge=union`, d0f77b4) never gets it. `scripts/pr-doctor.mjs`, run by
+`.github/workflows/pr-doctor.yml`, therefore merges with main's attributes and
+main's tools, and resolves only the driver files and Markdown hunks where both
+sides only inserted text. A dry run on the four PRs found two resolvable
+(#249, #255), one needing a person (#238: `AGENTS.md`) and one already clean
+(#253); the resolved merges lost no PR-side line and kept every main entry.
+Pushing needs the `PR_DOCTOR_TOKEN` secret, because pushes made with
+`GITHUB_TOKEN` start no CI. Main has no merge queue, so `gh pr merge --auto`
+needs `--merge`. AGENTS.md "PR doctor" holds the rule.

@@ -16,6 +16,7 @@ test("the offline host fixture emits valid wire replies for every exercised requ
     { type: "load_note", url: PAGE_URL }, { type: "save_note", expected_key: { kind: "url", value: PAGE_URL } },
     { type: "get_site_restore", origin: "https://acme.atlassian.net" }, { type: "check_capture_site" },
     { type: "get_agent_env" }, { type: "list_artifacts" },
+    { type: "worklog_choices", expected_revision: "1", start_date: "2026-11-02", end_date: "2026-11-02" },
     { type: "get_adapter_repair", expected_revision: "1" },
     { type: "replace_adapters", expected_revision: "1", document: { format: 1, artifacts: [] } },
     { type: "worklog_report", start_date: "2026-11-02", end_date: "2026-11-02" },
