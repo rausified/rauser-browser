@@ -34,7 +34,7 @@ npm run test:extension
 npm run test:a11y        # real headless Chrome; see TESTING.md for sandbox skips
 npm run test:markdown-neutralizer
 npm run test:scripts
-npm run test:queue
+npm run test:queue       # also checks this clone's bd queue (BD_NON_INTERACTIVE=1 bd bootstrap first)
 npm run test:dev-tools   # macOS/Linux only: scripts/dev tooling
 ```
 

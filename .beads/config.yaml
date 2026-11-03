@@ -71,11 +71,14 @@ issue-prefix: "brwr"
 # - linear.api_key  → use LINEAR_API_KEY env var instead
 # - github.token    → use GITHUB_TOKEN env var instead
 
-# Configured 2026-09-18: import.path must be set explicitly, otherwise
-# `bd init --from-jsonl` finds nothing on a fresh clone and yields an empty
-# queue. export.auto keeps .beads/issues.jsonl fresh as the git transport.
+# Since 2026-11-03 the queue's transport is Dolt, not a JSONL file in git:
+# `bd sync` pushes and pulls refs/dolt/data on this repository's origin, and a
+# fresh clone runs `BD_NON_INTERACTIVE=1 bd bootstrap` (AGENTS.md "Work
+# queue", worker-contract.json). export.auto is off, and no import path is
+# set, on purpose: an auto-exported .beads/issues.jsonl would be a second,
+# silently stale copy of the queue that a session could commit or copy over
+# the database, and bd bootstrap imports a present .beads/issues.jsonl when a
+# clone has no Dolt data. `scripts/dev/queue export` writes an export on
+# demand, outside .beads/ (target/queue/, git-ignored).
 export:
-    path: issues.jsonl
-    auto: true
-import:
-    path: issues.jsonl
+    auto: false

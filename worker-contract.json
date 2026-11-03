@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "merge": {
+    "method": "label",
+    "label": "queue",
+    "never": ["gh pr merge"]
+  },
+  "queue": {
+    "transport": "bd-dolt",
+    "bootstrap": "BD_NON_INTERACTIVE=1 bd bootstrap",
+    "sync": "scripts/dev/queue sync",
+    "export": "scripts/dev/queue export",
+    "sync_exit_codes": {
+      "0": "synced",
+      "1": "error",
+      "2": "conflict",
+      "3": "retry",
+      "4": "stuck"
+    }
+  },
+  "never_commit": [".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md"]
+}

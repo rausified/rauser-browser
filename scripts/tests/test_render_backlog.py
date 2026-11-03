@@ -303,194 +303,6 @@ class MergeJsonlTests(unittest.TestCase):
         self.assertEqual(conflicts, ["brwr-a1"])
 
 
-def git(cwd: pathlib.Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
-               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
-    return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True,
-                          text=True, env=env)
-
-
-class GitIntegrationTests(unittest.TestCase):
-    """Two branches each add a bead and edit prose: the classic backlog conflict."""
-
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.repo = pathlib.Path(self.tmp.name)
-        git(self.repo, "init", "-q", "-b", "main")
-        git(self.repo, "config", "core.autocrlf", "false")
-        (self.repo / "scripts").mkdir()
-        (self.repo / ".beads").mkdir()
-        for name in ("render_backlog.py", "check_queue_consistency.py"):
-            (self.repo / "scripts" / name).write_text(
-                (SCRIPTS / name).read_text(encoding="utf-8"), encoding="utf-8"
-            )
-        (self.repo / ".gitattributes").write_text(
-            ".beads/issues.jsonl merge=beads-jsonl\n", encoding="utf-8"
-        )
-        self.write_queue(bead("brwr-a1", metadata={"backlog_section": "plan"}))
-        git(self.repo, "add", ".")
-        git(self.repo, "commit", "-qm", "base")
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def run_script(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, "scripts/render_backlog.py", *args],
-            cwd=self.repo, capture_output=True, text=True,
-        )
-
-    def write_queue(self, *records: dict[str, object], prose: str = "Plan intro.") -> None:
-        gate = bead("brwr-gate", status="deferred")
-        (self.repo / ".beads" / "issues.jsonl").write_text(jsonl(gate, *records), encoding="utf-8")
-        (self.repo / "BOSUN_FEATURE_BACKLOG.md").write_text(
-            SKELETON.replace("Plan intro.", prose), encoding="utf-8"
-        )
-        result = self.run_script()
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def branch_pair(self) -> None:
-        base = bead("brwr-a1", metadata={"backlog_section": "plan"})
-        git(self.repo, "checkout", "-qb", "side")
-        self.write_queue(base, bead("brwr-s1", metadata={"backlog_section": "plan"}),
-                         prose="Plan intro, edited on side.")
-        git(self.repo, "commit", "-qam", "side")
-        git(self.repo, "checkout", "-q", "main")
-        self.write_queue(base, bead("brwr-m1", metadata={"backlog_section": "plan"}))
-        git(self.repo, "commit", "-qam", "main")
-
-    def assert_merged(self) -> None:
-        text = (self.repo / "BOSUN_FEATURE_BACKLOG.md").read_text(encoding="utf-8")
-        self.assertIn("Plan intro, edited on side.", text)
-        for issue_id in ("brwr-a1", "brwr-s1", "brwr-m1"):
-            self.assertEqual(text.count(f"`{issue_id}`"), 1)
-        self.assertNotIn("<<<<<<<", text)
-        check = subprocess.run(
-            [sys.executable, "scripts/check_queue_consistency.py"],
-            cwd=self.repo, capture_output=True, text=True,
-        )
-        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
-
-    def test_resolve_after_a_conflicted_merge_without_the_driver(self) -> None:
-        self.branch_pair()
-        merge = git(self.repo, "merge", "side", check=False)
-        self.assertNotEqual(merge.returncode, 0)
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout, "")
-        self.assert_merged()
-
-    def test_resolve_during_a_rebase(self) -> None:
-        self.branch_pair()
-        git(self.repo, "checkout", "-q", "side")
-        rebase = git(self.repo, "rebase", "main", check=False)
-        self.assertNotEqual(rebase.returncode, 0)
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assert_merged()
-
-    def test_installed_jsonl_driver_merges_the_queue_then_resolve_rerenders(self) -> None:
-        result = self.run_script("--install-merge-driver")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.branch_pair()
-        git(self.repo, "merge", "side", check=False)
-        unmerged = git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout.split()
-        self.assertNotIn(".beads/issues.jsonl", unmerged)
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assert_merged()
-
-    def test_installed_driver_falls_back_to_a_line_merge_without_the_script(self) -> None:
-        # A branch from before the renderer existed has no script in its
-        # working tree; the driver must not leave only ours' queue behind.
-        result = self.run_script("--install-merge-driver")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.branch_pair()
-        script = self.repo / "scripts" / "render_backlog.py"
-        saved = script.read_text(encoding="utf-8")
-        script.unlink()
-        try:
-            git(self.repo, "merge", "side", check=False)
-            queue = (self.repo / ".beads" / "issues.jsonl").read_text(encoding="utf-8")
-            self.assertIn('"brwr-s1"', queue)
-            self.assertIn('"brwr-m1"', queue)
-        finally:
-            script.write_text(saved, encoding="utf-8")
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assert_merged()
-
-    def test_resolve_does_not_keep_ours_left_by_a_failed_driver(self) -> None:
-        # A driver that fails outright (a stale interpreter path, a crash)
-        # leaves the queue conflicted with ours' bytes and no markers. That is
-        # not a hand resolution: --resolve must still merge theirs' beads in.
-        git(self.repo, "config", "merge.beads-jsonl.driver", "/nonexistent/python3 %O %A %B")
-        self.branch_pair()
-        git(self.repo, "merge", "side", check=False)
-        unmerged = git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout.split()
-        self.assertIn(".beads/issues.jsonl", unmerged)
-        queue = (self.repo / ".beads" / "issues.jsonl").read_text(encoding="utf-8")
-        self.assertNotIn('"brwr-s1"', queue)
-        self.assertNotIn("<<<<<<<", queue)
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        queue = (self.repo / ".beads" / "issues.jsonl").read_text(encoding="utf-8")
-        self.assertIn('"brwr-s1"', queue)
-        self.assertIn('"brwr-m1"', queue)
-        self.assert_merged()
-
-    def test_resolve_keeps_a_real_prose_conflict(self) -> None:
-        base = bead("brwr-a1", metadata={"backlog_section": "plan"})
-        git(self.repo, "checkout", "-qb", "side")
-        self.write_queue(base, prose="Side wording.")
-        git(self.repo, "commit", "-qam", "side")
-        git(self.repo, "checkout", "-q", "main")
-        self.write_queue(base, prose="Main wording.")
-        git(self.repo, "commit", "-qam", "main")
-        git(self.repo, "merge", "side", check=False)
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("BOSUN_FEATURE_BACKLOG.md", result.stdout + result.stderr)
-        text = (self.repo / "BOSUN_FEATURE_BACKLOG.md").read_text(encoding="utf-8")
-        self.assertIn("<<<<<<<", text)
-        self.assertIn("`brwr-a1`", text)
-
-        # The user resolves the prose by hand and reruns, as the message says:
-        # the rerun keeps that resolution instead of re-merging the stages.
-        start, end = text.index("<<<<<<<"), text.index(">>>>>>>")
-        end = text.index("\n", end) + 1
-        resolved = text[:start] + "Agreed wording.\n" + text[end:]
-        (self.repo / "BOSUN_FEATURE_BACKLOG.md").write_text(resolved, encoding="utf-8")
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        text = (self.repo / "BOSUN_FEATURE_BACKLOG.md").read_text(encoding="utf-8")
-        self.assertIn("Agreed wording.", text)
-        self.assertNotIn("<<<<<<<", text)
-        self.assertEqual(git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout, "")
-
-    def test_resolve_keeps_a_hand_resolved_bead_on_rerun(self) -> None:
-        git(self.repo, "checkout", "-qb", "side")
-        self.write_queue(bead("brwr-a1", title="Side title", metadata={"backlog_section": "plan"}))
-        git(self.repo, "commit", "-qam", "side")
-        git(self.repo, "checkout", "-q", "main")
-        self.write_queue(bead("brwr-a1", title="Main title", metadata={"backlog_section": "plan"}))
-        git(self.repo, "commit", "-qam", "main")
-        git(self.repo, "merge", "side", check=False)
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 1)
-        queue = self.repo / ".beads" / "issues.jsonl"
-        self.assertIn("<<<<<<<", queue.read_text(encoding="utf-8"))
-
-        gate = bead("brwr-gate", status="deferred")
-        queue.write_text(jsonl(gate, bead("brwr-a1", title="Agreed title",
-                                          metadata={"backlog_section": "plan"})), encoding="utf-8")
-        result = self.run_script("--resolve")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Agreed title", queue.read_text(encoding="utf-8"))
-        self.assertIn("Agreed title", (self.repo / "BOSUN_FEATURE_BACKLOG.md").read_text(encoding="utf-8"))
-        self.assertEqual(git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout, "")
-
-
 class QueueCheckTests(unittest.TestCase):
     def check(self, backlog: str, *records: dict[str, object]) -> list[str]:
         issues = render_backlog.parse_issues(jsonl(*records), "issues.jsonl")
@@ -561,6 +373,44 @@ class QueueCheckTests(unittest.TestCase):
             report = json.loads(output.getvalue())
             self.assertEqual(report["status"], "error")
             self.assertIn("duplicate issue id brwr-t33", report["message"])
+
+
+class FrameTests(unittest.TestCase):
+    """The backlog is the committed frame plus one-file notes, rendered with the beads."""
+
+    def test_notes_are_appended_in_name_order_and_the_readme_is_not_a_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            notes = pathlib.Path(tmp)
+            (notes / "README.md").write_text("How notes work.\n", encoding="utf-8")
+            (notes / "2026-11-05-b.md").write_text("### Second\n\nB.\n", encoding="utf-8")
+            (notes / "2026-11-04-a.md").write_text("### First\n\nA.\n", encoding="utf-8")
+            text = render_backlog.compose("# Frame\n", notes)
+        self.assertEqual(text, "# Frame\n\n" + render_backlog.NOTES_HEADING + "\n\n### First\n\nA.\n\n### Second\n\nB.\n")
+        self.assertNotIn("How notes work", text)
+
+    def test_no_notes_leaves_the_frame_as_is(self) -> None:
+        self.assertEqual(render_backlog.compose("# Frame\r\n", None), "# Frame\n")
+
+    def test_cli_renders_the_frame_and_notes_with_a_given_export(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "q.jsonl").write_text(jsonl(bead("brwr-gate", status="deferred"),
+                                                bead("brwr-p1", metadata={"backlog_section": "plan"})), encoding="utf-8")
+            (root / "frame.md").write_text(SKELETON, encoding="utf-8")
+            (root / "notes").mkdir()
+            (root / "notes" / "2026-11-04-x.md").write_text("### Note about `brwr-p1`\n", encoding="utf-8")
+            out = root / "target" / "BOSUN_FEATURE_BACKLOG.md"
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = render_backlog.main(["--issues", str(root / "q.jsonl"), "--frame", str(root / "frame.md"),
+                                            "--notes", str(root / "notes"), "--out", str(out)])
+            self.assertEqual(code, 0)
+            text = out.read_text(encoding="utf-8")
+        self.assertIn("`brwr-p1`", generated(text, "plan"))
+        self.assertTrue(text.rstrip().endswith("### Note about `brwr-p1`"))
+
+    def test_the_committed_frame_has_valid_markers(self) -> None:
+        frame = (SCRIPTS.parent / render_backlog.FRAME_PATH).read_text(encoding="utf-8")
+        self.assertEqual(render_backlog.strip_generated(frame), frame.replace("\r\n", "\n"))
 
 
 if __name__ == "__main__":

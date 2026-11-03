@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Assert that Brauser's backlog is a faithful rendering of its beads queue.
+"""Assert that Brauser's backlog view is a faithful rendering of its beads queue.
 
-Beads (`.beads/issues.jsonl`) is authoritative. `BOSUN_FEATURE_BACKLOG.md`'s
-item lists are generated from it by `scripts/render_backlog.py` between
-`BEGIN/END GENERATED` markers, and the overnight loop reads them between
-launches, so a stale rendering steers a cycle wrong. This check:
+Beads are authoritative; they live in bd's Dolt database, synced through this
+repository's refs/dolt/data (AGENTS.md "Work queue"). By default this checks
+`scripts/dev/queue export` of this checkout's database against the backlog
+rendered from docs/backlog/frame.md and docs/backlog/notes/. `--issues` names
+a bd export instead, and `--backlog` a rendered file to check as it is. It:
 
-- re-renders the generated sections and fails when they differ from the file;
+- re-renders the generated sections and fails when they differ from the file
+  (only meaningful with --backlog: a fresh rendering always matches);
 - validates the queue (JSON, unique ids, backlog metadata types, dependencies
   that name real beads, `backlog_section` values that name a real block);
 - checks the hand-written text around the blocks: no open checkbox items
   (open work lives in beads), no cited id that is not in the queue, and no
   closed bead named in a Proposed section's prose.
 
-It reads only the two files and needs no `bd`, so it runs inside a cycle
-before `bd` has rebuilt its database, and on the scaffold's committed copies
-(`--issues`, `--backlog`). Exit status is 0 when everything holds, 1 otherwise.
+`scripts/dev/queue sync` runs it before pushing, and the Queue check workflow
+on a schedule. Exit status is 0 when everything holds, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -80,7 +81,7 @@ def check_generated(
             Violation(
                 "generated-section-stale",
                 f"generated section(s) {', '.join(stale)} do not match the queue; "
-                f"run python3 scripts/render_backlog.py and commit the result "
+                f"render it again with scripts/dev/queue backlog "
                 f"(never hand-edit a GENERATED block)",
             )
         )
@@ -141,16 +142,17 @@ def check_generated(
 
 
 def main(argv: list[str] | None = None) -> int:
-    repo_root = pathlib.Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--issues", type=pathlib.Path, default=repo_root / ".beads" / "issues.jsonl",
-                        help="committed beads export (default: %(default)s)")
-    parser.add_argument("--backlog", type=pathlib.Path, default=repo_root / "BOSUN_FEATURE_BACKLOG.md",
-                        help="generated backlog (default: %(default)s)")
+    parser.add_argument("--issues", type=pathlib.Path,
+                        help="a bd export (default: `scripts/dev/queue export` of this checkout's database)")
+    parser.add_argument("--backlog", type=pathlib.Path,
+                        help="a rendered backlog to check as it is (default: render the frame and notes)")
     parser.add_argument("--prefix", default=DEFAULT_PREFIX, help="beads issue id prefix (default: %(default)s)")
     parser.add_argument("--json", action="store_true", help="emit a JSON report")
-    args = parser.parse_args(argv)
+    return check(parser.parse_args(argv))
 
+
+def check(args: argparse.Namespace) -> int:
     def fail(message: str) -> int:
         if args.json:
             print(json.dumps({"status": "error", "message": message}, indent=2))
@@ -158,7 +160,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"queue consistency check ERROR: {message}", file=sys.stderr)
         return 1
 
-    for path in (args.issues, args.backlog):
+    if args.issues is None:
+        import work_queue  # local: it imports this module
+
+        try:
+            args.issues = work_queue.export(work_queue.repo_root())
+        except work_queue.QueueError as error:
+            return fail(str(error))
+    for path in [args.issues] + ([args.backlog] if args.backlog else []):
         if not path.is_file():
             # A missing export is exactly how a night's queue reasoning is lost.
             return fail(f"required file not found: {path}")
@@ -167,7 +176,20 @@ def main(argv: list[str] | None = None) -> int:
     except BacklogError as error:
         return fail(str(error))
     id_pattern = re.compile(rf"\b{re.escape(args.prefix)}-[0-9a-z]+\b")
-    violations = check_generated(issues, args.backlog.read_text(encoding="utf-8"), id_pattern)
+    if args.backlog:
+        backlog = args.backlog.read_text(encoding="utf-8")
+    else:
+        root = render_backlog.REPO
+        try:
+            backlog = render_backlog.render(
+                render_backlog.compose((root / render_backlog.FRAME_PATH).read_text(encoding="utf-8"),
+                                       root / render_backlog.NOTES_DIR),
+                issues,
+            )
+        except (BacklogError, OSError) as error:
+            return fail(str(error))
+    name = args.backlog.name if args.backlog else render_backlog.FRAME_PATH
+    violations = check_generated(issues, backlog, id_pattern)
     live = sum(1 for issue in issues.values() if str(issue.get("status") or "") in LIVE_STATUSES)
 
     if args.json:
@@ -184,14 +206,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if violations:
         print(f"queue consistency check FAILED: {len(violations)} problem(s) in "
-              f"{args.backlog.name} against {args.issues.name}")
+              f"{name} against {args.issues.name}")
         for violation in violations:
             print(f"  {violation}")
         print()
-        print("Beads is authoritative and the backlog's item lists are generated from it:")
-        print("edit the bead (one JSONL row, or bd update in this workspace), then run")
-        print("python3 scripts/render_backlog.py. After a merge or rebase conflict in either")
-        print("file, run python3 scripts/render_backlog.py --resolve.")
+        print("Beads are authoritative and the backlog's item lists are generated from them:")
+        print("fix the bead with bd (or the prose in docs/backlog/), then scripts/dev/queue sync.")
         return 1
 
     print(f"queue consistency check passed: {live} live issue(s), generated sections up to date")
