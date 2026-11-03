@@ -1,0 +1,493 @@
+{
+ "comment": "Synthetic vectors for research/blind/servicenow/adapters.toml. Every ID is fake. 'positives' must match with the given id (and expected_title when a title is given); 'negatives' must match no adapter. Origin placeholder: https://acme.service-now.com.",
+ "positives": [
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef",
+   "id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "title": "INC0010001 | Incident | ServiceNow",
+   "expected_title": "INC0010001",
+   "note": "classic form, direct"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=incident&sysparm_record_row=1",
+   "id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "title": "INC0010001 | Incident | Acme IT | Portal",
+   "expected_title": "INC0010001",
+   "note": "query noise; product name containing ' | ' still skipped from the end"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/incident.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+   "id": "servicenow.incident:acme.service-now.com/abcdef0123456789abcdef0123456789",
+   "title": "INC0010001 | Incident | ServiceNow",
+   "expected_title": "INC0010001",
+   "note": "uppercase sys_id lowercased; fragment ignored"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210",
+   "id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "Service Operations Workspace"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210/",
+   "id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "SOW, trailing slash"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210/params/selected-tab-index/1",
+   "id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "SOW with trailing params segments (shape assumed)"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/now/workspace/agent/record/incident/00000000111111112222222233333333",
+   "id": "servicenow.incident:acme.service-now.com/00000000111111112222222233333333",
+   "note": "legacy Agent Workspace"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/now/cwf/agent/record/incident/00000000111111112222222233333333?foo=bar",
+   "id": "servicenow.incident:acme.service-now.com/00000000111111112222222233333333",
+   "note": "CSM/FSM configurable workspace, query noise"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/sp?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef",
+   "id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Service Portal ticket page"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/esc?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef&view=sp",
+   "id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Employee Center ticket page, noise"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=incident&id=form",
+   "id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Service Portal form page, param order varied"
+  },
+  {
+   "type": "servicenow.incident",
+   "url": "https://acme.service-now.com/esc?id=standard_ticket&table=incident&sys_id=fedcba9876543210fedcba9876543210",
+   "id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "Employee Center standard_ticket page"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef",
+   "id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "title": "RITM0010001 | Requested Item | ServiceNow",
+   "expected_title": "RITM0010001",
+   "note": "classic form, direct"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=sc_req_item&sysparm_record_row=1",
+   "id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "title": "RITM0010001 | Requested Item | Acme IT | Portal",
+   "expected_title": "RITM0010001",
+   "note": "query noise; product name containing ' | ' still skipped from the end"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/sc_req_item.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+   "id": "servicenow.ritm:acme.service-now.com/abcdef0123456789abcdef0123456789",
+   "title": "RITM0010001 | Requested Item | ServiceNow",
+   "expected_title": "RITM0010001",
+   "note": "uppercase sys_id lowercased; fragment ignored"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210",
+   "id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "Service Operations Workspace"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210/",
+   "id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "SOW, trailing slash"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210/params/selected-tab-index/1",
+   "id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "SOW with trailing params segments (shape assumed)"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/now/workspace/agent/record/sc_req_item/00000000111111112222222233333333",
+   "id": "servicenow.ritm:acme.service-now.com/00000000111111112222222233333333",
+   "note": "legacy Agent Workspace"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/now/cwf/agent/record/sc_req_item/00000000111111112222222233333333?foo=bar",
+   "id": "servicenow.ritm:acme.service-now.com/00000000111111112222222233333333",
+   "note": "CSM/FSM configurable workspace, query noise"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/sp?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef",
+   "id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Service Portal ticket page"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/esc?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef&view=sp",
+   "id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Employee Center ticket page, noise"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=sc_req_item&id=form",
+   "id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Service Portal form page, param order varied"
+  },
+  {
+   "type": "servicenow.ritm",
+   "url": "https://acme.service-now.com/esc?id=standard_ticket&table=sc_req_item&sys_id=fedcba9876543210fedcba9876543210",
+   "id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "Employee Center standard_ticket page"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef",
+   "id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "title": "CHG0030001 | Change Request | ServiceNow",
+   "expected_title": "CHG0030001",
+   "note": "classic form, direct"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=change_request&sysparm_record_row=1",
+   "id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "title": "CHG0030001 | Change Request | Acme IT | Portal",
+   "expected_title": "CHG0030001",
+   "note": "query noise; product name containing ' | ' still skipped from the end"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/change_request.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+   "id": "servicenow.change:acme.service-now.com/abcdef0123456789abcdef0123456789",
+   "title": "CHG0030001 | Change Request | ServiceNow",
+   "expected_title": "CHG0030001",
+   "note": "uppercase sys_id lowercased; fragment ignored"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210",
+   "id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "Service Operations Workspace"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210/",
+   "id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "SOW, trailing slash"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210/params/selected-tab-index/1",
+   "id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+   "note": "SOW with trailing params segments (shape assumed)"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/now/workspace/agent/record/change_request/00000000111111112222222233333333",
+   "id": "servicenow.change:acme.service-now.com/00000000111111112222222233333333",
+   "note": "legacy Agent Workspace"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/now/cwf/agent/record/change_request/00000000111111112222222233333333?foo=bar",
+   "id": "servicenow.change:acme.service-now.com/00000000111111112222222233333333",
+   "note": "CSM/FSM configurable workspace, query noise"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/sp?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef",
+   "id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Service Portal ticket page"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/esc?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef&view=sp",
+   "id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Employee Center ticket page, noise"
+  },
+  {
+   "type": "servicenow.change",
+   "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=change_request&id=form",
+   "id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+   "note": "Service Portal form page, param order varied"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB0010035",
+   "id": "servicenow.kb:acme.service-now.com/KB0010035",
+   "note": "platform article view"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/kb_view.do?sysparm_article=kb0010035&sysparm_language=en",
+   "id": "servicenow.kb:acme.service-now.com/KB0010035",
+   "note": "lowercase number folded to upper; language noise"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035",
+   "id": "servicenow.kb:acme.service-now.com/KB0010035",
+   "note": "Service Portal kb_article"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/sp?id=kb_article_view&sysparm_article=KB0010035&sysparm_rank=1&sysparm_tsqueryId=0123456789abcdef0123456789abcdef",
+   "id": "servicenow.kb:acme.service-now.com/KB0010035",
+   "note": "Service Portal kb_article_view with search-ranking noise"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/esc?id=kb_article_view&sysparm_article=KB0012345",
+   "id": "servicenow.kb:acme.service-now.com/KB0012345",
+   "note": "Employee Center"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/esc?id=kb_article&sysparm_article=KB0012345#comments",
+   "id": "servicenow.kb:acme.service-now.com/KB0012345",
+   "note": "Employee Center, fragment"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/kb?id=kb_article_view&sysparm_article=KB0099999",
+   "id": "servicenow.kb:acme.service-now.com/KB0099999",
+   "note": "Knowledge portal (/kb suffix)"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/kb_view.do/?sysparm_article=KB0099999",
+   "id": "servicenow.kb:acme.service-now.com/KB0099999",
+   "note": "trailing slash on kb_view.do"
+  },
+  {
+   "type": "servicenow.kb",
+   "url": "https://acme.service-now.com/sp?sysparm_article=HRKB0001001&id=kb_article_view",
+   "id": "servicenow.kb:acme.service-now.com/HRKB0001001",
+   "note": "custom prefix, param order varied"
+  }
+ ],
+ "negatives": [
+  {
+   "url": "https://acme.service-now.com/incident_list.do?sysparm_query=active%3Dtrue",
+   "note": "incident list"
+  },
+  {
+   "url": "https://acme.service-now.com/incident.do?sys_id=-1&sysparm_query=",
+   "note": "incident new-record form (sys_id=-1)"
+  },
+  {
+   "url": "https://acme.service-now.com/incident.do?sysparm_query=number%3DINC0010001",
+   "note": "incident opened by number query: no sys_id in URL"
+  },
+  {
+   "url": "https://acme.service-now.com/incident.do?XML&sys_id=0123456789abcdef0123456789abcdef",
+   "note": "incident XML export processor"
+  },
+  {
+   "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210",
+   "note": "incident duplicate sys_id is ambiguous"
+  },
+  {
+   "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/incident.do%3Fsys_id%3D0123456789abcdef0123456789abcdef",
+   "note": "incident Next Experience classic wrapper: GRAMMAR GAP, not expressible"
+  },
+  {
+   "url": "https://acme.service-now.com/nav_to.do?uri=incident.do%3Fsys_id%3D0123456789abcdef0123456789abcdef",
+   "note": "incident nav_to.do wrapper: GRAMMAR GAP, not expressible"
+  },
+  {
+   "url": "https://acme.service-now.com/now/sow/record/incident/-1_uid_3",
+   "note": "incident SOW new record placeholder"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=ticket&table=incident",
+   "note": "incident portal ticket page without sys_id"
+  },
+  {
+   "url": "https://acme.service-now.com/sc_req_item_list.do?sysparm_query=active%3Dtrue",
+   "note": "sc_req_item list"
+  },
+  {
+   "url": "https://acme.service-now.com/sc_req_item.do?sys_id=-1&sysparm_query=",
+   "note": "sc_req_item new-record form (sys_id=-1)"
+  },
+  {
+   "url": "https://acme.service-now.com/sc_req_item.do?sysparm_query=number%3DRITM0010001",
+   "note": "sc_req_item opened by number query: no sys_id in URL"
+  },
+  {
+   "url": "https://acme.service-now.com/sc_req_item.do?XML&sys_id=0123456789abcdef0123456789abcdef",
+   "note": "sc_req_item XML export processor"
+  },
+  {
+   "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210",
+   "note": "sc_req_item duplicate sys_id is ambiguous"
+  },
+  {
+   "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/sc_req_item.do%3Fsys_id%3D0123456789abcdef0123456789abcdef",
+   "note": "sc_req_item Next Experience classic wrapper: GRAMMAR GAP, not expressible"
+  },
+  {
+   "url": "https://acme.service-now.com/nav_to.do?uri=sc_req_item.do%3Fsys_id%3D0123456789abcdef0123456789abcdef",
+   "note": "sc_req_item nav_to.do wrapper: GRAMMAR GAP, not expressible"
+  },
+  {
+   "url": "https://acme.service-now.com/now/sow/record/sc_req_item/-1_uid_3",
+   "note": "sc_req_item SOW new record placeholder"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=ticket&table=sc_req_item",
+   "note": "sc_req_item portal ticket page without sys_id"
+  },
+  {
+   "url": "https://acme.service-now.com/change_request_list.do?sysparm_query=active%3Dtrue",
+   "note": "change_request list"
+  },
+  {
+   "url": "https://acme.service-now.com/change_request.do?sys_id=-1&sysparm_query=",
+   "note": "change_request new-record form (sys_id=-1)"
+  },
+  {
+   "url": "https://acme.service-now.com/change_request.do?sysparm_query=number%3DCHG0030001",
+   "note": "change_request opened by number query: no sys_id in URL"
+  },
+  {
+   "url": "https://acme.service-now.com/change_request.do?XML&sys_id=0123456789abcdef0123456789abcdef",
+   "note": "change_request XML export processor"
+  },
+  {
+   "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210",
+   "note": "change_request duplicate sys_id is ambiguous"
+  },
+  {
+   "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/change_request.do%3Fsys_id%3D0123456789abcdef0123456789abcdef",
+   "note": "change_request Next Experience classic wrapper: GRAMMAR GAP, not expressible"
+  },
+  {
+   "url": "https://acme.service-now.com/nav_to.do?uri=change_request.do%3Fsys_id%3D0123456789abcdef0123456789abcdef",
+   "note": "change_request nav_to.do wrapper: GRAMMAR GAP, not expressible"
+  },
+  {
+   "url": "https://acme.service-now.com/now/sow/record/change_request/-1_uid_3",
+   "note": "change_request SOW new record placeholder"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=ticket&table=change_request",
+   "note": "change_request portal ticket page without sys_id"
+  },
+  {
+   "url": "https://acme.service-now.com/kb_view.do?sys_kb_id=0123456789abcdef0123456789abcdef",
+   "note": "KB version sys_id form: deliberately not recorded"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=kb_article_view&sys_kb_id=0123456789abcdef0123456789abcdef",
+   "note": "portal KB version sys_id form: not recorded"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=kb_article&sys_id=0123456789abcdef0123456789abcdef",
+   "note": "portal KB sys_id form: not recorded"
+  },
+  {
+   "url": "https://acme.service-now.com/now/sow/kb_view/kb_knowledge/0123456789abcdef0123456789abcdef",
+   "note": "SOW KB view by sys_id: not recorded"
+  },
+  {
+   "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB0010035&sysparm_article=KB0010036",
+   "note": "duplicate sysparm_article"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=kb_home",
+   "note": "knowledge home"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=kb_search&query=vpn",
+   "note": "knowledge search"
+  },
+  {
+   "url": "https://acme.service-now.com/kb_find.do?sysparm_search=vpn",
+   "note": "classic knowledge search"
+  },
+  {
+   "url": "https://acme.service-now.com/esc?id=kb_article_view",
+   "note": "portal article page with no article"
+  },
+  {
+   "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB%2F0001",
+   "note": "value with '/' is not a token"
+  },
+  {
+   "url": "https://acme.service-now.com/",
+   "note": "instance root"
+  },
+  {
+   "url": "https://acme.service-now.com/navpage.do",
+   "note": "UI16 frameset home"
+  },
+  {
+   "url": "https://acme.service-now.com/now/nav/ui/home",
+   "note": "Next Experience home"
+  },
+  {
+   "url": "https://acme.service-now.com/login.do",
+   "note": "login"
+  },
+  {
+   "url": "https://acme.service-now.com/sp",
+   "note": "portal home"
+  },
+  {
+   "url": "https://acme.service-now.com/esc?id=sc_cat_item&sys_id=0123456789abcdef0123456789abcdef",
+   "note": "catalog item page (not a starter)"
+  },
+  {
+   "url": "https://acme.service-now.com/now/sow/home",
+   "note": "SOW home"
+  },
+  {
+   "url": "https://acme.service-now.com/now/sow/list/params/list-id/0123456789abcdef0123456789abcdef",
+   "note": "SOW list"
+  },
+  {
+   "url": "https://acme.example.com/incident.do?sys_id=0123456789abcdef0123456789abcdef",
+   "note": "other origin (example.com) never matches"
+  },
+  {
+   "url": "https://other.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef",
+   "note": "other ServiceNow instance: adapter origin is exact"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=ticket&table=sn_customerservice_case&sys_id=0123456789abcdef0123456789abcdef",
+   "note": "case table: no starter"
+  },
+  {
+   "url": "https://acme.service-now.com/sp?id=ticket&table=sc_request&sys_id=0123456789abcdef0123456789abcdef",
+   "note": "request (REQ) table: no starter"
+  },
+  {
+   "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcde",
+   "note": "31-hex sys_id"
+  },
+  {
+   "url": "https://acme.service-now.com/now/sow/record/problem/0123456789abcdef0123456789abcdef",
+   "note": "problem table: no starter"
+  }
+ ]
+}

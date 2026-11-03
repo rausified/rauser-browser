@@ -1,0 +1,62 @@
+{
+  "family": "github",
+  "origin": { "kind": "exact", "origin": "https://github.com" },
+  "scope": { "kind": "github_org" },
+  "types": [
+    {
+      "type": "github.pr",
+      "key": "github.pr",
+      "label": "GitHub pull requests",
+      "label_variants": [],
+      "description": "Pull request routes share one artifact; files use review mode, while commits and checks use view mode.",
+      "adapter": {
+        "type": "github.pr",
+        "match": [{ "path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}" }],
+        "scope": { "owner": { "$scope": true } },
+        "modes": { "files": "review", "commits": "view", "checks": "view" },
+        "id": "github.pr:{host}/{owner}/{repo}/{number}",
+        "title": "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
+        "refs": [{ "type": "jira.issue", "find": "jira_key" }],
+        "within": { "type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}" }
+      },
+      "history": [],
+      "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
+      "docs": "docs/adapters/github.pr.md"
+    },
+    {
+      "type": "github.issue",
+      "key": "github.issue",
+      "label": "GitHub issues",
+      "label_variants": [],
+      "description": "Issue pages are captured only for the organizations you name.",
+      "adapter": {
+        "type": "github.issue",
+        "match": [{ "path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+        "scope": { "owner": { "$scope": true } },
+        "id": "github.issue:{host}/{owner}/{repo}/{number}",
+        "title": "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
+        "refs": [{ "type": "jira.issue", "find": "jira_key" }],
+        "within": { "type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}" }
+      },
+      "history": [],
+      "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
+      "docs": "docs/adapters/github.issue.md"
+    },
+    {
+      "type": "github.repo",
+      "key": "github.repo",
+      "label": "GitHub repositories",
+      "label_variants": [],
+      "description": "Every page inside a repository counts toward it; pull requests and issues count toward both.",
+      "adapter": {
+        "type": "github.repo",
+        "match": [{ "path": "/{owner:name|lower}/{repo:name|lower}/{*}" }],
+        "scope": { "owner": { "$scope": true } },
+        "id": "github.repo:{host}/{owner}/{repo}"
+      },
+      "history": [],
+      "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
+      "docs": "docs/adapters/github.repo.md"
+    }
+  ]
+}

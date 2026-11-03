@@ -1,0 +1,1079 @@
+{
+ "doc": "adapters.toml",
+ "generated": "2026-11-03",
+ "note": "Synthetic IDs only. expect.mode null means no mode recorded. expect.title is the extracted title when a tab title is given.",
+ "cases": [
+  {
+   "name": "doc.edit",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "edit",
+    "title": "Q4 Plan"
+   },
+   "title": "Q4 Plan - Google Docs"
+  },
+  {
+   "name": "doc.bare",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": null,
+    "title": "Q4 Plan"
+   },
+   "title": "Q4 Plan - Google Docs"
+  },
+  {
+   "name": "doc.trailing_slash",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": null
+   }
+  },
+  {
+   "name": "doc.share_link",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=sharing",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "edit",
+    "title": "Design - Review"
+   },
+   "title": "Design - Review - Google Docs"
+  },
+  {
+   "name": "doc.tab_query_fragment",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?tab=t.0#heading=h.abc123",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "doc.view",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/view",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "doc.preview",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/preview",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "doc.mobilebasic_title_no_suffix",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/mobilebasic",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "view",
+    "title": "Q4 Plan"
+   },
+   "title": "Q4 Plan"
+  },
+  {
+   "name": "doc.account_index",
+   "url": "https://docs.google.com/document/u/1/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=drive_web&ouid=123",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "doc.legacy_domain",
+   "url": "https://docs.google.com/a/example.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "doc.drive_open_redirect_target",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=drive_open",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "doc.ref_in_title",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+   "expect": {
+    "match": true,
+    "type": "google.doc",
+    "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "edit",
+    "title": "PROJ-123 rollout notes"
+   },
+   "title": "PROJ-123 rollout notes - Google Docs"
+  },
+  {
+   "name": "sheet.edit",
+   "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": "edit",
+    "title": "Budget 2027"
+   },
+   "title": "Budget 2027 - Google Sheets"
+  },
+  {
+   "name": "sheet.gid",
+   "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit?gid=1234567#gid=1234567",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "sheet.bare",
+   "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": null
+   }
+  },
+  {
+   "name": "sheet.trailing",
+   "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit/",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "sheet.view",
+   "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/view",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": "view",
+    "title": "Budget 2027"
+   },
+   "title": "Budget 2027 - Google Sheets"
+  },
+  {
+   "name": "sheet.htmlview_drive_title",
+   "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/htmlview",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": "view",
+    "title": "Budget 2027"
+   },
+   "title": "Budget 2027 - Google Drive"
+  },
+  {
+   "name": "sheet.preview",
+   "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/preview",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": "view",
+    "title": "Budget 2027"
+   },
+   "title": "Budget 2027 - Google Drive"
+  },
+  {
+   "name": "sheet.account_index",
+   "url": "https://docs.google.com/spreadsheets/u/0/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit?usp=sharing",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "sheet.legacy_domain",
+   "url": "https://docs.google.com/a/example.org/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit#gid=0",
+   "expect": {
+    "match": true,
+    "type": "google.sheet",
+    "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "slides.edit",
+   "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": "edit",
+    "title": "Kickoff deck"
+   },
+   "title": "Kickoff deck - Google Slides"
+  },
+  {
+   "name": "slides.slide_fragment",
+   "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit#slide=id.p1",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "slides.slide_query",
+   "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit?slide=id.g2a3b4c5d6e_0_0",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "slides.present",
+   "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/present?slide=id.p",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": "view",
+    "title": "Kickoff deck"
+   },
+   "title": "Kickoff deck - Google Slides"
+  },
+  {
+   "name": "slides.preview",
+   "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/preview",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "slides.embed",
+   "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/embed?start=false&loop=false",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "slides.view",
+   "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/view",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "slides.account_index",
+   "url": "https://docs.google.com/presentation/u/2/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit?usp=sharing",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "slides.bare_trailing",
+   "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/",
+   "expect": {
+    "match": true,
+    "type": "google.slides",
+    "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+    "mode": null
+   }
+  },
+  {
+   "name": "form.edit",
+   "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+   "expect": {
+    "match": true,
+    "type": "google.form",
+    "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+    "mode": "edit",
+    "title": "Team survey"
+   },
+   "title": "Team survey - Google Forms"
+  },
+  {
+   "name": "form.edit_responses_fragment",
+   "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit#responses",
+   "expect": {
+    "match": true,
+    "type": "google.form",
+    "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "form.bare",
+   "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+   "expect": {
+    "match": true,
+    "type": "google.form",
+    "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+    "mode": null
+   }
+  },
+  {
+   "name": "form.legacy_viewform",
+   "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/viewform",
+   "expect": {
+    "match": true,
+    "type": "google.form",
+    "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+    "mode": "view",
+    "title": "Team survey"
+   },
+   "title": "Team survey"
+  },
+  {
+   "name": "form.account_index",
+   "url": "https://docs.google.com/forms/u/0/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+   "expect": {
+    "match": true,
+    "type": "google.form",
+    "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "form.legacy_domain",
+   "url": "https://docs.google.com/a/example.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+   "expect": {
+    "match": true,
+    "type": "google.form",
+    "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "form.trailing",
+   "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit/",
+   "expect": {
+    "match": true,
+    "type": "google.form",
+    "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "form.query_noise",
+   "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit?usp=forms_home&ths=true",
+   "expect": {
+    "match": true,
+    "type": "google.form",
+    "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "responder.viewform",
+   "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform",
+   "expect": {
+    "match": true,
+    "type": "google.form.responder",
+    "artifact_id": "google.form.responder:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+    "mode": "view",
+    "title": "Team survey"
+   },
+   "title": "Team survey"
+  },
+  {
+   "name": "responder.share_link",
+   "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?usp=sf_link",
+   "expect": {
+    "match": true,
+    "type": "google.form.responder",
+    "artifact_id": "google.form.responder:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "responder.embedded",
+   "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?embedded=true",
+   "expect": {
+    "match": true,
+    "type": "google.form.responder",
+    "artifact_id": "google.form.responder:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "responder.prefilled",
+   "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?usp=pp_url&entry.123456=Alice",
+   "expect": {
+    "match": true,
+    "type": "google.form.responder",
+    "artifact_id": "google.form.responder:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "responder.formresponse",
+   "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/formResponse",
+   "expect": {
+    "match": true,
+    "type": "google.form.responder",
+    "artifact_id": "google.form.responder:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "responder.closedform",
+   "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/closedform",
+   "expect": {
+    "match": true,
+    "type": "google.form.responder",
+    "artifact_id": "google.form.responder:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "responder.account_index",
+   "url": "https://docs.google.com/forms/u/1/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform",
+   "expect": {
+    "match": true,
+    "type": "google.form.responder",
+    "artifact_id": "google.form.responder:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "responder.legacy_domain_trailing",
+   "url": "https://docs.google.com/a/example.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform/",
+   "expect": {
+    "match": true,
+    "type": "google.form.responder",
+    "artifact_id": "google.form.responder:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "drivefile.view",
+   "url": "https://drive.google.com/file/d/1SyntheticDriveFileIdFFFFFFFFFFFf/view",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/1SyntheticDriveFileIdFFFFFFFFFFFf",
+    "mode": "view",
+    "title": "Q3 report.pdf"
+   },
+   "title": "Q3 report.pdf - Google Drive"
+  },
+  {
+   "name": "drivefile.share",
+   "url": "https://drive.google.com/file/d/1SyntheticDriveFileIdFFFFFFFFFFFf/view?usp=sharing",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/1SyntheticDriveFileIdFFFFFFFFFFFf",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "drivefile.drive_link_resourcekey",
+   "url": "https://drive.google.com/file/d/0BSyntheticLegacyFileIdGGGG/view?usp=drive_link&resourcekey=0-AbCdEfGhIjKlMnOp",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/0BSyntheticLegacyFileIdGGGG",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "drivefile.preview",
+   "url": "https://drive.google.com/file/d/1SyntheticDriveFileIdFFFFFFFFFFFf/preview",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/1SyntheticDriveFileIdFFFFFFFFFFFf",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "drivefile.edit",
+   "url": "https://drive.google.com/file/d/1SyntheticDriveFileIdFFFFFFFFFFFf/edit",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/1SyntheticDriveFileIdFFFFFFFFFFFf",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "drivefile.bare",
+   "url": "https://drive.google.com/file/d/1SyntheticDriveFileIdFFFFFFFFFFFf",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/1SyntheticDriveFileIdFFFFFFFFFFFf",
+    "mode": null
+   }
+  },
+  {
+   "name": "drivefile.account_index",
+   "url": "https://drive.google.com/file/u/0/d/1SyntheticDriveFileIdFFFFFFFFFFFf/view",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/1SyntheticDriveFileIdFFFFFFFFFFFf",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "drivefile.trailing",
+   "url": "https://drive.google.com/file/d/1SyntheticDriveFileIdFFFFFFFFFFFf/view/",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/1SyntheticDriveFileIdFFFFFFFFFFFf",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "drivefile.native_doc_in_previewer",
+   "url": "https://drive.google.com/file/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/view",
+   "expect": {
+    "match": true,
+    "type": "google.drive.file",
+    "artifact_id": "google.drive.file:drive.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+    "mode": "view",
+    "title": "Q4 Plan"
+   },
+   "title": "Q4 Plan - Google Drive"
+  },
+  {
+   "name": "folder.plain",
+   "url": "https://drive.google.com/drive/folders/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+   "expect": {
+    "match": true,
+    "type": "google.drive.folder",
+    "artifact_id": "google.drive.folder:drive.google.com/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+    "mode": null,
+    "title": "Customer decks"
+   },
+   "title": "Customer decks - Google Drive"
+  },
+  {
+   "name": "folder.share",
+   "url": "https://drive.google.com/drive/folders/1SyntheticFolderIdHHHHHHHHHHHHHHHh?usp=sharing",
+   "expect": {
+    "match": true,
+    "type": "google.drive.folder",
+    "artifact_id": "google.drive.folder:drive.google.com/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+    "mode": null
+   }
+  },
+  {
+   "name": "folder.drive_link",
+   "url": "https://drive.google.com/drive/folders/1SyntheticFolderIdHHHHHHHHHHHHHHHh?usp=drive_link",
+   "expect": {
+    "match": true,
+    "type": "google.drive.folder",
+    "artifact_id": "google.drive.folder:drive.google.com/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+    "mode": null
+   }
+  },
+  {
+   "name": "folder.resourcekey",
+   "url": "https://drive.google.com/drive/folders/1SyntheticFolderIdHHHHHHHHHHHHHHHh?resourcekey=0-AbCdEfGhIjKlMnOp",
+   "expect": {
+    "match": true,
+    "type": "google.drive.folder",
+    "artifact_id": "google.drive.folder:drive.google.com/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+    "mode": null
+   }
+  },
+  {
+   "name": "folder.account_index",
+   "url": "https://drive.google.com/drive/u/1/folders/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+   "expect": {
+    "match": true,
+    "type": "google.drive.folder",
+    "artifact_id": "google.drive.folder:drive.google.com/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+    "mode": null
+   }
+  },
+  {
+   "name": "folder.trailing",
+   "url": "https://drive.google.com/drive/folders/1SyntheticFolderIdHHHHHHHHHHHHHHHh/",
+   "expect": {
+    "match": true,
+    "type": "google.drive.folder",
+    "artifact_id": "google.drive.folder:drive.google.com/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+    "mode": null
+   }
+  },
+  {
+   "name": "folder.shared_drive_root",
+   "url": "https://drive.google.com/drive/u/0/folders/0ASyntheticSharedDrv",
+   "expect": {
+    "match": true,
+    "type": "google.drive.folder",
+    "artifact_id": "google.drive.folder:drive.google.com/0ASyntheticSharedDrv",
+    "mode": null
+   }
+  },
+  {
+   "name": "folder.mobile",
+   "url": "https://drive.google.com/drive/mobile/folders/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+   "expect": {
+    "match": true,
+    "type": "google.drive.folder",
+    "artifact_id": "google.drive.folder:drive.google.com/1SyntheticFolderIdHHHHHHHHHHHHHHHh",
+    "mode": null
+   }
+  },
+  {
+   "name": "event.r_eid",
+   "url": "https://calendar.google.com/calendar/r?eid=c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+   "expect": {
+    "match": true,
+    "type": "google.calendar.event",
+    "artifact_id": "google.calendar.event:calendar.google.com/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "event.u_r_eid",
+   "url": "https://calendar.google.com/calendar/u/0/r?eid=c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+   "expect": {
+    "match": true,
+    "type": "google.calendar.event",
+    "artifact_id": "google.calendar.event:calendar.google.com/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "event.htmllink",
+   "url": "https://calendar.google.com/calendar/event?eid=c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+   "expect": {
+    "match": true,
+    "type": "google.calendar.event",
+    "artifact_id": "google.calendar.event:calendar.google.com/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "event.htmllink_ctz",
+   "url": "https://calendar.google.com/calendar/event?eid=c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0&ctz=America/New_York",
+   "expect": {
+    "match": true,
+    "type": "google.calendar.event",
+    "artifact_id": "google.calendar.event:calendar.google.com/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+    "mode": "view"
+   }
+  },
+  {
+   "name": "event.eventedit",
+   "url": "https://calendar.google.com/calendar/r/eventedit/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+   "expect": {
+    "match": true,
+    "type": "google.calendar.event",
+    "artifact_id": "google.calendar.event:calendar.google.com/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "event.u_eventedit",
+   "url": "https://calendar.google.com/calendar/u/1/r/eventedit/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+   "expect": {
+    "match": true,
+    "type": "google.calendar.event",
+    "artifact_id": "google.calendar.event:calendar.google.com/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "event.recurring_instance",
+   "url": "https://calendar.google.com/calendar/r/eventedit/c3ludGhldGljZXZlbnRpZDAwMl8yMDI2MTEwM1QxNTAwMDBaIGV4YW1wbGVAbQ",
+   "expect": {
+    "match": true,
+    "type": "google.calendar.event",
+    "artifact_id": "google.calendar.event:calendar.google.com/c3ludGhldGljZXZlbnRpZDAwMl8yMDI2MTEwM1QxNTAwMDBaIGV4YW1wbGVAbQ",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "event.eventedit_trailing",
+   "url": "https://calendar.google.com/calendar/r/eventedit/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0/?pli=1",
+   "expect": {
+    "match": true,
+    "type": "google.calendar.event",
+    "artifact_id": "google.calendar.event:calendar.google.com/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+    "mode": "edit"
+   }
+  },
+  {
+   "name": "neg.docs_home",
+   "url": "https://docs.google.com/document/u/0/",
+   "expect": {
+    "match": false
+   },
+   "why": "Docs home list"
+  },
+  {
+   "name": "neg.docs_create",
+   "url": "https://docs.google.com/document/create",
+   "expect": {
+    "match": false
+   },
+   "why": "create route"
+  },
+  {
+   "name": "neg.docs_u_create",
+   "url": "https://docs.google.com/document/u/0/create?usp=docs_home",
+   "expect": {
+    "match": false
+   },
+   "why": "create route"
+  },
+  {
+   "name": "neg.doc_copy",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/copy",
+   "expect": {
+    "match": false
+   },
+   "why": "copy action, not an open"
+  },
+  {
+   "name": "neg.doc_export",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/export?format=pdf",
+   "expect": {
+    "match": false
+   },
+   "why": "export download"
+  },
+  {
+   "name": "neg.doc_template_preview",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/template/preview",
+   "expect": {
+    "match": false
+   },
+   "why": "template link (unverified route)"
+  },
+  {
+   "name": "neg.doc_published",
+   "url": "https://docs.google.com/document/d/e/2PACX-1vSyntheticPublishedIdIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIi/pub",
+   "expect": {
+    "match": false
+   },
+   "why": "published copy, different ID"
+  },
+  {
+   "name": "neg.doc_short_id",
+   "url": "https://docs.google.com/document/d/abc123/edit",
+   "expect": {
+    "match": false
+   },
+   "why": "ID shorter than 20"
+  },
+  {
+   "name": "neg.sheets_home",
+   "url": "https://docs.google.com/spreadsheets/u/0/",
+   "expect": {
+    "match": false
+   },
+   "why": "Sheets home"
+  },
+  {
+   "name": "neg.sheet_published",
+   "url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vSyntheticPublishedIdJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJj/pubhtml",
+   "expect": {
+    "match": false
+   },
+   "why": "published copy"
+  },
+  {
+   "name": "neg.sheet_legacy_ccc",
+   "url": "https://docs.google.com/spreadsheet/ccc?key=1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+   "expect": {
+    "match": false
+   },
+   "why": "legacy redirector"
+  },
+  {
+   "name": "neg.slides_home",
+   "url": "https://docs.google.com/presentation/u/0/?tgif=d",
+   "expect": {
+    "match": false
+   },
+   "why": "Slides home"
+  },
+  {
+   "name": "neg.forms_home",
+   "url": "https://docs.google.com/forms/u/0/",
+   "expect": {
+    "match": false
+   },
+   "why": "Forms home"
+  },
+  {
+   "name": "neg.responder_prefill",
+   "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/prefill",
+   "expect": {
+    "match": false
+   },
+   "why": "prefill builder"
+  },
+  {
+   "name": "neg.responder_bare",
+   "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+   "expect": {
+    "match": false
+   },
+   "why": "no route word after published ID (unverified)"
+  },
+  {
+   "name": "neg.docs_open_redirector",
+   "url": "https://docs.google.com/open?id=1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+   "expect": {
+    "match": false
+   },
+   "why": "redirector"
+  },
+  {
+   "name": "neg.docs_encoded_slash",
+   "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa%2Fedit",
+   "expect": {
+    "match": false
+   },
+   "why": "encoded slash rejected"
+  },
+  {
+   "name": "neg.docs_double_slash",
+   "url": "https://docs.google.com/document//d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+   "expect": {
+    "match": false
+   },
+   "why": "empty segment"
+  },
+  {
+   "name": "neg.docs_case",
+   "url": "https://docs.google.com/Document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+   "expect": {
+    "match": false
+   },
+   "why": "paths are case-sensitive"
+  },
+  {
+   "name": "neg.docs_http",
+   "url": "http://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+   "expect": {
+    "match": false
+   },
+   "why": "origin must be https"
+  },
+  {
+   "name": "neg.drive_home",
+   "url": "https://drive.google.com/drive/home",
+   "expect": {
+    "match": false
+   },
+   "why": "Drive home"
+  },
+  {
+   "name": "neg.drive_my_drive",
+   "url": "https://drive.google.com/drive/my-drive",
+   "expect": {
+    "match": false
+   },
+   "why": "My Drive root list"
+  },
+  {
+   "name": "neg.drive_u_my_drive",
+   "url": "https://drive.google.com/drive/u/0/my-drive",
+   "expect": {
+    "match": false
+   },
+   "why": "My Drive root list"
+  },
+  {
+   "name": "neg.drive_shared_with_me",
+   "url": "https://drive.google.com/drive/shared-with-me",
+   "expect": {
+    "match": false
+   },
+   "why": "list"
+  },
+  {
+   "name": "neg.drive_recent",
+   "url": "https://drive.google.com/drive/u/1/recent",
+   "expect": {
+    "match": false
+   },
+   "why": "list"
+  },
+  {
+   "name": "neg.drive_search",
+   "url": "https://drive.google.com/drive/search?q=budget",
+   "expect": {
+    "match": false
+   },
+   "why": "search"
+  },
+  {
+   "name": "neg.drive_shared_drives",
+   "url": "https://drive.google.com/drive/shared-drives",
+   "expect": {
+    "match": false
+   },
+   "why": "list"
+  },
+  {
+   "name": "neg.drive_open",
+   "url": "https://drive.google.com/open?id=1SyntheticDriveFileIdFFFFFFFFFFFf",
+   "expect": {
+    "match": false
+   },
+   "why": "redirector"
+  },
+  {
+   "name": "neg.drive_uc_download",
+   "url": "https://drive.google.com/uc?id=1SyntheticDriveFileIdFFFFFFFFFFFf&export=download",
+   "expect": {
+    "match": false
+   },
+   "why": "download"
+  },
+  {
+   "name": "neg.drive_folder_root_alias",
+   "url": "https://drive.google.com/drive/folders/root",
+   "expect": {
+    "match": false
+   },
+   "why": "API alias, below length floor"
+  },
+  {
+   "name": "neg.drive_file_subroute",
+   "url": "https://drive.google.com/file/d/1SyntheticDriveFileIdFFFFFFFFFFFf/view/extra",
+   "expect": {
+    "match": false
+   },
+   "why": "no rest"
+  },
+  {
+   "name": "neg.drive_on_docs_host",
+   "url": "https://docs.google.com/file/d/1SyntheticDriveFileIdFFFFFFFFFFFf/view",
+   "expect": {
+    "match": false
+   },
+   "why": "wrong origin"
+  },
+  {
+   "name": "neg.cal_root",
+   "url": "https://calendar.google.com/calendar/r",
+   "expect": {
+    "match": false
+   },
+   "why": "main view"
+  },
+  {
+   "name": "neg.cal_u_root",
+   "url": "https://calendar.google.com/calendar/u/0/r",
+   "expect": {
+    "match": false
+   },
+   "why": "main view"
+  },
+  {
+   "name": "neg.cal_week",
+   "url": "https://calendar.google.com/calendar/r/week/2026/11/3",
+   "expect": {
+    "match": false
+   },
+   "why": "week view"
+  },
+  {
+   "name": "neg.cal_create_link",
+   "url": "https://calendar.google.com/calendar/r/eventedit?text=Sync&dates=20261103T150000Z/20261103T160000Z",
+   "expect": {
+    "match": false
+   },
+   "why": "create-event link"
+  },
+  {
+   "name": "neg.cal_copy",
+   "url": "https://calendar.google.com/calendar/r/eventedit/copy/c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0",
+   "expect": {
+    "match": false
+   },
+   "why": "copy event"
+  },
+  {
+   "name": "neg.cal_settings",
+   "url": "https://calendar.google.com/calendar/r/settings",
+   "expect": {
+    "match": false
+   },
+   "why": "settings"
+  },
+  {
+   "name": "neg.cal_eid_duplicate",
+   "url": "https://calendar.google.com/calendar/r?eid=c3ludGhldGljZXZlbnRpZDAwMSBleGFtcGxlQG0&eid=c3ludGhldGljZXZlbnRpZDAwMl8yMDI2MTEwM1QxNTAwMDBaIGV4YW1wbGVAbQ",
+   "expect": {
+    "match": false
+   },
+   "why": "duplicate key is ambiguous"
+  },
+  {
+   "name": "neg.cal_eid_plus",
+   "url": "https://calendar.google.com/calendar/r?eid=abc+defghijklmnopqrstuvwxyz",
+   "expect": {
+    "match": false
+   },
+   "why": "base64 '+' decodes to space"
+  },
+  {
+   "name": "neg.gmail_thread",
+   "url": "https://mail.google.com/mail/u/0/#inbox/FMfcgzSyntheticThreadId",
+   "expect": {
+    "match": false
+   },
+   "why": "Gmail is hash-routed; no adapter"
+  }
+ ]
+}

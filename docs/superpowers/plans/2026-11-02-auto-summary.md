@@ -238,4 +238,4 @@
 - [ ] **Step 1: Update the smoke and run `npm run smoke:macos:headless`.** Expected: PASS, including the new auto step.
 - [ ] **Step 2: Run the README full gate** (cargo build/test/fmt/clippy, typecheck, lint, build/test extension, a11y, markdown-neutralizer, scripts, queue, dev-tools). Expected: all pass. Known flakes: `brwr-kpg`, which applies only under load.
 - [ ] **Step 3: Write the docs**, then run `python3 scripts/check_current_state.py` and `python3 scripts/check_queue_consistency.py`. Expected: PASS.
-- [ ] **Step 4: Commit, open the PR** (with the Owner and Handoff lines), **run one Codex pass alongside CI, merge with `gh pr merge --auto --merge`** (the merge queue is not enabled), **then `scripts/dev/deploy-live`** and tell John to reload the extension.
+- [ ] **Step 4: Commit, open the PR** (with the Owner and Handoff lines), **run one Codex pass alongside CI, queue it with `gh pr edit <n> --add-label queue`** (the Mergify queue; never `gh pr merge`, AGENTS.md "Review and merge cadence"), **then `scripts/dev/deploy-live`** and tell John to reload the extension.

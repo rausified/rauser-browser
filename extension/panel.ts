@@ -202,7 +202,16 @@ const recentType = element<HTMLSelectElement>("recent-type");
 const recentTitle = element<HTMLInputElement>("recent-title");
 const recentStatus = element<HTMLParagraphElement>("recent-status");
 const recentList = element<HTMLDivElement>("recent-list");
-const worklogPeriod = element<HTMLSelectElement>("worklog-period");
+/** The worklog period's segments: one native radio group, so arrows move
+ * the choice and the group is one tab stop. */
+const WORKLOG_PERIODS = ["today", "yesterday", "week"] as const;
+type WorklogPeriod = (typeof WORKLOG_PERIODS)[number];
+const worklogPeriodRadios = new Map<WorklogPeriod, HTMLInputElement>(
+  WORKLOG_PERIODS.map((period) => [period, element<HTMLInputElement>(`worklog-${period}`)]),
+);
+function worklogPeriod(): WorklogPeriod {
+  return WORKLOG_PERIODS.find((period) => worklogPeriodRadios.get(period)!.checked) ?? "today";
+}
 const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
 const curateWorklog = element<HTMLInputElement>("worklog-curate");
@@ -216,16 +225,20 @@ const worklogGapStatus = element<HTMLElement>("worklog-gap-status");
 const worklogGapList = element<HTMLElement>("worklog-gap-list");
 const includeWorklogGaps = element<HTMLInputElement>("worklog-include-gaps");
 const summarizeButton = element<HTMLButtonElement>("summarize");
+const summarizeLabel = element<HTMLSpanElement>("summarize-label");
+const pageActions = element<HTMLDivElement>("page-actions");
 const runArea = element<HTMLDivElement>("run-area");
 const pageSummary = element<HTMLDivElement>("page-summary");
 const pageSummaryText = element<HTMLParagraphElement>("page-summary-text");
 const pageSummaryOpen = element<HTMLButtonElement>("page-summary-open");
 const pageSummaryTime = element<HTMLSpanElement>("page-summary-time");
 const pageSummaryChips = element<HTMLDivElement>("page-summary-chips");
+const pageSummaryHead = element<HTMLDivElement>("page-summary-head");
 const taskBar = element<HTMLElement>("task-bar");
 const taskForm = element<HTMLFormElement>("task-form");
 const taskInput = element<HTMLTextAreaElement>("task-input");
 const taskRunButton = element<HTMLButtonElement>("task-run");
+const taskRunLabel = element<HTMLSpanElement>("task-run-label");
 const taskUsePage = element<HTMLInputElement>("task-use-page");
 const taskContext = element<HTMLParagraphElement>("task-context");
 const taskHint = element<HTMLParagraphElement>("task-hint");
@@ -417,12 +430,27 @@ function renderPageSummary(summary: SummaryView | null, pageUrl: string | null):
 }
 
 /** The one Summarize & log button reads as the design's action for the
- * page: Save Page for a page no adapter recognizes, Summarize again once a
- * summary exists. */
+ * page: Save Page for a page no adapter recognizes, Summarize & log for an
+ * artifact, and once a summary exists it moves into the Summary card as its
+ * re-summarize icon (`data-place="card"`, the label kept for assistive
+ * technology). It stays one control, so its id, focus and state carry over. */
 function renderSummarizeLabel(): void {
   const summarized = summaryPageUrl !== null;
-  const label = summarized ? "Summarize again" : artifactPageUrl === null ? "Save Page" : "Summarize & log";
-  summarizeButton.textContent = label;
+  summarizeLabel.textContent = summarized ? "Summarize again" : artifactPageUrl === null ? "Save Page" : "Summarize & log";
+  const place = summarized ? "card" : "actions";
+  if (summarizeButton.dataset.place !== place) {
+    const hadFocus = document.activeElement === summarizeButton;
+    if (place === "card") pageSummaryHead.append(summarizeButton);
+    else pageActions.prepend(summarizeButton);
+    summarizeButton.dataset.place = place;
+    if (hadFocus) summarizeButton.focus();
+  }
+  if (summarizeButton.title !== NEEDS_HARNESS_MESSAGE) summarizeButton.title = summarizeTooltip();
+}
+
+/** The icon-only form names itself on hover too. */
+function summarizeTooltip(): string {
+  return summarizeButton.dataset.place === "card" ? "Summarize again" : "";
 }
 
 /** The page tile: the artifact type's look when recognized, else the host's. */
@@ -991,7 +1019,7 @@ function updateControls(): void {
   const ready = harnessReady(session);
   summarizeButton.hidden = currentPage === null;
   summarizeButton.disabled = !ready || summarizing || currentPage?.tabId === undefined;
-  summarizeButton.title = ready ? "" : NEEDS_HARNESS_MESSAGE;
+  summarizeButton.title = ready ? summarizeTooltip() : NEEDS_HARNESS_MESSAGE;
   renderTaskBar();
   pageSummaryOpen.disabled = !connected;
   for (const open of recentOpenButtons) open.disabled = !connected;
@@ -1376,7 +1404,7 @@ function renderTaskBar(): void {
   taskBar.hidden = followedTabId === null;
   taskRunButton.disabled = blocked !== null || taskStarting;
   const label = taskStarting ? "Starting…" : "Run";
-  if (taskRunButton.textContent !== label) taskRunButton.textContent = label;
+  if (taskRunLabel.textContent !== label) taskRunLabel.textContent = label;
   taskInput.readOnly = taskStarting;
   taskUsePage.disabled = taskStarting || (currentPage === null && pageState !== "site-access");
   taskHint.hidden = blocked === null;
@@ -1755,12 +1783,12 @@ function localDate(date: Date): string {
 function worklogRange(): { start: string; end: string } {
   const now = new Date();
   now.setHours(12, 0, 0, 0);
-  if (worklogPeriod.value === "yesterday") {
+  if (worklogPeriod() === "yesterday") {
     now.setDate(now.getDate() - 1);
     const day = localDate(now);
     return { start: day, end: day };
   }
-  if (worklogPeriod.value === "week") {
+  if (worklogPeriod() === "week") {
     const end = localDate(now);
     const mondayOffset = (now.getDay() + 6) % 7;
     now.setDate(now.getDate() - mondayOffset);
@@ -2207,10 +2235,12 @@ for (const tab of [pageTab, recentTab]) {
 }
 recentType.addEventListener("change", () => void loadRecent());
 recentTitle.addEventListener("input", scheduleRecent);
-worklogPeriod.addEventListener("change", () => {
-  selectedWork.clear();
-  void loadWorklog();
-});
+for (const radio of worklogPeriodRadios.values()) {
+  radio.addEventListener("change", () => {
+    selectedWork.clear();
+    void loadWorklog();
+  });
+}
 curateWorklog.addEventListener("change", () => void loadWorklog());
 worklogSelectAll.addEventListener("click", () => {
   if (worklogReport?.type !== "worklog_choices_result") return;

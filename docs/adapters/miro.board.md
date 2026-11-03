@@ -78,3 +78,34 @@ URL and tells the agent to read that one board with its own Miro tools
 (DESIGN.md §4.5 "Miro boards"). That works only when the agent has a Miro
 connector, Miro's MCP server, or Miro API credentials of its own; otherwise
 the summary says the board could not be read.
+
+## Live check still needed
+
+Before this page's status line changes to release-certified, check on macOS
+with real Chrome and a real Miro account, the way the Jira, SharePoint and
+GitHub starters were certified on 2026-11-02:
+
+1. On a board page with no saved Miro rules, **Capture Site** offers **Miro
+   boards** with the every-account statement and the development-draft source
+   line. Saving it turns the page card's status to "● Artifact recognized",
+   and settings' starter gallery then shows Miro boards as **Already
+   configured**.
+2. The same board opened directly, from a share link (`?share_link_id=…`) and
+   at a widget (`?moveToWidget=…`, for example from a comment) lands on one
+   artifact: Recent shows one row for it, and a page note written on one form
+   shows on the others.
+3. Once the board has loaded, the recorded title is the board's name, not
+   `Miro`. Note the real tab title of an untitled board, and add a title entry
+   or vector if it is not `Untitled - Miro`.
+4. The dashboard (`/app/dashboard/…`), the app root (`/app/`), sign-in
+   (`/login/`) and SSO stay "○ Not an artifact", and an embedded board
+   (`/app/live-embed/<id>/`) records nothing.
+5. If you can open a board with an older `o9J_` ID, it records with its ID
+   exactly as matched (case kept); otherwise say it was not checked.
+
+Then record the date in this page's status line (`Status: release-certified
+<date>. …`, as in `docs/adapters/jira.issue.md`), set the Miro type's `status`
+in `protocol/starters/miro.json` to `{ "state": "certified", "method": "live",
+"checked_on": "<date>", "checked_by": "John" }`, and run `npm run
+gen:starters` (`protocol/starters/README.md`). The Capture Site source line
+follows the status.

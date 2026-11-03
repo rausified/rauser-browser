@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rausified/rauser-browser/worker-contract.schema.json",
+  "title": "Brauser worker contract",
+  "description": "How every worker (the shared worker driver, Cookie, any session) merges pull requests and moves the work queue in this repository. AGENTS.md \"Worker contract\" explains each field. A new field or meaning bumps version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "merge",
+    "queue",
+    "never_commit"
+  ],
+  "properties": {
+    "version": {
+      "description": "The contract version a worker must understand before acting on it.",
+      "const": 1
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "label",
+        "never"
+      ],
+      "properties": {
+        "method": {
+          "description": "How a worker asks for a merge: `label` means add the label below to a green PR.",
+          "enum": [
+            "label"
+          ]
+        },
+        "label": {
+          "description": "The label that requests the merge.",
+          "type": "string",
+          "minLength": 1
+        },
+        "comment": {
+          "description": "Optional. A PR comment the worker posts after adding the label, which asks Mergify to queue the PR. Label-only auto-queue depends on Mergify's Merge Protections being activated in the dashboard; the comment queues it either way.",
+          "type": "string",
+          "minLength": 1
+        },
+        "never": {
+          "description": "Commands a worker must never run to merge.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "bootstrap",
+        "sync",
+        "export",
+        "backlog",
+        "sync_exit_codes"
+      ],
+      "properties": {
+        "transport": {
+          "description": "`bd-dolt`: beads live in bd's Dolt database, synced through this repository's refs/dolt/data.",
+          "enum": [
+            "bd-dolt"
+          ]
+        },
+        "bootstrap": {
+          "description": "Run once in a fresh clone, from the repository root, to get the queue.",
+          "type": "string",
+          "minLength": 1
+        },
+        "sync": {
+          "description": "Run from the repository root after editing beads with bd: checks, then publishes.",
+          "type": "string",
+          "minLength": 1
+        },
+        "export": {
+          "description": "Prints the whole queue as JSONL on stdout; empty output is a failure.",
+          "type": "string",
+          "minLength": 1
+        },
+        "backlog": {
+          "description": "Prints BOSUN_FEATURE_BACKLOG.md, rendered from the frame, the notes and the beads, on stdout; the driver writes it to <workspace>/.bosun_queue_backlog.md after each sync.",
+          "type": "string",
+          "minLength": 1
+        },
+        "sync_exit_codes": {
+          "description": "What `sync`'s exit status means, so a worker can branch on it: 0 synced (or nothing to do); 1 error (a failed queue check, an unseeded remote, transport, auth or storage), nothing pushed; 2 conflict, bd sync halted and nothing pushed, an operator resolves it (`bd conflicts`); 3 retry, a push race or another writer's pending edit, nothing pushed, sync again on the next tick; 4 stuck, the working set will not publish until an operator clears it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "0",
+            "1",
+            "2",
+            "3",
+            "4"
+          ],
+          "properties": {
+            "0": {
+              "const": "synced"
+            },
+            "1": {
+              "const": "error"
+            },
+            "2": {
+              "const": "conflict"
+            },
+            "3": {
+              "const": "retry"
+            },
+            "4": {
+              "const": "stuck"
+            }
+          }
+        }
+      }
+    },
+    "never_commit": {
+      "description": "Paths no commit may add or change; CI fails a change that tracks them.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  }
+}

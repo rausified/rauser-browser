@@ -34,7 +34,7 @@ npm run test:extension
 npm run test:a11y        # real headless Chrome; see TESTING.md for sandbox skips
 npm run test:markdown-neutralizer
 npm run test:scripts
-npm run test:queue
+npm run test:queue       # also checks this clone's bd queue (BD_NON_INTERACTIVE=1 bd bootstrap first)
 npm run test:dev-tools   # macOS/Linux only: scripts/dev tooling
 ```
 
@@ -199,7 +199,7 @@ add patterns again; pausing or removing the site clears them and stops sampling.
 
 The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. Windows is in scope but has no accepted run yet (DESIGN.md §13, §14); the public package remains a later release milestone.
 
-To prepare a shorter work update, open **Recent**, choose a worklog period,
+To prepare a shorter work update, open **Recent**, choose **Today**, **Yesterday** or **Week**,
 and turn on **Choose work to share**. Check the artifact-day entries to include,
 or use **Select all shown**, then review and **Copy** the exact preview. Each
 entry keeps its own day's title, measured activity and link. Container entries

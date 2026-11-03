@@ -1,0 +1,23 @@
+{
+  "family": "miro",
+  "origin": { "kind": "exact", "origin": "https://miro.com" },
+  "scope": null,
+  "types": [
+    {
+      "type": "miro.board",
+      "key": "miro.board",
+      "label": "Miro boards",
+      "label_variants": [],
+      "description": "Each board becomes one artifact, however it was opened. Records boards from every Miro account signed in to this Chrome profile.",
+      "adapter": {
+        "type": "miro.board",
+        "match": [{ "path": "/app/board/{board:token(12)}" }],
+        "id": "miro.board:{host}/{board}",
+        "title": "{title} - Miro"
+      },
+      "history": [],
+      "status": { "state": "development", "method": null, "checked_on": null, "checked_by": null },
+      "docs": "docs/adapters/miro.board.md"
+    }
+  ]
+}

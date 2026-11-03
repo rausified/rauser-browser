@@ -1,0 +1,202 @@
+# Aha! blind starter adapters (research draft, not shipped).
+#
+# Derived only from public sources on 2026-11-03: Aha! support articles
+# (support.aha.io), the Aha! REST API docs (www.aha.io/api), Aha!'s public
+# GitHub code (aha-app/aha-services fixtures, aha-develop/aha-mcp,
+# aha-develop/github), the public Aha! Big Ideas portal (big.ideas.aha.io),
+# and logged-out route probes of Aha!'s own account (big.aha.io: a 302 to
+# /session/new means "route exists", a 404 means "no such route"). See
+# research.md for every source and the confidence of each claim.
+#
+# Origin model: a tenant subdomain family, like *.atlassian.net.
+#   - The application lives on https://<account>.aha.io (API docs: "The API
+#     must be accessed using the account specific domain <yourcompany>.aha.io").
+#     Aha! Roadmaps, Ideas, Develop (/develop/...), Knowledge (/pages/...) and
+#     Whiteboards all share that one origin.
+#   - Ideas portals live on https://<portal>.ideas.aha.io (portal settings
+#     article: "It follows this format: name.ideas.aha.io"), or on a customer
+#     CNAME such as https://ideas.example.com, which no suffix rule can detect.
+#   Neither is a shared multi-tenant origin (§6): the host name is the tenant,
+#   so no scope is needed. `acme` below is a placeholder for the account and
+#   portal subdomains; a starter offer substitutes the enabled origin.
+#
+# Reference numbers. Every record type below is opened by its human-readable
+# reference number, which Aha! assigns from the workspace prefix
+# (`[A-Z][A-Z0-9]*`, 1-10 characters per aha-develop/github):
+#   feature      PRJ-123        requirement  PRJ-123-1
+#   epic         PRJ-E-12       idea         PRJ-I-45
+#   release      PRJ-R-3        note/doc     PRJ-N-67
+# A record moved to another workspace keeps its original prefix (support:
+# "If you want your features to take on the workspace prefix of their new
+# workspace, consider cloning the release"), and an edited workspace prefix
+# cannot be reused while records still carry it, so the reference number
+# survives renames, moves and prefix edits. It is the stable ID. Only a
+# feature number has the jira_key shape; the others contain a second dash,
+# so they are captured as `name(5,100)|upper` behind a literal route word.
+# The minimum of 5 ("A-E-1") keeps short route words such as `new` out.
+#
+# Titles (LOW confidence everywhere in the app). No public source shows an
+# in-app record tab title. The only observed app title is the login page,
+# "Log in to your workspace | Aha!", so each app adapter tries
+#   1. "<ref> <name> | Aha!..."  (only when the leading word equals the ref)
+#   2. "<name> | Aha!..."
+# and otherwise records the whole tab title. `{~}` after "| Aha!" also
+# tolerates a product suffix such as "| Aha! Roadmaps". The portal title IS
+# observed: "<idea name> | <portal title>".
+
+[adapters]
+format = 1
+
+# ---------------------------------------------------------------------------
+# aha.feature: Aha! Roadmaps / Develop feature (confidence: HIGH for
+# /features/<ref>; MEDIUM-LOW for /develop/features/<ref>).
+#   /features/PRJ-123             API "url" field in aha-app/aha-services
+#                                 fixtures (watersco.aha.io/features/PROD-2) and
+#                                 Aha!'s own support link big.aha.io/features/AI-2056.
+#   /develop/features/PRJ-123     Aha! Develop route; exists logged-out (302),
+#                                 /develop/features/x/y is 404. Not documented.
+# No rest segment: /features/PRJ-1/edit is a 404 route, and any sub-view is
+# not the record page. jira_key rejects /features/board and similar words and
+# canonicalizes case (Aha! paths are case-sensitive, refs are uppercase).
+# Not matched: /records/<x> (a generic redirector used by GitHub autolinks;
+# the browser lands on the typed URL after the redirect), /api/v1/features/...,
+# /products/<prefix>/features/<x> (exists for any <x>, so it is most likely a
+# list view named by its last segment; see research.md open questions).
+[[artifacts]]
+type   = "aha.feature"
+origin = "https://acme.aha.io"
+match  = [
+  { path = "/features/{ref:jira_key}" },
+  { path = "/develop/features/{ref:jira_key}" },
+]
+id     = "aha.feature:{host}/{ref}"
+title  = ["{ref:jira_key} {title} | Aha!{~}", "{title} | Aha!{~}"]
+refs   = [{ type = "aha.feature", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# aha.requirement: a requirement (child of a feature) (confidence: HIGH for
+# /requirements/<ref>; MEDIUM-LOW for the /develop form).
+#   /requirements/PRJ-123-1       API fixture url (watersco.aha.io/requirements/PROD-2-1)
+#                                 and support link big.aha.io/requirements/KNB-6438-2?full_screen=...
+#   /develop/requirements/PRJ-123-1  route exists logged-out (302).
+# The query (?full_screen=<report id>) is noise and never changes the ID.
+# A requirement keeps its own ID; it is not folded into its feature, because
+# the ID language cannot split PRJ-123 out of the single segment PRJ-123-1.
+[[artifacts]]
+type   = "aha.requirement"
+origin = "https://acme.aha.io"
+match  = [
+  { path = "/requirements/{ref:name(5,100)|upper}" },
+  { path = "/develop/requirements/{ref:name(5,100)|upper}" },
+]
+id     = "aha.requirement:{host}/{ref}"
+title  = ["{ref:name} {title} | Aha!{~}", "{title} | Aha!{~}"]
+refs   = [{ type = "aha.feature", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# aha.epic: epic (formerly "master feature") (confidence: MEDIUM).
+#   /epics/PRJ-E-12               route exists logged-out (302); the reference
+#                                 format PRJ1-E-1 is from the API docs
+#                                 (/api/v1/epics/PRJ1-E-1) and aha-develop/github.
+#   /develop/epics/PRJ-E-12       route exists logged-out (302).
+# Not matched: /epics/<ref>/features (a sub-list, 302 but not the record),
+# /master_features/<x> (404 today; legacy name).
+[[artifacts]]
+type   = "aha.epic"
+origin = "https://acme.aha.io"
+match  = [
+  { path = "/epics/{ref:name(5,100)|upper}" },
+  { path = "/develop/epics/{ref:name(5,100)|upper}" },
+]
+id     = "aha.epic:{host}/{ref}"
+title  = ["{ref:name} {title} | Aha!{~}", "{title} | Aha!{~}"]
+refs   = [{ type = "aha.feature", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# aha.release: release (or "schedule" in non-product workspaces)
+# (confidence: HIGH for the URL, from API fixtures
+# watersco.aha.io/releases/PROD-R-1 and peterklipfel-trial.aha.io/releases/INTSANDBOX-R-3).
+# Not matched: /products/<prefix>/releases/<x> (exists for any <x>; probably
+# a workspace list view), /releases/<ref>/<anything> (404).
+[[artifacts]]
+type   = "aha.release"
+origin = "https://acme.aha.io"
+match  = [
+  { path = "/releases/{ref:name(5,100)|upper}" },
+]
+id     = "aha.release:{host}/{ref}"
+title  = ["{ref:name} {title} | Aha!{~}", "{title} | Aha!{~}"]
+refs   = [{ type = "aha.feature", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# aha.idea: an idea opened inside the Aha! application (confidence: MEDIUM).
+#   /ideas/ideas/PRJ-I-45         route exists logged-out (302); /ideas/ideas/x/y 404.
+#   /develop/ideas/ideas/PRJ-I-45 route exists logged-out (302).
+# Reference format PRJ1-I-1 from the API docs and DEMO-I-38 from the portal
+# email-variable table. Not matched: /ideas/<word> (the ideas module's own
+# pages such as /ideas/overview and /ideas/portals answer for any word).
+# The same idea on a portal gets a different ID (aha.portalidea, other host).
+[[artifacts]]
+type   = "aha.idea"
+origin = "https://acme.aha.io"
+match  = [
+  { path = "/ideas/ideas/{ref:name(5,100)|upper}" },
+  { path = "/develop/ideas/ideas/{ref:name(5,100)|upper}" },
+]
+id     = "aha.idea:{host}/{ref}"
+title  = ["{ref:name} {title} | Aha!{~}", "{title} | Aha!{~}"]
+refs   = [{ type = "aha.feature", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# aha.note: Aha! Notes / Knowledge documents ("pages") (confidence: HIGH for
+# both /pages forms; LOW for /develop/pages).
+#   /pages/PRJ-N-67                 thousands of Aha!'s own support links
+#                                   (big.aha.io/pages/AKB-N-2655) and the
+#                                   aha-mcp README (company.aha.io/pages/ABC-N-123).
+#   /products/<prefix>/pages/PRJ-N-67  the most common form in those links
+#                                   (big.aha.io/products/AKB/pages/AKB-N-1950);
+#                                   the workspace prefix is skipped with {_}
+#                                   so a moved note keeps its ID.
+#   /develop/pages/PRJ-N-67         route exists logged-out (302); undocumented.
+# Fragments (#administrator-roles, #top) are heading anchors and ignored.
+# Known limit: Aha!'s own links also use /pages/<19-digit internal id>
+# (big.aha.io/pages/7400459715869298098). Those match too and record the
+# numeric ID, a second artifact for the same note; the template language
+# cannot map one to the other.
+[[artifacts]]
+type   = "aha.note"
+origin = "https://acme.aha.io"
+match  = [
+  { path = "/pages/{ref:name(5,100)|upper}" },
+  { path = "/products/{_}/pages/{ref:name(5,100)|upper}" },
+  { path = "/develop/pages/{ref:name(5,100)|upper}" },
+]
+id     = "aha.note:{host}/{ref}"
+title  = ["{ref:name} {title} | Aha!{~}", "{title} | Aha!{~}"]
+refs   = [{ type = "aha.feature", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# aha.portalidea: an idea on an ideas portal (confidence: HIGH, observed
+# logged-out on the public portal big.ideas.aha.io). The type is
+# `aha.portalidea`, not `aha.portal_idea`: the ID scheme grammar (§8.1)
+# forbids `_`, and the type doubles as the scheme like the other starters.
+#   /ideas/A-I-24044          idea page; canonical link is the same URL.
+#   /ideas/A-I-24044/         trailing slash also serves the page.
+#   ?foo=1 query              ignored, same page.
+# Title observed: "Allow hiding unused record types on the new features |
+# Aha! Big Ideas", i.e. "<idea name> | <portal title>". The portal title is
+# per-portal, so it is skipped with {~} back to the last " | ". A portal title
+# containing " | " leaves its first part in the extracted title.
+# Not matched: /ideas/new ("New idea | ..."; too short for name(5,100)),
+# /ideas (list), /ideas/<ref>/idea_comments..., /idea_endorsements/...,
+# /portal_session/new (login), /?category=... (list).
+# Lowercase refs (/ideas/a-i-24044) are not found on the portal (redirect to
+# login); |upper still canonicalizes them so a stray link cannot fork an ID.
+[[artifacts]]
+type   = "aha.portalidea"
+origin = "https://acme.ideas.aha.io"
+match  = [
+  { path = "/ideas/{ref:name(5,100)|upper}" },
+]
+id     = "aha.portalidea:{host}/{ref}"
+title  = "{title} | {~}"

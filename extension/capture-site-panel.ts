@@ -12,7 +12,7 @@ import {
   type CaptureMode, type CapturePlan, type DraftPlan, type DraftRequest, type DraftSelection,
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
-import { githubOwnerFromUrl, parseTenantList, starterKind } from "./starter-adapters.js";
+import { githubOwnerFromUrl, parseTenantList, starterKind, starterOffers, starterStatus } from "./starter-adapters.js";
 import { SitePatternPanel, collectPagePatterns } from "./site-pattern-panel.js";
 import { draftHandoff, handoffKey, storeDraftHandoff } from "./capture-site-handoff.js";
 import { GITHUB_RECORD_LABELS, GITHUB_RECORD_ORDER, joinRecordedTypes } from "./site-coverage.js";
@@ -36,7 +36,21 @@ interface CaptureActions {
   agentReady(): boolean;
 }
 
-const STARTER_SOURCE = "Development starter draft · live-tool certification is still pending.";
+const STARTER_DRAFT_SOURCE = "Development starter draft · live-tool certification is still pending.";
+const STARTER_CERTIFIED_SOURCE = "Starter rules checked against the live tool.";
+
+/** The starter source line for an origin, from each offered starter's status
+ * in protocol/starters: certified, a development draft, or a mix that names
+ * the drafts. */
+function starterSource(origin: string): string {
+  const offers = starterOffers(origin, []);
+  const drafts = offers.filter((offer) => starterStatus(offer.artifact_type)?.state !== "certified");
+  if (!offers.length || drafts.length === offers.length) return STARTER_DRAFT_SOURCE;
+  if (!drafts.length) return STARTER_CERTIFIED_SOURCE;
+  const names = drafts.map((offer) => offer.label).join(", ");
+  const what = drafts.length === 1 ? "a development draft whose" : "development drafts whose";
+  return `Starter rules checked against the live tool, except ${names}: ${what} live-tool certification is still pending.`;
+}
 const DRAFT_SOURCE = "Drafted by Brauser from this site's page patterns. No agent and no page content were used; review each kind of page before saving.";
 const AGENT_SOURCE = "Drafted by Brauser from this site's page patterns, then improved by AI from the same patterns. No page content was used, and Brauser checked every rule; review each kind of page before saving.";
 const DRAFTED_BY = "Drafted from this site's page patterns";
@@ -361,7 +375,7 @@ export class CaptureSitePanel {
     this.start.hidden = true;
     this.recurringStart.hidden = true;
     this.heading.textContent = `Capture work on ${new URL(origin).host}`;
-    this.source.textContent = mode === "draft" ? DRAFT_SOURCE : STARTER_SOURCE;
+    this.source.textContent = mode === "draft" ? DRAFT_SOURCE : starterSource(origin);
     this.atlassian.hidden = mode !== "starter" || starterKind(origin) !== "atlassian";
     this.jira.checked = true;
     this.confluence.checked = true;

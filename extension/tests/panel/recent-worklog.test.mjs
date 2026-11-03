@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  CONFIG, FakeElement, PROTOCOL_VERSION, hostReply, install, isResponseShape,
+  CONFIG, FakeElement, PANEL_HTML, PROTOCOL_VERSION, hostReply, install, isResponseShape,
   statusFor, until,
 } from "./harness.mjs";
 
@@ -145,6 +145,26 @@ test("Recent replaces its startup wait with setup guidance when no home folder i
   assert.equal(page.sent("worklog_report").length, 0);
 });
 
+/** Picks a worklog period the way a click on its segment does: the radio
+ * becomes the checked one of its group and fires change. */
+function chooseWorklogPeriod(page, period) {
+  for (const name of ["today", "yesterday", "week"]) page.el(`worklog-${name}`).checked = name === period;
+  page.el(`worklog-${period}`).dispatch("change");
+}
+
+test("the worklog period is a Today / Yesterday / Week radio group, Today first", () => {
+  const group = PANEL_HTML.match(/<fieldset id="worklog-period"[^>]*>[\s\S]*?<\/fieldset>/)?.[0];
+  assert.ok(group, "a fieldset groups the period segments");
+  assert.match(group, /<legend class="visually-hidden">Worklog period<\/legend>/);
+  assert.equal(PANEL_HTML.includes('<select id="worklog-period"'), false, "the select is gone");
+  const radios = [...group.matchAll(/<input id="worklog-(\w+)" type="radio" name="worklog-period"[^>]*>/g)];
+  assert.deepEqual(radios.map((match) => match[1]), ["today", "yesterday", "week"]);
+  assert.match(radios[0][0], /\bchecked\b/, "Today starts selected");
+  for (const [id, text] of [["today", "Today"], ["yesterday", "Yesterday"], ["week", "Week"]]) {
+    assert.match(group, new RegExp(`<label for="worklog-${id}"[^>]*>${text}</label>`));
+  }
+});
+
 function worklogReply(request, gaps = [], gaps_truncated = false) {
   return {
     type: "worklog_reported", start_date: request.start_date, end_date: request.end_date,
@@ -183,8 +203,7 @@ test("worklog preview shows gaps and Copy follows the explicit include choice", 
   await until(() => page.state.copied.length === 2, "Copy without gaps");
   assert.equal(page.state.copied[1], page.el("worklog-text").textContent);
   // Keep the person's choice on a new period; do not silently include notices again.
-  page.el("worklog-period").value = "yesterday";
-  page.el("worklog-period").dispatch("change");
+  chooseWorklogPeriod(page, "yesterday");
   await until(() => page.sent("worklog_report").length === 2 && !page.el("copy-worklog").disabled, "new period");
   assert.equal(page.el("worklog-include-gaps").checked, false);
   assert.doesNotMatch(page.el("worklog-text").textContent, /Capture gaps/);
@@ -203,8 +222,7 @@ test("new worklog periods discard old gaps and ignore late reports", async () =>
   await until(() => page.sent("load_note").length > 0, "startup");
   page.el("tab-recent").click();
   await until(() => first, "held report");
-  page.el("worklog-period").value = "yesterday";
-  page.el("worklog-period").dispatch("change");
+  chooseWorklogPeriod(page, "yesterday");
   await until(() => !page.el("copy-worklog").disabled, "second report");
   release(worklogReply(first, [WORKLOG_GAP], true));
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -235,8 +253,7 @@ test("a failed or mismatched worklog report cannot copy a stale preview", async 
   page.el("tab-recent").click();
   await until(() => !page.el("copy-worklog").disabled, "first report");
   fail = true;
-  page.el("worklog-period").value = "yesterday";
-  page.el("worklog-period").dispatch("change");
+  chooseWorklogPeriod(page, "yesterday");
   await until(() => page.el("worklog-text").textContent.includes("Could not generate"), "mismatched report");
   assert.equal(page.el("copy-worklog").disabled, true);
   assert.equal(page.el("worklog-gaps").hidden, true);
@@ -357,8 +374,7 @@ test("changing period clears selection even when Today and This week cover the s
   checkChoice(choiceRows(page)[0]);
   const first = page.sent("worklog_choices").at(-1);
   const before = page.sent("worklog_choices").length;
-  page.el("worklog-period").value = "week";
-  page.el("worklog-period").dispatch("change");
+  chooseWorklogPeriod(page, "week");
   await until(() => page.sent("worklog_choices").length > before && choiceRows(page).length === 2, "Monday week choices");
   const latest = page.sent("worklog_choices").at(-1);
   assert.equal(latest.start_date, first.start_date);
@@ -380,8 +396,7 @@ test("changing the worklog period clears selection and late replies cannot resto
   page.el("tab-recent").click();
   await until(() => first, "delayed refresh");
   delay = false;
-  page.el("worklog-period").value = "yesterday";
-  page.el("worklog-period").dispatch("change");
+  chooseWorklogPeriod(page, "yesterday");
   await until(() => choiceRows(page).length === 2, "new period choices");
   assert.ok(choiceRows(page).every((row) => !row.checked));
   release(choicesReply(first, ["OLD"]));
