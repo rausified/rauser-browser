@@ -1,21 +1,41 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Buffer } from "node:buffer";
 
 import {
-  ADMIT_GRACE_MINUTES, DOCTOR_GRACE_MINUTES, EXIT, analyzeChecks, classifyConflicts, decide, decideConflict,
-  doctorComment, enqueueCommand, latestChecks, parseArgs, snapshotFromGraphql, statusLine,
+  ADMIT_GRACE_MINUTES, CONDITIONS_GRACE_MINUTES, DOCTOR_GRACE_MINUTES, EXIT, analyzeChecks, classifyConflicts, decide, decideConflict,
+  doctorComment, enqueueCommand, mergifyMeta, mergifyQueueStatus, unmetConditions, latestChecks, parseArgs, snapshotFromGraphql, statusLine,
 } from "../dev/pr-watch.mjs";
 
 // --- Fixtures in the recorded shape of the GraphQL query (PR #243, 2026-11-02) --
 
 let runSeq = 41500842838;
-const run = (name, status, conclusion, { required = false, runId = runSeq, workflow = "CI", startedAt = "2026-11-02T18:33:19Z" } = {}) => ({
-  __typename: "CheckRun", name, status, conclusion, isRequired: required, startedAt,
+const run = (name, status, conclusion, { required = false, runId = runSeq, workflow = "CI", startedAt = "2026-11-02T18:33:19Z", title = null, summary = null } = {}) => ({
+  __typename: "CheckRun", name, status, conclusion, isRequired: required, startedAt, title, summary,
   checkSuite: { workflowRun: { databaseId: runId, workflow: { name: workflow } } },
 });
 const done = (name, conclusion = "SUCCESS", opts) => run(name, "COMPLETED", conclusion, opts);
 const status = (context, state, description, required = true) =>
   ({ __typename: "StatusContext", context, state, description, isRequired: required });
+
+// The "Mergify Merge Queue" check run, with the titles seen live (2026-11-03)
+// and, optionally, the state Mergify embeds in its summary.
+function mq(title, { status = "COMPLETED", conclusion = status === "COMPLETED" ? "NEUTRAL" : null, meta = null, markdown = "" } = {}) {
+  const span = meta ? `\n<span itemprop="mergify.v1.${Buffer.from(JSON.stringify(meta)).toString("base64url")}"></span>` : "";
+  return run("Mergify Merge Queue", status, conclusion, { workflow: "", title, summary: `${markdown}${span}` });
+}
+// PR #268's condition tree (labeled needs-merge, checks not run), as Mergify embedded it.
+const TREE_268 = [{"description": "-conflict", "match": false, "subconditions": []}, {"description": "any of", "match": false, "subconditions": [{"description": "all of", "match": false, "subconditions": [{"description": "-label = needs-merge", "match": false, "subconditions": []}, {"description": "check-success = Build and check", "match": false, "subconditions": []}, {"description": "check-success = PR owner", "match": false, "subconditions": []}, {"description": "check-success = Rust dependency policy", "match": false, "subconditions": []}, {"description": "label = queue", "match": false, "subconditions": []}, {"description": "any of", "match": false, "subconditions": [{"description": "check-neutral = Build and check", "match": false, "subconditions": []}, {"description": "check-skipped = Build and check", "match": false, "subconditions": []}, {"description": "check-success = Build and check", "match": false, "subconditions": []}]}, {"description": "any of", "match": false, "subconditions": [{"description": "check-neutral = Rust dependency policy", "match": false, "subconditions": []}, {"description": "check-skipped = Rust dependency policy", "match": false, "subconditions": []}, {"description": "check-success = Rust dependency policy", "match": false, "subconditions": []}]}, {"description": "any of", "match": false, "subconditions": [{"description": "check-neutral = PR owner", "match": false, "subconditions": []}, {"description": "check-skipped = PR owner", "match": false, "subconditions": []}, {"description": "check-success = PR owner", "match": false, "subconditions": []}]}, {"description": "-draft", "match": true, "subconditions": []}, {"description": "-label = pr-doctor:skip", "match": true, "subconditions": []}, {"description": "base = main", "match": true, "subconditions": []}, {"description": "any of", "match": true, "subconditions": [{"description": "check-success = merge-hold", "match": true, "subconditions": []}, {"description": "check-neutral = merge-hold", "match": false, "subconditions": []}, {"description": "check-skipped = merge-hold", "match": false, "subconditions": []}]}]}]}, {"description": "-closed", "match": true, "subconditions": []}, {"description": "-draft", "match": true, "subconditions": []}, {"description": "any of", "match": true, "subconditions": [{"description": "-mergify-configuration-changed", "match": true, "subconditions": []}, {"description": "check-success = @mergify/Configuration changed", "match": false, "subconditions": []}, {"description": "check-success = @mergify/Configuration has been deleted", "match": false, "subconditions": []}]}];
+const WAITING_META = (required_conditions) => ({ version: 1, state: "waiting", queue_rule_name: null, queued_at: null, required_conditions });
+// A labeled, green PR whose .mergify.yml change still lacks Mergify's "Configuration changed" check.
+const CONFIG_TREE = [
+  { description: "-closed", match: true, subconditions: [] },
+  { description: "any of", match: false, subconditions: [
+    { description: "-mergify-configuration-changed", match: false, subconditions: [] },
+    { description: "check-success = @mergify/Configuration changed", match: false, subconditions: [] },
+    { description: "check-success = @mergify/Configuration has been deleted", match: false, subconditions: [] },
+  ] },
+];
 
 const NO_HOLD = status("merge-hold", "SUCCESS", "Retired: the Mergify queue replaced the final-stretch hold");
 const GREEN = [
@@ -31,7 +51,7 @@ const GREEN = [
   done("Build and check", "SUCCESS", { required: true }),
   NO_HOLD,
   // Mergify admitted the PR (it is labeled queue in the default fixture).
-  run("Mergify Merge Queue", "IN_PROGRESS", null, { workflow: "" }),
+  mq("Queued · estimated merge in 25 minutes", { status: "IN_PROGRESS" }),
 ];
 const NOT_ADMITTED = GREEN.filter((node) => node.name !== "Mergify Merge Queue");
 
@@ -178,7 +198,7 @@ test("a pending merge-hold (retired, always green once posted) is an ordinary pe
 });
 
 test("a failed Mergify queue run on a queued PR says it was dequeued", () => {
-  const contexts = rollup([done("Mergify Merge Queue", "FAILURE", { workflow: "" })]);
+  const contexts = rollup([mq("The pull request has been removed from the queue", { conclusion: "FAILURE" })]);
   const d = decide(snap({ contexts }));
   assert.equal(d.exitCode, EXIT.CHECK_FAILED);
   assert.equal(d.action, "dequeued");
@@ -271,6 +291,90 @@ test("a failing non-required check outside the gate does not stop the watch", ()
   const s = snap({ contexts });
   assert.equal(decide(s).action, "queued:CLEAN");
   assert.match(statusLine(s, decide(s)), /non-blocking failures: Review new dependencies/);
+});
+
+// --- Mergify queue membership: the check's title, never its status ---------------------
+
+test("unmetConditions reads PR #268's real condition tree, without branch-protection repeats", () => {
+  assert.deepEqual(unmetConditions(TREE_268), [
+    "-conflict", "-label = needs-merge", "check-success = Build and check", "check-success = PR owner",
+    "check-success = Rust dependency policy", "label = queue",
+  ]);
+  assert.deepEqual(unmetConditions(CONFIG_TREE),
+    ["-mergify-configuration-changed or check-success = @mergify/Configuration changed or check-success = @mergify/Configuration has been deleted"]);
+});
+
+test("mergifyMeta decodes the embedded state and tolerates its absence", () => {
+  const check = latestChecks([mq("Waiting for queue conditions to match", { meta: WAITING_META(TREE_268) })])[0];
+  assert.equal(mergifyMeta(check.summary).state, "waiting");
+  assert.equal(mergifyMeta("no span here"), null);
+  assert.equal(mergifyMeta('<span itemprop="mergify.v1.!!!"></span>'), null);
+});
+
+for (const [title, opts, phase] of [
+  ["Merge queue is ready", {}, "ready"],
+  ["Waiting for queue conditions to match", {}, "waiting"],
+  ["Waiting for queue conditions", { status: "IN_PROGRESS" }, "waiting"],
+  ["Queued · estimated merge in 25 minutes", { status: "IN_PROGRESS" }, "queued"],
+  ["Running merge queue checks", { status: "IN_PROGRESS" }, "queued"],
+  ["Merged via merge queue", { conclusion: "SUCCESS" }, "merged"],
+  ["The pull request has been removed from the queue", { conclusion: "FAILURE" }, "dequeued"],
+  ["Something new", { status: "IN_PROGRESS" }, "unknown"],
+]) {
+  test(`Mergify title "${title}" is phase ${phase}`, () => {
+    const status = mergifyQueueStatus(latestChecks([mq(title, opts)])[0]);
+    assert.equal(status.phase, phase);
+    assert.equal(analyzeChecks(latestChecks([mq(title, opts)])).inQueue, phase === "queued");
+  });
+}
+
+test("the embedded state outranks an unfamiliar title", () => {
+  const queued = mq("Some future wording", { status: "IN_PROGRESS", meta: { version: 1, state: "queued", queued_at: "2026-11-03T16:00:00Z" } });
+  assert.equal(mergifyQueueStatus(latestChecks([queued])[0]).phase, "queued");
+  const waiting = mq("Some future wording", { meta: WAITING_META(CONFIG_TREE) });
+  assert.equal(mergifyQueueStatus(latestChecks([waiting])[0]).phase, "waiting");
+});
+
+test("a pending Mergify check that is only evaluating conditions is not queue membership", () => {
+  const contexts = rollup([mq("Waiting for queue conditions", { status: "IN_PROGRESS" })]);
+  const d = decide(snap({ contexts }));
+  assert.equal(d.action, "awaiting-admission");
+  assert.doesNotMatch(statusLine(snap({ contexts }), d), /in queue/);
+});
+
+test('"Merge queue is ready" on an unlabeled green PR: not queued, advise the label', () => {
+  const d = decide(snap({ pr: { labels: { nodes: [] } }, contexts: rollup([mq("Merge queue is ready")]) }));
+  assert.equal(d.exitCode, EXIT.ENQUEUE);
+});
+
+test('labeled and green but stuck at "Waiting for queue conditions to match": exit 16 naming the unmet condition', () => {
+  const contexts = rollup([mq("Waiting for queue conditions to match", { meta: WAITING_META(CONFIG_TREE) })]);
+  const early = decide(snap({ contexts }), { now: NOW, admitWaitSince: NOW });
+  assert.equal(early.action, "awaiting-admission");
+  assert.match(early.message, /Unmet: `-mergify-configuration-changed or check-success = @mergify\/Configuration changed/);
+  const since = new Date(Date.parse(NOW) - (CONDITIONS_GRACE_MINUTES + 1) * 60000).toISOString();
+  const d = decide(snap({ contexts }), { now: NOW, admitWaitSince: since });
+  assert.equal(d.exitCode, EXIT.QUEUE_BLOCKED);
+  assert.equal(d.action, "queue-conditions-unmet");
+  assert.match(d.message, /still says "Waiting for queue conditions to match"/);
+  assert.match(d.message, /@mergify\/Configuration changed/);
+  assert.match(d.message, /@Mergifyio queue/);
+});
+
+test("stuck waiting with no embedded state falls back to the summary's unchecked lines", () => {
+  const markdown = "### Queue entry conditions\n\n- [X] `base = main`\n- [ ] `check-success = PR owner`\n";
+  const contexts = rollup([mq("Waiting for queue conditions to match", { markdown })]);
+  const since = new Date(Date.parse(NOW) - (CONDITIONS_GRACE_MINUTES + 1) * 60000).toISOString();
+  const d = decide(snap({ contexts }), { now: NOW, admitWaitSince: since });
+  assert.equal(d.action, "queue-conditions-unmet");
+  assert.match(d.message, /Unmet: `check-success = PR owner`\./);
+});
+
+test("queued and running titles keep the watcher waiting in the queue", () => {
+  for (const title of ["Queued · estimated merge in 25 minutes", "Running merge queue checks"]) {
+    const d = decide(snap({ contexts: rollup([mq(title, { status: "IN_PROGRESS" })]) }));
+    assert.equal(d.action, "queued:CLEAN");
+  }
 });
 
 // --- decide: enqueueing ------------------------------------------------------------------

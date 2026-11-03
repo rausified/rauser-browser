@@ -36,6 +36,7 @@
 // refs or working tree), and only when the local clone already has both commits.
 
 import { spawnSync } from "node:child_process";
+import { Buffer } from "node:buffer";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -47,14 +48,75 @@ export const EXIT = Object.freeze({
 });
 
 // .mergify.yml: the label that requests admission, the labels whose presence
-// keeps a PR out (queue_conditions), and the check run Mergify keeps on a PR
-// it actually admitted (pending while queued or tested, failure when it
-// dequeues it). The label is a request; only the check is membership.
+// keeps a PR out (queue_conditions), and the check run Mergify keeps on every
+// PR into main, queued or not. The label is a request; membership is the
+// check's title (and the state Mergify embeds in its summary), never its
+// status: "Merge queue is ready" (not queued), "Waiting for queue conditions
+// to match" (labeled, not admitted), "Queued · estimated merge …" or "Running
+// merge queue checks" (in the queue), "Merged via merge queue". Seen live
+// 2026-11-03 (#265, #268, #276-#289).
 export const QUEUE_LABEL = "queue";
 export const QUEUE_EXCLUSION_LABELS = Object.freeze([NEEDS_MERGE_LABEL, DOCTOR_SKIP_LABEL]);
 export const MERGIFY_QUEUE_CHECK = "Mergify Merge Queue";
 // Green and labeled but not admitted for this long: say so instead of waiting.
+// Mergify re-evaluates within seconds of a check or label event, so a PR still
+// "Waiting for queue conditions" after CONDITIONS_GRACE_MINUTES is stuck; with
+// no Mergify verdict at all, allow ADMIT_GRACE_MINUTES.
 export const ADMIT_GRACE_MINUTES = 10;
+export const CONDITIONS_GRACE_MINUTES = 5;
+
+/** The state Mergify embeds in its check summary (`<span itemprop="mergify.v1.<base64url JSON>">`), or null. */
+export function mergifyMeta(summary) {
+  const encoded = /itemprop="mergify\.v1\.([A-Za-z0-9_-]+=*)"/.exec(summary ?? "")?.[1];
+  if (!encoded) return null;
+  try { return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")); } catch { return null; }
+}
+
+/** The leaf conditions that keep a PR out of the queue, from Mergify's condition
+ * tree. An unmet "any of" group of plain alternatives is reported as "a or b",
+ * unless one of them is already listed (branch protection repeats each check
+ * as success/neutral/skipped). */
+export function unmetConditions(nodes) {
+  const out = [];
+  const walk = (node) => {
+    if (node.match) return;
+    const subs = node.subconditions ?? [];
+    if (subs.length === 0) { out.push(node.description); return; }
+    if (node.description === "any of" && subs.length > 1) {
+      if (subs.every((sub) => (sub.subconditions ?? []).length === 0)) {
+        if (!subs.some((sub) => out.includes(sub.description))) out.push(subs.map((sub) => sub.description).join(" or "));
+        return;
+      }
+      walk(subs.find((sub) => !sub.match) ?? subs[0]);
+      return;
+    }
+    subs.forEach(walk);
+  };
+  (nodes ?? []).forEach(walk);
+  return [...new Set(out)];
+}
+
+/** Fallback when the summary carries no embedded state: its unchecked `- [ ] \`cond\`` lines. */
+function unmetFromMarkdown(summary) {
+  return [...new Set([...(summary ?? "").matchAll(/^\s*- \[ \] `([^`]+)`/gm)].map((m) => m[1]))];
+}
+
+/** Where the "Mergify Merge Queue" check says the PR is: phase is one of none,
+ * ready, waiting, queued, merged, dequeued or unknown; `unmet` lists the queue
+ * conditions Mergify reports unmet while it waits. */
+export function mergifyQueueStatus(check) {
+  if (!check) return { phase: "none", unmet: [], title: "" };
+  const title = check.title ?? "";
+  const meta = mergifyMeta(check.summary);
+  const unmet = meta?.required_conditions ? unmetConditions(meta.required_conditions) : unmetFromMarkdown(check.summary);
+  let phase = "unknown";
+  if (FAILED.has(check.state)) phase = "dequeued";
+  else if (/^Merged\b/i.test(title)) phase = "merged";
+  else if (meta?.queued_at || /^(Queued\b|Running merge queue checks)/i.test(title)) phase = "queued";
+  else if (meta?.state === "waiting" || /^Waiting for queue conditions/i.test(title)) phase = "waiting";
+  else if (/^Merge queue is ready/i.test(title)) phase = "ready";
+  return { phase, unmet: phase === "waiting" ? unmet : [], title };
+}
 
 // The work queue left git for bd's Dolt database; a PR that still edits it
 // conflicts there, and pr-doctor applies the edits through bd (scripts/pr-doctor.mjs).
@@ -110,7 +172,7 @@ export function latestChecks(contexts) {
     const check = node.__typename === "StatusContext"
       ? { kind: "status", name: node.context, state: node.state, required: !!node.isRequired,
         description: node.description ?? "", runId: null, order: "" }
-      : { kind: "check", name: node.name, required: !!node.isRequired,
+      : { kind: "check", name: node.name, required: !!node.isRequired, title: node.title ?? "", summary: node.summary ?? "",
         state: node.status === "COMPLETED" ? node.conclusion ?? "NEUTRAL" : node.status ?? "PENDING",
         runId: node.checkSuite?.workflowRun?.databaseId ?? null,
         workflow: node.checkSuite?.workflowRun?.workflow?.name ?? "",
@@ -179,7 +241,8 @@ export function analyzeChecks(checks) {
   const advisoryFailed = checks.filter((check) => !blocking.includes(check) && check !== queue && FAILED.has(check.state)).map((check) => check.name);
   return {
     failed, cancelled, pending, starved, requiredGreen, advisoryFailed,
-    inQueue: !!queue && isPending(queue), dequeued: !!queue && FAILED.has(queue.state),
+    queue: mergifyQueueStatus(queue),
+    inQueue: mergifyQueueStatus(queue).phase === "queued", dequeued: mergifyQueueStatus(queue).phase === "dequeued",
   };
 }
 
@@ -318,12 +381,19 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
       `#${n} green and in the Mergify queue (${snap.mergeStateStatus}); Mergify tests it on top of main and merges it.${behind}`);
   }
   if (snap.queueRequested) {
-    if (admitWaitSince && minutesBetween(admitWaitSince, now) >= ADMIT_GRACE_MINUTES) {
-      return act(EXIT.QUEUE_BLOCKED, "queue-not-admitted",
-        `#${n} is green and labeled ${QUEUE_LABEL} but Mergify has not admitted it after ${ADMIT_GRACE_MINUTES}+ minutes (no ${MERGIFY_QUEUE_CHECK} check). Read Mergify's summary check on the PR (it lists the unmet queue_conditions) or https://dashboard.mergify.com; check that the Mergify app is installed on the repository.`);
+    const { phase, unmet, title } = checks.queue;
+    const waiting = phase === "waiting";
+    const grace = waiting ? CONDITIONS_GRACE_MINUTES : ADMIT_GRACE_MINUTES;
+    const unmetText = unmet.length ? ` Unmet: ${short(unmet.map((c) => `\`${c}\``), 6)}.` : "";
+    if (admitWaitSince && minutesBetween(admitWaitSince, now) >= grace) {
+      const verdict = waiting
+        ? `Mergify still says "${title}" after ${grace}+ minutes.${unmetText} The ${MERGIFY_QUEUE_CHECK} check's summary has the full condition list`
+        : `Mergify has not admitted it after ${grace}+ minutes (${phase === "none" ? `no ${MERGIFY_QUEUE_CHECK} check` : `${MERGIFY_QUEUE_CHECK}: "${title}"`}). Read that check's summary (the unmet queue_conditions) or https://dashboard.mergify.com, and check that the Mergify app is installed on the repository`;
+      return act(EXIT.QUEUE_BLOCKED, waiting ? "queue-conditions-unmet" : "queue-not-admitted",
+        `#${n} is green and labeled ${QUEUE_LABEL} but not in the Mergify queue: ${verdict}. A .mergify.yml change also needs Mergify's "Configuration changed" check; if that is the gap, comment "@Mergifyio queue".`);
     }
     return wait("awaiting-admission",
-      `#${n} green and labeled ${QUEUE_LABEL}; waiting for Mergify to admit it (its ${MERGIFY_QUEUE_CHECK} check appears).${behind}`);
+      `#${n} green and labeled ${QUEUE_LABEL}; waiting for Mergify to admit it (${MERGIFY_QUEUE_CHECK}: ${title ? `"${title}"` : "not reported yet"}).${unmetText}${behind}`);
   }
   return act(EXIT.ENQUEUE, "enqueue", `#${n} required checks are green but it is not queued: ${enqueueCommand(snap)}`);
 }
@@ -367,7 +437,7 @@ const QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner
   labels(first:30){nodes{name}}
   commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{
    __typename
-   ... on CheckRun{name status conclusion startedAt isRequired(pullRequestNumber:$number) checkSuite{workflowRun{databaseId workflow{name}}}}
+   ... on CheckRun{name status conclusion startedAt title summary isRequired(pullRequestNumber:$number) checkSuite{workflowRun{databaseId workflow{name}}}}
    ... on StatusContext{context state description isRequired(pullRequestNumber:$number)}
   }}}}}}
  }}}`;
@@ -445,7 +515,7 @@ async function main() {
       const conflict = dirty && snap.state === "OPEN" ? conflictContext(repo, snap, state) : {};
       decision = decide(snap, { until: opts.until, conflict, admitWaitSince: state.admitWaitSince });
       if (decision.action === "awaiting-admission") state.admitWaitSince ??= new Date().toISOString();
-      else if (decision.action !== "queue-not-admitted") state.admitWaitSince = null;
+      else if (!["queue-not-admitted", "queue-conditions-unmet"].includes(decision.action)) state.admitWaitSince = null;
     } catch (error) {
       if (opts.once) { console.error(`pr-watch: ${error.message}`); return EXIT.ERROR; }
       console.error(`${stamp()} gh failed (${error.message}); retrying`);
