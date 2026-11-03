@@ -1742,6 +1742,22 @@ The accessibility pages suite includes an offline real-Chrome journey through
 future-format repair, match preview, Escape/focus return and save. Browser
 execution still requires the normal unsandboxed driver/CI gate.
 
+### Personal summary guidance
+
+`cargo test --locked -p brauser --lib service::` includes the personal-style
+reader, snapshot, setup, prompt and fake-harness cases. They need no model or
+network: the server setup test runs without a socket, and the recording harness
+runs in-process. Tests cover fixed home placement with a separate knowledge
+base, defaults, UTF-8/BOM/CRLF, byte limits, symlink/directory/control refusals,
+replaced folder identity, private snapshots and unchanged strict status,
+new-run prompt delivery, queued restart and damaged snapshot refusal before
+harness start, legacy missing snapshots, literal template markers and the
+unchanged required answer validation. Settings discovery is covered by the
+existing page accessibility fixtures. These checks verify prompt construction;
+they do not prove that a full-access model obeys the instructions or a user's
+preferred language/style. A real-model style comparison remains separate
+interactive acceptance work.
+
 ## Named focus sessions
 
 After `npm run build:extension`, the focused offline checks are

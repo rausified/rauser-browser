@@ -287,6 +287,14 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 
 ## Notes / Ideas for Later
 
+**2026-11-03 — Summary customization.** Personal language and emphasis now come
+from a fixed optional home file, with queued snapshots rather than an editable
+replacement for the compiled instructions. `brwr-myn8` proposes an explicit
+settings preview before a user spends a summary run validating an edit. Keeping
+optional run inputs in sidecars avoids expanding strict process-recovery status
+for every new prompt preference. Assigned Re-learn remains behind the driver's
+human/pr-held `brwr-9eio`; this cycle does not alter or duplicate that gate.
+
 - **2026-11-02 Re-learn review prerequisites completed.** The cycle began
   clean and the full health gate passed with explicit sandbox skips. Assigned
   `brwr-eo7` and `brwr-r62` now refuse damaged owned markers and foreign-occupied

@@ -23,6 +23,7 @@ pub mod section;
 pub mod server;
 pub mod setup;
 pub mod shell_env;
+pub mod summary_style;
 pub mod supervisor;
 
 use std::time::Duration;

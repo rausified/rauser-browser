@@ -486,6 +486,20 @@ impl RunStore {
     /// has no attached page, `page.md`. An
     /// existing directory for the same run is refused and left untouched.
     pub fn create(&self, status: &RunStatusFile, page_md: &str) -> Result<()> {
+        self.create_with_summary_style(status, page_md, None)
+    }
+
+    /// Persist guidance before queued status; a partial snapshot can never launch.
+    pub fn create_with_summary_style(
+        &self,
+        status: &RunStatusFile,
+        page_md: &str,
+        style: Option<&str>,
+    ) -> Result<()> {
+        if status.kind != RunKind::Summary && style.is_some() {
+            bail!("summary style is only for summaries");
+        }
+        let snapshot = super::summary_style::encode(style)?;
         let id = status.id()?;
         let dir = self.run_dir(id);
         fs::DirBuilder::new()
@@ -498,6 +512,10 @@ impl RunStore {
             {
                 self.write_new(&dir.join(PAGE_FILE), page_md.as_bytes())
                     .context("writing page.md")?;
+            }
+            if status.kind == RunKind::Summary {
+                self.write_new(&dir.join(super::summary_style::SNAPSHOT_NAME), &snapshot)
+                    .context("writing summary style snapshot")?;
             }
             self.write_status(status)
         })();
@@ -1194,6 +1212,50 @@ mod tests {
         assert_eq!(store.stream_bytes(id).unwrap() as usize, STREAM_CAP);
         assert!(!store.append_stream(id, "z").unwrap());
         assert_eq!(store.stream_bytes(id).unwrap() as usize, STREAM_CAP);
+    }
+
+    #[test]
+    fn summary_style_is_private_run_data_without_changing_status_format() {
+        let (_dir, store) = store();
+        let id = Uuid::new_v4();
+        let status = sample(id);
+        store
+            .create_with_summary_style(&status, "# Page", Some("Prefer decisions."))
+            .unwrap();
+        let run = store.run_dir(id);
+        assert_eq!(
+            super::super::summary_style::from_run(&run)
+                .unwrap()
+                .as_deref(),
+            Some("Prefer decisions.")
+        );
+        assert_eq!(
+            mode(&run.join(super::super::summary_style::SNAPSHOT_NAME)),
+            0o600
+        );
+        assert_eq!(store.status(id).unwrap(), status);
+        let raw = std::fs::read_to_string(run.join(STATUS_FILE)).unwrap();
+        assert!(!raw.contains("summary_style") && !raw.contains("Prefer decisions."));
+
+        let invalid = sample(Uuid::new_v4());
+        assert!(
+            store
+                .create_with_summary_style(&invalid, "# Page", Some("bad\0style"))
+                .is_err()
+        );
+        assert!(
+            !store.run_dir(invalid.id().unwrap()).exists(),
+            "invalid input published a run"
+        );
+
+        let mut task = sample(Uuid::new_v4());
+        task.kind = RunKind::Task;
+        assert!(
+            store
+                .create_with_summary_style(&task, "# Page", Some("No task guidance"))
+                .is_err()
+        );
+        assert!(!store.run_dir(task.id().unwrap()).exists());
     }
 
     #[test]
