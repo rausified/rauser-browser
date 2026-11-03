@@ -27,6 +27,34 @@ test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop
   assert.ok(await page.evaluate(() => fixture.actions.includes("settings")));
 });
 
+test("worklog curation selects and copies checked work entirely by keyboard", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  const choices = page.locator('#worklog-choices input[type="checkbox"]');
+  await choices.first().waitFor();
+  assert.equal(await page.locator("#copy-worklog").isDisabled(), true);
+  await activate(page, choices.first(), "Space");
+  assert.equal(await choices.first().evaluate((input) => input === document.activeElement), true);
+  assert.match(await page.locator("#worklog-text").textContent(), /Release update/);
+  assert.doesNotMatch(await page.locator("#worklog-text").textContent(), /Private research/);
+  const before = await page.evaluate(() => fixture.requests.filter((r) => r.type === "worklog_choices").length);
+  await page.evaluate(() => { fixture.workerStatus.delivered_batches++; });
+  await page.waitForFunction((count) => fixture.requests.filter((r) => r.type === "worklog_choices").length > count, before, { timeout: 40_000 });
+  await choices.first().waitFor();
+  assert.equal(await choices.first().evaluate((input) => input === document.activeElement), true);
+  assert.equal(await choices.first().isChecked(), true);
+  await audit(t, page, "panel/selected-work");
+  await activate(page, "#copy-worklog", "Space");
+  await page.waitForFunction(() => fixture.actions.includes("copy"));
+  await activate(page, "#worklog-clear", "Space");
+  assert.equal(await page.locator("#copy-worklog").isDisabled(), true);
+  await activate(page, "#worklog-select-all", "Space");
+  assert.match(await page.locator("#worklog-text").textContent(), /2 artifact-day entries/);
+  await audit(t, page, "panel/selected-work-all");
+});
+
 test("Capture Site and Page patterns open by keyboard, escape and return focus", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

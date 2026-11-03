@@ -313,6 +313,15 @@ before Run. Keep the draft, current-page context and Enter/Run boundary intact;
 never navigate automatically. Where: `extension/task-recall.ts`, the task-bar
 context in `extension/panel.ts`, and `extension/tests/panel/task-bar.test.mjs`.
 
+## 2026-11-02 — Page through work before selecting an update
+
+Change: build the existing `brwr-p71k` follow-up with explicit next/previous
+choices and stable artifact/day selections. Why: recovering selected-work
+curation confirms that its 200-row/96 KiB response cap can omit work even for
+a single busy day; choosing a shorter period cannot expose that remainder.
+Where: `ArtifactIndex::worklog_choices`, the protocol query and the Recent
+selection controls. Keep newly viewed rows unchecked and Copy equal to the
+checked preview; do not silently include omitted work.
 ## 2026-11-02 — Stop docs/history.md from blocking PRs on append conflicts
 
 Change: decide how `docs/history.md` merges so that two PRs each adding a

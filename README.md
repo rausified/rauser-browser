@@ -197,6 +197,17 @@ add patterns again; pausing or removing the site clears them and stops sampling.
 
 The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. Windows is in scope but has no accepted run yet (DESIGN.md §13, §14); the public package remains a later release milestone.
 
+To prepare a shorter work update, open **Recent**, choose a worklog period,
+and turn on **Choose work to share**. Check the artifact-day entries to include,
+or use **Select all shown**, then review and **Copy** the exact preview. Each
+entry keeps its own day's title, measured activity and link. Container entries
+show direct activity without work inside them. New entries stay unchecked when
+capture refreshes the list. Changing the period or home folder, a host exit, or
+closing the panel clears the selection. Source history stays intact. If choices
+are truncated, choose a shorter period to see more of that work. Capture-gap
+notices still describe the entire period and can be excluded with the existing
+checkbox. Rebuild host and extension together to use selected work.
+
 ### Run a task from the task bar
 
 Tasks need the same setup as Summarize & log: the development service, a home folder, and a harness set up in settings (above).

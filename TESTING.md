@@ -1556,6 +1556,28 @@ The private run record's optional `incoming` field is omitted when empty;
 older services cannot read records containing it. Before rollback, leave no
 queued/running runs; preserved newer records remain unreadable to that build.
 
+### Selected-work worklogs
+
+`node --test extension/tests/panel/recent-worklog.test.mjs` after
+`npm run build:extension` checks exact preview/clipboard equality, text-only
+row rendering, period-wide gaps, polling with a new unchecked row, checkbox focus restoration
+without stealing focus from another control, removed and
+returning identities, host exits, home-folder changes, stale replies, and
+unsupported/invalid responses. `cargo test --locked -p brauser worklog_choices`
+checks direct-only container measures, same-day title/URL context, summary-only
+days, serialized response bounds and revision/date refusals. Wire coverage is
+in `protocol/tests/wire_artifacts.rs`.
+
+The accessibility keyboard suite uses the shared `enterPanelTab` helper to Tab
+to the selected tab and select **Recent** with the tablist's Home/End keys.
+Recent starts with `tabindex="-1"`, so Tab alone cannot reach it; this is the
+panel's existing roving-tabindex contract.
+The suite also opens selection, checks one entry and
+copies it, clears it and selects all using native keyboard actions, auditing
+both populated states. Its real-Chromium case can skip under the documented
+sandbox guard; mocked DOM tests do not replace that browser acceptance. The
+macOS smoke runner and its expected scripted-dialog count are unchanged.
+
 ## Tasks without a page
 
 `brwr-qin` adds explicit scope tests, all using temporary files or mocked

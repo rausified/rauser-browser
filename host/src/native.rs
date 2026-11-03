@@ -249,6 +249,7 @@ fn panel_request(body: &[u8]) -> bool {
                     | "list_artifacts"
                     | "worklog"
                     | "worklog_report"
+                    | "worklog_choices"
             )
         )
     })
@@ -359,6 +360,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::StartTask(_) => "start_task",
         Request::CheckSiteDraft(_) => "check_site_draft",
         Request::WorklogReport(_) => "worklog_report",
+        Request::WorklogChoices(_) => "worklog_choices",
         Request::CheckCaptureSite(_) => "check_capture_site",
         Request::GetSiteRestore(_) => "get_site_restore",
         Request::ForgetAdoptedContracts(_) => "forget_adopted_contracts",
@@ -852,7 +854,17 @@ fn dispatch(
                 end_date: value.end_date,
             },
             config,
-            true,
+            WorklogMode::Report,
+        ),
+        Request::WorklogChoices(value) => worklog_response(
+            brauser_protocol::WorklogRequest {
+                protocol_version: value.protocol_version,
+                request_id: value.request_id,
+                start_date: value.start_date,
+                end_date: value.end_date,
+            },
+            config,
+            WorklogMode::Choices(value.expected_revision),
         ),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         #[cfg(unix)]
@@ -2992,13 +3004,19 @@ fn list_artifacts(
 }
 
 fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) -> Response {
-    worklog_response(value, config, false)
+    worklog_response(value, config, WorklogMode::Text)
+}
+
+enum WorklogMode {
+    Text,
+    Report,
+    Choices(String),
 }
 
 fn worklog_response(
     value: brauser_protocol::WorklogRequest,
     config: &mut ConfigStore,
-    report: bool,
+    mode: WorklogMode,
 ) -> Response {
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
@@ -3038,12 +3056,49 @@ fn worklog_response(
             "worklog range must be one to seven inclusive local dates",
         );
     }
+    if let WorklogMode::Choices(expected_revision) = &mode {
+        if config.refresh().is_err() {
+            return error(
+                &value.request_id,
+                ErrorCode::InvalidConfig,
+                "configuration is unavailable",
+            );
+        }
+        if expected_revision != config.revision() {
+            return error(
+                &value.request_id,
+                ErrorCode::Conflict,
+                "configuration changed; close and reopen the panel before choosing work to share",
+            );
+        }
+    }
     let index = match read_index(config) {
         Ok(index) => index,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
+    if matches!(mode, WorklogMode::Choices(_)) {
+        return match index.worklog_choices(start, end) {
+            Ok((choices, truncated, gaps, gaps_truncated)) => {
+                Response::WorklogChoicesResult(brauser_protocol::WorklogChoicesResult {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id,
+                    start_date: value.start_date,
+                    end_date: value.end_date,
+                    choices,
+                    truncated,
+                    gaps,
+                    gaps_truncated,
+                })
+            }
+            Err(_) => error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "worklog history is unavailable; log catch-up could not complete",
+            ),
+        };
+    }
     match index.worklog_report(start, end) {
-        Ok((text, count, gaps, gaps_truncated)) if report => {
+        Ok((text, count, gaps, gaps_truncated)) if matches!(mode, WorklogMode::Report) => {
             Response::WorklogReported(brauser_protocol::WorklogReported {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -9054,7 +9109,7 @@ id = "work:{host}/{id}"
                     end_date: at[..10].to_owned(),
                 };
                 let Response::WorklogReported(report) =
-                    worklog_response(report_request.clone(), &mut config, true)
+                    worklog_response(report_request.clone(), &mut config, WorklogMode::Report)
                 else {
                     panic!("expected worklog gap report")
                 };
@@ -9078,6 +9133,70 @@ id = "work:{host}/{id}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn worklog_choices_use_locked_history_and_the_existing_date_bounds() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, root) = adapter_only_config(&folder);
+        let revision = config.revision().to_owned();
+        let request = |start: &str, end: &str| brauser_protocol::WorklogRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "choices".into(),
+            start_date: start.into(),
+            end_date: end.into(),
+        };
+        for (start, end) in [
+            ("2026-02-30", "2026-03-01"),
+            ("2026-11-02", "2026-11-01"),
+            ("2026-11-01", "2026-11-08"),
+        ] {
+            let Response::Error(result) = worklog_response(
+                request(start, end),
+                &mut config,
+                WorklogMode::Choices(revision.clone()),
+            ) else {
+                panic!("invalid dates must fail before loading history");
+            };
+            assert_eq!(result.code, ErrorCode::InvalidRequest);
+        }
+        let Response::WorklogChoicesResult(result) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::Choices(revision.clone()),
+        ) else {
+            panic!("expected choices for a valid seven-day range");
+        };
+        let Response::Error(stale) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::Choices("stale".into()),
+        ) else {
+            panic!("stale sharing scope must refuse");
+        };
+        assert_eq!(stale.code, ErrorCode::Conflict);
+        // The caller's in-memory config can still describe the old home:
+        // refresh the disk revision under the lock before serving any choices.
+        let path = folder.path().join("config.toml");
+        let disk = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            disk.replace("capture_enabled = true", "capture_enabled = false"),
+        )
+        .unwrap();
+        let Response::Error(changed) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::Choices(revision),
+        ) else {
+            panic!("external config change must refuse old sharing scope");
+        };
+        assert_eq!(changed.code, ErrorCode::Conflict);
+        assert!(result.choices.is_empty());
+        assert!(!result.truncated);
+        assert!(result.gaps.is_empty());
+        assert!(!root.join("notes").exists());
+        assert!(!root.join("logs").exists());
     }
 
     #[test]

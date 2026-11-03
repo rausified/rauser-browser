@@ -20,7 +20,7 @@ use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
     IncomingTrailView, OverflowMarker, RecordKey, RecordKeyKind, StorageConfig, SummaryView,
-    WhyEvent,
+    WhyEvent, WorklogChoice,
 };
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
@@ -1680,6 +1680,82 @@ impl ArtifactIndex {
         let (gaps, gaps_truncated) = worklog_gaps(&state, start, end);
         let derived = self.derive(&state);
         worklog_derived(&derived, start, end, gaps, gaps_truncated)
+    }
+
+    /// Independent artifact-day rows for sharing. Use only direct visits and
+    /// their own day's context: global titles/Why and container roll-ups can
+    /// disclose work the user excluded from the selection.
+    pub fn worklog_choices(
+        &self,
+        start: Date,
+        end: Date,
+    ) -> Result<(Vec<WorklogChoice>, bool, Vec<OverflowMarker>, bool)> {
+        let state = self.load_or_rebuild()?;
+        let (gaps, gaps_truncated) = worklog_gaps(&state, start, end);
+        let derived = self.derive(&state);
+        let mut rows = BTreeMap::<(String, String), (WorklogRow, &VisitRow)>::new();
+        // derive orders visits by instant, with durable append order for ties.
+        for visit in &derived.visits {
+            let Ok(date) = parse_date(&visit.local_date) else {
+                continue;
+            };
+            if visit.contained || date < start || date > end {
+                continue;
+            }
+            let (row, latest) = rows
+                .entry((visit.local_date.clone(), visit.artifact_id.clone()))
+                .or_insert_with(|| (WorklogRow::default(), visit));
+            row.focused = row.focused.saturating_add(visit.focused_secs);
+            row.background = row.background.saturating_add(visit.background_secs);
+            row.opens = row.opens.saturating_add(visit.opens);
+            if let Some(summary) = &visit.summary {
+                row.summary = Some(summary.clone());
+            }
+            *latest = visit;
+        }
+        let mut ordered = rows.into_iter().collect::<Vec<_>>();
+        ordered.sort_by(|a, b| b.0.0.cmp(&a.0.0).then(a.0.1.cmp(&b.0.1)));
+        let mut choices = Vec::new();
+        let mut bytes = 2usize; // JSON array brackets; count escaped fields too.
+        let mut truncated = false;
+        for ((local_date, artifact_id), (row, latest)) in ordered {
+            if choices.len() == 200 {
+                truncated = true;
+                break;
+            }
+            let mut text = format!("{}: {}", artifact_id, plain_text(&latest.title));
+            if row.summary.is_none() || row.focused > 0 || row.background > 0 || row.opens > 0 {
+                text.push_str(&format!(
+                    " — {}",
+                    measures(row.focused, row.background, row.opens)
+                ));
+            }
+            if let Some(summary) = row.summary {
+                text.push_str(&format!(
+                    " · Summarized: {}, {} importance",
+                    plain_text(&summary.document_type),
+                    crate::summary::importance_str(summary.importance)
+                ));
+            }
+            let choice = WorklogChoice {
+                artifact_id,
+                local_date,
+                text,
+                url: latest.url.clone(),
+            };
+            let size = serde_json::to_vec(&choice)?.len().saturating_add(1);
+            if choice.artifact_id.chars().count() > 2048
+                || choice.text.chars().count() > 8192
+                || choice.url.chars().count() > 8192
+                || bytes.saturating_add(size) > MAX_WORKLOG_BYTES
+            {
+                truncated = true;
+                continue;
+            }
+            bytes = bytes.saturating_add(size);
+            choices.push(choice);
+        }
+        Ok((choices, truncated, gaps, gaps_truncated))
     }
 
     fn state_path(&self) -> PathBuf {
@@ -5009,6 +5085,126 @@ print(json.dumps(list(c.execute('select role,url,stripped_params from url_proven
             index.artifact_urls("gdoc:docs.example/abc").unwrap(),
             vec![edit_url.to_string(), view_url.to_string()]
         );
+    }
+
+    #[test]
+    fn worklog_choices_scope_context_and_measures_to_each_day() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let mut public = activity(
+            &Uuid::new_v4().to_string(),
+            "ABC",
+            "Public update",
+            "2026-10-15T12:00:00Z",
+        );
+        public.url = "https://work.example/items/ABC?view=public".into();
+        let mut private = public.clone();
+        private.event_id = Uuid::new_v4().to_string();
+        private.title = Some("Private next-day topic".into());
+        private.url = "https://work.example/items/ABC?view=private".into();
+        private.occurred_at = "2026-10-16T12:00:00Z".into();
+        index.record_activities([&public, &private], &[]).unwrap();
+        let start = parse_date("2026-10-15").unwrap();
+        let end = parse_date("2026-10-16").unwrap();
+        let (choices, truncated, _, _) = index.worklog_choices(start, end).unwrap();
+        assert!(!truncated);
+        assert_eq!(choices.len(), 2);
+        assert_eq!(choices[0].local_date, "2026-10-16");
+        assert!(choices[1].text.contains("Public update — focused 2 min"));
+        assert!(!choices[1].text.contains("Private"));
+        assert_eq!(choices[1].url, public.url);
+        assert_eq!(choices[0].url, private.url);
+        assert_eq!(
+            index.worklog_choices(start, start).unwrap().0,
+            vec![choices[1].clone()]
+        );
+    }
+
+    #[test]
+    fn worklog_choices_include_summary_only_days_without_inventing_activity() {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let url = "https://news.ycombinator.com/item?id=50251344";
+        index
+            .record_summary(&web_summary(url, "2026-10-15T12:00:00Z"))
+            .unwrap();
+        let day = parse_date("2026-10-15").unwrap();
+        let choices = index.worklog_choices(day, day).unwrap().0;
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].url, url);
+        assert!(
+            choices[0]
+                .text
+                .contains("Summarized: discussion, high importance")
+        );
+        assert!(!choices[0].text.contains("opened"));
+        assert!(!choices[0].text.contains("seen"));
+    }
+
+    #[test]
+    fn worklog_choices_never_include_container_copies() {
+        let document = github_document(true);
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache).with_adapters(Some(&document));
+        index
+            .record_activities(
+                [
+                    &github_pr(1, 7, "2026-10-15T10:00:00Z"),
+                    &github_blob(2, "2026-10-15T11:00:00Z"),
+                    &github_pr(3, 8, "2026-10-16T10:00:00Z"),
+                ],
+                &[],
+            )
+            .unwrap();
+        let d1 = parse_date("2026-10-15").unwrap();
+        let d2 = d1.next_day().unwrap();
+        let choices = index.worklog_choices(d1, d2).unwrap().0;
+        let repo = choices
+            .iter()
+            .filter(|r| r.artifact_id == GITHUB_REPO_ID)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            repo.len(),
+            1,
+            "a child-only day must not invent a container choice"
+        );
+        assert_eq!(repo[0].local_date, "2026-10-15");
+        assert!(repo[0].text.contains("focused <1 min"), "{}", repo[0].text);
+        assert!(!repo[0].text.contains("focused 2 min"));
+    }
+
+    #[test]
+    fn worklog_choices_bound_rows_and_serialized_bytes_deterministically() {
+        for (count, title) in [(205, "Brief".to_owned()), (200, "\"é".repeat(250))] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let index = index(&root, &cache);
+            let events = (0..count)
+                .map(|n| {
+                    activity(
+                        &Uuid::new_v4().to_string(),
+                        &format!("ABC{n:04}"),
+                        &title,
+                        "2026-10-15T12:00:00Z",
+                    )
+                })
+                .collect::<Vec<_>>();
+            index.record_activities(events.iter(), &[]).unwrap();
+            let day = parse_date("2026-10-15").unwrap();
+            let (choices, truncated, _, _) = index.worklog_choices(day, day).unwrap();
+            assert!(truncated);
+            assert!(choices.len() <= 200);
+            assert!(serde_json::to_vec(&choices).unwrap().len() <= MAX_WORKLOG_BYTES);
+            if title == "Brief" {
+                assert_eq!(choices.len(), 200);
+            } else {
+                assert!(choices.len() < 200);
+            }
+            assert_eq!(choices, index.worklog_choices(day, day).unwrap().0);
+        }
     }
 
     #[test]

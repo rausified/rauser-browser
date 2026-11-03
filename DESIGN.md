@@ -631,6 +631,38 @@ are unchanged; the JSON index cache holds these system notices.
 
 As built in M1.5a, `list_artifacts` returns at most 32 artifact-day rows per request and reports truncation; the host accepts worklog ranges of one through seven inclusive local dates and caps generated text before the native-message ceiling. Worklog files remain deferred to M1.5b.
 
+**Selected work for sharing.** In Recent, **Choose work to share** replaces the
+whole-period preview with explicit artifact-day checkboxes. Nothing starts
+selected. **Select all shown** includes only the displayed choices; **Clear**
+removes the selection. The preview names the inclusive local period and selected
+entry count, followed by each checked day's host-rendered title, measures,
+summary action if present, and exact recorded URL. Copy receives exactly that
+text. It never changes source logs, notes, settings or measured activity.
+
+The additive protocol-v8 `worklog_choices` query carries the panel's
+`expected_revision`; the host refreshes and checks it under the configuration
+lock before opening history, and rejects a stale configuration. It accepts the
+same one-to-seven-day ranges as other worklogs. Rows use only non-contained
+visits, grouped by artifact ID and local date, with the latest direct visit's
+title and URL within that day. Global Why/latest-title context is excluded.
+Container choices describe their own direct activity, without rolled-up child
+copies, so excluding children also excludes their measures. Summary-only days
+remain selectable without inventing opens or time. Choices sort by newest local
+day then artifact ID, with at most 200 rows and 96 KiB of serialized row data;
+oversized rows are omitted whole, never with a clipped URL. Truncation stays
+visible beside the selection, and the copied entry count covers only selected
+rows. Known gaps come from the same index snapshot and concern the entire
+period; the existing explicit gap-inclusion choice also controls this preview.
+
+Selections live only in the open panel. A same-period delivery refresh retains
+selected artifact/day identities still shown, while newly arrived or returning
+rows stay unchecked. A focused choice regains focus after the refresh only if
+the user has not moved focus to another control. A period change, home-folder change or host-port exit
+clears selection and invalidates old replies. Copy is disabled during loading,
+after an error, or with no selected entries. A host without this query gives
+rebuild guidance; ordinary `worklog` and `worklog_report` messages and their
+whole-period previews are unchanged.
+
 **Sync caution.** Titles of confidential tickets and documents sit in the home folder. The folder is the user's choice. (history: [docs/history.md §5.1](docs/history.md#51-artifact-logging--history))
 
 **Rules carried over from M1.**

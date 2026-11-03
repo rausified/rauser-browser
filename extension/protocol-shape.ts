@@ -519,6 +519,11 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "worklog_result":
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&
         typeof value.text === "string" && isUnsignedInteger(value.artifact_count);
+    case "worklog_choices_result":
+      return typeof value.start_date === "string" && typeof value.end_date === "string" &&
+        Array.isArray(value.choices) && value.choices.length <= 200 && value.choices.every(isWorklogChoice) &&
+        typeof value.truncated === "boolean" && typeof value.gaps_truncated === "boolean" &&
+        Array.isArray(value.gaps) && value.gaps.length <= 32 && value.gaps.every(isOverflowMarker);
     case "worklog_reported":
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&
         typeof value.text === "string" && isUnsignedInteger(value.artifact_count) &&
@@ -566,4 +571,14 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     default:
       return false;
   }
+}
+
+function isWorklogChoice(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return hasExactKeys(row, ["artifact_id", "local_date", "text", "url"]) &&
+    typeof row.artifact_id === "string" && row.artifact_id.length > 0 && row.artifact_id.length <= 2048 &&
+    typeof row.local_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.local_date) &&
+    typeof row.text === "string" && row.text.length <= 8192 &&
+    typeof row.url === "string" && row.url.length > 0 && row.url.length <= 8192;
 }

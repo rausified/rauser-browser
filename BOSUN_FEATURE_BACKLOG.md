@@ -179,7 +179,6 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
-- [ ] `brwr-6ede` **Held PR #255: CI still red after 1 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/255 (branch cookie/cookie-overnight/cycle-9-59c7612): failed checks: macOS / Build and check (macos-15); macOS fallback / Build and check (macos-15-intel); Build and check. It stays open with the held… _(P1; labels: human, pr-held)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2; blocked)_
@@ -187,7 +186,6 @@ queue".
 - [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
 - [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
-- [ ] `brwr-ppn` **Curate a worklog before copying it.** Recent and the native worklog make captured work visible, but copying a day or week currently includes every recorded artifact. Let a person prepare a concise update by selecting the artifact-day rows they want to share and previewing the result, without altering measured… _(P3; blocked)_
 - [ ] `brwr-dfd` **Container roll-up follow-ups (from PR #126 final review).** Deferred minors from the GitHub repo containers work (PR #126): (1) a rolled-up visit never advances a container row's latest_at (index.rs roll_up), a trap for future consumers; (2) a repos-only setup (no linked PR/issue rule) shows the latest sub-page title instead of… _(P3)_
 - [ ] `brwr-4ex` **Guard PR branches against concurrent pushes during review.** On PR #126, a second agent session pushed four fix commits to the branch and merged it while the opening session's codex exec review was still running. The merged head was never covered by the opener's final review. Options: a branch-claim convention (the Owner: line now exists… _(P3)_
 - [ ] `brwr-sm4` **User-editable summary instructions with a fixed core.** John is considering letting the user edit SUMMARY.md. Proposal: keep the compiled-in SUMMARY.md as the default; allow an optional user file in the home folder that replaces only a marked 'style' part (or adds guidance), while the safety rules (untrusted page, no file writes, no… _(P3)_
@@ -233,6 +231,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Repair capture rules without discarding the original (2026-11-02).** Settings offers copyable preserved values and a complete format-1 replacement with preview on every site. The host backs up the exact original config, preserves pause and other settings, refuses stale or invalid replacements and retains recorded identity checks. Future formats remain opaque and remove-all recovery stays available. **Metrics:** 4 new Rust/wire tests and 5 offline UI cases; 1,386 Rust-reported outcomes (94 IPC sandbox skips), 44 extension files and 95 settings cases pass; 2 accessibility fixtures pass, 41 browser cases explicitly skip in sandbox.
 
 - **Category:** New Capability. **Run tasks without attaching a browser page (2026-11-02).** The task bar works on non-web tabs and offers Include this page on web tabs. Host and service validate explicit scope, no page file or page-reading permission is created, and Tasks history/Reuse preserves the choice without navigation. Ordinary page extraction failures remain visible. **Metrics:** 8 new Rust/wire and 7 extension regressions; 1,382 Rust-reported outcomes (94 explicit IPC skips), all 44 extension files pass; 2 accessibility fixtures pass and 40 browser cases explicitly skip in sandbox.
+
+- **Category:** New Capability. **Choose captured work for a concise update (2026-11-02).** Recent offers explicit artifact-day selection and an exact text preview/Copy, with same-day context and direct-only container measures. Recovered the unintegrated implementation and both review fixes onto the redesigned panel; refresh preserves checked identities and focus, while period/home/host changes invalidate selection. **Metrics:** 6 restored Rust and 14 panel regressions; 1,380 Rust-reported outcomes (94 explicit IPC skips), all 44 extension files pass; 2 accessibility fixtures pass and 40 browser cases explicitly skip in sandbox.
 
 - **Category:** User Experience. **Reach the task bar from Chrome and the keyboard (2026-11-02).** Ctrl/Command+Shift+8 and Ask Brauser open and focus the task bar; panel-local slash focuses it outside editable controls. Drafts stay intact, fixed notices survive startup, and only Enter or Run starts a task. **Metrics:** 4 new offline gesture cases; all 44 extension files and required gate green, with 94 IPC and 39 browser sandbox skips.
 
@@ -2043,6 +2043,29 @@ open again rather than falsely shipped; brwr-p71k now has a real dependency on
 that implementation. brwr-sm2's existing unresolved window/tab-scope decisions
 remain blocked. A useful next task is recovery/integration of brwr-ppn, while
 brwr-k6rg proposes source-page context for recalled instructions before Run.
+
+### Cycle observations (2026-11-02 — recover selected-work curation)
+
+The clean `e9f7408c` baseline passed the required health gate. Assigned Re-learn
+and container-review items remain externally blocked with no changed evidence.
+Recovered `brwr-ppn` from archived `f42018a3` plus `00891487`, without restoring
+old queue rows or bookkeeping. Its worklog controls fit the current panel, and
+the curation browser journey uses the shared tablist helper already on main.
+The period-overlap regression remains: Today and This week on a Monday must
+still clear selections when the user changes the period.
+
+Full required/README gates pass: 1,380 Rust-reported outcomes include 94
+explicit IPC skips; all 44 extension files pass; accessibility has 2 fixture
+passes and 40 browser sandbox skips. Complete diff review is finished. The
+driver must still run its independent review and real browser/IPC gate; local
+skips do not establish acceptance there. No remote Git or live service call
+was made. `brwr-ppn` is closed locally; `brwr-1xmv` remains blocked on real
+Chromium and `brwr-p71k` retains busy-day pagination.
+
+Product observation: capture becomes more useful when people can turn measured
+work into an intentional update. The next improvement on this surface should
+let a person reach omitted work through explicit pages, preserving unchecked
+new rows and exact preview/Copy, rather than silently expanding an update.
 
 ### Cycle observations (2026-11-02 — tasks without a page)
 
