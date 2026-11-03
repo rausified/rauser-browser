@@ -262,9 +262,30 @@ class AdoptTests(QueueFixture):
         mine = self.tmp / "repo-queue-beads"
         self.assertEqual(git(mine, "status", "--porcelain"), "")
 
+    def test_edits_that_fail_the_queue_check_leave_the_worktree_untouched(self) -> None:
+        # A dependency on a bead no queue has (a database-only row).
+        head = self.pr_branch(bead("brwr-a1", dependencies=[{"depends_on_id": "brwr-zz9"}]))
+        before = git(self.origin, "rev-parse", "beads")
+        result = self.queue(self.repo, "adopt", "--from", head)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("unknown-dependency", result.stderr)
+        self.assertEqual(git(self.origin, "rev-parse", "beads"), before)
+        self.assertEqual(git(self.tmp / "repo-queue-beads", "status", "--porcelain"), "")
+
     def test_a_branch_without_queue_edits_has_nothing_to_adopt(self) -> None:
         git(self.repo, "checkout", "-q", "-b", "feat/plain", self.base)
         self.assertIn("did not change the queue files", self.ok(self.repo, "adopt", "--from", "HEAD"))
+
+
+class ProseTests(unittest.TestCase):
+    def test_two_insertions_at_one_point_keep_both_ours_first(self) -> None:
+        base = "# Notes\n\n- old\n"
+        ours = "# Notes\n\n- ours new\n- old\n"
+        theirs = "# Notes\n\n- theirs new\n- old\n"
+        self.assertEqual(work_queue.merge_prose(base, ours, theirs), "# Notes\n\n- ours new\n- theirs new\n- old\n")
+
+    def test_a_line_both_sides_changed_is_refused(self) -> None:
+        self.assertIsNone(work_queue.merge_prose("a\nx\nb\n", "a\ny\nb\n", "a\nz\nb\n"))
 
 
 class UpsertTests(unittest.TestCase):

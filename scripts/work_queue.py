@@ -349,6 +349,66 @@ def _show(repo: pathlib.Path, rev: str, file: str) -> Optional[str]:
     return result.stdout.replace("\r\n", "\n") if result.returncode == 0 else None
 
 
+def resolve_insertions(text: str) -> Optional[str]:
+    """TEXT (a diff3 merge) with every conflict resolved, or None.
+
+    Only a hunk whose base is empty (both sides inserted text at the same
+    point, as two cycles appending observations do) is resolved: ours, then
+    theirs. Any other hunk, or a marker-looking line inside a side, returns
+    None. scripts/pr-doctor.mjs resolveAppendOnly is the same rule for PRs.
+    """
+    out: list[str] = []
+    lines = text.splitlines(keepends=True)
+    i = 0
+    while i < len(lines):
+        if not lines[i].startswith("<<<<<<< "):
+            out.append(lines[i])
+            i += 1
+            continue
+        parts: dict[str, list[str]] = {"ours": [], "base": [], "theirs": []}
+        part, i = "ours", i + 1
+        while i < len(lines) and not lines[i].startswith(">>>>>>> "):
+            line = lines[i]
+            if line.startswith("<<<<<<< "):
+                return None
+            if line.startswith("||||||| ") or line.rstrip("\n") == "|||||||":
+                if part != "ours":
+                    return None
+                part = "base"
+            elif line.rstrip("\n") == "=======":
+                if part != "base":
+                    return None
+                part = "theirs"
+            else:
+                parts[part].append(line)
+            i += 1
+        if i >= len(lines) or part != "theirs" or parts["base"]:
+            return None
+        ours, theirs = parts["ours"], parts["theirs"]
+        if ours and not ours[-1].endswith("\n"):
+            ours[-1] += "\n"
+        out += ours + theirs
+        i += 1
+    return "".join(out)
+
+
+def merge_prose(base: str, ours: str, theirs: str) -> Optional[str]:
+    """Three-way merge of hand-written text; both-sides insertions keep both."""
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = []
+        for name, text in (("ours", ours), ("base", base), ("theirs", theirs)):
+            path = pathlib.Path(tmp) / name
+            path.write_text(text, encoding="utf-8", newline="\n")
+            paths.append(str(path))
+        result = subprocess.run(
+            ["git", "merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs", *paths],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+    if result.returncode < 0 or result.returncode > 127:
+        raise QueueError(f"git merge-file failed: {result.stderr.strip()}")
+    return result.stdout if result.returncode == 0 else resolve_insertions(result.stdout)
+
+
 def merge_edits(base: dict[str, Optional[str]], ours: dict[str, str], theirs: dict[str, Optional[str]]) -> dict[str, str]:
     """The queue files with THEIRS' edits (against BASE) applied on OURS.
 
@@ -368,9 +428,9 @@ def merge_edits(base: dict[str, Optional[str]], ours: dict[str, str], theirs: di
             skeletons = [rb.strip_generated(text) for text in (base_backlog, backlog, their_backlog)]
         except rb.BacklogError as error:
             raise QueueError(f"{BACKLOG_PATH}: {error}") from error
-        merged, prose_conflicts = rb.merge_text(SCRIPTS, *skeletons)
-        if prose_conflicts:
-            raise QueueError(f"{BACKLOG_PATH}: {prose_conflicts} hand-written conflict(s); carry the prose by hand")
+        merged = merge_prose(*skeletons)
+        if merged is None:
+            raise QueueError(f"{BACKLOG_PATH}: a hand-written conflict that is not two insertions; carry the prose by hand")
         backlog = merged
     elif their_backlog is not None and base_backlog is None and their_backlog != backlog:
         raise QueueError(f"{BACKLOG_PATH}: no base version to merge against; carry the prose by hand")
@@ -405,12 +465,14 @@ def adopt(repo: pathlib.Path, source: str, base: Optional[str], message: str, *,
                 git("merge", "-q", "--ff-only", f"{REMOTE}/{BRANCH}", cwd=path)
         ours = {file: (path / file).read_text(encoding="utf-8") for file in QUEUE_FILES}
         merged = merge_edits(base_files, ours, theirs)
+        # Check a scratch copy first, so a failing check leaves the shared
+        # worktree exactly as it was (the next push would commit it otherwise).
+        with tempfile.TemporaryDirectory() as tmp:
+            for file, text in merged.items():
+                (pathlib.Path(tmp) / file).parent.mkdir(parents=True, exist_ok=True)
+                _render_backlog().write(pathlib.Path(tmp) / file, text)
+            _render_and_check(pathlib.Path(tmp))
         if dry_run:
-            with tempfile.TemporaryDirectory() as tmp:
-                for file, text in merged.items():
-                    (pathlib.Path(tmp) / file).parent.mkdir(parents=True, exist_ok=True)
-                    _render_backlog().write(pathlib.Path(tmp) / file, text)
-                _render_and_check(pathlib.Path(tmp))
             print(f"queue: {source}'s queue edits apply cleanly (dry run; nothing pushed)")
             return None
         for file, text in merged.items():
