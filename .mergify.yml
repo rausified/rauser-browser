@@ -1,8 +1,8 @@
 # Mergify merge queue for main (AGENTS.md "Review and merge cadence").
 #
 # GitHub's own merge queue is unavailable: the repository is owned by a
-# personal account. Mergify tests each queued PR on top of current main and
-# merges it with a merge commit, one PR at a time.
+# personal account. Mergify tests queued PRs on top of current main, in
+# batches of up to 3, and merges each with a merge commit.
 #
 # Entering the queue: the `queue` label (`gh pr edit <n> --add-label queue`),
 # the only supported way in. Never `gh pr merge` a PR into main: on a PR whose
@@ -11,18 +11,38 @@
 # someone arms anyway on a pending PR becomes the label and is disarmed.
 # Removing the label dequeues.
 #
-# How a PR is tested: Mergify opens a draft PR on a `mergify/merge-queue/<hex>`
-# branch (main plus the PR), CI runs on it through ordinary pull_request events,
-# and the original PR merges once the checks below pass on that draft. A PR
-# that already contains main's tip merges at once, with no extra CI run.
-# `max_checks_retries: 1` both retries one flaky queue run (a starved macOS
-# runner, say) and keeps Mergify off the PR's own branch: with no retries and
-# one check at a time, Mergify would instead merge main into the PR branch
-# itself ("in-place checks"), a push that cancels the PR's own runs.
+# How PRs are tested: Mergify builds a batch draft PR on a
+# `mergify/merge-queue/<hex>` branch (main plus up to 3 queued PRs), CI runs on
+# it through ordinary pull_request events, and every PR in the batch merges
+# (each with its own merge commit) once the checks below pass on that draft.
+# Mergify never pushes to a PR's own branch. A PR alone at the front of the
+# queue that already contains main's tip merges at once, with no extra CI run.
 #
-# Queue size 1 (`max_parallel_checks: 1`, the default `batch_size: 1`): no
-# speculative checks or batches. Either would spend extra macOS runs whenever
-# an entry ahead fails; revisit only if the queue backs up.
+# Throughput (2026-11-03: 7 PRs open, ~60 min per PR one at a time):
+# - `batch_size: 3`: one CI run (~40 min with macOS) validates up to 3 PRs.
+# - `batch_max_wait_time: 3 min`: a batch that is not full starts after 3
+#   minutes, so a lone PR waits at most that long for company.
+# - `max_parallel_checks: 2`: while one batch runs, the next is tested on top
+#   of it (speculatively). At most 2 CI runs at once.
+#
+# Failures, in order:
+# 1. Retry: `max_checks_retries: 1` re-runs a failed batch once on a fresh
+#    draft (a flake or a starved macOS runner) before treating it as broken.
+#    The speculative batch behind it was built on top of it, so Mergify cancels
+#    and requeues that one.
+# 2. Bisection: a batch that fails again is split to find the culprit. With
+#    n = 3 PRs and N = 2 parallel checks, the first n - 1 = 2 PRs become 2 parts
+#    of 1, tested at once as [A] and [A+B]; C is not retested. The first part
+#    that fails names its PR, and if both pass, C is the culprit. The others
+#    merge. 3 = N + 1 is a size that one split round always resolves, so
+#    `batch_max_failure_resolution_attempts` stays unset (unlimited): a cap of
+#    1 would change nothing today, and if someone raises `batch_size` without
+#    raising the cap, it would dequeue innocent PRs untested.
+# Worst case for a real failure: the batch run, its retry and one split round,
+# about 3 CI runs, no more than testing the 3 PRs one at a time; a passing
+# batch costs 1 run instead of 3.
+# Keep "Require branches to be up to date" off in branch protection: with it,
+# Mergify checks one batch at a time and bisection degrades (N = 1).
 #
 # Main's branch protection (required checks today: Build and check, PR owner,
 # Rust dependency policy, merge-hold) is also injected by Mergify as queue and
@@ -30,11 +50,13 @@
 # retired merge-hold (always green) to the injection.
 
 merge_queue:
-  max_parallel_checks: 1
+  max_parallel_checks: 2
 
 queue_rules:
   - name: default
     merge_method: merge
+    batch_size: 3
+    batch_max_wait_time: 3 min
     max_checks_retries: 1
     queue_conditions:
       - base = main
