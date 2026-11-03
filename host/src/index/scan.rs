@@ -178,11 +178,31 @@ impl LogScan {
     /// gap notices as well as event bodies, so it hashes the events keyed by
     /// ID, their earliest positions and the overflow notices: one
     /// fingerprint for both review and the projection recheck.
+    /// Positions are hashed with portable `/` paths, so one history gives
+    /// the same revision on every platform (Windows paths use `\\`).
     pub(super) fn revision(&self) -> Result<String> {
+        let portable = |path: &Path| {
+            catchup::portable_path(path).unwrap_or_else(|| path.to_string_lossy().into_owned())
+        };
+        let positions: BTreeMap<&String, (String, u64)> = self
+            .positions
+            .iter()
+            .map(|(id, (path, line))| (id, (portable(path), *line)))
+            .collect();
+        let gaps: BTreeMap<&String, (&OverflowMarker, (String, u64))> = self
+            .gaps
+            .iter()
+            .map(|(id, gap)| {
+                (
+                    id,
+                    (&gap.marker, (portable(&gap.position.0), gap.position.1)),
+                )
+            })
+            .collect();
         Ok(sha256_hex(&serde_json::to_vec(&(
             &self.events,
-            &self.positions,
-            &self.gaps,
+            &positions,
+            &gaps,
         ))?))
     }
 
