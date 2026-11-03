@@ -38,6 +38,8 @@ npm run test:queue
 npm run test:dev-tools   # macOS/Linux only: scripts/dev tooling
 ```
 
+For a change that only adds or changes adapter templates or starters (the starter table, Capture Site, the vectors/catalog/shapes files, the engine's tests, the capture-site host fixtures and docs), run `npm run gate:adapter` instead of the full list above. It runs only the checks that read those files, prints PASS/FAIL per step and the total time, and refuses with exit 2 if the change touches anything else; then run the full list. `--dry-run` shows the scope decision and step plan.
+
 To deploy the live install (the main checkout Chrome and the native host run from), use `scripts/dev/deploy-live` (`--dry-run` first); AGENTS.md "PR ownership and handoff" has the details and `scripts/dev/index-lock-watch` for stale `.git/index.lock` files.
 
 To rehearse artifact identity changes offline, use

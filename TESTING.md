@@ -431,6 +431,8 @@ Chrome gates. The macOS smoke runner's localhost adapter flow is unchanged;
 Capture Site adds no scripted dialogs; the runner compares answered dialogs
 with its transcript instead of expecting a fixed total.
 
+`npm run gate:adapter` (scripts/gate-adapter.mjs) is the local gate for starter and adapter-template changes. From the changed paths it picks the status and queue checks, typecheck, lint, build:extension and test:extension (for extension or protocol data changes), test:a11y (only for page markup or styles), cargo fmt, the adapter-templates tests and clippy (for engine tests or protocol data), and the host's `capture_site`, `service::prompt` and `site_draft` unit tests (for the catalog or host capture fixtures). It refuses paths outside its allowlist, which is kept as data at the top of the script; adapter-templates/src, extension/panel.ts, the protocol schema and host code always need the full gate. Its allowlist and step selection are unit-tested in scripts/tests/gate-adapter.test.mjs.
+
 ### Unknown-site drafting (`brwr-t40`)
 
 Two shared fixtures pin both sides of the boundary to one source:
@@ -856,6 +858,12 @@ on its VM) used to stop on them. `.gitattributes` gives each a merge driver:
 - The two logs use git's built-in `union`: both sides' appended entries
   are kept, ours first. An entry edited in place on both sides comes out
   twice (both wordings), never as markers; tidy it by hand if that happens.
+
+The improvement feed needs no driver: each entry is its own file under
+`docs/improvement-feed/`, and `scripts/tests/test_improvement_feed.py` proves
+that two branches adding entries merge cleanly with no drivers configured.
+GitHub's mergeability check and merge queue ignore every driver here, which is
+why the feed does not rely on one.
 
 The drivers live in per-clone git config, so a clone (or the clone a
 worktree belongs to, or a worker workspace) runs

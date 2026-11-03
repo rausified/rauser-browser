@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Keep the short project-status summaries aligned with shipped M1.5a work."""
+"""Keep the short project-status summaries aligned with shipped M1.5a work.
+
+Also runs scripts/check_improvement_feed.py, so CI checks the feed's layout.
+"""
 
 from __future__ import annotations
 
 import pathlib
 import re
 import sys
+
+import check_improvement_feed
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -157,6 +162,8 @@ def main() -> int:
         errors.append("README.md Status no longer records shipped artifact-facing views")
     if "record keys, and artifact-facing views merged" not in normalized(design):
         errors.append("DESIGN.md status no longer records shipped record keys and views")
+
+    errors.extend(check_improvement_feed.check(ROOT))
 
     for error in errors:
         print(error, file=sys.stderr)

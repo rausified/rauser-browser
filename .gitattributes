@@ -12,11 +12,13 @@ host/tests/fixtures/** -text
 #   generated blocks from the merged queue;
 # - the append-only logs keep both sides' new entries (git's built-in union
 #   driver, which needs no registration).
+# None of these drivers runs in GitHub's mergeability check or merge queue,
+# which merge as plain text. The improvement feed avoids needing one: each
+# entry is its own file under docs/improvement-feed/ (BRAUSER_IMPROVEMENT_FEED.md).
 .beads/issues.jsonl merge=beads-jsonl
 BOSUN_FEATURE_BACKLOG.md merge=bosun-backlog
 PENDING_AMOS_DOC_UPDATES.md merge=union
 CookieFeature.md merge=union
-BRAUSER_IMPROVEMENT_FEED.md merge=union
 
 # SUMMARY.md is compiled into the host as the summary prompt; its template
 # delimiters are LF-only, so never let a checkout convert it to CRLF.
