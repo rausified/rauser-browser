@@ -902,6 +902,7 @@ mod tests {
         let mut status = run(world, PAGE, HarnessId::Codex);
         status.kind = RunKind::Task;
         status.task = Some(super::super::record::TaskStatus {
+            no_page: false,
             instruction: "Make a list of the links on this page.".into(),
             protected: vec![world.root.join("notes").display().to_string()],
         });

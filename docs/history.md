@@ -1134,3 +1134,15 @@ PowerPoint never have Word paragraphs and would always pay the full wait. A
 frame with Word paragraphs now also always wins the content choice. The wait
 keys on the absence of paragraphs rather than on splash markup, which was not
 available to test against. Live Word behavior was not verified headlessly.
+
+## 2026-11-02 — Tasks without a page (brwr-qin)
+
+The task bar can run from a non-web tab or with **Include this page** unchecked,
+with a visible No page context. Additive protocol-v8 `no_page` is validated by
+native and service boundaries, stored in TaskStatus and projected in RunView.
+The host selects a non-HTTP internal marker; a flag alone cannot discard supplied
+page data, and extraction errors never fall back. The supervisor omits page.md,
+and task_prompt omits page context and reading permissions while retaining file
+protections. Tasks detail and Reuse preserve scope, with no Open page action.
+Tests use local fixtures and fake transport/harnesses; real browser acceptance
+remains with the external driver/platform gate. See the task's plan and TESTING.md.

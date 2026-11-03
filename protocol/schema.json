@@ -2015,6 +2015,7 @@
       "description": "One agent run as the Brauser service reports it. Timestamps are RFC 3339. answer is filled once the run has a validated answer.",
       "required": ["run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd", "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id", "summary_path", "stream_bytes", "can_retry_save", "answer"],
       "properties": {
+        "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 },
         "state": { "$ref": "#/$defs/RunState" },
         "harness": { "$ref": "#/$defs/HarnessId" },
@@ -2046,6 +2047,7 @@
       "description": "Start, or join, the summary run for a page. content and selection bounds are characters; the host frame cap is the binding byte limit. The extension always sends record_key null; the host resolves it.",
       "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "harness", "record_key", "requested_at"],
       "properties": {
+        "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "type": { "const": "start_run" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -2367,9 +2369,10 @@
     "StartTaskRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Start a task-bar run: the user's typed instruction, with the page as untrusted context. The host bounds the instruction (not blank; no control characters but newline and tab), resolves the record key, and forwards a start_run with kind task. Answers run_started; existing is always false.",
-      "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "instruction", "harness", "requested_at"],
+      "description": "Start a task-bar run: the user's typed instruction, with optional page context. no_page true requires url, title, content and capture_truncated to be absent and selection null; otherwise the existing complete page payload is required. The host bounds the instruction (not blank; no control characters but newline and tab), resolves the record key, and forwards a start_run with kind task. Answers run_started; existing is always false.",
+      "required": ["type", "protocol_version", "request_id", "selection", "instruction", "harness", "requested_at"],
       "properties": {
+        "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "type": { "const": "start_task" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
