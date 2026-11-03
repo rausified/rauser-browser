@@ -1323,6 +1323,19 @@ host-built replay. No native alias input or applied-history publication is
 added, and the ordinary ID freeze remains. Durable recovery/config/history
 integration and panel Re-learn still do not satisfy their parent acceptance.
 
+## 2026-11-03 — Named focus sessions
+
+`brwr-ued` adds explicit profile-local Start/Rename/End controls, immutable
+activity snapshots and direct-activity worklog groups. The active snapshot,
+settled cursor, totals and queue handoff share the local durable envelope;
+session-context writes follow it, and restoration uses the committed cursor
+when that later write failed. Both activity bucket lookups and pressure
+coalescing compare snapshots. Rename applies to future measurements; the
+worklog identifies name changes in its selected range. Existing event bytes
+omit absent metadata, and frozen capture recovery stays intact. The shared
+worklog renderer also serves the cache-independent Re-learn projection.
+Browser/platform acceptance remains separate from offline tests.
+
 
 ## 2026-11-03 — Explicitly keep task reports beside their source pages
 

@@ -324,3 +324,26 @@ for (const name of ["panel", "tasks"]) {
     assert.ok(await page.evaluate(() => fixture.actions.includes("settings")));
   });
 }
+
+
+test("focus sessions start, rename and end by keyboard with text-only names", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await activate(page, "#focus-heading");
+  await activate(page, "#focus-name", null);
+  await page.keyboard.type("Release planning");
+  await page.locator("#focus-save:enabled").waitFor();
+  await activate(page, "#focus-save");
+  await page.waitForFunction(() => document.querySelector("#focus-current").textContent === "Release planning");
+  await audit(t, page, "panel/focus-session");
+  await activate(page, "#focus-name", null);
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("<img src=x onerror=attack()>");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector("#focus-current").textContent === "<img src=x onerror=attack()>");
+  assert.equal(await page.locator("#focus-current img").count(), 0);
+  await activate(page, "#focus-end");
+  await page.waitForFunction(() => document.querySelector("#focus-current").textContent === "None");
+  assert.equal(await page.locator("#focus-end").isHidden(), true);
+  await audit(t, page, "panel/focus-ended");
+});

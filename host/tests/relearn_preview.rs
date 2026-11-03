@@ -53,6 +53,7 @@ impl Fixture {
         fs::write(home.join("summaries").join(format!("{}.summary.md", brauser_host::vault::note_filename(&key, url).unwrap().strip_suffix(".md").unwrap())),format!(
             "---\nbrauser:\n  kind: summary\n  canonical_url: {url:?}\n  artifact_id: {:?}\n  stripped_params: []\n---\n\nOriginal summary body\n",key.value)).unwrap();
         let activity = ActivityEvent {
+            focus_session: None,
             event_id: "00000000-0000-4000-8000-000000000001".into(),
             artifact_id: key.value,
             artifact_type: "work.item".into(),

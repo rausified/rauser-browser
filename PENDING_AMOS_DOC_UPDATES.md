@@ -366,6 +366,8 @@
 
 - **Brauser — keep finished task reports in their source notes:** Tasks now offers an explicit Save to note for successful page tasks. The host fetches the retained report, checks the home/settings revision, and appends Markdown-safe text through the ordinary note identity, ownership and version checks. Existing note text and later edits survive, exact report retries avoid duplicates, and task completion itself still writes no content. No-page tasks remain copy-only; report retention in a note is independent of service history.
 
+- **Brauser named focus sessions (2026-11-03):** Explicit Start/Rename/End in the panel groups measured cross-tool activity in the worklog. Sessions survive restarts; pause and offline time stay unmeasured. Immutable name snapshots replay from logs without changing ordinary totals or capture authority. Names persist with captured activity and copied worklogs; empty sessions generate no record, agent run or network request.
+
 - **Brauser personal summary style (2026-11-03, `brwr-sm4`):** Users can tailor
   summary language, emphasis and presentation through an optional home-root
   `SUMMARY_STYLE.md`. Each new summary snapshots bounded UTF-8 guidance before

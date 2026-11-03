@@ -765,6 +765,14 @@ pub struct ActivityMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FocusSession {
+    pub id: String,
+    pub name: String,
+    pub revision: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActivityEvent {
     pub event_id: String,
     pub artifact_id: String,
@@ -780,6 +788,8 @@ pub struct ActivityEvent {
     pub modes: Vec<ActivityMode>,
     pub trails: Vec<ActivityTrail>,
     pub refs: Vec<ActivityRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_session: Option<FocusSession>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

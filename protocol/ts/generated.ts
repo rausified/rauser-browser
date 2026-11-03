@@ -586,6 +586,12 @@ export interface ActivityMode {
   url: string;
 }
 
+export interface FocusSession {
+  id: string;
+  name: string;
+  revision: number;
+}
+
 export interface ActivityEvent {
   event_id: string;
   artifact_id: string;
@@ -600,6 +606,7 @@ export interface ActivityEvent {
   modes: ActivityMode[];
   trails: ActivityTrail[];
   refs: ActivityRef[];
+  focus_session?: FocusSession;
 }
 
 export interface WhyEvent {

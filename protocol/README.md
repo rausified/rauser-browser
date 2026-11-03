@@ -691,6 +691,24 @@ convention of reading null as absent. Rebuild host and extension together:
 an older extension rejects the extra reply field. Stored answers and summary
 files already hold this information, so this adds no disk-format change.
 
+
+## Focus-session activity snapshots
+
+An `ActivityEvent` may include `focus_session: {id, name, revision}` within
+protocol v8. The host bounds it to a canonical RFC 4122 v4 UUID, 1–120 Unicode
+scalars without control/invisible formatting, and revision 1..4294967295.
+The snapshot never authorizes capture; the existing URL/adapter checks still
+run. Omit the field for ungrouped activity, including older persisted events,
+so their serialized marker and recovery bytes stay unchanged. Session-tagged
+payloads and their snapshots remain frozen across delivery retries.
+
+The extension's profile-local worker owns the active label; no native request
+lets a page set it. New activity after a rename carries the next revision of
+the same ID; Start after End creates a fresh ID. Worklogs group direct captured
+activity by ID and retain immutable historical name snapshots. Deploy host and
+extension together; older hosts reject tagged activity and cannot index its
+new log payloads after rollback.
+
 ### Explicit task-report note copy (additive protocol v8)
 
 `save_task_note { run_id, expected_revision }` is extension-to-host only;

@@ -625,6 +625,7 @@ fn timeline_interleaves_summaries_and_rollups_by_date() {
         "2026-10-01T12:00:00Z",
     );
     let day5 = ActivityEvent {
+        focus_session: None,
         event_id: "00000000-0000-4000-8000-000000000105".into(),
         occurred_at: "2026-10-05T12:00:00Z".into(),
         ..day1.clone()
@@ -685,6 +686,7 @@ fn timeline_merges_summaries_across_offsets_by_their_own_date() {
         "2026-10-05T12:00:00Z",
     );
     let day6 = ActivityEvent {
+        focus_session: None,
         event_id: "00000000-0000-4000-8000-000000000112".into(),
         occurred_at: "2026-10-06T12:00:00Z".into(),
         ..day5.clone()
@@ -863,6 +865,7 @@ fn a_summary_on_an_adapter_artifact_without_activity_creates_that_row() {
     );
 
     let later = ActivityEvent {
+        focus_session: None,
         artifact_id: summary.artifact_id.clone(),
         artifact_type: "jira.issue".into(),
         url: "https://jira.example/browse/PROJ-1?focusedCommentId=2".into(),
@@ -907,6 +910,7 @@ fn a_web_summary_url_stays_with_its_own_web_artifact() {
     let adapter_url = "https://jira.example/browse/PROJ-1";
     let web_url = "https://jira.example/browse/PROJ-1?view=print";
     let adapter = ActivityEvent {
+        focus_session: None,
         artifact_id: "jira:jira.example/PROJ-1".into(),
         artifact_type: "jira.issue".into(),
         url: adapter_url.into(),
