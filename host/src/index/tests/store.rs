@@ -666,6 +666,7 @@ fn replay_event(n: u64, variant: u64) -> CachedEvent {
                 })
                 .collect();
             EventData::Activity(ActivityEvent {
+                focus_session: None,
                 event_id: id,
                 artifact_id,
                 artifact_type,

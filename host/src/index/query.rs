@@ -439,7 +439,8 @@ pub(super) fn worklog(
             }
         }
     }
-    let (text, count) = worklog_text(rows);
+    let (mut text, count) = worklog_text(rows);
+    focus::from_index(tx, &first, &last)?.append(&mut text);
     Ok((text, count, gaps, gaps_truncated))
 }
 

@@ -3339,3 +3339,124 @@ test("dwellSurvivesWorkerRestart", async () => {
   const { request } = await autoRequest(before);
   assert.equal(request.url, `${AUTO_ORIGIN}/items/dwell`);
 });
+
+// Focus-session gestures share the activity serialization and local envelope.
+test("focus session survives worker context and browser restart, but not offline time or pause measurement", async () => {
+  values.clear(); sessionValues.clear(); tabs.clear();
+  const origin = "https://focus.example";
+  const realNow = Date.now;
+  let now = new Date(2026, 10, 3, 10, 15).getTime();
+  Date.now = () => now;
+  try {
+    tabs.set(88, { id: 88, windowId: 1, active: true, status: "complete", url: `${origin}/items/a`, incognito: false });
+    await send({ kind: "install_policy", lease: { ...lease(origin), expires_at: now + 24 * 60 * 60_000 }, resume_after_confirmation: false, resume_after_pause_token: null });
+    const started = await send({ kind: "change_focus", expected: null, name: "Release" });
+    const active = started.focus_session;
+    now += 10_000;
+    await queueActivityMapRebuild(); // MV3 suspension: same session context.
+    let total = values.get(storageKey("activity_totals_v1")).totals.find((t) => t.focus_session);
+    assert.equal(total.focused_ms, 10_000);
+    assert.equal(total.focus_session.id, active.id);
+    sessionValues.clear(); // Browser restart: the label stays, cursor resets.
+    now += 30_000;
+    await queueActivityMapRebuild();
+    total = values.get(storageKey("activity_totals_v1")).totals.find((t) => t.focus_session);
+    assert.equal(total.focused_ms, 10_000, "closed-browser time is not backfilled");
+    now += 5_000;
+    await send({ kind: "get_status" });
+    assert.equal(values.get(storageKey("activity_totals_v1")).totals.find((t) => t.focus_session).focused_ms, 15_000);
+    const paused = await send({ kind: "pause_capture" });
+    assert.deepEqual(paused.focus_session, active);
+    now += 20_000;
+    const renamed = await send({ kind: "change_focus", expected: active, name: "Shipping" });
+    assert.equal(renamed.focus_session.id, active.id);
+    assert.equal(renamed.focus_session.revision, 2);
+    assert.deepEqual(values.get(storageKey("activity_totals_v1")).totals, []);
+    await assert.rejects(send({ kind: "change_focus", expected: active, name: null }), /changed in another panel/);
+    await send({ kind: "install_policy", lease: { ...lease(origin), expires_at: now + 60_000 }, resume_after_confirmation: true, resume_after_pause_token: paused.pause_token });
+    now += 7_000;
+    await send({ kind: "change_focus", expected: renamed.focus_session, name: null });
+    const queued = values.get(storageKey("queue_v1")).items.map((item) => item.event);
+    const shipping = queued.find((e) => e.focus_session?.name === "Shipping");
+    assert.equal(shipping.focused_seconds, 7, "paused interval stays unmeasured");
+    assert.equal((await send({ kind: "get_status" })).focus_session, null);
+  } finally { Date.now = realNow; }
+});
+
+test("focus boundary publication failure leaves the original session and totals retryable", async () => {
+  values.clear(); sessionValues.clear(); tabs.clear();
+  const before = structuredClone(values.get(storageKey("activity_totals_v1")));
+  rejectLocalSet = (items) => storageKey("activity_totals_v1") in items;
+  try {
+    await assert.rejects(send({ kind: "change_focus", expected: null, name: "Release" }), /quota/);
+    assert.deepEqual(values.get(storageKey("activity_totals_v1")), before);
+  } finally { rejectLocalSet = null; }
+  const started = await send({ kind: "change_focus", expected: null, name: "Release" });
+  assert.equal(started.focus_session.name, "Release");
+});
+
+test("pressure coalescing preserves different focus snapshots and frozen delivery bytes", async () => {
+  values.clear(); sessionValues.clear(); tabs.clear();
+  const origin = "https://focus-pressure.example";
+  const realNow = Date.now;
+  const now = new Date(2026, 10, 3, 10, 15).getTime();
+  Date.now = () => now;
+  try {
+    values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: now + 60_000 });
+    const session = { id: "00000000-0000-4000-8000-000000000077", name: "Release", revision: 1 };
+    const stamp = localTimestamp(new Date(now));
+    const hour = `${stamp.slice(0, 13)}:00:00${stamp.slice(19)}`;
+    const queued = activityVisit("00000000-0000-4000-8000-000000000078", `${origin}/items/a`, { occurred_at: hour });
+    queued.dispatched = false;
+    const frozen = { ...structuredClone(queued), dispatched: true, event: {
+      ...structuredClone(queued.event), event_id: "00000000-0000-4000-8000-000000000080", focus_session: session,
+    } };
+    const queue = {
+      version: 1, items: Array.from({ length: 210 }, (_, n) => n === 0 ? queued : n === 1 ? frozen : activityVisit(`pressure-${n}`, `${origin}/items/${n}`)),
+      overflow_count: 0, overflow_first_at: null, overflow_last_at: null, rejected_count: 0, last_error: null, retry_error: null,
+    };
+    values.set(storageKey("queue_v1"), queue);
+    const event = queued.event;
+    values.set(storageKey("activity_totals_v1"), { version: 1, focus_session: null, totals: [{
+      event_id: "00000000-0000-4000-8000-000000000079", artifact_id: event.artifact_id, artifact_type: event.artifact_type,
+      hour_start: hour, url: event.url, title: event.title, opens: 0, focused_ms: 9_000, background_ms: 0,
+      modes: [], trails: [], refs: [], focus_session: session,
+    }] });
+    await send({ kind: "get_activity" });
+    const stored = values.get(storageKey("queue_v1")).items;
+    assert.deepEqual(stored[0], queued, "ungrouped activity must not absorb session activity");
+    assert.deepEqual(stored[1], frozen, "already dispatched item remains byte-for-byte unchanged");
+    assert.equal(stored.length, 211);
+    assert.equal(stored.at(-1).event.focus_session.id, session.id);
+  } finally { Date.now = realNow; }
+});
+
+test("a focus handoff whose session-context write fails never measures the committed interval twice", async () => {
+  values.clear(); sessionValues.clear(); tabs.clear();
+  const origin = "https://focus-cursor.example";
+  const realNow = Date.now;
+  const realSet = chrome.storage.session.set;
+  let now = new Date(2026, 10, 3, 10, 15).getTime();
+  Date.now = () => now;
+  try {
+    tabs.set(89, { id: 89, windowId: 1, active: true, status: "complete", url: `${origin}/items/a`, incognito: false });
+    await send({ kind: "install_policy", lease: { ...lease(origin), expires_at: now + 60_000 }, resume_after_confirmation: false, resume_after_pause_token: null });
+    const first = (await send({ kind: "change_focus", expected: null, name: "Release" })).focus_session;
+    now += 9_000;
+    chrome.storage.session.set = async (items) => {
+      if (storageKey("activity_session_v1") in items) throw new Error("context write failed");
+      return realSet(items);
+    };
+    await assert.rejects(send({ kind: "change_focus", expected: first, name: "Shipping" }), /context write failed/);
+    chrome.storage.session.set = realSet;
+    const saved = values.get(storageKey("activity_totals_v1"));
+    assert.equal(saved.focus_session.name, "Shipping");
+    const queued = values.get(storageKey("queue_v1")).items;
+    assert.equal(queued.find((item) => item.event.focus_session?.name === "Release").event.focused_seconds, 9);
+    now += 4_000;
+    await send({ kind: "get_status" });
+    const totals = values.get(storageKey("activity_totals_v1")).totals;
+    assert.equal(totals.find((total) => total.focus_session?.name === "Shipping").focused_ms, 4_000);
+    assert.equal(values.get(storageKey("queue_v1")).items.length, queued.length);
+  } finally { Date.now = realNow; chrome.storage.session.set = realSet; }
+});

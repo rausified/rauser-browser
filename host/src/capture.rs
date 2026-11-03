@@ -198,6 +198,10 @@ pub(crate) fn activity_shape_is_bounded(event: &ActivityEvent) -> bool {
         && event.modes.len() <= 3
         && event.trails.len() <= 10
         && event.refs.len() <= 20
+        && event
+            .focus_session
+            .as_ref()
+            .is_none_or(focus_session_is_valid)
         && event.artifact_id.len() <= 512
         && event.artifact_type.len() <= 64
         && event.modes.iter().all(|mode| {
@@ -224,6 +228,17 @@ pub(crate) fn activity_shape_is_bounded(event: &ActivityEvent) -> bool {
                 && !reference.value.is_empty()
                 && reference.value.len() <= 512
         })
+}
+
+pub(crate) fn focus_session_is_valid(session: &brauser_protocol::FocusSession) -> bool {
+    Uuid::parse_str(&session.id).is_ok_and(|id| {
+        id.get_version_num() == 4
+            && id.get_variant() == uuid::Variant::RFC4122
+            && id.to_string() == session.id
+    }) && session.revision > 0
+        && !session.name.is_empty()
+        && session.name.chars().count() <= 120
+        && crate::presentation::plain_line(&session.name, 120) == session.name
 }
 
 /// The field bounds a logged activity must meet to be indexed: the shape
@@ -2710,6 +2725,7 @@ mod tests {
 
     fn activity() -> ActivityEvent {
         ActivityEvent {
+            focus_session: None,
             event_id: Uuid::new_v4().to_string(),
             artifact_id: "web:example/article".into(),
             artifact_type: "web.page".into(),
@@ -3952,6 +3968,77 @@ mod tests {
     }
 
     #[test]
+    fn focus_snapshots_are_bounded_and_never_authorize_capture() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let mut event = activity();
+        let session = brauser_protocol::FocusSession {
+            id: "00000000-0000-4000-8000-000000000099".into(),
+            name: "Release 😀".into(),
+            revision: 1,
+        };
+        event.focus_session = Some(session.clone());
+        assert!(activity_shape_is_valid(&event));
+        for name in [
+            "",
+            " leading",
+            "line\nbreak",
+            "hidden\u{202e}",
+            "line\u{2028}break",
+            &"x".repeat(121),
+        ] {
+            event.focus_session.as_mut().unwrap().name = name.into();
+            assert!(!activity_shape_is_valid(&event), "{name:?}");
+            assert!(matches!(
+                record_activity(&store, &event),
+                CaptureOutcome::Rejected { .. }
+            ));
+        }
+        event.focus_session = Some(session.clone());
+        event.focus_session.as_mut().unwrap().revision = 0;
+        assert!(!activity_shape_is_valid(&event));
+        event.focus_session = Some(session);
+        event.url = "https://foreign.example/items/1".into();
+        assert!(matches!(
+            record_activity(&store, &event),
+            CaptureOutcome::Rejected { .. }
+        ));
+        assert!(!root.path().join("log").exists());
+    }
+
+    #[test]
+    fn focus_snapshot_log_payload_and_retry_keep_the_original_label() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            CaptureStore::open_at(&storage(root.path(), "log"), None, state.path()).unwrap();
+        let mut event = activity();
+        event.focus_session = Some(brauser_protocol::FocusSession {
+            id: "00000000-0000-4000-8000-000000000099".into(),
+            name: "Release".into(),
+            revision: 1,
+        });
+        let CaptureOutcome::Persisted { relative_path } = record_activity(&store, &event) else {
+            panic!("persisted");
+        };
+        let path = root.path().join(relative_path);
+        let original = fs::read(&path).unwrap();
+        assert!(matches!(
+            record_activity(&store, &event),
+            CaptureOutcome::Suppressed { .. }
+        ));
+        event.focus_session.as_mut().unwrap().name = "Changed".into();
+        let _ = record_activity(&store, &event);
+        assert_eq!(
+            fs::read(path).unwrap(),
+            original,
+            "a duplicate cannot rewrite a recorded snapshot"
+        );
+    }
+
+    #[test]
     fn pre_sanitizer_activity_and_why_recovery_keeps_exact_marker_payloads() {
         for why in [false, true] {
             let root = tempfile::tempdir().unwrap();
@@ -4677,6 +4764,7 @@ mod tests {
                     ..event()
                 };
                 let activity = ActivityEvent {
+                    focus_session: None,
                     url: url.clone(),
                     ..activity()
                 };

@@ -105,6 +105,7 @@ mod tests {
         let config = crate::config::ConfigStore::load_from(path);
         let _lock = config.lock_current().unwrap();
         let source = ActivityEvent {
+            focus_session: None,
             event_id: "00000000-0000-4000-8000-000000000001".into(),
             artifact_id: "work:example.com/1".into(),
             artifact_type: "work.item".into(),
@@ -120,6 +121,7 @@ mod tests {
             refs: vec![],
         };
         let target = ActivityEvent {
+            focus_session: None,
             event_id: "00000000-0000-4000-8000-000000000002".into(),
             artifact_id: "work:example.com/2".into(),
             url: "https://example.com/items/2".into(),
