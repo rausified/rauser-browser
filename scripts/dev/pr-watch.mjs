@@ -67,7 +67,7 @@ const PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
 // CI jobs that feed the required "Build and check" gate (ci.yml build-gate):
 // a failure here fails the gate, so it is reported before the gate finishes.
-const GATE_INPUT = /^(Classify changes|Docs and queue checks|macOS|Windows|Detect macOS runner starvation)\b/;
+const GATE_INPUT = /^(Classify changes|Docs and queue checks|Accessibility|macOS|Windows|Detect macOS runner starvation)\b/;
 const MACOS_PRIMARY = /^macOS \/ .*\(macos-15\)$/;
 const STARVATION_CHECK = "Detect macOS runner starvation";
 const MACOS_FALLBACK = /^macOS fallback\b/;

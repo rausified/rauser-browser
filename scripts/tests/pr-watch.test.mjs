@@ -387,3 +387,14 @@ test("a real check failure outranks DIRTY and mentions the conflict", () => {
   assert.equal(d.exitCode, EXIT.CHECK_FAILED);
   assert.match(d.message, /also conflicts with main/);
 });
+
+test("a failed Accessibility job blocks like the platform builds (PR #275)", () => {
+  const contexts = rollup([
+    done("PR owner", "SUCCESS", { required: true }),
+    done("Accessibility", "FAILURE"),
+    run("Windows / Build and check (windows-latest)", "IN_PROGRESS", null),
+  ]);
+  const d = decide(snap({ contexts }));
+  assert.equal(d.exitCode, EXIT.CHECK_FAILED);
+  assert.match(d.message, /Accessibility/);
+});
