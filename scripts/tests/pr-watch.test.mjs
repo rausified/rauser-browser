@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  DOCTOR_GRACE_MINUTES, EXIT, analyzeChecks, armCommand, classifyConflicts, decide, decideConflict,
-  doctorComment, latestChecks, parseArgs, snapshotFromGraphql, statusLine,
+  ADMIT_GRACE_MINUTES, DOCTOR_GRACE_MINUTES, EXIT, analyzeChecks, classifyConflicts, decide, decideConflict,
+  doctorComment, enqueueCommand, latestChecks, parseArgs, snapshotFromGraphql, statusLine,
 } from "../dev/pr-watch.mjs";
 
 // --- Fixtures in the recorded shape of the GraphQL query (PR #243, 2026-11-02) --
@@ -17,7 +17,7 @@ const done = (name, conclusion = "SUCCESS", opts) => run(name, "COMPLETED", conc
 const status = (context, state, description, required = true) =>
   ({ __typename: "StatusContext", context, state, description, isRequired: required });
 
-const NO_HOLD = status("merge-hold", "SUCCESS", "No merge hold");
+const NO_HOLD = status("merge-hold", "SUCCESS", "Retired: the Mergify queue replaced the final-stretch hold");
 const GREEN = [
   done("Classify changes"),
   done("PR owner", "SUCCESS", { required: true, runId: 41500842845, workflow: "PR hygiene" }),
@@ -30,7 +30,10 @@ const GREEN = [
   done("macOS fallback", "SKIPPED"),
   done("Build and check", "SUCCESS", { required: true }),
   NO_HOLD,
+  // Mergify admitted the PR (it is labeled queue in the default fixture).
+  run("Mergify Merge Queue", "IN_PROGRESS", null, { workflow: "" }),
 ];
+const NOT_ADMITTED = GREEN.filter((node) => node.name !== "Mergify Merge Queue");
 
 /** Replaces checks by name in GREEN (or appends). */
 function rollup(overrides = [], base = GREEN) {
@@ -38,16 +41,15 @@ function rollup(overrides = [], base = GREEN) {
   return [...base.filter((node) => !names.has(node.name ?? node.context)), ...overrides];
 }
 
-function graphql({ pr = {}, contexts = GREEN, mergeQueue = null } = {}) {
+function graphql({ pr = {}, contexts = GREEN } = {}) {
   return {
     repository: {
-      mergeQueue,
       main: { target: { oid: "m".repeat(40) } },
       pullRequest: {
         number: 243, state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
-        isInMergeQueue: false, headRefName: "feat/confluence-starter", headRefOid: "6629a6b3a95ba330a0a564eb5f22a0e9fe7a843a",
-        autoMergeRequest: { enabledAt: "2026-11-02T16:14:08Z" }, mergeQueueEntry: null,
-        labels: { nodes: [] },
+        headRefName: "feat/confluence-starter", headRefOid: "6629a6b3a95ba330a0a564eb5f22a0e9fe7a843a",
+        autoMergeRequest: null,
+        labels: { nodes: [{ name: "queue" }] },
         commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: contexts } } } }] },
         ...pr,
       },
@@ -79,11 +81,16 @@ test("parseArgs refuses a missing PR, a bad --until and a hammering interval", (
 // --- snapshot + latestChecks ---------------------------------------------------
 
 test("snapshotFromGraphql reads the recorded field shapes", () => {
-  const s = snap({ pr: { labels: { nodes: [{ name: "final-stretch" }] } }, mergeQueue: { id: "MQ_1" } });
+  const s = snap({ pr: { labels: { nodes: [{ name: "queue" }, { name: "queued" }] }, autoMergeRequest: { enabledAt: "2026-11-02T16:14:08Z" } } });
   assert.equal(s.number, 243);
   assert.equal(s.autoMerge, true);
-  assert.equal(s.mergeQueueEnabled, true);
-  assert.deepEqual(s.labels, ["final-stretch"]);
+  assert.equal(s.queueRequested, true);
+  assert.deepEqual(s.queueBlockers, []);
+  assert.deepEqual(s.labels, ["queue", "queued"]);
+  assert.equal(snap({ pr: { labels: { nodes: [{ name: "queued" }] } } }).queueRequested, false);
+  assert.deepEqual(snap({ pr: { labels: { nodes: [{ name: "queue" }, { name: "pr-doctor:skip" }] } } }).queueBlockers, ["pr-doctor:skip"]);
+  assert.equal(analyzeChecks(s.checks).inQueue, true);
+  assert.equal(analyzeChecks(snap({ contexts: NOT_ADMITTED }).checks).inQueue, false);
   assert.equal(s.mainOid, "m".repeat(40));
   const gate = s.checks.find((check) => check.name === "Build and check");
   assert.deepEqual([gate.state, gate.required, gate.runId], ["SUCCESS", true, 41500842838]);
@@ -116,9 +123,12 @@ test("merged exits 0; closed exits CLOSED", () => {
 });
 
 test("--until green finishes as soon as required checks pass", () => {
-  const d = decide(snap({ pr: { autoMergeRequest: null } }), { until: "green" });
+  const d = decide(snap({ pr: { labels: { nodes: [] } } }), { until: "green" });
   assert.equal(d.exitCode, EXIT.DONE);
-  assert.match(d.message, /gh pr merge --auto --merge 243/);
+  assert.match(d.message, /not queued \(gh pr edit 243 --add-label queue\)/);
+  assert.match(decide(snap(), { until: "green" }).message, /green and it is in the Mergify queue/);
+  assert.match(decide(snap({ pr: { labels: { nodes: [{ name: "queue" }, { name: "needs-merge" }] } } }), { until: "green" }).message,
+    /labeled queue but needs-merge keeps it out of the queue/);
 });
 
 test("--until green waits while the aggregate gate has not reported (PR #264, Codex P2)", () => {
@@ -145,9 +155,10 @@ test("a draft says how to mark it ready", () => {
 
 for (const [name, opts, expect] of [
   ["BEHIND with checks pending", { pr: { mergeStateStatus: "BEHIND" }, contexts: rollup([run("macOS / Build and check (macos-15)", "IN_PROGRESS", null), run("Build and check", "QUEUED", null, { required: true })]) }, /waiting on macOS .*BEHIND main: that is fine, do not merge main in/],
-  ["BEHIND, green, auto-merge armed", { pr: { mergeStateStatus: "BEHIND" } }, /auto-merge armed \(BEHIND\).*do not merge main in/],
+  ["BEHIND, green, queued", { pr: { mergeStateStatus: "BEHIND" } }, /in the Mergify queue \(BEHIND\).*do not merge main in/],
+  ["queued while Mergify tests its draft", {}, /in the Mergify queue \(CLEAN\)/],
+  ["green and labeled, Mergify not yet admitted", { contexts: NOT_ADMITTED }, /labeled queue; waiting for Mergify to admit it/],
   ["BLOCKED only by pending checks", { pr: { mergeStateStatus: "BLOCKED" }, contexts: rollup([run("Build and check", "IN_PROGRESS", null, { required: true })]) }, /waiting on Build and check/],
-  ["in the merge queue", { pr: { isInMergeQueue: true, mergeQueueEntry: { position: 2 } }, mergeQueue: { id: "MQ" } }, /merge queue at position 2/],
   ["no checks reported yet", { pr: { mergeStateStatus: "BLOCKED" }, contexts: [] }, /waiting on checks to start/],
 ]) {
   test(`waits: ${name}`, () => {
@@ -159,11 +170,20 @@ for (const [name, opts, expect] of [
   });
 }
 
-test("merge-hold pending names the PR in its final stretch", () => {
-  const held = rollup([status("merge-hold", "PENDING", "Held while #250, #251 are in the final stretch")]);
-  const d = decide(snap({ pr: { mergeStateStatus: "BLOCKED" }, contexts: held }));
+test("a pending merge-hold (retired, always green once posted) is an ordinary pending check", () => {
+  const contexts = rollup([status("merge-hold", "PENDING", "")]);
+  const d = decide(snap({ pr: { mergeStateStatus: "BLOCKED" }, contexts }));
   assert.equal(d.done, false);
-  assert.match(d.message, /#250, #251 carries final-stretch/);
+  assert.match(d.message, /waiting on merge-hold/);
+});
+
+test("a failed Mergify queue run on a queued PR says it was dequeued", () => {
+  const contexts = rollup([done("Mergify Merge Queue", "FAILURE", { workflow: "" })]);
+  const d = decide(snap({ contexts }));
+  assert.equal(d.exitCode, EXIT.CHECK_FAILED);
+  assert.equal(d.action, "dequeued");
+  assert.match(d.message, /@mergifyio requeue/);
+  assert.doesNotMatch(statusLine(snap({ contexts }), d), /non-blocking failures/);
 });
 
 // --- decide: macOS starvation and cancellations -------------------------------------
@@ -200,7 +220,7 @@ test("starved macOS with a passing fallback and a green gate is green", () => {
     done("Detect macOS runner starvation"),
     done("macOS fallback / Build and check (macos-15-intel)"),
   ]);
-  assert.equal(decide(snap({ contexts })).action, "armed:CLEAN");
+  assert.equal(decide(snap({ contexts })).action, "queued:CLEAN");
 });
 
 test("macOS cancelled without starvation (recorded run 41553653914): rerun the cancelled job", () => {
@@ -249,17 +269,52 @@ test("PR owner failure points at the PR template, not a log", () => {
 test("a failing non-required check outside the gate does not stop the watch", () => {
   const contexts = rollup([done("Review new dependencies", "FAILURE")]);
   const s = snap({ contexts });
-  assert.equal(decide(s).action, "armed:CLEAN");
+  assert.equal(decide(s).action, "queued:CLEAN");
   assert.match(statusLine(s, decide(s)), /non-blocking failures: Review new dependencies/);
 });
 
-// --- decide: auto-merge -------------------------------------------------------------------
+// --- decide: enqueueing ------------------------------------------------------------------
 
-test("green with auto-merge off advises arming it, with the queue-aware command", () => {
-  const d = decide(snap({ pr: { autoMergeRequest: null } }));
-  assert.equal(d.exitCode, EXIT.ARM_AUTO_MERGE);
-  assert.match(d.message, /gh pr merge --auto --merge 243/);
-  assert.equal(armCommand(snap({ mergeQueue: { id: "MQ" } })), "gh pr merge --auto 243");
+test("GitHub auto-merge armed is an action: it would merge around the queue", () => {
+  const armed = { enabledAt: "2026-11-02T16:14:08Z" };
+  const unlabeled = decide(snap({ pr: { labels: { nodes: [] }, autoMergeRequest: armed } }));
+  assert.equal(unlabeled.exitCode, EXIT.ENQUEUE);
+  assert.equal(unlabeled.action, "auto-merge-armed");
+  assert.match(unlabeled.message, /gh pr merge --disable-auto 243 && gh pr edit 243 --add-label queue/);
+  // Pending checks are no excuse: the merge happens the moment they pass.
+  const pending = rollup([run("Build and check", "IN_PROGRESS", null, { required: true })]);
+  assert.equal(decide(snap({ pr: { autoMergeRequest: armed }, contexts: pending })).action, "auto-merge-armed");
+  assert.match(decide(snap({ pr: { autoMergeRequest: armed } })).message, /--disable-auto 243$/);
+});
+
+for (const label of ["pr-doctor:skip", "needs-merge"]) {
+  test(`labeled queue plus ${label}: Mergify never admits it, so act naming the label`, () => {
+    const s = snap({ pr: { labels: { nodes: [{ name: "queue" }, { name: label }] } }, contexts: NOT_ADMITTED });
+    const d = decide(s);
+    assert.equal(d.exitCode, EXIT.QUEUE_BLOCKED);
+    assert.equal(d.action, `queue-blocked:${label}`);
+    assert.match(d.message, new RegExp(`carries ${label}`));
+    assert.match(d.message, new RegExp(`gh pr edit 243 --remove-label ${label}`));
+    assert.notEqual(d.action, "awaiting-admission");
+    assert.match(statusLine(s, d), new RegExp(`blocked by ${label}`));
+  });
+}
+
+test("green and labeled but never admitted: act after the admission grace period", () => {
+  const s = snap({ contexts: NOT_ADMITTED });
+  assert.equal(decide(s, { now: NOW, admitWaitSince: NOW }).done, false);
+  const since = new Date(Date.parse(NOW) - (ADMIT_GRACE_MINUTES + 1) * 60000).toISOString();
+  const d = decide(s, { now: NOW, admitWaitSince: since });
+  assert.equal(d.exitCode, EXIT.QUEUE_BLOCKED);
+  assert.equal(d.action, "queue-not-admitted");
+  assert.match(d.message, /Mergify app is installed/);
+});
+
+test("green, unlabeled and without auto-merge advises the queue label", () => {
+  const d = decide(snap({ pr: { labels: { nodes: [] } } }));
+  assert.equal(d.exitCode, EXIT.ENQUEUE);
+  assert.match(d.message, /gh pr edit 243 --add-label queue/);
+  assert.equal(enqueueCommand(snap()), "gh pr edit 243 --add-label queue");
 });
 
 // --- DIRTY: pr-doctor first --------------------------------------------------------------

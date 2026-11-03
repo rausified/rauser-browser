@@ -1,0 +1,55 @@
+# Mergify merge queue for main (AGENTS.md "Review and merge cadence").
+#
+# GitHub's own merge queue is unavailable: the repository is owned by a
+# personal account. Mergify tests each queued PR on top of current main and
+# merges it with a merge commit, one PR at a time.
+#
+# Entering the queue: the `queue` label (`gh pr edit <n> --add-label queue`),
+# the only supported way in. Never `gh pr merge` a PR into main: on a PR whose
+# checks are already green, even `--auto` merges at once, around the queue.
+# .github/workflows/mergify-enqueue.yml is only a safety net: an auto-merge
+# someone arms anyway on a pending PR becomes the label and is disarmed.
+# Removing the label dequeues.
+#
+# How a PR is tested: Mergify opens a draft PR on a `mergify/merge-queue/<hex>`
+# branch (main plus the PR), CI runs on it through ordinary pull_request events,
+# and the original PR merges once the checks below pass on that draft. A PR
+# that already contains main's tip merges at once, with no extra CI run.
+# `max_checks_retries: 1` both retries one flaky queue run (a starved macOS
+# runner, say) and keeps Mergify off the PR's own branch: with no retries and
+# one check at a time, Mergify would instead merge main into the PR branch
+# itself ("in-place checks"), a push that cancels the PR's own runs.
+#
+# Queue size 1 (`max_parallel_checks: 1`, the default `batch_size: 1`): no
+# speculative checks or batches. Either would spend extra macOS runs whenever
+# an entry ahead fails; revisit only if the queue backs up.
+#
+# Main's branch protection (required checks today: Build and check, PR owner,
+# Rust dependency policy, merge-hold) is also injected by Mergify as queue and
+# merge conditions, so the list below names the real checks and leaves the
+# retired merge-hold (always green) to the injection.
+
+merge_queue:
+  max_parallel_checks: 1
+
+queue_rules:
+  - name: default
+    merge_method: merge
+    max_checks_retries: 1
+    queue_conditions:
+      - base = main
+      - label = queue
+      - -draft
+      - -label = needs-merge
+      - -label = pr-doctor:skip
+      - check-success = Build and check
+      - check-success = Rust dependency policy
+      - check-success = PR owner
+
+pull_request_rules:
+  - name: Queue PRs labeled queue
+    conditions:
+      - base = main
+      - label = queue
+    actions:
+      queue:
