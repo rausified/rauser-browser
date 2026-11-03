@@ -115,6 +115,20 @@ test("Capture Site recognizes OneDrive document routes without scope or JSON", a
   assert.equal(updates(page)[0].config.adapters.artifacts[0].id, "sharepoint:{host}/{doc}");
 });
 
+test("the starter source line follows each starter's certification status", async () => {
+  // GitHub's three starters are release-certified, so nothing is pending.
+  const github = await captureReview(GITHUB_URL);
+  assert.equal(github.el("capture-site-source").textContent, "Starter rules checked against the live tool.");
+  // Jira is certified and Confluence pages is still a development draft.
+  const atlassian = await captureReview(JIRA_URL);
+  assert.equal(atlassian.el("capture-site-source").textContent,
+    "Starter rules checked against the live tool, except Confluence pages: a development draft whose live-tool certification is still pending.");
+  // Miro's only starter is a development draft.
+  const miro = await captureReview("https://miro.com/app/board/uXjVM0uuBLo=/");
+  assert.equal(miro.el("capture-site-source").textContent,
+    "Development starter draft · live-tool certification is still pending.");
+});
+
 test("Capture Site offers Miro boards as a starter, keyed by the padded board ID", async () => {
   const url = "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990";
   const page = await captureReview(url);
