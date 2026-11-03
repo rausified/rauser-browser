@@ -13,3 +13,5 @@ today) should hold at both entry points that write it, not just one.
 Change: add `field.maxLength = input.maxLength;` to `renderScopeField` in
 `extension/options.ts`, matching `starter-choice-view.ts`'s `box.maxLength`.
 Where: `extension/options.ts`.
+
+- Done 2026-11-03: 2355e26
