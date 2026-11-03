@@ -43,6 +43,13 @@ confirmed every rule and title; `checked_by` names the agent session). A
 development type has not been certified yet and carries `method: null`,
 `checked_on: null`, `checked_by: null`.
 
+## Adding a type
+
+1. Add a `types[]` entry to the family's JSON file (or a new family file, named `<family>.json`, for a tool with no existing entry) following the shape above.
+2. Add the type's `adapter.id` template (and any `within.id`) to `ids.lock.json`; `generate-starters.mjs` fails closed with "no lock entry for `<type>`" until it is there.
+3. Run `npm run gen:starters` and commit the regenerated `extension/starter-families.generated.ts` and `protocol/capture-site/catalog.json` alongside the source change.
+4. Add the type's doc page, `docs/adapters/<type>.md` (`adapter-templates.md` §11.1), and its shared test vectors.
+
 ## Frozen IDs
 
 `ids.lock.json` maps each type's `id` template (and `<container>#within` for

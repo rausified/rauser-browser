@@ -46,6 +46,12 @@ const MIRO = [
   "protocol/capture-site/shapes.json",
 ];
 
+test("a family-file change is in scope and runs gen:starters --check first", () => {
+  assert.deepEqual(outOfScope(["protocol/starters/atlassian.json"]), []);
+  assert.equal(names(["protocol/starters/atlassian.json"])[0], "starter sources");
+  assert.equal(names(["extension/starter-families.generated.ts"])[0], "starter sources");
+});
+
 test("the Confluence and Miro starter changes are in scope", () => {
   assert.deepEqual(outOfScope(CONFLUENCE), []);
   assert.deepEqual(outOfScope(MIRO), []);
