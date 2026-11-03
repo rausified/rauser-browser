@@ -10,6 +10,7 @@ Run with `npm run test:dev-tools` (python3 -m unittest discover -s scripts/tests
 from __future__ import annotations
 
 import os
+import stat
 import pathlib
 import shutil
 import subprocess
@@ -18,6 +19,20 @@ import tempfile
 import unittest
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _make_writable_and_retry(func, path, _exc):
+    # git marks object files read-only; Windows refuses to unlink those.
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _rmtree(path: pathlib.Path) -> None:
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_make_writable_and_retry)
+    else:
+        shutil.rmtree(path, onerror=_make_writable_and_retry)
+
 REPO = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
@@ -41,6 +56,8 @@ class CheckTests(unittest.TestCase):
     def add(self, name: str, text: str) -> None:
         (self.feed / name).write_text(text, encoding="utf-8")
 
+    @unittest.skipUnless((REPO / "docs" / "improvement-feed").is_dir(),
+                         "sparse checkout without docs/ (pr-hygiene Dev tools); check_current_state.py checks the real feed in build-os.yml")
     def test_repository_feed_passes(self) -> None:
         self.assertEqual(check_improvement_feed.check(REPO), [])
 
@@ -93,7 +110,7 @@ def git(cwd: pathlib.Path, *args: str, check: bool = True) -> subprocess.Complet
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
     }
-    return subprocess.run(["git", *args], cwd=cwd, env=env, check=check, capture_output=True, text=True)
+    return subprocess.run(["git", *args], cwd=cwd, env=env, check=check, capture_output=True, text=True, encoding="utf-8")
 
 
 class PlainMergeTests(unittest.TestCase):
@@ -101,7 +118,7 @@ class PlainMergeTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.repo = pathlib.Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.repo)
+        self.addCleanup(_rmtree, self.repo)
         git(self.repo, "init", "-q", "-b", "main")
         # The repository's real merge rules, so the test fails if the feed
         # ever comes to depend on a driver again.
@@ -147,13 +164,13 @@ class PlainMergeTests(unittest.TestCase):
         old = feed / "2026-11-01-old.md"
         old.write_text(entry("2026-11-01", "Old"), encoding="utf-8")
         self.commit_all("base")
-        self.branch("a", lambda: old.write_text(old.read_text() + "- +1 2026-11-02: seen again\n", encoding="utf-8"))
+        self.branch("a", lambda: old.write_text(old.read_text(encoding="utf-8") + "- +1 2026-11-02: seen again\n", encoding="utf-8"))
         self.branch("b", lambda: (feed / "2026-11-02-new.md").write_text(entry("2026-11-02", "New"), encoding="utf-8"))
 
         result = self.merge_both()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(old.read_text().endswith("- +1 2026-11-02: seen again\n"))
+        self.assertTrue(old.read_text(encoding="utf-8").endswith("- +1 2026-11-02: seen again\n"))
         self.assertEqual(check_improvement_feed.check(self.repo), [])
 
     def test_the_old_single_file_layout_conflicts(self) -> None:
@@ -161,8 +178,8 @@ class PlainMergeTests(unittest.TestCase):
         feed = self.repo / "FEED.md"
         feed.write_text("# Feed\n\n" + entry("2026-11-01", "Old"), encoding="utf-8")
         self.commit_all("base")
-        self.branch("a", lambda: feed.write_text(feed.read_text() + "\n" + entry("2026-11-02", "A"), encoding="utf-8"))
-        self.branch("b", lambda: feed.write_text(feed.read_text() + "\n" + entry("2026-11-02", "B"), encoding="utf-8"))
+        self.branch("a", lambda: feed.write_text(feed.read_text(encoding="utf-8") + "\n" + entry("2026-11-02", "A"), encoding="utf-8"))
+        self.branch("b", lambda: feed.write_text(feed.read_text(encoding="utf-8") + "\n" + entry("2026-11-02", "B"), encoding="utf-8"))
 
         result = self.merge_both()
 
