@@ -85,6 +85,26 @@ Summaries need the development service from step 3 and an installed, logged-in C
 5. Optionally edit the document types and categories the agent picks from, one per line, and click **Save vocabulary**.
 6. On any HTTP(S) page, click **Summarize & log** in the panel, press Command+Shift+9, or choose **Summarize with Brauser** from the page's context menu. The card shows the streamed text, then "Summarized" with the type, category, and importance. **Open in Codex** reopens a Codex run's thread in Codex Desktop; **Copy resume command** copies `cd '<knowledge base>' && claude --resume <session>` for a Claude Code run. Closing the panel does not stop a run; reopening it brings the card back. On the development branch with saved summaries, the finished card also shows the saved summary's line and **Open summary**, which opens the file in your default Markdown app; if the save fails, the card says why and, when a retry can work, offers **Retry save**, which saves the same answer again without rerunning the agent. A failure no retry can fix (a full or refusing daily log, an interrupted log entry that changed since, an invalid stored answer, or a newer summary of the page already saved) offers no Retry save, and a summary file it already wrote can still be opened.
 
+To personalize summaries, create `SUMMARY_STYLE.md` directly in your Brauser
+home folder (the folder settings names as **Home folder**). For example:
+
+```markdown
+Write in French, retaining product names as written.
+Emphasize decisions, deadlines and unresolved questions.
+Keep the assessment concise and explain what needs my attention.
+```
+
+Use an ordinary UTF-8 file of at most 8192 bytes; symlinks are refused. No
+special syntax is required. An empty or missing file uses the default style.
+If the file is invalid or cannot be read, the summary start message explains
+how to fix or rename it. Changes apply to new manual and automatic summaries;
+queued summaries keep their original guidance through a service restart.
+Tasks and Capture Site do not use this file. The required JSON answer fields
+and compiled instructions still apply. File-write and sending restrictions
+remain prompt instructions for the full-access agent, as described above.
+Rebuild the host to enable this feature. Older hosts ignore the file and its
+per-run snapshot, so summaries resumed after a rollback use their defaults.
+
 The panel updates when settings change, can send pending activity and pause capture, and follows whichever tab is active. On any HTTP(S) page it shows the address and title, loads that page's note (if any), and autosaves what you type. Recognized artifact pages also show measured activity and one-line context; **Recent** combines artifacts across tools and generates a copyable worklog. Brauser holds HTTP(S) site access from install; if you withdraw it in Chrome, the panel shows one banner with a button that opens Brauser's Chrome extension settings so you can turn it back on.
 
 In **Recent**, the worklog shows known capture gaps beside the preview, with

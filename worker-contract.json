@@ -3,6 +3,7 @@
   "merge": {
     "method": "label",
     "label": "queue",
+    "comment": "@Mergifyio queue",
     "never": ["gh pr merge"]
   },
   "queue": {
