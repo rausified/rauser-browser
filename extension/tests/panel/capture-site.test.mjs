@@ -346,6 +346,42 @@ test("a tenant_name starter renders its own field", async (t) => {
   assert.match(page.el("capture-site-preview").textContent, /Records Example items and Example notes only for: acme\./);
 });
 
+test("the records line reads the marked scope key, not the scope table's first key", async (t) => {
+  // Codex P2: the records line read Object.values(adapter.scope)[0], the
+  // scope table's first key in object order. A template with a fixed
+  // narrowing key (here, "category") declared ahead of its {"$scope": true}
+  // key ("workspace") showed that fixed value instead of what Save actually
+  // records.
+  const { setStarterFamiliesForTest } = await import("../../dist/starter-adapters.js");
+  const { EXAMPLE_TENANT_FAMILY } = await import("../starter-fixtures.mjs");
+  const family = {
+    ...EXAMPLE_TENANT_FAMILY,
+    types: [
+      {
+        ...EXAMPLE_TENANT_FAMILY.types[0],
+        adapter: {
+          ...EXAMPLE_TENANT_FAMILY.types[0].adapter,
+          // "category" is a required, non-"$scope" capture bound to one
+          // literal ("work") — a fixed narrowing key the engine accepts
+          // because it anchors a real path segment, not a placeholder.
+          match: [{ path: "/{category:(work)}/{workspace:name|lower}/item/{id:int}" }],
+          scope: { category: ["work"], workspace: { "$scope": true } },
+        },
+      },
+    ],
+  };
+  setStarterFamiliesForTest([family]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const url = "https://example.test/work/acme/item/1";
+  const page = await captureReview(url);
+  const scope = starterScope(page, "example");
+  scope.value = "acme";
+  scope.dispatch("input");
+  await until(() => !page.el("capture-site-save").disabled, "the tenant preflight");
+  assert.match(page.el("capture-site-preview").textContent, /Records Example items only for: acme\./);
+  assert.doesNotMatch(page.el("capture-site-preview").textContent, /only for: work/);
+});
+
 test("a same-URL tab switch and an SPA route change dismiss the review", async () => {
   const page = await captureReview();
   page.navigate(JIRA_URL, 2);

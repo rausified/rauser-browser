@@ -13,9 +13,31 @@ const {
   recordOrder,
   isContainerType,
   configuredScope,
+  matchingStarter,
+  starterRuleAddition,
   setStarterFamiliesForTest,
 } = await import("../dist/starter-adapters.js");
 const { EXAMPLE_TENANT_FAMILY } = await import("./starter-fixtures.mjs");
+
+// A tenant_name family whose one type has two match rules (EXAMPLE_TENANT_FAMILY's
+// example.item has only one), test-only, to exercise starterRuleAddition's
+// "a saved adapter is missing one of the current starter's rules" path on a
+// family keyed by something other than GitHub's "owner".
+const TENANT_TWO_RULE_FAMILY = {
+  ...EXAMPLE_TENANT_FAMILY,
+  types: [
+    {
+      ...EXAMPLE_TENANT_FAMILY.types[0],
+      adapter: {
+        ...EXAMPLE_TENANT_FAMILY.types[0].adapter,
+        match: [
+          ...EXAMPLE_TENANT_FAMILY.types[0].adapter.match,
+          { path: "/{workspace:name|lower}/item/{id:int}/detail" },
+        ],
+      },
+    },
+  ],
+};
 
 // [origin, expected StarterKind | null], computed from today's rules
 // (secureHostname: canonical https origin only; a subdomain suffix match
@@ -135,6 +157,48 @@ test("configuredScope reads only the scope key the family's templates mark, not 
     { type: "github.repo", origin: "https://github.com", scope: { owner: ["acme"], repo: ["api"] } },
   ];
   assert.deepEqual(configuredScope(artifacts, "https://github.com"), ["acme"]);
+});
+
+test("matchingStarter recognises a saved tenant-scoped adapter by its family's own marked scope key, not GitHub's owner", () => {
+  // Codex P2: matchingStarter used to pass ownersOf(adapter) (which only
+  // ever reads scope.owner) into starterOffers, so a saved tenant_name
+  // starter's scope was read as empty, starterOffers refused to build an
+  // adapter for a scoped type with no values, and the saved adapter could
+  // never be found among the (all-null) offers.
+  setStarterFamiliesForTest([EXAMPLE_TENANT_FAMILY]);
+  try {
+    const saved = {
+      type: "example.item",
+      origin: "https://example.test",
+      scope: { workspace: ["acme"] },
+      match: [{ path: "/{workspace:name|lower}/item/{id:int}" }],
+      id: "example.item:{host}/{workspace}/{id}",
+    };
+    const offer = matchingStarter(saved);
+    assert.ok(offer, "expected the tenant-scoped adapter to match its starter");
+    assert.equal(offer.artifact_type, "example.item");
+  } finally {
+    setStarterFamiliesForTest(null);
+  }
+});
+
+test("starterRuleAddition offers a missing rule on a saved tenant-scoped adapter", () => {
+  setStarterFamiliesForTest([TENANT_TWO_RULE_FAMILY]);
+  try {
+    const detailRule = TENANT_TWO_RULE_FAMILY.types[0].adapter.match[1];
+    const saved = {
+      type: "example.item",
+      origin: "https://example.test",
+      scope: { workspace: ["acme"] },
+      match: [TENANT_TWO_RULE_FAMILY.types[0].adapter.match[0]],
+      id: "example.item:{host}/{workspace}/{id}",
+    };
+    const update = starterRuleAddition(saved, detailRule);
+    assert.ok(update, "expected a rule addition for the tenant-scoped adapter");
+    assert.deepEqual(update.added, [detailRule]);
+  } finally {
+    setStarterFamiliesForTest(null);
+  }
 });
 
 test("the test seam swaps and restores the family list", () => {
