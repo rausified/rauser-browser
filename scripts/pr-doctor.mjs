@@ -109,7 +109,7 @@ export function commentBody({ outcome, files = [], sha = "", autoMerge = false, 
     case "repaired":
       return head + `Merged \`main\` into this branch as ${sha}. The conflicts were only in bookkeeping or both-sides-appended Markdown, resolved with main's text first:\n\n${list(files)}\n\nCI runs on the new commit. Pull before pushing again.`;
     case "needs-person":
-      return head + `This PR conflicts with \`main\` in files the doctor does not resolve on its own:${waiting}\n\n${list(files)}\n\nMerge \`main\` into the branch and resolve these by hand (bookkeeping files: \`python3 scripts/render_backlog.py --resolve\`). The \`${LABEL}\` label clears on the next run after the PR merges cleanly.`;
+      return head + `This PR conflicts with \`main\` in files the doctor does not resolve on its own.${waiting} The files:\n\n${list(files)}\n\nMerge \`main\` into the branch and resolve these by hand (bookkeeping files: \`python3 scripts/render_backlog.py --resolve\`). The \`${LABEL}\` label clears on the next run after the PR merges cleanly.`;
     case "report-only":
       return head + `This PR conflicts with \`main\`.${waiting}\n\n${resolvable
         ? `The doctor could resolve it (bookkeeping or both-sides-appended Markdown only) but has no push token (\`PR_DOCTOR_TOKEN\`), so it did not:`
