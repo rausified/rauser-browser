@@ -1,16 +1,19 @@
 // CI change classifier (AGENTS.md "Review and merge cadence"): decides whether a
-// pull request or merge group touches only docs and work-queue files, so
+// pull request or merge group touches only docs and beads configuration, so
 // .github/workflows/ci.yml can skip the macOS and Windows builds and run the
-// cheap docs/queue checks instead. Nothing builds, tests or ships from these
+// cheap docs checks instead. Nothing builds, tests or ships from these
 // paths, so skipping the builds for them is safe:
 //
 // - Markdown at the repository root (AGENTS.md, DESIGN.md, TESTING.md,
-//   README.md, BOSUN_FEATURE_BACKLOG.md, CookieFeature.md,
-//   PENDING_AMOS_DOC_UPDATES.md, adapter-templates.md, ...). README.md and
-//   the status lines are checked by scripts/check_current_state.py, which the
-//   docs job still runs.
+//   README.md, CookieFeature.md, PENDING_AMOS_DOC_UPDATES.md,
+//   adapter-templates.md, ...). README.md and the status lines are checked by
+//   scripts/check_current_state.py, which the docs job still runs.
 // - Anything under docs/ (plans, specs, history, starter-adapter notes).
-// - Anything under .beads/ (the work queue).
+// - Anything under .beads/ (bd's configuration; the queue itself lives in
+//   bd's Dolt database, synced through refs/dolt/data, and
+//   BOSUN_FEATURE_BACKLOG.md is rendered, never committed). A change that commits either queue file
+//   to main is still docs-only here, and check_current_state.py, which every
+//   CI path runs, fails it (AGENTS.md "Work queue").
 //
 // Everything else is code, including SUMMARY.md at the root (the native host
 // compiles it in as the page-summary prompt, so its tests must run) and

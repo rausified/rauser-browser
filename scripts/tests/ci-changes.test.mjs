@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { classify, isDocsOrQueuePath, parseNameList } from "../ci-changes.mjs";
 
-test("root Markdown, docs/ and the beads queue are docs or queue files", () => {
+test("root Markdown, docs/ and .beads/ are docs paths (check_current_state.py refuses a committed queue file)", () => {
   for (const path of [
     "AGENTS.md",
     "BOSUN_FEATURE_BACKLOG.md",

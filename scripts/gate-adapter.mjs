@@ -44,7 +44,7 @@ const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const NODE_MAJOR = 24;
 
 /**
- * Paths an adapter or starter change may touch. Docs and queue files
+ * Paths an adapter or starter change may touch. Docs and beads config
  * (root Markdown, docs/**, .beads/**) are allowed too, through
  * scripts/ci-changes.mjs's isDocsOrQueuePath, so the two classifiers agree
  * on what counts as docs. Anything else needs the full README gate.
@@ -84,7 +84,7 @@ function matches(entry, file) {
   return entry.pattern.test(file);
 }
 
-/** True when `file` is a docs/queue file or on ALLOWLIST. */
+/** True when `file` is a docs/beads-config file or on ALLOWLIST. */
 export function isInScope(file) {
   if (typeof file !== "string" || file === "") return false;
   return isDocsOrQueuePath(file) || ALLOWLIST.some((entry) => matches(entry, file));
@@ -115,13 +115,9 @@ const HOST_TEST_INPUTS = anyOf("protocol/capture-site/catalog.json", "host/tests
  */
 export const STEPS = [
   // README/status consistency; cheap, and README.md changes with most starters.
+  // It also fails a change that commits the work queue, which lives in bd's
+  // Dolt database (bd edits, scripts/dev/queue sync publishes them).
   { name: "status docs", cmd: ["python3", "scripts/check_current_state.py"], when: () => true },
-  // The two queue views agree; only when the queue or its rendered view moved.
-  {
-    name: "queue consistency",
-    cmd: ["python3", "scripts/check_queue_consistency.py"],
-    when: anyOf(".beads/", "BOSUN_FEATURE_BACKLOG.md"),
-  },
   // The extension tests read vectors, catalog, shapes and host fixtures, so
   // any of those (or extension code) runs the whole extension group. The full
   // test:extension takes about a minute, so it is not subset.

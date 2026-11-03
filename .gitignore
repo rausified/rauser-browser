@@ -46,3 +46,10 @@ BOSUN_FEATURE_BACKLOG.md.bak-*
 # Python bytecode from scripts/ (render_backlog.py and its tests)
 __pycache__/
 .wardroom/
+
+# The work queue lives in bd's Dolt database, synced through refs/dolt/data
+# (AGENTS.md "Work queue"); edit beads with bd and publish with
+# `scripts/dev/queue sync`. The backlog is rendered into target/queue/.
+# Never commit either file (worker-contract.json never_commit).
+/.beads/issues.jsonl
+/BOSUN_FEATURE_BACKLOG.md
