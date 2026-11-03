@@ -88,7 +88,7 @@ class WorkerContractTests(unittest.TestCase):
         self.assertEqual(tuple(self.contract["never_commit"]), check_current_state.QUEUE_FILES)
 
     def test_the_queue_commands_name_real_subcommands(self) -> None:
-        for key in ("sync", "export"):
+        for key in ("sync", "export", "backlog"):
             command = self.contract["queue"][key].split()
             self.assertEqual(command[0], "scripts/dev/queue")
             self.assertTrue((ROOT / command[0]).is_file())

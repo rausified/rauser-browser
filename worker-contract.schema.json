@@ -56,6 +56,7 @@
         "bootstrap",
         "sync",
         "export",
+        "backlog",
         "sync_exit_codes"
       ],
       "properties": {
@@ -77,6 +78,11 @@
         },
         "export": {
           "description": "Prints the whole queue as JSONL on stdout; empty output is a failure.",
+          "type": "string",
+          "minLength": 1
+        },
+        "backlog": {
+          "description": "Prints BOSUN_FEATURE_BACKLOG.md, rendered from the frame, the notes and the beads, on stdout; the driver writes it to <workspace>/.bosun_queue_backlog.md after each sync.",
           "type": "string",
           "minLength": 1
         },

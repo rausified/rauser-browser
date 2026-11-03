@@ -55,10 +55,15 @@ SCRIPTS = pathlib.Path(__file__).resolve().parent
 QUEUE_PATH = ".beads/issues.jsonl"  # the old committed export, read from branches only
 EXPORT_PATH = "target/queue/issues.jsonl"
 WORKSPACE_ENV = "BRAUSER_QUEUE_WORKSPACE"  # run bd here instead of the checkout
+# The shared driver runs the contract's commands from a pristine checkout of
+# main (cwd), naming the workspace whose database they act on in these.
+BOSUN_WORKSPACE_ENV = "BOSUN_WORKSPACE"
+BEADS_DIR_ENV = "BEADS_DIR"
 DOLT_REF = "refs/dolt/data"
 PREFIX = "brwr"
 # Never prompt: the shared driver runs these with no TTY, a credential helper
-# in GIT_CONFIG_* and GH_TOKEN in the environment, which pass through as is.
+# in GIT_CONFIG_* and GH_TOKEN in the environment, which pass through as is
+# (so do BOSUN_WORKSPACE and BEADS_DIR, which bd reads itself).
 BD_ENV = {"BD_NON_INTERACTIVE": "1", "GIT_TERMINAL_PROMPT": "0"}
 # bd sync's documented exit codes.
 SYNC_EXITS = {
@@ -110,10 +115,12 @@ def bd(*args: str, cwd: pathlib.Path, check: bool = True) -> subprocess.Complete
 
 
 def repo_root(start: Optional[pathlib.Path] = None) -> pathlib.Path:
-    """The checkout to act for: START, else the one containing cwd, else this script's.
+    """The checkout whose tools and backlog frame to use: START, else the one
+    containing cwd, else this script's.
 
-    The shared driver runs the contract's commands in the workspace cwd, so
-    cwd wins over wherever the script happens to live.
+    The shared driver runs the contract's commands with cwd = a pristine
+    checkout of main and BOSUN_WORKSPACE naming the workspace, so this is
+    where the frame comes from; `workspace()` is where the database is.
     """
     for candidate in ([start] if start else []) + [pathlib.Path.cwd(), SCRIPTS]:
         result = git("rev-parse", "--show-toplevel", cwd=candidate, check=False)
@@ -125,9 +132,21 @@ def repo_root(start: Optional[pathlib.Path] = None) -> pathlib.Path:
 
 
 def workspace(repo: pathlib.Path) -> pathlib.Path:
-    """Where bd runs: $BRAUSER_QUEUE_WORKSPACE, else the checkout itself."""
-    override = os.environ.get(WORKSPACE_ENV)
-    return pathlib.Path(override).resolve() if override else repo
+    """Where bd runs, i.e. whose database the queue commands act on.
+
+    $BRAUSER_QUEUE_WORKSPACE, else $BOSUN_WORKSPACE (the shared driver's
+    workspace), else the directory holding $BEADS_DIR, else the checkout. bd
+    itself also honours BEADS_DIR, which is passed through unchanged.
+    """
+    for name in (WORKSPACE_ENV, BOSUN_WORKSPACE_ENV):
+        if os.environ.get(name):
+            return pathlib.Path(os.environ[name]).expanduser().resolve()
+    beads_dir = os.environ.get(BEADS_DIR_ENV)
+    if beads_dir:
+        path = pathlib.Path(beads_dir).expanduser().resolve()
+        if path.name == ".beads":
+            return path.parent
+    return repo
 
 
 # --------------------------------------------------------------------------
@@ -576,7 +595,17 @@ def seed(repo: pathlib.Path, remote: str, main: pathlib.Path, extras: list[pathl
     try:
         git("init", "-q", "-b", "main", str(work), cwd=repo)
         git("remote", "add", "origin", remote, cwd=work)
+        # bd init keeps a metadata.json that is already there, and gives the
+        # database that project_id; without it every clone that carries the
+        # committed file fails bd's workspace identity check (brwr-765q).
+        committed = repo / ".beads" / "metadata.json"
+        (work / ".beads").mkdir()
+        if committed.is_file():
+            shutil.copyfile(committed, work / ".beads" / "metadata.json")
         bd("init", "--prefix", PREFIX, "--non-interactive", "--skip-hooks", "--skip-agents", cwd=work)
+        project_id = json.loads((work / ".beads" / "metadata.json").read_text(encoding="utf-8")).get("project_id")
+        if committed.is_file() and project_id != json.loads(committed.read_text(encoding="utf-8")).get("project_id"):
+            raise QueueError(f"bd init did not keep the committed project_id from {committed}; nothing pushed")
         if dolt_remote(work) is None:
             bd("dolt", "remote", "add", "origin", f"git+{remote}", cwd=work)
         source = work / "seed.jsonl"
@@ -594,6 +623,11 @@ def seed(repo: pathlib.Path, remote: str, main: pathlib.Path, extras: list[pathl
         if not pushed:
             raise QueueError(f"bd dolt push reported success but {remote} has no {DOLT_REF}")
         print(f"queue: seeded {remote} with {count} bead(s) at {DOLT_REF} {pushed[0][:12]}")
+        if committed.is_file():
+            print(f"queue: the database keeps the committed project_id {project_id}")
+        else:
+            print(f"queue: {committed} is missing: commit .beads/metadata.json with project_id {project_id} "
+                  f"(the seeded database's), or clones fail bd's identity check")
         return pushed[0]
     finally:
         shutil.rmtree(work, ignore_errors=True)
