@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  MARKER, classifyPr, commentBody, resolveAppendOnly, stripGenerated,
+  MARKER, adoptArgs, classifyPr, commentBody, resolveAppendOnly, tryRepair,
 } from "../pr-doctor.mjs";
 
 // --- resolveAppendOnly: diff3 hunks whose base is empty ----------------------
@@ -48,26 +48,6 @@ test("text with no markers is already resolved and unchanged", () => {
 
 test("a truncated hunk is not resolved", () => {
   assert.equal(resolveAppendOnly("<<<<<<< ours\nx\n||||||| base\n=======\ny\n").resolved, false);
-});
-
-// --- stripGenerated: the backlog's generated blocks are emptied --------------
-
-test("generated backlog blocks are emptied, markers and prose kept", () => {
-  const text = [
-    "intro",
-    "<!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->",
-    "- generated line",
-    "<!-- END GENERATED section=plan -->",
-    "prose",
-    "",
-  ].join("\n");
-  assert.equal(stripGenerated(text), [
-    "intro",
-    "<!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->",
-    "<!-- END GENERATED section=plan -->",
-    "prose",
-    "",
-  ].join("\n"));
 });
 
 // --- classifyPr --------------------------------------------------------------
@@ -140,4 +120,100 @@ test("marker-looking text inside a side leaves the hunk to a person", () => {
   // A Markdown setext heading underline inside a side looks like a separator.
   const setext = "<<<<<<< ours\nTitle\n||||||| base\n=======\nOther\n=======\n>>>>>>> theirs\n";
   assert.equal(resolveAppendOnly(setext).resolved, false);
+});
+
+// --- The work queue left main (AGENTS.md "Work queue") -------------------------
+
+test("a needs-person comment explains how to move queue edits to the beads branch", () => {
+  const body = commentBody({ outcome: "needs-person", files: [".beads/issues.jsonl (bead(s) brwr-a1 changed differently)"] });
+  assert.match(body, /scripts\/dev\/queue adopt --from origin\/<this branch>/);
+  assert.match(body, /git rm/);
+});
+
+test("adopt pushes only when the doctor may push", () => {
+  assert.deepEqual(adoptArgs({ number: 7, base: "abc", push: true }),
+    ["adopt", "--from", "HEAD", "--base", "abc", "-m", "queue: carry bead edits from #7 (PR doctor)"]);
+  assert.equal(adoptArgs({ number: 7, base: "abc", push: false }).at(-1), "--dry-run");
+});
+
+// A PR cut before the move still edits the queue: main deleted the files, so
+// GitHub reports a modify/delete conflict. The doctor carries the edits to
+// the beads branch and drops the files from the PR.
+test("tryRepair moves a PR's queue edits to the beads branch and drops the files", { skip: process.platform === "win32" }, async () => {
+  const { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const scripts = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pr-doctor-queue-")));
+  const identity = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
+  const saved = { ...process.env };
+  const cwd = process.cwd();
+  const run = (dir, ...args) => {
+    const r = spawnSync("git", args, { cwd: dir, encoding: "utf8", env: { ...process.env, ...identity } });
+    assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  const bead = (id, extra = {}) => JSON.stringify({ id, title: `Title of ${id}`, status: "open", priority: 2, created_at: "2026-10-01T00:00:00Z", ...extra });
+  const backlog = (ids) => {
+    const block = (section, body = "") => `<!-- BEGIN GENERATED section=${section}: edit the beads, then run python3 scripts/render_backlog.py -->\n${body}<!-- END GENERATED section=${section} -->\n`;
+    const items = ids.map((id) => `- [ ] \`${id}\` **Title of ${id}.** _(P2)_\n`).join("");
+    return `# Backlog\n\n## Proposed\n\n${block("new", items)}\n## In Progress\n\n${block("in-progress")}\n## Shipped\n\n${block("shipped")}`;
+  };
+  try {
+    Object.assign(process.env, identity);
+    delete process.env.BRAUSER_QUEUE_DIR;
+    const origin = join(root, "origin.git");
+    run(root, "init", "-q", "--bare", "-b", "main", origin);
+    const seed = join(root, "seed");
+    run(root, "init", "-q", "-b", "main", seed);
+    mkdirSync(join(seed, ".beads"));
+    writeFileSync(join(seed, ".beads/issues.jsonl"), `${bead("brwr-a1")}\n`);
+    writeFileSync(join(seed, "BOSUN_FEATURE_BACKLOG.md"), backlog(["brwr-a1"]));
+    writeFileSync(join(seed, "notes.md"), "# Notes\n");
+    run(seed, "add", ".");
+    run(seed, "commit", "-qm", "base");
+    // The PR: a bead edit plus an ordinary change.
+    run(seed, "checkout", "-q", "-b", "feat/old");
+    writeFileSync(join(seed, ".beads/issues.jsonl"), `${bead("brwr-a1")}\n${bead("brwr-p1")}\n`);
+    writeFileSync(join(seed, "BOSUN_FEATURE_BACKLOG.md"), backlog(["brwr-a1", "brwr-p1"]));
+    writeFileSync(join(seed, "code.txt"), "pr\n");
+    run(seed, "add", ".");
+    run(seed, "commit", "-qm", "pr");
+    // Main moves the queue off.
+    run(seed, "checkout", "-q", "main");
+    run(seed, "rm", "-q", ".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md");
+    run(seed, "commit", "-qm", "queue moved");
+    run(seed, "push", "-q", origin, "main", "feat/old");
+    run(seed, "checkout", "-q", "--orphan", "beads");
+    run(seed, "rm", "-rqf", ".");
+    mkdirSync(join(seed, ".beads"), { recursive: true });
+    writeFileSync(join(seed, ".beads/issues.jsonl"), `${bead("brwr-a1")}\n${bead("brwr-q1")}\n`);
+    writeFileSync(join(seed, "BOSUN_FEATURE_BACKLOG.md"), backlog(["brwr-a1", "brwr-q1"]));
+    run(seed, "add", ".");
+    run(seed, "commit", "-qm", "beads");
+    run(seed, "push", "-q", origin, "beads");
+
+    const clone = join(root, "clone");
+    run(root, "clone", "-q", origin, clone);
+    process.chdir(clone);
+    const result = tryRepair({ number: 9, headRefName: "feat/old" }, scripts, true);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.files.sort(), [
+      ".beads/issues.jsonl (bead edits moved to the beads branch)",
+      "BOSUN_FEATURE_BACKLOG.md (bead edits moved to the beads branch)",
+    ]);
+    const tree = run(clone, "ls-tree", "-r", "--name-only", "HEAD").split("\n");
+    assert.ok(!tree.includes(".beads/issues.jsonl") && !tree.includes("BOSUN_FEATURE_BACKLOG.md"), tree.join(","));
+    assert.ok(tree.includes("code.txt"));
+    const queue = run(origin, "show", "beads:.beads/issues.jsonl");
+    for (const id of ["brwr-a1", "brwr-p1", "brwr-q1"]) assert.match(queue, new RegExp(`"${id}"`));
+    assert.match(run(origin, "log", "-1", "--format=%s", "beads"), /carry bead edits from #9/);
+  } finally {
+    process.chdir(cwd);
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+    rmSync(root, { recursive: true, force: true });
+  }
 });

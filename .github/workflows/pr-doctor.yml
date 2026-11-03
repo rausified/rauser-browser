@@ -2,8 +2,10 @@ name: PR doctor
 
 # A PR that conflicts with main runs no CI, so auto-merge waits on it forever
 # with nothing failing. This finds those PRs, merges main into the ones whose
-# conflicts are only bookkeeping or both-sides-appended Markdown, and labels
+# conflicts are only work-queue files (their edits are carried to the beads
+# branch, AGENTS.md "Work queue") or both-sides-appended Markdown, and labels
 # and comments on the rest (AGENTS.md "PR doctor", scripts/pr-doctor.mjs).
+# The same token pushes those queue edits to the beads branch.
 #
 # Repairs are pushed only with the PR_DOCTOR_TOKEN secret (a fine-grained
 # token with Contents and Pull requests write on this repository): a push
@@ -52,7 +54,8 @@ jobs:
         # The repair checks out PR branches; only main's copies ever run.
         run: |
           mkdir -p "$RUNNER_TEMP/pr-doctor"
-          cp scripts/pr-doctor.mjs scripts/render_backlog.py "$RUNNER_TEMP/pr-doctor/"
+          cp scripts/pr-doctor.mjs scripts/work_queue.py scripts/render_backlog.py \
+            scripts/check_queue_consistency.py "$RUNNER_TEMP/pr-doctor/"
           git config user.name "PR doctor"
           git config user.email "pr-doctor@users.noreply.github.com"
       - name: Run the PR doctor

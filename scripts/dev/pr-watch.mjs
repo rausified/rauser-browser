@@ -35,7 +35,7 @@ import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { LABEL as NEEDS_MERGE_LABEL, MARKER as DOCTOR_MARKER, resolveAppendOnly } from "../pr-doctor.mjs";
+import { LABEL as NEEDS_MERGE_LABEL, MARKER as DOCTOR_MARKER, QUEUE_FILES, resolveAppendOnly } from "../pr-doctor.mjs";
 import { HOLD_LABEL, STATUS_CONTEXT as HOLD_CONTEXT } from "../merge-hold.mjs";
 
 export const EXIT = Object.freeze({
@@ -43,8 +43,9 @@ export const EXIT = Object.freeze({
   CHECK_FAILED: 10, CONFLICT: 11, ARM_AUTO_MERGE: 12, CLOSED: 13, DRAFT: 14, CANCELLED: 15,
 });
 
-// pr-doctor resolves these through render_backlog.py --resolve (scripts/pr-doctor.mjs).
-export const DOCTOR_BOOKKEEPING = Object.freeze([".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md"]);
+// The work queue left main for the beads branch; a PR that still edits it
+// conflicts there, and pr-doctor carries the edits over (scripts/pr-doctor.mjs).
+export const DOCTOR_BOOKKEEPING = QUEUE_FILES;
 export const DOCTOR_CYCLE_MINUTES = 20;
 // One doctor cycle plus the run's own few minutes and cron lateness.
 export const DOCTOR_GRACE_MINUTES = 30;
@@ -190,7 +191,7 @@ export function doctorComment(comments) {
 
 const minutesBetween = (from, to) => (Date.parse(to) - Date.parse(from)) / 60000;
 const mergeMainAdvice = (files) =>
-  `merge main yourself: git fetch origin && git merge origin/main, resolve ${files.length ? short(files, 6) : "the conflicts"} (bookkeeping files: python3 scripts/render_backlog.py --resolve), run the focused checks, push`;
+  `merge main yourself: git fetch origin && git merge origin/main, resolve ${files.length ? short(files, 6) : "the conflicts"} (queue files: scripts/dev/queue adopt --from HEAD, then git rm them), run the focused checks, push`;
 
 /** The DIRTY branch of decide(): wait for pr-doctor, or hand the merge to you. */
 export function decideConflict(snap, { now, dirtySince = null, doctorRuns = [], comment = null, conflicts = null } = {}) {
