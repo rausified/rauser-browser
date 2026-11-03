@@ -364,6 +364,8 @@
   remain assigned work. This is an internal prerequisite, not enabled
   migration. Brauser's design, staged plan and testing guidance stay here.
 
+- **Brauser named focus sessions (2026-11-03):** Explicit Start/Rename/End in the panel groups measured cross-tool activity in the worklog. Sessions survive restarts; pause and offline time stay unmeasured. Immutable name snapshots replay from logs without changing ordinary totals or capture authority. Names persist with captured activity and copied worklogs; empty sessions generate no record, agent run or network request.
+
 - **Brauser personal summary style (2026-11-03, `brwr-sm4`):** Users can tailor
   summary language, emphasis and presentation through an optional home-root
   `SUMMARY_STYLE.md`. Each new summary snapshots bounded UTF-8 guidance before

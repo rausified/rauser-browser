@@ -479,6 +479,7 @@ fn uuid(fixture: u32, n: u32) -> String {
 
 fn act(id: String, artifact: &str, title: Option<&str>, at: &str) -> ActivityEvent {
     ActivityEvent {
+        focus_session: None,
         event_id: id,
         artifact_id: format!("work:example.com/{artifact}"),
         artifact_type: "work.item".into(),

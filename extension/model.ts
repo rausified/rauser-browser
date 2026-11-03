@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, AdapterDocument, AutoSummaryConfig, OverflowMarker, VisitEvent, VisitOutcome,
+  ActivityEvent, FocusSession, AdapterDocument, AutoSummaryConfig, OverflowMarker, VisitEvent, VisitOutcome,
 } from "../protocol/ts/generated.js";
 import {
   compileDocument,
@@ -7,6 +7,7 @@ import {
   type CompiledDocument,
   type CompileResult,
 } from "./adapter-templates.js";
+import { isFocusSession } from "./focus-session.js";
 import { storageKey } from "./brand.js";
 
 export const POLICY_LEASE_MS = 24 * 60 * 60 * 1_000;
@@ -100,6 +101,7 @@ export interface QueueState {
 }
 
 export interface WorkerStatus {
+  focus_session: FocusSession | null;
   queued: number;
   live_activity: number;
   next_retry_at: number | null;
@@ -132,6 +134,7 @@ export type WorkerRequest =
   | { kind: "discard_pending"; event_ids: string[] }
   | { kind: "get_pending" }
   | { kind: "get_activity" }
+  | { kind: "change_focus"; expected: FocusSession | null; name: string | null }
   | { kind: "get_site_patterns"; origin: string }
   | { kind: "clear_site_patterns"; origin: string }
   | { kind: "ack_visit"; event_id: string; outcome: VisitOutcome; reason: string | null }
@@ -270,6 +273,7 @@ export function isQueuedVisit(value: unknown): value is QueuedVisit {
     typeof visit.occurred_at === "string" &&
     visit.incognito === false;
   const activity =
+    (visit.focus_session === undefined || isFocusSession(visit.focus_session)) &&
     typeof visit.artifact_id === "string" &&
     typeof visit.artifact_type === "string" &&
     typeof visit.opens === "number" &&
