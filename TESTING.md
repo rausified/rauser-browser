@@ -431,7 +431,7 @@ Chrome gates. The macOS smoke runner's localhost adapter flow is unchanged;
 Capture Site adds no scripted dialogs; the runner compares answered dialogs
 with its transcript instead of expecting a fixed total.
 
-`npm run gate:adapter` (scripts/gate-adapter.mjs) is the local gate for starter and adapter-template changes. From the changed paths it picks the status and queue checks, typecheck, lint, build:extension and test:extension (for extension or protocol data changes), test:a11y (only for page markup or styles), cargo fmt, the adapter-templates tests and clippy (for engine tests or protocol data), and the host's `capture_site`, `service::prompt` and `site_draft` unit tests (for the catalog or host capture fixtures). It refuses paths outside its allowlist, which is kept as data at the top of the script; adapter-templates/src, extension/panel.ts, the protocol schema and host code always need the full gate. Its allowlist and step selection are unit-tested in scripts/tests/gate-adapter.test.mjs.
+`npm run gate:adapter` (scripts/gate-adapter.mjs) is the local gate for starter and adapter-template changes. From the changed paths it picks the status check (which also refuses a committed work-queue file), typecheck, lint, build:extension and test:extension (for extension or protocol data changes), test:a11y (only for page markup or styles), cargo fmt, the adapter-templates tests and clippy (for engine tests or protocol data), and the host's `capture_site`, `service::prompt` and `site_draft` unit tests (for the catalog or host capture fixtures). It refuses paths outside its allowlist, which is kept as data at the top of the script; adapter-templates/src, extension/panel.ts, the protocol schema and host code always need the full gate. Its allowlist and step selection are unit-tested in scripts/tests/gate-adapter.test.mjs.
 
 ### Unknown-site drafting (`brwr-t40`)
 
@@ -829,10 +829,16 @@ The fixture uses the same `head -c` tool as the neighboring timeout fixture.
 
 ## Bookkeeping-file merge drivers
 
-`.beads/issues.jsonl`, `BOSUN_FEATURE_BACKLOG.md`, `PENDING_AMOS_DOC_UPDATES.md`
-and `CookieFeature.md` change in every worker cycle, queue PR and human PR,
-so merging main into a branch (Cookie's overnight driver does `git merge`
-on its VM) used to stop on them. `.gitattributes` gives each a merge driver:
+`PENDING_AMOS_DOC_UPDATES.md` and `CookieFeature.md` change in every worker
+cycle and many human PRs; main's `.gitattributes` unions them. The work queue
+(`.beads/issues.jsonl`, `BOSUN_FEATURE_BACKLOG.md`) changed even more often,
+dozens of times a day, and GitHub ignores custom drivers, so it marked PRs
+conflicting and ran no CI. Since 2026-11-03 the queue lives on its own `beads`
+branch (AGENTS.md "Work queue"), which sessions and Cookie push directly with
+`scripts/dev/queue push`, and these drivers merge it there: that branch's
+`.gitattributes` names them, and `scripts/dev/queue` passes them on its own
+git command lines (`git -c merge.<name>.driver=…`, naming the calling
+checkout's `scripts/render_backlog.py`), so a push race replays bead by bead:
 
 - `beads-jsonl` merges the queue bead by bead (`render_backlog.merge_jsonl`):
   a field changed on one side takes that side, `metadata` merges key by
@@ -865,17 +871,29 @@ that two branches adding entries merge cleanly with no drivers configured.
 GitHub's mergeability check and merge queue ignore every driver here, which is
 why the feed does not rely on one.
 
-The drivers live in per-clone git config, so a clone (or the clone a
-worktree belongs to, or a worker workspace) runs
-`sh scripts/install-merge-drivers.sh` once; it is idempotent. Without them
-git does a normal text merge and `--resolve` still finishes it. GitHub's
-own merges (the merge queue, the PR page) never run custom drivers.
+For plain git in the queue worktree, `sh scripts/install-merge-drivers.sh`
+registers the drivers in the clone's config (idempotent); because that
+worktree has no `scripts/`, the registered command runs the renderer
+`$BRAUSER_RENDER_BACKLOG` names there. Without the drivers git does a normal
+text merge and `python3 <checkout>/scripts/render_backlog.py --resolve`, run in
+the queue worktree, still finishes it. GitHub's own merges never run custom
+drivers.
 
 `scripts/tests/test_merge_drivers.py` (`npm run test:queue`) covers the
 2026-11-01 conflict shapes in unit tests and in real `git merge`, `git
-rebase` and `git cherry-pick` runs in a temporary repository with the
-committed `.gitattributes` and the installed drivers; every integration
-test ends with `check_queue_consistency.py` passing.
+rebase` and `git cherry-pick` runs in a temporary repository with the queue
+files, the beads branch's attributes and the installed drivers; every
+integration test ends with `check_queue_consistency.py` passing.
+`scripts/tests/test_work_queue.py` runs `scripts/dev/queue` against a scratch
+origin with a `main` and an orphan `beads` branch: one shared worktree beside
+the clone (also when four first calls race), fast-forward pulls that keep
+local edits, a push that renders, checks and pushes, a failing check that
+commits nothing, two clones racing a push (the loser rebases bead by bead and
+pushes without force), and `adopt` carrying an old PR's bead and prose edits
+(idempotently, refusing a conflicting edit with nothing written).
+`scripts/tests/pr-doctor.test.mjs` runs the doctor's repair on a real
+modify/delete conflict: the PR's bead edits land on the beads branch and the
+queue files leave the PR.
 
 ## Local IPC in sandboxes
 

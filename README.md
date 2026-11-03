@@ -34,7 +34,7 @@ npm run test:extension
 npm run test:a11y        # real headless Chrome; see TESTING.md for sandbox skips
 npm run test:markdown-neutralizer
 npm run test:scripts
-npm run test:queue
+npm run test:queue       # also checks the beads branch's queue (scripts/dev/queue path)
 npm run test:dev-tools   # macOS/Linux only: scripts/dev tooling
 ```
 

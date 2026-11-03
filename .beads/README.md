@@ -60,8 +60,9 @@ Issues in Beads are:
 Initialize this repository's local database after installing Beads:
 
 ```bash
-# Initialize once; an existing database still needs import before create
-bd init --init-if-missing --from-jsonl --skip-agents --skip-hooks --non-interactive --prefix brwr
+# Initialize once, then load the queue from the beads branch's worktree
+bd init --init-if-missing --skip-agents --skip-hooks --non-interactive --prefix brwr
+bd import "$(scripts/dev/queue path)/.beads/issues.jsonl"
 
 # Create your first issue
 scripts/dev/create-bead "Try out Beads"
@@ -69,21 +70,28 @@ scripts/dev/create-bead "Try out Beads"
 
 ## Learn More
 
-In this repository, `.beads/issues.jsonl` is the committed work queue, and
-`BOSUN_FEATURE_BACKLOG.md` is generated from it. Initializing an existing
-database does not load new committed rows. Use `scripts/dev/create-bead` in
-the checkout that owns the database: it validates the export and runs
-`bd import` before `bd create`, reserving closed IDs as well as open ones.
-The import uses the default timestamp guard (never `--allow-stale`) to keep
-newer local scalar fields; related labels, comments and dependencies may
-still merge. It preserves local-only work rather than rebuilding the DB.
-Import progress goes to stderr so `--json` still returns only the created
-issue on stdout. A failed import prevents creation.
+In this repository the work queue is not on `main`: `.beads/issues.jsonl`
+and `BOSUN_FEATURE_BACKLOG.md` (generated from it) live on the `beads`
+branch, in the shared worktree `scripts/dev/queue path` prints. Edit a row
+there and publish it with `scripts/dev/queue push`; never commit either file
+on a work branch. Initializing an existing database does not load new rows,
+and on a fresh clone `bd init --from-jsonl` finds no queue here: run
+`bd import "$(scripts/dev/queue path)/.beads/issues.jsonl"` after `bd init`.
+Use `scripts/dev/create-bead` in the checkout that owns the database: it
+pulls the queue worktree, validates its export and runs `bd import` before
+`bd create`, reserving closed IDs as well as open ones, then copies the new
+row into the queue worktree for `scripts/dev/queue push`. The import uses the
+default timestamp guard (never `--allow-stale`) to keep newer local scalar
+fields; related labels, comments and dependencies may still merge. It
+preserves local-only work rather than rebuilding the DB. Import progress goes
+to stderr so `--json` still returns only the created issue on stdout. A
+failed import prevents creation. `scripts/dev/queue from-db <id>…` copies
+rows you changed with `bd update` into the queue worktree.
 
-Linked worktrees must use a scratch database under `target/`, hydrate that
-database from the branch's export before creating, and copy only the new
-row back. The helper refuses shared worktree databases and routing flags.
-See AGENTS.md "Work queue" for export, rendering and conflict rules.
+Linked worktrees edit the queue worktree's JSONL directly (or hydrate a
+scratch database under `target/` from it and copy only the new row). The
+helper refuses shared worktree databases and routing flags. See AGENTS.md
+"Work queue" for the full rules.
 
 - **Documentation**: [github.com/steveyegge/beads/docs](https://github.com/steveyegge/beads/tree/main/docs)
 - **Quick Start Guide**: Run `bd quickstart`

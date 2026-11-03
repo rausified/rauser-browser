@@ -73,7 +73,10 @@ issue-prefix: "brwr"
 
 # Configured 2026-09-18: import.path must be set explicitly, otherwise
 # `bd init --from-jsonl` finds nothing on a fresh clone and yields an empty
-# queue. export.auto keeps .beads/issues.jsonl fresh as the git transport.
+# queue. Since 2026-11-03 the queue's git transport is the `beads` branch
+# (AGENTS.md "Work queue"), not this directory: main ignores .beads/issues.jsonl,
+# so export.auto's copy here is a local database dump, never the queue. Load
+# the queue with `bd import "$(scripts/dev/queue path)/.beads/issues.jsonl"`.
 export:
     path: issues.jsonl
     auto: true
