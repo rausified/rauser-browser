@@ -1,0 +1,35 @@
+{
+  "family": "sharepoint",
+  "origin": { "kind": "subdomain", "suffix": ".sharepoint.com" },
+  "scope": null,
+  "types": [
+    {
+      "type": "sharepoint.doc",
+      "key": "sharepoint:{origin}",
+      "label": "SharePoint documents",
+      "label_variants": [{ "host_suffix": "-my.sharepoint.com", "label": "OneDrive for work documents" }],
+      "description": "Office document links resolve to the stable sourcedoc GUID, across common sharing routes.",
+      "adapter": {
+        "type": "sharepoint.doc",
+        "path_case": "insensitive",
+        "match": [
+          { "path": "/sites/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
+          { "path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
+          { "path": "/personal/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } }
+        ],
+        "id": "sharepoint:{host}/{doc}"
+      },
+      "history": [
+        {
+          "match": [
+            { "path": "/sites/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
+            { "path": "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
+            { "path": "/personal/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } }
+          ]
+        }
+      ],
+      "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
+      "docs": "docs/adapters/sharepoint.doc.md"
+    }
+  ]
+}

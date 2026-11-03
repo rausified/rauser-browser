@@ -200,7 +200,7 @@ export async function browserFixture(t, pageName, state = "configured", options 
       await route.fulfill({ status: 204 });
       return;
     }
-    if (url.origin !== ORIGIN || !/^\/[a-z0-9-]+\.(html|js|css)$/.test(url.pathname)) {
+    if (url.origin !== ORIGIN || !/^\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(html|js|css)$/.test(url.pathname)) {
       blocked.push(url.href);
       await route.abort();
       return;
