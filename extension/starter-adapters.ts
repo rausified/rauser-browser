@@ -1,11 +1,15 @@
 import type { AdapterObject } from "./adapter-review.js";
 import { canonicalCapture, compileDocument } from "./adapter-templates.js";
 import { canonicalJson } from "./capture-site-handoff.js";
+import { STARTER_FAMILIES, type StarterFamilyData, type StarterTypeData } from "./starter-families.generated.js";
 
-/** The starter family an origin belongs to. One family can offer several
- * starters: an Atlassian Cloud site offers Jira issues and Confluence pages,
- * GitHub offers pull requests, issues and repositories. */
-export type StarterKind = "atlassian" | "sharepoint" | "github" | "miro";
+/** The starter family an origin belongs to: a `STARTER_FAMILIES` entry's
+ * `family` id. One family can offer several starters: an Atlassian Cloud
+ * site offers Jira issues and Confluence pages, GitHub offers pull requests,
+ * issues and repositories. Today's families are "atlassian", "sharepoint",
+ * "github" and "miro"; the type stays `string` so a new family added to
+ * protocol/starters/*.json needs no signature change here. */
+export type StarterKind = string;
 
 export interface StarterOffer {
   key: string;
@@ -19,10 +23,28 @@ export interface StarterOffer {
 }
 
 const GITHUB_ORIGIN = "https://github.com";
-const MIRO_ORIGIN = "https://miro.com";
-const GITHUB_REPOSITORY = "github.repo";
-// Frozen with the PR and issue IDs (adapter-templates.md §8.2, §8.3).
-const GITHUB_REPOSITORY_WITHIN = { type: GITHUB_REPOSITORY, id: "github.repo:{host}/{owner}/{repo}" };
+
+// Derived from STARTER_FAMILIES rather than hardcoded: the GitHub family's
+// container type (today, "github.repo") and the sibling types that declare a
+// `within` naming it (today, github.pr and github.issue). Falls back to
+// nothing if no family declares a `within`, so `linkPlan` below simply finds
+// no containers to link.
+const { linkableToContainer: LINKABLE_TO_REPOSITORY, containerType: GITHUB_REPOSITORY_TYPE } = (() => {
+  const linkableToContainer = new Set<string>();
+  let containerType: string | null = null;
+  for (const family of STARTER_FAMILIES) {
+    for (const type of family.types) {
+      const within = (type.adapter as Record<string, unknown>).within;
+      if (!within || typeof within !== "object" || Array.isArray(within)) continue;
+      const to = (within as Record<string, unknown>).type;
+      if (typeof to === "string") {
+        linkableToContainer.add(type.type);
+        containerType = to;
+      }
+    }
+  }
+  return { linkableToContainer, containerType };
+})();
 
 function secureHostname(origin: string): string | null {
   try {
@@ -35,13 +57,37 @@ function secureHostname(origin: string): string | null {
   }
 }
 
-export function starterKind(origin: string): StarterKind | null {
+function familyFor(origin: string): StarterFamilyData | null {
+  for (const family of STARTER_FAMILIES) {
+    if (family.origin.kind === "exact" && origin === family.origin.origin) return family;
+  }
   const host = secureHostname(origin);
   if (!host) return null;
-  if (host.endsWith(".atlassian.net") && host !== "atlassian.net") return "atlassian";
-  if (host.endsWith(".sharepoint.com") && host !== "sharepoint.com") return "sharepoint";
-  if (origin === GITHUB_ORIGIN) return "github";
-  if (origin === MIRO_ORIGIN) return "miro";
+  let best: StarterFamilyData | null = null;
+  let bestSuffixLength = -1;
+  for (const family of STARTER_FAMILIES) {
+    if (family.origin.kind !== "subdomain") continue;
+    const suffix = family.origin.suffix;
+    if (host.endsWith(suffix) && host !== suffix.slice(1) && suffix.length > bestSuffixLength) {
+      best = family;
+      bestSuffixLength = suffix.length;
+    }
+  }
+  return best;
+}
+
+export function starterKind(origin: string): StarterKind | null {
+  return familyFor(origin)?.family ?? null;
+}
+
+/** The current status of a starter type, or `null` when `type` names no
+ * known starter. */
+export function starterStatus(type: string): StarterTypeData["status"] | null {
+  for (const family of STARTER_FAMILIES) {
+    for (const starterType of family.types) {
+      if (starterType.type === type) return starterType.status;
+    }
+  }
   return null;
 }
 
@@ -100,207 +146,59 @@ export function githubOwnerFromUrl(url: string): string | null {
   return parseGitHubOrganizations(owner) ? owner : null;
 }
 
-function jira(origin: string): AdapterObject {
-  return {
-    type: "jira.issue",
-    origin,
-    match: [
-      { path: "/browse/{key:jira_key}" },
-      { path: "/jira/{*}", query: { selectedIssue: "{key:jira_key}" } },
-    ],
-    id: "jira:{host}/{key}",
-    title: "[{key:jira_key}] {title} - Jira",
-    alias: { from: "tab_title", capture: "key" },
-    refs: [{ type: "jira.issue", find: "jira_key" }],
-  };
+/** `value` with every `{"$scope": true}` marker, at any depth, replaced by
+ * `organizations`; everything else deep-copied so the generated family data
+ * is never mutated. */
+function withScope(value: unknown, organizations: readonly string[]): unknown {
+  if (Array.isArray(value)) return value.map((entry) => withScope(entry, organizations));
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 1 && entries[0]![0] === "$scope" && entries[0]![1] === true) {
+      return [...organizations];
+    }
+    const copy: Record<string, unknown> = {};
+    for (const [key, entry] of entries) copy[key] = withScope(entry, organizations);
+    return copy;
+  }
+  return value;
 }
 
-/** Confluence Cloud pages (docs/adapters/confluence.page.md). The ID is the
- * numeric page ID alone, never the space key, so a page moved to another
- * space keeps its identity. The ID template is type-qualified so later
- * Confluence starters (blog posts, whiteboards, databases) each get their
- * own namespace. A page's version history counts toward the page, in view
- * mode; the first title entry strips that view's "Version history - "
- * prefix. */
-function confluencePage(origin: string): AdapterObject {
-  return {
-    type: "confluence.page",
-    origin,
-    match: [
-      { path: "/wiki/spaces/{_}/pages/{id:int}/{*}" },
-      { path: "/wiki/spaces/{_}/pages/edit-v2/{id:int}", mode: "edit" },
-      { path: "/wiki/spaces/{_}/history/{id:int}/{*}", mode: "view" },
-      { path: "/wiki/pages/viewpage.action", query: { pageId: "{id:int}" } },
-    ],
-    id: "confluence.page:{host}/{id}",
-    title: ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"],
-    refs: [{ type: "jira.issue", find: "jira_key" }],
-  };
+/** The adapter a starter type offers at `origin`: its template with `origin`
+ * inserted right after `type`, and every scope marker resolved against
+ * `organizations` (or `null` when the type needs a scope and none is
+ * named). */
+function starterAdapter(
+  type: StarterTypeData, origin: string, needsScope: boolean, organizations: readonly string[],
+): AdapterObject | null {
+  if (needsScope && !organizations.length) return null;
+  const { type: adapterType, ...rest } = type.adapter as Record<string, unknown>;
+  return { type: adapterType, origin, ...(withScope(rest, organizations) as Record<string, unknown>) };
 }
 
-function sharepoint(origin: string): AdapterObject {
-  return {
-    type: "sharepoint.doc",
-    origin,
-    path_case: "insensitive",
-    match: [
-      { path: "/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
-      { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
-      { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } },
-    ],
-    id: "sharepoint:{host}/{doc}",
-  };
+/** The label for a type offered at `origin`: the first `label_variants`
+ * entry whose `host_suffix` the origin contains, else the type's plain
+ * `label`. */
+function starterLabel(type: StarterTypeData, origin: string): string {
+  return type.label_variants.find((variant) => origin.includes(variant.host_suffix))?.label ?? type.label;
 }
 
-/** Miro boards (docs/adapters/miro.board.md). Board IDs are 12 characters
- * ending in base64 padding, such as `uXjVM0uuBLo=`. miro.com serves every
- * Miro account from one origin and its board URLs name no account, so the
- * review says the starter records boards from every account. */
-function miro(): AdapterObject {
-  return {
-    type: "miro.board",
-    origin: MIRO_ORIGIN,
-    match: [{ path: "/app/board/{board:token(12)}" }],
-    id: "miro.board:{host}/{board}",
-    title: "{title} - Miro",
-  };
-}
-
-function githubPullRequest(organizations: string[]): AdapterObject {
-  return {
-    type: "github.pr",
-    origin: GITHUB_ORIGIN,
-    match: [{
-      path: "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}",
-    }],
-    scope: { owner: organizations },
-    modes: { files: "review", commits: "view", checks: "view" },
-    id: "github.pr:{host}/{owner}/{repo}/{number}",
-    title: "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
-    refs: [{ type: "jira.issue", find: "jira_key" }],
-    within: { ...GITHUB_REPOSITORY_WITHIN },
-  };
-}
-
-function githubIssue(organizations: string[]): AdapterObject {
-  return {
-    type: "github.issue",
-    origin: GITHUB_ORIGIN,
-    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
-    scope: { owner: organizations },
-    id: "github.issue:{host}/{owner}/{repo}/{number}",
-    title: "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
-    refs: [{ type: "jira.issue", find: "jira_key" }],
-    within: { ...GITHUB_REPOSITORY_WITHIN },
-  };
-}
-
-/** Every page inside a repository. It has no title templates: the host
- * derives a container's title from its ID. It must follow the PR and issue
- * adapters on the origin (first match wins), which `orderContainedFirst`
- * guarantees. */
-function githubRepository(organizations: string[]): AdapterObject {
-  return {
-    type: GITHUB_REPOSITORY,
-    origin: GITHUB_ORIGIN,
-    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/{*}" }],
-    scope: { owner: organizations },
-    id: GITHUB_REPOSITORY_WITHIN.id,
-  };
-}
-
-/** The starter drafts for one site origin. GitHub starters stay without an
- * adapter until `githubOrganizations` names at least one organization. */
+/** The starter drafts for one site origin. A starter type whose family needs
+ * a scope (today, GitHub's organizations) stays without an adapter until
+ * `githubOrganizations` names at least one organization. */
 export function starterOffers(origin: string, githubOrganizations: string[]): StarterOffer[] {
-  const kind = starterKind(origin);
-  if (kind === "atlassian") {
-    // Jira and Confluence share the site's origin; their routes (/browse and
-    // /jira against /wiki) never overlap, so either can be chosen alone.
-    return [
-      {
-        key: `jira:${origin}`,
-        kind,
-        artifact_type: "jira.issue",
-        label: "Jira issues",
-        description: "Issue pages and board modals become one artifact per Jira key.",
-        origin,
-        needs_scope: false,
-        adapter: jira(origin),
-      },
-      {
-        key: `confluence.page:${origin}`,
-        kind,
-        artifact_type: "confluence.page",
-        label: "Confluence pages",
-        description: "Each page becomes one artifact by its page ID, whether you view it, edit it, or open its version history.",
-        origin,
-        needs_scope: false,
-        adapter: confluencePage(origin),
-      },
-    ];
-  }
-  if (kind === "sharepoint") {
-    return [{
-      key: `sharepoint:${origin}`,
-      kind,
-      artifact_type: "sharepoint.doc",
-      label: origin.includes("-my.sharepoint.com")
-        ? "OneDrive for work documents"
-        : "SharePoint documents",
-      description: "Office document links resolve to the stable sourcedoc GUID, across common sharing routes.",
-      origin,
-      needs_scope: false,
-      adapter: sharepoint(origin),
-    }];
-  }
-  if (kind === "miro") {
-    return [{
-      key: "miro.board",
-      kind,
-      artifact_type: "miro.board",
-      label: "Miro boards",
-      description: "Each board becomes one artifact, however it was opened. Records boards from every Miro account signed in to this Chrome profile.",
-      origin,
-      needs_scope: false,
-      adapter: miro(),
-    }];
-  }
-  if (kind === "github") {
-    const scope = githubOrganizations.length ? githubOrganizations : null;
-    return [
-      {
-        key: "github.pr",
-        kind,
-        artifact_type: "github.pr",
-        label: "GitHub pull requests",
-        description: "Pull request routes share one artifact; files use review mode, while commits and checks use view mode.",
-        origin,
-        needs_scope: true,
-        adapter: scope ? githubPullRequest(scope) : null,
-      },
-      {
-        key: "github.issue",
-        kind,
-        artifact_type: "github.issue",
-        label: "GitHub issues",
-        description: "Issue pages are captured only for the organizations you name.",
-        origin,
-        needs_scope: true,
-        adapter: scope ? githubIssue(scope) : null,
-      },
-      {
-        key: GITHUB_REPOSITORY,
-        kind,
-        artifact_type: GITHUB_REPOSITORY,
-        label: "GitHub repositories",
-        description: "Every page inside a repository counts toward it; pull requests and issues count toward both.",
-        origin,
-        needs_scope: true,
-        adapter: scope ? githubRepository(scope) : null,
-      },
-    ];
-  }
-  return [];
+  const family = familyFor(origin);
+  if (!family) return [];
+  const needsScope = family.scope !== null;
+  return family.types.map((type) => ({
+    key: type.key.replace("{origin}", origin),
+    kind: family.family,
+    artifact_type: type.type,
+    label: starterLabel(type, origin),
+    description: type.description,
+    origin,
+    needs_scope: needsScope,
+    adapter: starterAdapter(type, origin, needsScope, githubOrganizations),
+  }));
 }
 
 /** One entry of an adapter's `match` list. */
@@ -328,23 +226,15 @@ export function matchingStarter(adapter: AdapterObject): StarterOffer | null {
 
 const MODE_CAPTURE = /\{mode\??:\(([^)}]*)\)\}/g;
 
-const SOURCEDOC = { sourcedoc: "{doc:uuid}" };
-
 /** Earlier shipped versions of each starter's match rules, oldest first,
- * keyed by type. Only a saved adapter holding every rule of one of these is
- * offered an update: an adapter matching no known version was written or
- * narrowed by its user, and the current starter is not a reason to widen it.
- * Add the outgoing rules here whenever a starter's rules change. */
-const STARTER_HISTORY: Readonly<Record<string, readonly { match: readonly AdapterRule[] }[]>> = {
-  "sharepoint.doc": [{
-    // Until 2026-10-28: Word sharing links from sites only.
-    match: [
-      { path: "/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
-      { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
-      { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
-    ],
-  }],
-};
+ * keyed by type, from each family type's `history` (protocol/starters/*.json).
+ * Only a saved adapter holding every rule of one of these is offered an
+ * update: an adapter matching no known version was written or narrowed by
+ * its user, and the current starter is not a reason to widen it. */
+const STARTER_HISTORY: Readonly<Record<string, readonly { match: readonly AdapterRule[] }[]>> =
+  Object.fromEntries(
+    STARTER_FAMILIES.flatMap((family) => family.types.map((type) => [type.type, type.history])),
+  );
 
 export interface StarterRuleUpdate {
   adapter: AdapterObject;
@@ -438,8 +328,6 @@ export function hasAdapter(adapters: AdapterObject[], offer: StarterOffer): bool
     adapter.type === offer.artifact_type && adapter.origin === offer.origin);
 }
 
-const LINKABLE_TO_REPOSITORY = new Set(["github.pr", "github.issue"]);
-
 type LinkPlan = "link" | "skip" | null;
 
 /** For each adapter, whether adding `repo` links it ("link"), would link it
@@ -449,8 +337,8 @@ type LinkPlan = "link" | "skip" | null;
  * own, so a hand-written rule whose ID and scope do not capture owner and
  * repo is skipped rather than invalidating the whole document. */
 function linkPlan(artifacts: AdapterObject[], repo: AdapterObject): LinkPlan[] {
-  if (repo.type !== GITHUB_REPOSITORY || typeof repo.id !== "string") return artifacts.map(() => null);
-  const within = { type: GITHUB_REPOSITORY, id: repo.id };
+  if (repo.type !== GITHUB_REPOSITORY_TYPE || typeof repo.id !== "string") return artifacts.map(() => null);
+  const within = { type: GITHUB_REPOSITORY_TYPE, id: repo.id };
   return artifacts.map((adapter) => {
     if (adapter.origin !== repo.origin || typeof adapter.type !== "string" ||
       !LINKABLE_TO_REPOSITORY.has(adapter.type) || adapter.within !== undefined) return null;
@@ -476,7 +364,7 @@ export function containerLinks(artifacts: AdapterObject[], repo: AdapterObject):
 export function withContainerLinks(artifacts: AdapterObject[], repo: AdapterObject): AdapterObject[] {
   const plan = linkPlan(artifacts, repo);
   return artifacts.map((adapter, at) => plan[at] === "link"
-    ? { ...adapter, within: { type: GITHUB_REPOSITORY, id: repo.id as string } }
+    ? { ...adapter, within: { type: GITHUB_REPOSITORY_TYPE, id: repo.id as string } }
     : adapter);
 }
 
