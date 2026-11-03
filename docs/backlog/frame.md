@@ -287,6 +287,21 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 
 ## Notes / Ideas for Later
 
+- **2026-11-03 task reports now have an explicit durable destination.**
+  `brwr-bsx` adds Save to note in Tasks, preserving existing source-page note
+  text and recognizing exact retries. Full final required/README gates pass
+  (1,565 Rust-reported outcomes, 44 extension files; explicit IPC/Chromium
+  sandbox skips). Fresh review reproduced and fixed cross-note Markdown
+  reference definitions; all 573 composed renderings are inert. Follow-up
+  `brwr-vuvc` offers a direct Open note action after saving. Prefer another
+  contextual capability once assigned work is actionable, rather than more
+  task-history presentation polish. The three assigned Re-learn items remain
+  behind the driver's human/pr-held `brwr-9eio`; do not infer its reconciliation
+  from merged local history or duplicate held work. Queue hydration/export
+  retains earlier local-only completion records, whose implementation/publication
+  must be verified separately by the driver. This cycle ships only `brwr-bsx`.
+
+
 - **2026-11-02 Re-learn review prerequisites completed.** The cycle began
   clean and the full health gate passed with explicit sandbox skips. Assigned
   `brwr-eo7` and `brwr-r62` now refuse damaged owned markers and foreign-occupied
