@@ -2085,6 +2085,13 @@ async function run() {
       const listed = await agentRequest({ type: "list_runs" });
       requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);
       const before = new Set([...listed.runs.map((run) => run.run_id), ...(await runCards()).map((card) => card.id)]);
+      // A click on a disabled button does nothing and shows no run line, so
+      // wait for it to be enabled: right after a task-bar run (Second invalid
+      // answer) it stays disabled a moment longer on a slower runner, which
+      // stopped every macos-15-intel fallback run here (6 of 6, 2026-11-02).
+      await waitFor(() => onPanel(async (page) => {
+        requireCondition(await page.enabled("#summarize"), "Summarize & log is disabled");
+      }), { timeout: 30_000, signal: abort.signal });
       await onPanel((page) => page.click("#summarize"));
       // Until the card appears, the panel shows a run line: "Reading this
       // page…", or why the run could not start, which no wait can change.

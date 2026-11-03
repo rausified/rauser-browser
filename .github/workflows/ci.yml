@@ -29,6 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      macos: ${{ steps.classify.outputs.macos }}
       base: ${{ steps.base.outputs.base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,8 +56,9 @@ jobs:
           BASE: ${{ steps.base.outputs.base }}
         run: |
           if [ -z "$BASE" ]; then
-            echo "$GITHUB_EVENT_NAME: always build"
+            echo "$GITHUB_EVENT_NAME: always build, macOS included"
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "macos=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           node scripts/ci-changes.mjs "$BASE" HEAD
@@ -103,14 +105,46 @@ jobs:
           fi
           echo "::warning::The queue views already disagree on the base commit; this change adds no new disagreement."
 
-  # Every platform runs the same steps from build-os.yml.
+  # Every platform runs the same steps from build-os.yml. macOS runs only for
+  # a change that can behave differently there (scripts/ci-macos.mjs: macOS
+  # paths, Unix-only host Rust and what it reads); Windows runs for every code
+  # change,
+  # and every push to main runs both, so main's own run catches anything a
+  # PR's skipped macOS build would have.
   build-macos:
     name: macOS
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.macos == 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: macos-15
+
+  # The axe and keyboard checks of the built extension pages: platform
+  # independent, so they run once on Linux (Chrome is on the runner image)
+  # for every code change instead of tying page changes to macOS.
+  a11y:
+    name: Accessibility
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+          cache: npm
+      - name: Install TypeScript tooling
+        run: npm ci --ignore-scripts
+      - name: Build unpacked Chrome extension
+        run: npm run build:extension
+      - name: Check built pages with axe and keyboard navigation
+        env:
+          BRAUSER_REQUIRE_A11Y_TESTS: "1"
+        run: |
+          CHROME_PATH="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium)"
+          test -n "$CHROME_PATH" || { echo "::error::no Chrome on the runner image"; exit 1; }
+          export CHROME_PATH
+          npm run test:a11y
 
   build-windows:
     name: Windows
@@ -182,13 +216,15 @@ jobs:
 
   # Branch protection requires a check named exactly "Build and check"; the
   # per-OS jobs report under their own names, so this job stands for all of
-  # them. Pass needs Windows plus macOS, where macOS is either the macos-15
-  # build or, only when that job was starved of a runner, the macos-15-intel (x64)
-  # fallback. A docs-only change passes when the classifier ran, both builds
-  # were skipped as intended, and docs-checks passed.
+  # them. A code change passes with Windows and Accessibility passing, plus,
+  # when the classifier says the change needs macOS, the macos-15 build or,
+  # only when that job was starved of a runner, the macos-15-intel (x64)
+  # fallback; when it does not, macOS must have been skipped. A docs-only
+  # change passes when the classifier ran, both builds were skipped as
+  # intended, and docs-checks passed.
   build-gate:
     name: Build and check
-    needs: [changes, docs-checks, build-macos, build-windows, macos-starvation-check, build-macos-fallback]
+    needs: [changes, docs-checks, a11y, build-macos, build-windows, macos-starvation-check, build-macos-fallback]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -196,13 +232,15 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          MACOS_NEEDED: ${{ needs.changes.outputs.macos }}
           DOCS: ${{ needs.docs-checks.result }}
+          A11Y: ${{ needs.a11y.result }}
           MACOS: ${{ needs.build-macos.result }}
           WINDOWS: ${{ needs.build-windows.result }}
           STARVED: ${{ needs.macos-starvation-check.outputs.starved }}
           FALLBACK: ${{ needs.build-macos-fallback.result }}
         run: |
-          echo "classify: $CHANGES (docs only: ${DOCS_ONLY:-n/a}); docs checks: $DOCS"
+          echo "classify: $CHANGES (docs only: ${DOCS_ONLY:-n/a}; macOS needed: ${MACOS_NEEDED:-n/a}); docs checks: $DOCS; accessibility: $A11Y"
           echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-15-intel fallback: $FALLBACK"
           test "$CHANGES" = success
           if [ "$DOCS_ONLY" = true ]; then
@@ -210,6 +248,11 @@ jobs:
             exit 0
           fi
           test "$WINDOWS" = success
+          test "$A11Y" = success
+          if [ "$MACOS_NEEDED" != true ]; then
+            test "$MACOS" = skipped
+            exit 0
+          fi
           if [ "$MACOS" = success ]; then exit 0; fi
           case "$MACOS" in cancelled|abandoned) ;; *) exit 1 ;; esac
           test "$STARVED" = true && test "$FALLBACK" = success

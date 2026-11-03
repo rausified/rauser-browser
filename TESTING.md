@@ -12,7 +12,7 @@ When you can't test something without UI, don't fall back to the user's screen o
 
 ## Accessibility checks in a real browser
 
-Accessibility tests use axe-core through playwright-core against a real headless Chromium, launched through `scripts/a11y-browser.mjs` (`a11yBrowser(t)`; open pages with `browser.newContext()` then `context.newPage()`, because AxeBuilder rejects `browser.newPage()`). The packages are exact-pinned devDependencies (`playwright-core` 1.64.1, `@axe-core/playwright` 4.14.0, `axe-core` 4.14.0); nothing downloads a browser (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`).
+Accessibility tests use axe-core through playwright-core against a real headless Chromium, launched through `scripts/a11y-browser.mjs` (`a11yBrowser(t)`; open pages with `browser.newContext()` then `context.newPage()`, because AxeBuilder rejects `browser.newPage()`). The packages are exact-pinned devDependencies (`playwright-core` 1.64.1, `@axe-core/playwright` 4.14.0, `axe-core` 4.14.0); nothing downloads a browser (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`). CI runs them once, in the ubuntu `Accessibility` job of `.github/workflows/ci.yml`, with `CHROME_PATH` set to the runner image's Google Chrome and `BRAUSER_REQUIRE_A11Y_TESTS=1`; they no longer run in the per-OS builds.
 
 - **Which browser:** `CHROME_PATH`, else `/opt/browsers/chromium` on Linux (a stable symlink to Playwright's Chrome for Testing build on the worker VMs: 156.0.8078.4, revision chromium-1248), else the Google Chrome app on macOS. Launch flags are `headless` plus `--no-sandbox`, which is harmless where Chrome's own sandbox works.
 - **Codex sandbox:** Chromium cannot start inside Codex's workspace-write sandbox on Linux with any flags: its seccomp filter returns EPERM for `setsockopt` and `shutdown` on Unix socketpairs, and Chromium aborts at startup. That sandbox sets `CODEX_SANDBOX_NETWORK_DISABLED=1`. There the launcher tries Chromium once per test process (30-second bound); if it does not start, every browser test is skipped with a `blocked by sandbox:` reason and the run stays green, even with `BRAUSER_REQUIRE_A11Y_TESTS=1`. Cookie runs that exact command as its in-sandbox health check, so the sandbox must not read as a red suite; the unsandboxed commit gate runs it for real. If Chromium does start in the sandbox, the tests run.
@@ -962,7 +962,7 @@ Cargo cache; an uncached offline dependency is unavailable, not a passing check.
 
 ### Waiting for state, not time
 
-The required CI check runs the headless smoke on a shared runner, sometimes the slower `macos-15-intel` fallback, so every wait must hold up when the machine is loaded. `scripts/smoke-macos.mjs` has one helper for this, and new steps should use it:
+The required CI check runs the headless smoke on a shared runner, sometimes the slower `macos-15-intel` fallback, so every wait must hold up when the machine is loaded. Before acting on a control, wait for it to be ready, not just present: a click on a disabled button does nothing and leaves no trace, which is how "Second invalid answer" stopped every `macos-15-intel` fallback run until `summarizeFromPanel` waited for Summarize & log to be enabled (2026-11-03). `scripts/smoke-macos.mjs` has one helper for this, and new steps should use it:
 
 ```js
 const state = await waitUntil("what the step waits for", observe, accept, { timeout, interval, signal: abort.signal });
