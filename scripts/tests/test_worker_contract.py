@@ -78,11 +78,20 @@ class WorkerContractTests(unittest.TestCase):
             (lambda c: c.update(never_commit=[]), "too few"),
             (lambda c: c.update(extra=1), "unexpected extra"),
             (lambda c: c["queue"].update(sync=""), "too short"),
+            (lambda c: c["merge"].update(comment=""), "too short"),
+            (lambda c: c["merge"].update(comment=["@Mergifyio queue"]), "expected string"),
         ):
             contract = json.loads(json.dumps(self.contract))
             change(contract)
             with self.subTest(message=message):
                 self.assertTrue(any(message in e for e in errors(contract, self.schema)), errors(contract, self.schema))
+
+    def test_the_merge_comment_is_optional_and_queues_with_mergify(self) -> None:
+        self.assertEqual(self.contract["merge"]["comment"], "@Mergifyio queue")
+        self.assertNotIn("comment", self.schema["properties"]["merge"]["required"])
+        contract = json.loads(json.dumps(self.contract))
+        del contract["merge"]["comment"]
+        self.assertEqual(errors(contract, self.schema), [])
 
     def test_never_commit_is_what_ci_enforces(self) -> None:
         self.assertEqual(tuple(self.contract["never_commit"]), check_current_state.QUEUE_FILES)

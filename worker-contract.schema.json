@@ -36,6 +36,11 @@
           "type": "string",
           "minLength": 1
         },
+        "comment": {
+          "description": "Optional. A PR comment the worker posts after adding the label, which asks Mergify to queue the PR. Label-only auto-queue depends on Mergify's Merge Protections being activated in the dashboard; the comment queues it either way.",
+          "type": "string",
+          "minLength": 1
+        },
         "never": {
           "description": "Commands a worker must never run to merge.",
           "type": "array",
