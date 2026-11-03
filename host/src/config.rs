@@ -5011,7 +5011,11 @@ mod tests {
         ] {
             assert!(DEFAULT_DOCUMENT_TYPES.contains(&kind), "{kind}");
         }
-        assert!(valid_summary_vocabulary(&default_summary_vocabulary()));
+        validate_vocabulary(
+            "document type",
+            &default_summary_vocabulary().document_types,
+        )
+        .unwrap();
     }
 
     #[test]
