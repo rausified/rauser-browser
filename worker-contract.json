@@ -10,6 +10,7 @@
     "bootstrap": "BD_NON_INTERACTIVE=1 bd bootstrap",
     "sync": "scripts/dev/queue sync",
     "export": "scripts/dev/queue export",
+    "backlog": "scripts/dev/queue backlog --print",
     "sync_exit_codes": {
       "0": "synced",
       "1": "error",

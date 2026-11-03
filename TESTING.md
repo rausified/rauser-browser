@@ -869,6 +869,11 @@ retired. What is tested:
   `bootstrap`, `sync` and `export` run as the shared driver runs them (new
   session with no TTY, stdin closed, `GH_TOKEN`, a credential helper in
   `GIT_CONFIG_*`, `BOSUN_WORKSPACE`); a failing sync reports one line.
+  The contract's `sync`, `export` and `backlog` also run from a pristine
+  checkout of main with `BOSUN_WORKSPACE` and `BEADS_DIR` naming another
+  clone, acting on that clone's database. A seeded clone that carries the
+  committed `.beads/metadata.json` passes bd's identity check (`bd info`), and
+  a seed with no committed file prints the project_id to commit.
 - `scripts/tests/test_queue_merge.py`: the bead-by-bead merge adopt uses
   (`render_backlog.merge_jsonl`, the 2026-11-01 shapes, `bd export`'s byte
   format and line order).

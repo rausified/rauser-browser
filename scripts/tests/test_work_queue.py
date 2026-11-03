@@ -32,6 +32,8 @@ IDENTITY = {
     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
 }
 GATE = bead("brwr-gate", status="deferred")
+COMMITTED_METADATA = {"database": "dolt", "backend": "dolt", "dolt_mode": "embedded", "dolt_database": "brwr",
+                      "project_id": "11111111-2222-3333-4444-555555555555"}
 
 
 def rows(text: str) -> dict[str, dict]:
@@ -166,6 +168,9 @@ class DoltIntegrationTests(unittest.TestCase):
         self.git(self.tmp, "init", "-q", "-b", "main", str(seed))
         (seed / "docs" / "backlog").mkdir(parents=True)
         (seed / "docs" / "backlog" / "frame.md").write_text(SKELETON, encoding="utf-8")
+        # Main commits bd's metadata.json, project_id included (brwr-765q).
+        (seed / ".beads").mkdir()
+        (seed / ".beads" / "metadata.json").write_text(json.dumps(COMMITTED_METADATA, indent=2), encoding="utf-8")
         self.git(seed, "add", ".")
         self.git(seed, "commit", "-qm", "frame")
         self.git(seed, "push", "-q", self.url, "main")
@@ -278,6 +283,45 @@ class DoltIntegrationTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
         self.assertIn("empty", result.stderr)
+
+    def test_a_bootstrapped_clone_matches_the_committed_project_id(self) -> None:
+        # brwr-765q: the seed used to get a fresh project_id, so every clone
+        # carrying the committed metadata.json failed bd's identity check.
+        self.seed(bead("brwr-a1"))
+        b = self.bootstrap(self.clone("b"))
+        info = subprocess.run(["bd", "info"], cwd=b, capture_output=True, text=True)
+        self.assertEqual(info.returncode, 0, info.stdout + info.stderr)
+        self.assertNotIn("mismatch", info.stdout + info.stderr)
+        committed = json.loads((b / ".beads" / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(committed["project_id"], COMMITTED_METADATA["project_id"])
+        self.assertEqual(self.git(b, "status", "--porcelain", "--", ".beads/metadata.json"), "")
+
+    def test_seed_without_a_committed_metadata_json_says_which_id_to_commit(self) -> None:
+        self.git(self.a, "rm", "-q", ".beads/metadata.json")
+        out = self.seed(bead("brwr-a1"))
+        self.assertRegex(out, r"commit \.beads/metadata\.json with project_id [0-9a-f-]{36}")
+
+    def test_contract_commands_from_a_pristine_checkout_act_on_bosun_workspace(self) -> None:
+        # The shared driver runs them in a pristine checkout of main, with
+        # BOSUN_WORKSPACE and BEADS_DIR naming the workspace and its database.
+        self.seed(bead("brwr-a1", metadata={"backlog_section": "plan"}))
+        ws = self.bootstrap(self.clone("ws"))
+        pristine = self.clone("pristine")
+        env = {**os.environ, "BOSUN_WORKSPACE": str(ws), "BEADS_DIR": str(ws / ".beads")}
+
+        def queue(*argv):
+            result = subprocess.run([sys.executable, str(SCRIPTS / "dev" / "queue"), *argv], cwd=pristine, env=env,
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180)
+            self.assertEqual(result.returncode, 0, f"{argv}: {result.stdout}{result.stderr}")
+            return result.stdout
+
+        self.bd(ws, "update", "brwr-a1", "--title", "Edited in the workspace")
+        before = self.dolt_head()
+        queue("sync")
+        self.assertNotEqual(self.dolt_head(), before, "sync must push the workspace's database")
+        self.assertEqual(rows(queue("export"))["brwr-a1"]["title"], "Edited in the workspace")
+        self.assertIn("Edited in the workspace", queue("backlog", "--print"))
+        self.assertFalse((pristine / ".beads" / "embeddeddolt").exists(), "nothing may create a database in the checkout")
 
     def test_the_contract_commands_run_with_no_tty_and_driver_credentials(self) -> None:
         # The shared driver: workspace cwd, no TTY (new session, stdin closed),
