@@ -1113,6 +1113,22 @@ new day: the worker retains the local day of the actual request timestamp,
 and lets the next activity update ask the host for a current-day decision.
 A failing-first worker regression covers the delayed reply.
 
+## 2026-11-02 — Honor pause at summary admission and disclose reading scope
+
+`brwr-q0i4` extends the existing locked/refreshed automatic-summary admission
+predicate to require capture enabled. A paused request answers `disabled`
+without contacting the service, including when disk settings supersede an
+enabled in-memory store. Explicit summaries still reach forwarding. The lock
+continues to end before IPC; this is admission policy, not cancellation of
+already admitted summaries. An offline regression failed before the change.
+
+`brwr-rr93` projects the existing validated `SummaryAnswer.read_scope` into an
+optional protocol enum on `RunAnswer`. One shared text-only answer formatter
+shows whole-artifact, partial-artifact and browser-page-only reading in both
+the panel card and Tasks detail. Legacy answers omit the label, and access
+walls retain their not-saved message. Host and extension deploy together;
+older extensions reject the extra reply key. No stored-answer, summary,
+cache, retrieval-authority or note-recovery format changes are involved.
 
 ## 2026-11-02 — Capped browser capture provenance (brwr-sm5)
 

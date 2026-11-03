@@ -1012,7 +1012,7 @@ fn start_auto_summary(
         }
     };
     let _ = config.refresh();
-    if !config.snapshot().auto_summary.enabled {
+    if !config.snapshot().capture_enabled || !config.snapshot().auto_summary.enabled {
         return skipped(Skip::Disabled);
     }
     if config.agent_status().state != brauser_protocol::AgentState::Ready {
@@ -10697,6 +10697,53 @@ id = "gdoc:{host}/{id}"
                 brauser_protocol::AutoSummarySkipReason::Disabled
             );
             assert_eq!(response.request_id(), "a");
+        }
+
+        #[test]
+        fn auto_summary_skips_when_capture_is_paused_even_after_loading_enabled_config() {
+            for refresh_before_request in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let mut config = auto_store(folder.path(), true, "");
+                assert!(config.snapshot().capture_enabled);
+                assert!(config.snapshot().auto_summary.enabled);
+                assert_eq!(
+                    config.agent_status().state,
+                    brauser_protocol::AgentState::Ready
+                );
+                assert!(config.adapter_match(GDOC_URL, None).is_ok());
+                let path = folder.path().join("config.toml");
+                let original = std::fs::read_to_string(&path).unwrap();
+                std::fs::write(
+                    &path,
+                    original.replace("capture_enabled = true", "capture_enabled = false"),
+                )
+                .unwrap();
+                if refresh_before_request {
+                    config.refresh().unwrap();
+                    assert!(!config.snapshot().capture_enabled);
+                }
+                // With no listener or launcher, contacting the service cannot
+                // produce this skip. Admission must refresh the stale store.
+                let dir = fake::short_dir();
+                let response = call(
+                    &mut config,
+                    &unreachable_link(&dir),
+                    start_auto(GDOC_URL, "paused"),
+                );
+                assert_eq!(
+                    skipped(&response),
+                    brauser_protocol::AutoSummarySkipReason::Disabled
+                );
+                assert_eq!(response.request_id(), "paused");
+                assert!(!config.snapshot().capture_enabled);
+
+                // Explicit summaries remain available while capture is paused.
+                let Request::StartRun(request) = start_run(GDOC_URL, None, &now()) else {
+                    unreachable!()
+                };
+                let manual = crate::native::start_run(request, &mut config, None);
+                assert_eq!(refused(&manual).0, ErrorCode::ServiceUnavailable);
+            }
         }
 
         #[test]
