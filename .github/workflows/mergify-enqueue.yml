@@ -1,0 +1,38 @@
+name: Mergify enqueue
+
+# Safety net only. The way into main's Mergify queue is the `queue` label
+# (`gh pr edit <n> --add-label queue`; .mergify.yml, AGENTS.md "Review and
+# merge cadence"), never `gh pr merge`. This catches a GitHub auto-merge armed
+# anyway on a PR whose checks are still pending: Mergify cannot see
+# auto-merge, so it adds the label Mergify does see, then disarms the
+# auto-merge, which would otherwise merge the PR around the queue once its
+# checks pass. It cannot help a PR whose checks were already green: there
+# `gh pr merge --auto` merges at once and no auto_merge_enabled event fires.
+#
+# pull_request_target so fork PRs get a write token too. Safe: nothing from
+# the PR is checked out or run; only its number is used.
+on:
+  pull_request_target:
+    types: [auto_merge_enabled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  enqueue:
+    name: Queue on auto-merge
+    if: github.event.pull_request.base.ref == 'main' && !startsWith(github.event.pull_request.head.ref, 'mergify/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Label the PR queue and disarm GitHub's auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api --silent -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=queue"
+          gh pr merge --disable-auto "$PR" --repo "$REPO"
+          echo "#$PR labeled queue; GitHub auto-merge disarmed, Mergify merges it"
