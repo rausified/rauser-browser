@@ -46,10 +46,10 @@ queue_rules:
       - check-success = Rust dependency policy
       - check-success = PR owner
 
-pull_request_rules:
-  - name: Queue PRs labeled queue
-    conditions:
-      - base = main
-      - label = queue
-    actions:
-      queue:
+# Auto-queueing: Mergify queues a PR that carries the `queue` label once it
+# passes queue_conditions above. (A pull_request_rules `queue` action does
+# not queue anything on current Mergify; auto_merge_conditions is the
+# documented setting: docs.mergify.com/merge-protections/auto-merge.)
+merge_protections_settings:
+  auto_merge_conditions:
+    - label = queue
