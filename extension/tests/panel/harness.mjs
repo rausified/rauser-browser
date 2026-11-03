@@ -745,6 +745,14 @@ export function linearDraft(revision = "1") {
 
 export const ruleBox = (page, adapter, rule) => descendants(page.el("capture-site-draft"))
   .find((node) => node.tagName === "INPUT" && node.dataset.rule === `${adapter}/${rule}`);
+// The rendered starter choice group (extension/starter-choice-view.ts): the
+// first child of #capture-site-starter, or null when the family renders
+// nothing (no known starter, or one type with no scope).
+export const starterGroup = (page) => page.el("capture-site-starter").children[0] ?? null;
+export const starterBox = (page, type) => descendants(page.el("capture-site-starter"))
+  .find((node) => node.tagName === "INPUT" && node.dataset.starterType === type) ?? null;
+export const starterScope = (page, family) => descendants(page.el("capture-site-starter"))
+  .find((node) => node.tagName === "INPUT" && node.dataset.starterScope === family) ?? null;
 export const draftText = (page) => ["capture-site-draft", "capture-site-preview", "capture-site-dropped", "capture-site-message"]
   .map((id) => page.el(id).textContent).join("\n");
 // The host requests sent from `from` on, less the panel's own background
