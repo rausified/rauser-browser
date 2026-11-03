@@ -249,6 +249,92 @@ async function openTasks({
   return page;
 }
 
+test("Save to note sends only the selected retained task after an explicit click", async () => {
+  const held = deferred();
+  const report = "A useful report from the agent";
+  const page = await openTasks({
+    runs: [task(1, { task_report: report }), task(2, { task_report: "Other report" })],
+    intercept: (request) => request.type === "save_task_note" ? held.promise : null,
+  });
+  await listed(page);
+  const area = page.el("tasks-detail");
+  await until(() => buttonIn(area, "Save to note"), "the fetched task report");
+  assert.equal(page.sent("save_task_note").length, 0, "viewing a report never writes a note");
+  buttonIn(area, "Save to note").focus();
+  buttonIn(area, "Save to note").click();
+  await settle();
+  assert.equal(buttonIn(area, "Save to note").disabled, true);
+  buttonIn(area, "Save to note").click();
+  assert.equal(page.sent("save_task_note").length, 1, "a double click cannot dispatch two appends");
+  const request = page.sent("save_task_note")[0];
+  assert.deepEqual(Object.keys(request).sort(), ["type", "protocol_version", "request_id", "run_id", "expected_revision"].sort());
+  assert.equal(request.run_id, runId(1));
+  assert.equal(request.expected_revision, hostReply({ type: "get_config" }).revision);
+  held.resolve({ type: "task_note_saved", run_id: runId(1), already_saved: false });
+  await until(() => area.textContent.includes("Report saved to the source page's note."), "the save acknowledgement");
+  const status = descendants(area).find((node) => node.className === "task-detail-note");
+  assert.equal(status.getAttribute("role"), "status");
+  assert.equal(buttonIn(area, "Save to note").disabled, false);
+  assert.equal(page.state.created.length, 0, "saving never navigates away");
+  assert.equal(page.sent("save_note").length, 0, "the extension cannot supply agent text as a note body");
+});
+
+test("Save to note reports an idempotent retry and hides on tasks without a page or report", async () => {
+  for (const overrides of [
+    { task_report: "A report", no_page: true, url: "brauser:task-without-page" },
+    { task_report: "A report", state: "failed" },
+    { task_report: "A report", state: "running" },
+    { task_report: null },
+    { task_report: " \n" },
+  ]) {
+    const page = await openTasks({ runs: [task(1, overrides)] });
+    await listed(page);
+    await until(() => page.sent("get_run").length > 0, "the full task fetch");
+    await settle();
+    assert.equal(buttonIn(page.el("tasks-detail"), "Save to note"), null);
+    assert.equal(page.sent("save_task_note").length, 0);
+    page.close();
+  }
+  const page = await openTasks({
+    runs: [task(1, { task_report: "Report" })],
+    intercept: (request) => request.type === "save_task_note"
+      ? { type: "task_note_saved", run_id: request.run_id, already_saved: true } : null,
+  });
+  await listed(page);
+  const area = page.el("tasks-detail");
+  await until(() => buttonIn(area, "Save to note"), "Save to note");
+  buttonIn(area, "Save to note").click();
+  await until(() => area.textContent.includes("This report is already in the source page's note."), "the retry acknowledgement");
+});
+
+test("Save to note keeps the report and offers retry after a conflict or an old host", async () => {
+  for (const [code, message, shown] of [
+    ["conflict", "Settings changed. Reload Tasks before saving the report to a note.", /Settings changed/],
+    ["invalid_request", "invalid or unsupported request JSON", /Rebuild the Brauser host and extension together/],
+    ["message_too_large", "note is too long to save", /note is too long to save/],
+  ]) {
+    let fails = true;
+    const page = await openTasks({
+      runs: [task(1, { task_report: "Keep this report" })],
+      intercept: (request) => request.type === "save_task_note" ? fails
+        ? { type: "error", code, message }
+        : { type: "task_note_saved", run_id: request.run_id, already_saved: false } : null,
+    });
+    await listed(page);
+    const area = page.el("tasks-detail");
+    await until(() => buttonIn(area, "Save to note"), "Save to note");
+    buttonIn(area, "Save to note").click();
+    await until(() => area.textContent.includes("Could not save the report to a note:"), "the refusal");
+    assert.match(area.textContent, shown);
+    assert.ok(area.textContent.includes("Keep this report"));
+    assert.equal(page.sent("save_task_note").length, 1, "no automatic retry");
+    fails = false;
+    buttonIn(area, "Save to note").click();
+    await until(() => area.textContent.includes("Report saved to the source page's note."), "the user retry");
+    page.close();
+  }
+});
+
 const listed = (page) => until(() => page.rows().length > 0, "the task list");
 
 // Polling is driven independently of zero-delay host replies.

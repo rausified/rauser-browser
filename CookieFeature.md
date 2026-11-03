@@ -1418,3 +1418,25 @@ This completes the physical-note contract prerequisite of assigned brwr-dbp.
 Durable config/history application, universal interrupted-apply handling,
 summary/run identity, preserved alias-note presentation and artifact stubs
 remain unfinished; panel Re-learn is still under brwr-6x2.
+
+
+## 2026-11-03 — Keep a task report beside its source page
+
+Brauser's Tasks page now offers **Save to note** beside Copy report when a
+page task has finished successfully. One click keeps the full instruction,
+finish time and retained report in that page's note, after whatever the user
+already wrote. This turns a useful answer into something that remains in the
+home folder after task history is pruned. Finishing a task still writes no
+Brauser content, and tasks without a page have no note destination.
+
+The native host fetches the retained report itself rather than accepting text
+or a destination from the Tasks page. It checks that the home/settings still
+match the history page, resolves the same physical note as the editor, and
+uses the existing ownership and version checks for the append. Concurrent
+copies retain both reports; an already-open stale editor keeps its normal
+conflict/recovery behavior. Report Markdown uses the shared neutralizer so
+HTML, embeds and plugin code stay inert; report link definitions cannot change
+images or links already in the user's note. A retry after an uncertain answer
+recognizes the whole exact saved section without duplicating it or replacing
+later edits. If the note is full or unsafe to replace, the report stays
+available to copy. The confirmation returns keyboard focus to Save to note.

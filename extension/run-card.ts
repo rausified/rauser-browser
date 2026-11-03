@@ -578,6 +578,9 @@ export const SUPERSEDED_TEXT = "Superseded by a newer summary of this page. Open
 /** What the Tasks page's {@link TaskDetail} needs. */
 export interface TaskDetailDeps extends RunProgressDeps {
   storage: ChromeStorageArea;
+  /** Explicitly append this retained task's report to its source-page note.
+   * Returns true if that exact report was already saved. */
+  saveToNote?(run: RunView): Promise<boolean>;
   /** Puts the full instruction back in the panel's task bar and reopens the
    * run's own `url` (never a URL from agent text), so the instruction runs
    * against the page it was first given on. */
@@ -604,9 +607,10 @@ function startedText(run: RunView): string | null {
  * starts open while the run is unfinished and closes once when it finishes
  * (or starts closed for a run already finished); after that the user's
  * toggle stays across re-renders (decision 43). It
- * offers Cancel, Copy report, Copy (a failed task's error), Reuse, the
+ * offers Cancel, Copy report, explicit Save to note, Copy (a failed task's error), Reuse, the
  * harness's resume, Open page and Dismiss, and never Open summary or Retry
- * save: a task writes nothing. A summary run (whose panel card goes once a
+ * save: finishing a task writes nothing. Save to note is a separate user action.
+ * A summary run (whose panel card goes once a
  * newer run of its page starts) shows the page as its headline and its
  * answer line in place of a report, and offers Open summary instead of Copy
  * report and Reuse; Retry save stays the panel card's. The full instruction and the report come
@@ -618,6 +622,7 @@ export class TaskDetail extends RunWatcher {
   readonly element: HTMLDivElement;
   private fullInstruction: string | null = null;
   private report: string | null = null;
+  private saveNoteMessage = "";
   private readonly headline: HTMLHeadingElement;
   private readonly metaLine: HTMLParagraphElement;
   private readonly actions: HTMLDivElement;
@@ -641,6 +646,7 @@ export class TaskDetail extends RunWatcher {
     this.actions = make("div", "run-card-actions");
     this.problemLine = make("p", "run-card-problem warning");
     this.noteLine = make("p", "task-detail-note");
+    this.noteLine.setAttribute("role", "status");
     this.reportLabel = make("h3", "task-detail-report-label");
     this.reportLabel.textContent = "Report";
     this.reportText = make("div", "task-detail-report");
@@ -702,6 +708,22 @@ export class TaskDetail extends RunWatcher {
     return report === null ? [] : [actionButton("Copy report", () => this.copy(report))];
   }
 
+  private saveNoteButtons(): HTMLButtonElement[] {
+    const run = this.view;
+    const save = this.deps.saveToNote;
+    if (!save || run.kind !== "task" || run.no_page === true ||
+        !/^https?:\/\//i.test(run.url) || !this.shownReport()?.trim()) return [];
+    const button = actionButton("Save to note", () => void this.act(async () => {
+      this.saveNoteMessage = "";
+      const alreadySaved = await save(run);
+      this.saveNoteMessage = alreadySaved
+        ? "This report is already in the source page's note."
+        : "Report saved to the source page's note.";
+    }, "Could not save the report to a note"));
+    button.title = "Append the report to the source page's note";
+    return [button];
+  }
+
   /** Copy, on a failed task: its error, or else its stream. */
   private copyFailureButtons(): HTMLButtonElement[] {
     if (this.view.state !== "failed") return [];
@@ -754,8 +776,8 @@ export class TaskDetail extends RunWatcher {
     this.problemLine.textContent = this.problem ?? "";
     this.problemLine.hidden = this.problem === null;
     const changed = !summary && this.changesMayStay();
-    const note = summary && this.superseded ? SUPERSEDED_TEXT : changed ? CHANGES_STAY : "";
-    this.noteLine.textContent = note;
+    const note = summary && this.superseded ? SUPERSEDED_TEXT : changed ? CHANGES_STAY : this.saveNoteMessage;
+    if (this.noteLine.textContent !== note) this.noteLine.textContent = note;
     this.noteLine.hidden = note === "";
     // A summary's "report" is its answer line; a summary run writes only
     // its own summary file, so the changes note is a task's alone.
@@ -776,6 +798,7 @@ export class TaskDetail extends RunWatcher {
 
     const buttons: HTMLButtonElement[] = [
       ...this.cancelButtons(), ...this.openSummaryButtons(), ...(summary ? [] : this.copyReportButtons()),
+      ...(summary ? [] : this.saveNoteButtons()),
       ...this.copyFailureButtons(),
       ...this.reuseButtons(), ...this.resumeButtons(),
       ...(run.no_page === true ? [] : [actionButton("Open page", () => this.deps.openPage(this.view.url))]),

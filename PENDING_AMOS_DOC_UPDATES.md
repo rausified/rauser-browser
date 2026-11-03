@@ -363,3 +363,5 @@
   Ordinary requests retain empty replay; durable apply and panel Re-learn
   remain assigned work. This is an internal prerequisite, not enabled
   migration. Brauser's design, staged plan and testing guidance stay here.
+
+- **Brauser — keep finished task reports in their source notes:** Tasks now offers an explicit Save to note for successful page tasks. The host fetches the retained report, checks the home/settings revision, and appends Markdown-safe text through the ordinary note identity, ownership and version checks. Existing note text and later edits survive, exact report retries avoid duplicates, and task completion itself still writes no content. No-page tasks remain copy-only; report retention in a note is independent of service history.
