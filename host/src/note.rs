@@ -13,6 +13,9 @@ use crate::brand::FRONTMATTER_KEY;
 use crate::frame::MAX_OUTBOUND_BYTES;
 use crate::vault::Vault;
 
+mod location;
+pub(crate) use location::NoteLocation;
+
 /// A new note's title is clamped to this many UTF-8 bytes, never refused.
 const MAX_TITLE_BYTES: usize = 2048;
 /// A body is refused above this many UTF-8 bytes. `note_loaded` and
@@ -785,7 +788,7 @@ mod tests {
     use super::*;
     use brauser_protocol::StorageConfig;
 
-    fn vault() -> (tempfile::TempDir, Vault) {
+    pub(super) fn vault() -> (tempfile::TempDir, Vault) {
         let root = tempfile::tempdir().unwrap();
         let storage = StorageConfig {
             root: root.path().to_string_lossy().into_owned(),

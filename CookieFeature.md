@@ -1395,3 +1395,26 @@ future formats, malformed entries, exact backups, conflicts, identity refusal,
 preview and cancellation; the real-browser journey also checks keyboard focus
 return after saving. The driver's external gate remains the source of real
 Chrome and platform acceptance.
+
+
+## 2026-11-03 — Preserve note ownership across re-keyed identities (brwr-c1bq)
+
+Re-learning needs to change an artifact's identity without creating a second
+editable note or rewriting the original note's ownership. The native note
+load/save path now separates the logical artifact key returned to the panel
+from the physical key used to read, validate and save the file. With trusted
+alias replay, a sole old note stays editable at its original filename; if a
+canonical note already exists it supplies the editor and the older file stays
+untouched. Several old notes with no canonical note refuse selection rather
+than silently picking one. URL notes remain separate preserved copies.
+
+Affected revisions bind both keys, the original content revision and replay
+history. A new canonical file makes an in-flight edit stale, and moving away
+and back cannot revive an old save. Files retain their creation URL, original
+title and names-only stripped-parameter evidence. The same native handlers
+are exercised with host-built replay in tests; ordinary requests still pass
+empty replay and keep existing revisions and browser-local copy-out recovery.
+This completes the physical-note contract prerequisite of assigned brwr-dbp.
+Durable config/history application, universal interrupted-apply handling,
+summary/run identity, preserved alias-note presentation and artifact stubs
+remain unfinished; panel Re-learn is still under brwr-6x2.
