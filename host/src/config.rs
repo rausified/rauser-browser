@@ -92,7 +92,23 @@ pub(crate) fn default_strip_params() -> Vec<String> {
 }
 
 /// The document types the summary prompt offers until the user edits them.
-pub const DEFAULT_DOCUMENT_TYPES: [&str; 6] = [
+pub const DEFAULT_DOCUMENT_TYPES: [&str; 11] = [
+    "report",
+    "announcement",
+    "ticket",
+    "specification",
+    "email",
+    "article",
+    "pull request",
+    "wiki page",
+    "board",
+    "presentation",
+    "spreadsheet",
+];
+/// The document types hosts offered before 2026-11-03. Every save writes
+/// `[summary_vocabulary]`, so an unedited config.toml still holds this list;
+/// `read_disk_state` loads exactly this list as `DEFAULT_DOCUMENT_TYPES`.
+const PREVIOUS_DEFAULT_DOCUMENT_TYPES: [&str; 6] = [
     "report",
     "announcement",
     "ticket",
@@ -100,6 +116,14 @@ pub const DEFAULT_DOCUMENT_TYPES: [&str; 6] = [
     "email",
     "article",
 ];
+/// An unedited document type list (exactly `PREVIOUS_DEFAULT_DOCUMENT_TYPES`)
+/// becomes the current default; the next save writes it. Any other list is
+/// the user's and stays as stored.
+fn upgrade_default_document_types(vocabulary: &mut SummaryVocabulary) {
+    if vocabulary.document_types == PREVIOUS_DEFAULT_DOCUMENT_TYPES {
+        vocabulary.document_types = DEFAULT_DOCUMENT_TYPES.map(String::from).to_vec();
+    }
+}
 /// The categories the summary prompt offers until the user edits them.
 pub const DEFAULT_CATEGORIES: [&str; 7] = [
     "technical specification",
@@ -1760,6 +1784,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             let agent = AgentView::parse(stored.summarizer.take());
             let mut config: ConfigSnapshot = stored.into();
             config.agent = agent.agent();
+            upgrade_default_document_types(&mut config.summary_vocabulary);
             if root_unconfirmed || validate_base(&config).is_err() {
                 let retired_adapter_contracts = repairable_history(retired_adapter_contracts);
                 let issue = if root_unconfirmed {
@@ -4973,6 +4998,61 @@ mod tests {
             store.snapshot().summary_vocabulary,
             valid.summary_vocabulary
         );
+    }
+
+    #[test]
+    fn default_document_types_name_the_work_artifacts_brauser_captures() {
+        for kind in [
+            "pull request",
+            "wiki page",
+            "board",
+            "presentation",
+            "spreadsheet",
+        ] {
+            assert!(DEFAULT_DOCUMENT_TYPES.contains(&kind), "{kind}");
+        }
+        validate_vocabulary(
+            "document type",
+            &default_summary_vocabulary().document_types,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn stored_previous_default_document_types_load_as_the_current_default() {
+        // Every save writes [summary_vocabulary], so a host that never had
+        // its lists edited still holds the six-type default on disk.
+        let previous = PREVIOUS_DEFAULT_DOCUMENT_TYPES
+            .map(|kind| format!("\"{kind}\""))
+            .join(", ");
+        let load = |document_types: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let root = dir.path().join("notes");
+            fs::create_dir(&root).unwrap();
+            fixtures::write(
+                &path,
+                &root,
+                "",
+                "",
+                &format!(
+                    "[summary_vocabulary]\ndocument_types = [{document_types}]\ncategories = [\"news\"]\n"
+                ),
+            );
+            let store = loaded(&path);
+            assert_eq!(store.config_issue(), None);
+            store.snapshot().summary_vocabulary.clone()
+        };
+        let upgraded = load(&previous);
+        assert_eq!(upgraded.document_types, DEFAULT_DOCUMENT_TYPES);
+        // Only the document types were the old default; categories stay.
+        assert_eq!(upgraded.categories, ["news"]);
+        // A list the user edited, even one reordered or one type short, is theirs.
+        let edited = "\"report\", \"announcement\", \"ticket\", \"specification\", \"email\"";
+        assert_eq!(load(edited).document_types.len(), 5);
+        let reordered =
+            "\"article\", \"report\", \"announcement\", \"ticket\", \"specification\", \"email\"";
+        assert_eq!(load(reordered).document_types[0], "article");
     }
 
     #[test]

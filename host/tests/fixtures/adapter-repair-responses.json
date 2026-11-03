@@ -23,7 +23,12 @@
             "ticket",
             "specification",
             "email",
-            "article"
+            "article",
+            "pull request",
+            "wiki page",
+            "board",
+            "presentation",
+            "spreadsheet"
           ],
           "categories": [
             "technical specification",
@@ -95,7 +100,12 @@
             "ticket",
             "specification",
             "email",
-            "article"
+            "article",
+            "pull request",
+            "wiki page",
+            "board",
+            "presentation",
+            "spreadsheet"
           ],
           "categories": [
             "technical specification",
@@ -807,7 +817,12 @@
             "ticket",
             "specification",
             "email",
-            "article"
+            "article",
+            "pull request",
+            "wiki page",
+            "board",
+            "presentation",
+            "spreadsheet"
           ],
           "categories": [
             "technical specification",
