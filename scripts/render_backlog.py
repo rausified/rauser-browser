@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Render BOSUN_FEATURE_BACKLOG.md's queue sections from .beads/issues.jsonl.
+"""Render Brauser's backlog view from the beads queue.
 
-The beads queue is authoritative. The backlog's item lists are generated from
-it between marker comments, so that no branch hand-edits them and two branches
-that each add a bead never conflict on hand-written Markdown:
+The queue lives in bd's Dolt database, synced through this repository's
+refs/dolt/data (AGENTS.md "Work queue"); nothing in git holds it. The
+backlog, BOSUN_FEATURE_BACKLOG.md, is a rendering and never committed: the
+hand-written frame (docs/backlog/frame.md) plus the one-file-per-entry notes
+(docs/backlog/notes/*.md), with each generated block filled from the beads:
 
     <!-- BEGIN GENERATED section=<key>[ show-closed]: ... -->
-    ...rendered from the beads, never edited by hand...
+    ...rendered from the beads, never written by hand...
     <!-- END GENERATED section=<key> -->
 
 Everything outside those markers (the preamble, section intros, Notes, cycle
-observations, the older Shipped history) is hand-written and left untouched.
+observations, the older Shipped history) is hand-written and kept as is.
 
 Where a bead goes is decided by its fields:
 
@@ -28,34 +30,31 @@ title, the lead of the description, and the priority and labels. Items are
 ordered by `backlog_order`, then priority, `created_at` and id, so output never
 depends on the JSONL's line order.
 
-Usage:
-    python3 scripts/render_backlog.py            # rewrite the backlog in place
-    python3 scripts/render_backlog.py --check    # exit 1 when it is stale
-    python3 scripts/render_backlog.py --resolve  # finish a merge/rebase conflict
-    python3 scripts/render_backlog.py --install-merge-driver
-    python3 scripts/render_backlog.py --merge-jsonl BASE OURS THEIRS    # git driver
-    python3 scripts/render_backlog.py --merge-backlog BASE OURS THEIRS  # git driver
+Usage (scripts/dev/queue backlog wraps this):
+    python3 scripts/render_backlog.py                 # write target/queue/BOSUN_FEATURE_BACKLOG.md
+    python3 scripts/render_backlog.py --print         # print it
+    python3 scripts/render_backlog.py --issues FILE   # render a given bd export
 """
 
 from __future__ import annotations
 
 import argparse
-import difflib
 import json
-import os
 import pathlib
 import re
-import shlex
 import subprocess
 import sys
-import tempfile
 
 LIVE_STATUSES = frozenset({"open", "in_progress", "blocked", "deferred"})
 REQUIRED_SECTIONS = ("new", "in-progress", "shipped")
+# The two files that used to be committed; never commit them again.
 QUEUE_PATH = ".beads/issues.jsonl"
 BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md"
-MERGE_DRIVER = "beads-jsonl"
-BACKLOG_DRIVER = "bosun-backlog"
+REPO = pathlib.Path(__file__).resolve().parent.parent
+FRAME_PATH = "docs/backlog/frame.md"
+NOTES_DIR = "docs/backlog/notes"
+RENDER_PATH = "target/queue/BOSUN_FEATURE_BACKLOG.md"
+NOTES_HEADING = "## Cycle notes (docs/backlog/notes/)"
 LEAD_LIMIT = 280
 
 BEGIN_PATTERN = re.compile(
@@ -594,349 +593,43 @@ def merge_jsonl(base: str, ours: str, theirs: str) -> tuple[str, list[str], list
 
 
 # --------------------------------------------------------------------------
-# Git helpers
+# Git helper
 
 
-def git(*args: str, cwd: pathlib.Path, check: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, input=input_text,
-        encoding="utf-8",
-    )
+def git(*args: str, cwd: pathlib.Path, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8")
     if check and result.returncode != 0:
         raise BacklogError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result
 
 
-def repo_root(start: pathlib.Path) -> pathlib.Path:
-    return pathlib.Path(git("rev-parse", "--show-toplevel", cwd=start).stdout.strip())
-
-
-def stage(root: pathlib.Path, number: int, path: str) -> str:
-    result = git("show", f":{number}:{path}", cwd=root, check=False)
-    return result.stdout if result.returncode == 0 else ""
-
-
-def unmerged(root: pathlib.Path) -> set[str]:
-    out = git("diff", "--name-only", "--diff-filter=U", cwd=root).stdout
-    return {line.strip() for line in out.splitlines() if line.strip()}
-
-
-def merge_text(root: pathlib.Path, base: str, ours: str, theirs: str) -> tuple[str, int]:
-    with tempfile.TemporaryDirectory() as tmp:
-        paths = []
-        for name, text in (("ours", ours), ("base", base), ("theirs", theirs)):
-            path = pathlib.Path(tmp) / name
-            path.write_text(text, encoding="utf-8", newline="\n")
-            paths.append(str(path))
-        result = git(
-            "merge-file", "-p", "-L", "ours", "-L", "base", "-L", "theirs", *paths,
-            cwd=root, check=False,
-        )
-        if result.returncode < 0 or result.returncode > 127:
-            raise BacklogError(f"git merge-file failed: {result.stderr.strip()}")
-        return result.stdout, result.returncode
-
-
 def write(path: pathlib.Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-CONFLICT_MARKER_PATTERN = re.compile(r"^(<{7}|={7}|>{7}|\|{7})( |$)", re.MULTILINE)
+# --------------------------------------------------------------------------
+# The frame and its notes
 
 
-def hand_resolved(path: pathlib.Path) -> bool:
-    """True when a conflicted file's working copy no longer has conflict markers.
+def compose(frame: str, notes_dir: pathlib.Path | None) -> str:
+    """The frame followed by every note under NOTES_DIR, in file-name order.
 
-    A rerun after the user fixed the markers by hand must keep that fix rather
-    than merge the index stages again.
+    A note is one Markdown file per entry (cycle observations, handoffs), so
+    two branches that each add one never touch the same file. README.md in
+    the directory explains the convention and is not a note.
     """
-    try:
-        return not CONFLICT_MARKER_PATTERN.search(path.read_text(encoding="utf-8"))
-    except OSError:
-        return False
-
-
-def resolve(root: pathlib.Path) -> int:
-    """Finish a merge, rebase or cherry-pick whose queue or backlog conflicted."""
-    conflicted = unmerged(root)
-    queue_file = root / QUEUE_PATH
-    backlog_file = root / BACKLOG_PATH
-    status = 0
-
-    # A merge driver that fails outright (a stale interpreter path, a crash)
-    # leaves ours' bytes with no markers; that is not a hand resolution, and
-    # keeping it would silently drop theirs' beads.
-    ours_untouched = (
-        queue_file.is_file()
-        and queue_file.read_text(encoding="utf-8") == stage(root, 2, QUEUE_PATH)
-        and stage(root, 2, QUEUE_PATH) != stage(root, 3, QUEUE_PATH)
+    frame = frame.replace("\r\n", "\n")
+    notes = sorted(
+        path for path in (notes_dir.glob("*.md") if notes_dir and notes_dir.is_dir() else [])
+        if path.name != "README.md"
     )
-    if QUEUE_PATH in conflicted and hand_resolved(queue_file) and not ours_untouched:
-        load_issues(queue_file)  # a hand resolution must still parse
-        git("add", "--", QUEUE_PATH, cwd=root)
-        print(f"{QUEUE_PATH}: kept your resolution")
-    elif QUEUE_PATH in conflicted:
-        text, conflicts, notes = merge_jsonl(
-            stage(root, 1, QUEUE_PATH), stage(root, 2, QUEUE_PATH), stage(root, 3, QUEUE_PATH)
-        )
-        write(queue_file, text)
-        for note in notes:
-            print(f"{QUEUE_PATH}: {note}")
-        if conflicts:
-            print(
-                f"{QUEUE_PATH}: {len(conflicts)} bead(s) changed differently on both sides: "
-                f"{', '.join(conflicts)}. Edit those lines (keep one record per bead), "
-                f"then run this command again (to keep ours exactly, `git add` the file yourself)."
-            )
-            return 1
-        git("add", "--", QUEUE_PATH, cwd=root)
-        print(f"{QUEUE_PATH}: merged bead by bead")
-
-    issues = load_issues(queue_file)
-
-    # Likewise a backlog driver that never ran leaves ours' bytes behind.
-    backlog_untouched = (
-        backlog_file.is_file()
-        and backlog_file.read_text(encoding="utf-8") == stage(root, 2, BACKLOG_PATH)
-        and stage(root, 2, BACKLOG_PATH) != stage(root, 3, BACKLOG_PATH)
-    )
-    if BACKLOG_PATH in conflicted and hand_resolved(backlog_file) and not backlog_untouched:
-        write(backlog_file, render(backlog_file.read_text(encoding="utf-8"), issues))
-        git("add", "--", BACKLOG_PATH, cwd=root)
-        print(f"{BACKLOG_PATH}: kept your resolution, generated sections re-rendered")
-    elif BACKLOG_PATH in conflicted:
-        skeletons = [strip_generated(stage(root, number, BACKLOG_PATH)) for number in (1, 2, 3)]
-        merged, prose_conflicts = merge_text(root, *skeletons)
-        try:
-            rendered = render(merged, issues)
-        except BacklogError as error:
-            write(backlog_file, merged)
-            print(f"{BACKLOG_PATH}: a conflict crosses a GENERATED marker ({error}); fix the markers by hand, then rerun")
-            return 1
-        write(backlog_file, rendered)
-        if prose_conflicts:
-            print(
-                f"{BACKLOG_PATH}: generated sections re-rendered, but {prose_conflicts} "
-                f"hand-written conflict(s) remain; resolve the markers, then rerun "
-                f"(to keep ours exactly, `git add` the file yourself)"
-            )
-            status = 1
-        else:
-            git("add", "--", BACKLOG_PATH, cwd=root)
-            print(f"{BACKLOG_PATH}: hand-written text merged, generated sections re-rendered")
-    else:
-        current = backlog_file.read_text(encoding="utf-8")
-        rendered = render(current, issues)
-        if rendered != current.replace("\r\n", "\n"):
-            write(backlog_file, rendered)
-            print(f"{BACKLOG_PATH}: generated sections re-rendered")
-        if QUEUE_PATH in conflicted or git("diff", "--quiet", "--", BACKLOG_PATH, cwd=root, check=False).returncode:
-            git("add", "--", BACKLOG_PATH, cwd=root)
-    return status
-
-
-def install_merge_driver(root: pathlib.Path) -> None:
-    """Register both merge drivers `.gitattributes` names, in this clone only.
-
-    Idempotent: rerunning rewrites the same two config entries (and picks up
-    a new interpreter path). Each driver falls back to git's ordinary line
-    merge when the branch being merged into has no renderer script, so a
-    failed driver can never leave only ours' side behind.
-    """
-    python = shlex.quote(pathlib.Path(sys.executable).as_posix())
-    fallback = "git merge-file -L ours -L base -L theirs %A %O %B"
-    for name, label, flag, path in (
-        (MERGE_DRIVER, "beads JSONL merge, bead by bead", "--merge-jsonl", QUEUE_PATH),
-        (BACKLOG_DRIVER, "backlog merge, generated sections re-rendered", "--merge-backlog", BACKLOG_PATH),
-    ):
-        git("config", f"merge.{name}.name", label, cwd=root)
-        git(
-            "config", f"merge.{name}.driver",
-            f"if test -f scripts/render_backlog.py; then "
-            f"{python} scripts/render_backlog.py {flag} %O %A %B; "
-            f"else {fallback}; fi",
-            cwd=root,
-        )
-        print(f"installed git merge driver '{name}' for {path} in this clone")
-
-
-def merge_driver(base: pathlib.Path, ours: pathlib.Path, theirs: pathlib.Path) -> int:
-    """`git merge` driver for the queue: write the merge into OURS, exit 1 on conflict."""
-    texts = [path.read_text(encoding="utf-8") for path in (base, ours, theirs)]
-    try:
-        merged, conflicts, notes = merge_jsonl(*texts)
-    except BacklogError as error:
-        # Not something we can merge record by record: fall back to the
-        # ordinary line merge so neither side is silently dropped.
-        print(f"beads-jsonl merge driver: {error}; using a line merge", file=sys.stderr)
-        return _line_merge(base, ours, theirs)
-    for note in notes:
-        print(f"beads-jsonl merge driver: {note}", file=sys.stderr)
-    write(ours, merged)
-    if conflicts:
-        print(
-            f"beads-jsonl merge driver: {len(conflicts)} bead(s) need a hand merge: "
-            f"{', '.join(conflicts)}; then run python3 scripts/render_backlog.py --resolve",
-            file=sys.stderr,
-        )
-    return 1 if conflicts else 0
-
-
-def _line_merge(base: pathlib.Path, ours: pathlib.Path, theirs: pathlib.Path) -> int:
-    result = subprocess.run(
-        ["git", "merge-file", "-L", "ours", "-L", "base", "-L", "theirs",
-         str(ours), str(base), str(theirs)],
-        capture_output=True, text=True,
-    )
-    return 0 if result.returncode == 0 else 1
-
-
-def _show(root: pathlib.Path, rev: str, path: str) -> str:
-    result = git("show", f"{rev}:{path}", cwd=root, check=False)
-    return result.stdout if result.returncode == 0 else ""
-
-
-def _commit(root: pathlib.Path, name: str) -> str | None:
-    result = git("rev-parse", "-q", "--verify", f"{name}^{{commit}}", cwd=root, check=False)
-    return result.stdout.strip() if result.returncode == 0 else None
-
-
-def _candidates(root: pathlib.Path) -> list[tuple[str, str]]:
-    """Commits that may be the side being merged in, with how to find its base.
-
-    git tells a merge driver nothing about the commits it merges, only the
-    three versions of one file. `git merge` and `git pull` export the merged
-    head as GITHEAD_<oid> (older git) and name it in GIT_REFLOG_ACTION (a
-    pull merges FETCH_HEAD); a rebase lists the commit it is picking last in
-    rebase-merge/done. Each guess is checked against the driver's own input
-    before it is used.
-    """
-    found: list[tuple[str, str]] = []
-    for key in sorted(os.environ):
-        if key.startswith("GITHEAD_"):
-            found.append(("merge", key[len("GITHEAD_"):]))
-    action = os.environ.get("GIT_REFLOG_ACTION", "").split()
-    if action[:1] == ["merge"]:
-        found.extend(("merge", name) for name in action[1:] if not name.startswith("-"))
-    if action[:1] == ["pull"]:
-        found.append(("merge", "FETCH_HEAD"))
-    done = pathlib.Path(git("rev-parse", "--git-path", "rebase-merge/done", cwd=root).stdout.strip())
-    if not done.is_absolute():
-        done = root / done
-    if done.is_file():
-        steps = [line.split() for line in done.read_text(encoding="utf-8").splitlines()]
-        steps = [step for step in steps if step and not step[0].startswith("#")]
-        if steps and steps[-1][0] in {"pick", "p", "reword", "r", "edit", "e", "fixup", "f", "squash", "s"}:
-            names = [token for token in steps[-1][1:] if not token.startswith("-")]
-            if names:
-                found.append(("pick", names[0]))
-    return found
-
-
-def merge_sides(root: pathlib.Path, base: str, ours: str, theirs: str) -> tuple[str, str, str] | None:
-    """The base, ours and theirs queues behind the backlog git is merging.
-
-    Ours is HEAD in a merge, a rebase and a cherry-pick alike. Theirs and the
-    base are only accepted when that commit's backlog is byte for byte the
-    file git handed the driver (and there is exactly one merge base), so a
-    wrong guess falls back rather than rendering from the wrong queue.
-    Returns None when the commits cannot be established.
-    """
-    def same(rev: str, text: str) -> bool:
-        return _show(root, rev, BACKLOG_PATH).replace("\r\n", "\n") == text
-
-    if not same("HEAD", ours):
-        return None
-    for kind, name in _candidates(root):
-        commit = _commit(root, name)
-        if commit is None or not same(commit, theirs):
-            continue
-        if kind == "merge":
-            result = git("merge-base", "--all", "HEAD", commit, cwd=root, check=False)
-            bases = result.stdout.split() if result.returncode == 0 else []
-        else:
-            parent = _commit(root, f"{commit}^")
-            bases = [parent] if parent else []
-        if len(bases) == 1 and same(bases[0], base):
-            return tuple(_show(root, rev, QUEUE_PATH) for rev in (bases[0], "HEAD", commit))  # type: ignore[return-value]
-    return None
-
-
-def fill_blocks(skeleton: str, source: str) -> str:
-    """The skeleton with each generated block's lines copied from SOURCE."""
-    source_lines = split_lines(source)
-    bodies = {block.section: source_lines[block.start + 1 : block.end] for block in find_blocks(source_lines)}
-    lines = split_lines(skeleton)
-    out: list[str] = []
-    cursor = 0
-    for block in find_blocks(lines):
-        out.extend(lines[cursor : block.start + 1])
-        out.extend(bodies.get(block.section, []))
-        out.append(lines[block.end])
-        cursor = block.end + 1
-    out.extend(lines[cursor:])
-    return "\n".join(out)
-
-
-def merge_backlog(
-    base: str, ours: str, theirs: str, queues: tuple[str, str, str] | None, *, cwd: pathlib.Path
-) -> tuple[str, int, str | None]:
-    """Merge three backlogs: hand-written text three ways, generated blocks re-rendered.
-
-    The generated blocks are never text-merged. They are rendered from the
-    merged queue, which is `merge_jsonl` of the three queues behind this
-    merge (the same merge the queue's own driver makes). Returns (text,
-    status, why): status 0 is a clean merge; 1 leaves the file conflicted,
-    either for a hand-written conflict (markers in the text) or because the
-    merged queue is unknown or itself conflicted, in which case the blocks
-    hold ours' rendering and `--resolve` re-renders them.
-    """
-    base, ours, theirs = (text.replace("\r\n", "\n") for text in (base, ours, theirs))
-    skeletons = [strip_generated(text) for text in (base, ours, theirs)]
-    merged, prose_conflicts = merge_text(cwd, *skeletons)
-    issues = None
-    why = None
-    if queues is None:
-        why = "cannot tell which commits are being merged"
-    else:
-        try:
-            queue, conflicts, _ = merge_jsonl(*queues)
-            if conflicts:
-                why = f"bead(s) {', '.join(conflicts)} need a hand merge"
-            else:
-                issues = parse_issues(queue, QUEUE_PATH)
-        except BacklogError as error:
-            why = f"the queue does not merge bead by bead ({error})"
-    try:
-        if issues is not None:
-            return render(merged, issues), 1 if prose_conflicts else 0, None
-        return fill_blocks(merged, ours), 1, why
-    except BacklogError as error:
-        # A hand-written conflict that swallowed a GENERATED marker.
-        return merged, 1, f"a conflict crosses a GENERATED marker ({error})"
-
-
-def backlog_driver(base: pathlib.Path, ours: pathlib.Path, theirs: pathlib.Path) -> int:
-    """`git merge` driver for the backlog: write the merge into OURS, exit 1 on conflict."""
-    texts = [path.read_text(encoding="utf-8") for path in (base, ours, theirs)]
-    cwd = pathlib.Path.cwd()
-    try:
-        root = repo_root(cwd)
-        queues = merge_sides(root, *(text.replace("\r\n", "\n") for text in texts))
-        merged, status, why = merge_backlog(*texts, queues, cwd=root)
-    except (BacklogError, OSError) as error:
-        # Markers missing on one side (a branch from before the renderer) or
-        # git unusable: fall back to the line merge, never to ours alone.
-        print(f"bosun-backlog merge driver: {error}; using a line merge", file=sys.stderr)
-        return _line_merge(base, ours, theirs)
-    write(ours, merged)
-    if why:
-        print(
-            f"bosun-backlog merge driver: {why}; "
-            f"finish with python3 scripts/render_backlog.py --resolve",
-            file=sys.stderr,
-        )
-    return status
+    if not notes:
+        return frame
+    parts = [frame.rstrip("\n"), "", NOTES_HEADING, ""]
+    for path in notes:
+        parts += [path.read_text(encoding="utf-8").replace("\r\n", "\n").strip("\n"), ""]
+    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------
@@ -944,54 +637,34 @@ def backlog_driver(base: pathlib.Path, ours: pathlib.Path, theirs: pathlib.Path)
 
 
 def main(argv: list[str] | None = None) -> int:
-    default_root = pathlib.Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--issues", type=pathlib.Path, default=default_root / QUEUE_PATH)
-    parser.add_argument("--backlog", type=pathlib.Path, default=default_root / BACKLOG_PATH)
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--check", action="store_true", help="exit 1 if the backlog is stale")
-    mode.add_argument("--resolve", action="store_true",
-                      help="finish a conflicted merge/rebase of the queue and backlog")
-    mode.add_argument("--install-merge-driver", action="store_true",
-                      help="register the queue and backlog merge drivers in this clone")
-    mode.add_argument("--merge-jsonl", nargs=3, type=pathlib.Path,
-                      metavar=("BASE", "OURS", "THEIRS"), help=argparse.SUPPRESS)
-    mode.add_argument("--merge-backlog", nargs=3, type=pathlib.Path,
-                      metavar=("BASE", "OURS", "THEIRS"), help=argparse.SUPPRESS)
+    parser.add_argument("--issues", type=pathlib.Path,
+                        help="a bd export (default: `scripts/dev/queue export` of this checkout's database)")
+    parser.add_argument("--frame", type=pathlib.Path, default=REPO / FRAME_PATH,
+                        help="the hand-written frame (default: %(default)s)")
+    parser.add_argument("--notes", type=pathlib.Path, default=REPO / NOTES_DIR,
+                        help="one-file-per-entry notes appended to the frame (default: %(default)s)")
+    where = parser.add_mutually_exclusive_group()
+    where.add_argument("--out", type=pathlib.Path, default=REPO / RENDER_PATH,
+                       help="where to write the rendering (default: %(default)s, git-ignored)")
+    where.add_argument("--print", action="store_true", help="print the rendering instead")
     args = parser.parse_args(argv)
 
     try:
-        if args.merge_jsonl:
-            return merge_driver(*args.merge_jsonl)
-        if args.merge_backlog:
-            return backlog_driver(*args.merge_backlog)
-        if args.install_merge_driver:
-            install_merge_driver(repo_root(pathlib.Path.cwd()))
-            return 0
-        if args.resolve:
-            return resolve(repo_root(pathlib.Path.cwd()))
+        if args.issues is None:
+            import work_queue  # local: it imports this module
+
+            try:
+                args.issues = work_queue.export(work_queue.repo_root())
+            except work_queue.QueueError as error:
+                raise BacklogError(str(error)) from error
         issues = load_issues(args.issues)
-        current = args.backlog.read_text(encoding="utf-8")
-        rendered = render(current, issues)
-        if args.check:
-            if rendered == current.replace("\r\n", "\n"):
-                print(f"{args.backlog.name}: generated sections are up to date")
-                return 0
-            sys.stdout.writelines(
-                difflib.unified_diff(
-                    current.replace("\r\n", "\n").splitlines(keepends=True),
-                    rendered.splitlines(keepends=True),
-                    fromfile=f"{args.backlog.name} (committed)",
-                    tofile=f"{args.backlog.name} (rendered)",
-                )
-            )
-            print(f"\n{args.backlog.name} is stale: run python3 scripts/render_backlog.py")
-            return 1
-        if rendered != current:
-            write(args.backlog, rendered)
-            print(f"{args.backlog.name}: generated sections re-rendered")
+        rendered = render(compose(args.frame.read_text(encoding="utf-8"), args.notes), issues)
+        if args.print:
+            sys.stdout.write(rendered)
         else:
-            print(f"{args.backlog.name}: already up to date")
+            write(args.out, rendered)
+            print(f"rendered {args.out}")
         return 0
     except (BacklogError, OSError) as error:
         print(f"render_backlog: {error}", file=sys.stderr)
