@@ -1419,6 +1419,20 @@ Durable config/history application, universal interrupted-apply handling,
 summary/run identity, preserved alias-note presentation and artifact stubs
 remain unfinished; panel Re-learn is still under brwr-6x2.
 
+## 2026-11-03 — Group deliberate work into named focus sessions
+
+Brauser now lets you name a block of work from a compact Focus session control
+in the panel, then rename or end it explicitly. A session stays active across
+windows and browser restarts, while capture pause still stops measurement and
+closed-browser time is never backfilled. The worklog keeps its normal totals
+and adds a session breakdown of the exact captured artifacts, so a Jira item,
+document and pull request can tell one coherent story. The same artifact can
+belong to two sessions without adding extra opens or duplicating its time.
+Names are snapshots on captured activity: a rename affects new measurements,
+and worklogs identify name changes within their date range rather than rewriting
+older logs. Labels persist locally and appear in copied worklogs; starting an
+empty session creates no record and invokes no agent or network service.
+
 ## 2026-11-03 — Personalize summary language and emphasis (`brwr-sm4`)
 
 Brauser can now take personal summary guidance from `SUMMARY_STYLE.md` in the

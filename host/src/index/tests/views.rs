@@ -8,6 +8,7 @@ fn artifact_urls_include_mode_evidence_urls() {
     let edit_url = "https://docs.example/d/abc/edit";
     let view_url = "https://docs.example/d/abc/view";
     let event = ActivityEvent {
+        focus_session: None,
         event_id: "00000000-0000-4000-8000-000000000003".into(),
         artifact_id: "gdoc:docs.example/abc".into(),
         artifact_type: "gdoc".into(),

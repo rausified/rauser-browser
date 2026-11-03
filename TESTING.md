@@ -1757,3 +1757,24 @@ existing page accessibility fixtures. These checks verify prompt construction;
 they do not prove that a full-access model obeys the instructions or a user's
 preferred language/style. A real-model style comparison remains separate
 interactive acceptance work.
+
+## Named focus sessions
+
+After `npm run build:extension`, the focused offline checks are
+`node --test --test-isolation=none extension/tests/focus-session.test.mjs`,
+`node --test --test-isolation=none extension/tests/panel/focus-session.test.mjs`,
+and `node --test --test-isolation=none extension/tests/worker.test.mjs`.
+They cover same-hour session boundaries on one artifact, immediate navigation
+after rename, stale panels, worker versus browser restart, pause/resume,
+pressure/frozen delivery, and interrupted local/session-context publication.
+`cargo test --locked -p brauser --lib focus` checks host metadata validation,
+immutable retries, real log/cache rebuild, bounded worklogs and Re-learn
+projection; `cargo test --locked -p brauser-protocol --test wire_focus_sessions`
+checks the additive wire shape and omitted legacy metadata. Existing frozen
+capture-recovery tests stay in the full gate.
+
+The accessibility keyboard journey opens the Focus session disclosure, starts,
+renames and ends a session using only the keyboard, audits both states, and
+checks a markup-shaped name remains text. A sandbox skip does not establish
+browser acceptance. macOS/Windows interactive capture acceptance remains
+separate; this feature adds no dialog and changes no scripted-dialog count.
