@@ -103,8 +103,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
 <!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** Blocked on held PR #238 (`brwr-37ca`), which contains the shared resolver/preview prerequisite `brwr-ruwj`. After it lands: physical note selection/revision, authoritative applied home history, exact config preparation and universal recovery/refusal, alias-aware access, old-path stubs and crash/reindex acceptance. Ordinary config saves keep the ID freeze.
-- [ ] `brwr-ruwj` **Project reviewed re-key history through a shared identity resolver.** Direct prerequisite of assigned brwr-dbp's migration design challenge. Extract existing alias rehearsal replay into one shared host identity resolver and use it to project strict authoritative log evidence without mutating capture events or files. Expose a read-only… _(P2; blocked)_
 <!-- END GENERATED section=plan -->
 
 ### Gated plan work (do not start yet)
@@ -126,6 +124,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 
 <!-- BEGIN GENERATED section=quality: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-q0i4` **Honor capture pause when an automatic summary reaches the host.** While fixing brwr-sm7, start_auto_summary checks auto_summary.enabled and current adapter identity but never snapshot.capture_enabled. The worker normally removes candidates while capture is paused, yet a pause during readTab leaves an in-flight request that can start a new… _(P2; blocked)_
+- [ ] `brwr-d586` **Resolve historical refs under the recorded contract in relearn-preview.** Codex review P2 on PR #238 (cookie-pr-repair, 2026-11-03), host/src/index.rs:2324-2325: when a proposal changes which URL capture supplies the ID, `resolved` is computed under the proposed policy, so the historical ref lookup receives a newly synthesized ID instead of the… _(P2)_
 - [ ] `brwr-ys8y` **Generate padded token values in adapter differential tests.** Discovered while fixing brwr-tp1: scripts/adapter-templates-diff.mjs genValue only emits the token body alphabet, so random URL/title/alias cases never exercise the supported base64 padding grammar. Shared fixed vectors caught title-run drift, but the property generator still… _(P3)_
 - [ ] `brwr-1xmv` **Share keyboard entry for composite controls in browser journeys.** Cycle 6 worklog curation was quarantined because its keyboard journey tried to Tab directly to inactive Recent, which intentionally has tabindex=-1. Repeated inline entry sequences make it easy to miss the existing roving-tabindex contract, especially where local Chromium cannot… _(P3; blocked)_
 <!-- END GENERATED section=quality -->
@@ -181,7 +180,6 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
-- [ ] `brwr-37ca` **Held PR #238: CI still red after 0 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/238 (branch cookie/cookie-overnight/cycle-2-8a8d351): checks green but still not merged after 2700s (is auto-merge on?). It stays open with the held label; nothing new is built on it. Fix it on its… _(P1; labels: human, pr-held)_
 - [ ] `brwr-tcfc` **Held PR #249: CI still red after 1 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/249 (branch cookie/cookie-overnight/cycle-3-2912754): failed checks: Windows / Build and check (windows-latest); Build and check. It stays open with the held label; nothing new is built on it. Fix it on… _(P1; labels: human, pr-held)_
 - [ ] `brwr-6ede` **Held PR #255: CI still red after 1 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/255 (branch cookie/cookie-overnight/cycle-9-59c7612): failed checks: macOS / Build and check (macos-15); macOS fallback / Build and check (macos-15-intel); Build and check. It stays open with the held… _(P1; labels: human, pr-held)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
@@ -224,6 +222,7 @@ queue".
   action is to record current Windows and macOS green CI against a named
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
+- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** Blocked on held PR #238 (`brwr-37ca`), which contains the shared resolver/preview prerequisite `brwr-ruwj`. After it lands: physical note selection/revision, authoritative applied home history, exact config preparation and universal recovery/refusal, alias-aware access, old-path stubs and crash/reindex acceptance. Ordinary config saves keep the ID freeze.
 - [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2; assignee: john-index-lane)_
 - [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2; assignee: john-index-lane)_
 <!-- END GENERATED section=in-progress -->
@@ -259,6 +258,8 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** Bug Fix. **Stopping a run ends its harness, not just the harness's children (2026-11-02).** Found that on macOS a process-group SIGKILL could kill a harness's background child first and leave the woken parent time to exit normally, so a cancelled run could report an answer. The kill now reaches the leader directly before the group, with a regression test that repeats the race twenty times. **Metrics:** under load, the two flaky kill tests went from 36/50 and 41/50 failures to 0/50, the new test from 50/50 to 0/50; all README gates green.
 
 - **Category:** New Capability. **Preserve recorded incoming navigation in summaries (2026-11-02).** Summaries freeze up to five host-derived source/transition pairs and retain them through queueing, restart and Retry save. A bounded untrusted section gives the agent attributed context without source retrieval; the host renders an Incoming list with safe title links and last-recorded dates, omitted for absent/legacy context. Hostile text remains inert and Office/Miro retrieval keeps its boundaries. **Metrics:** 1,331 workspace Rust-reported outcomes (+10 tests; 92 IPC guard skips), 40 extension test files, both Clippy builds, 10,696 inert renderings; a11y 2 fixture passes and 36 explicit sandbox skips.
+
+- **Category:** New Capability. **Preview corrected capture history before applying Re-learn (2026-11-02).** Added host-only relearn-preview with shared alias replay and the real artifact/Recent/worklog derivation. Corrected totals, refs, trails and container roll-ups retain raw event evidence and original summary ownership/paths. Fresh review, full snapshot hashes (events, durable order and gaps) and final evidence revalidation refuse stale or ambiguous mappings without publishing state. Durable apply and panel Re-learn remain unfinished. **Metrics:** 1,327 workspace Rust-reported outcomes (+13 new; 92 explicit IPC guards), 40 extension test files, both Clippy configurations; two a11y fixtures pass and 36 browser cases explicitly skip in sandbox.
 
 - **Category:** Bug Fix. **Detect Re-learn key collisions across origins (2026-11-02).** All-origin log, owned-note/summary and verified implicit-container identities protect occupied sources and destinations, including HTTP/HTTPS keys sharing a host. Fresh approval refuses these conflicts; unrelated origins stay outside migration rows. All contracts used for occupancy bind the review revision. **Metrics:** 4 new regressions for this fix; 7 across the assigned pair, 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension files and both Clippy builds; 36 browser sandbox skips.
 
@@ -1825,6 +1826,28 @@ locally; logs are in `target/overnight-health/assignment-mirror-repair/`.
 No new feature shipped, so no feature-briefing or product-design change was
 needed. Independent review and publication remain with the driver.
 
+### Re-learning projection handoff (2026-11-02 — brwr-ruwj)
+
+The assigned apply work now has one shared identity resolver and a real
+read-only projected-history command. Thirteen regressions and the full local
+required/README gate pass. `adapters relearn-preview` takes a normal impact
+request, shows corrected artifact/Recent/worklog views, and preserves original
+summary ownership and file locations without publishing anything. Its log
+snapshot must match the plan, and the final plan check catches owned-file
+edits. Tests cover chains, move-back, unalias, refs/trails, implicit containers,
+URL-summary separation and deleted/corrupt disposable caches.
+
+Continue assigned brwr-dbp, which remains in progress: settle the physical-note
+selection/revision and universal prepared-transaction recovery rules in the
+staged plan before building the write path. A loaded logical key must never
+be passed to the existing note save API as a physical ownership key. Then add
+authoritative home history, exact before/after config preparation, ordinary
+access recovery/refusal, alias-aware note/summary access, old-path stubs and
+cache/reindex/crash tests. Preserve the original decision journal. The parent
+brwr-6x2 still needs panel review after host apply; brwr-7lq follows the P2
+assigned tier. Avoid adding another preview stage instead of these remaining
+integration steps. No new human ask was introduced. The improvement feed
+records the physical-note revision contract with its evidence from this cycle.
 
 ### 2026-11-02 — Queue readiness must account for held cycle PRs
 
