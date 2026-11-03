@@ -40,6 +40,7 @@ use crate::capture::{
     trail_transition_is_valid,
 };
 use crate::markdown::{self, yaml_string};
+use crate::relearn::aliases::Resolution;
 use crate::summary::SummaryEvent;
 use crate::url_provenance::{StoredUrl, UrlProvenance};
 use crate::vault::{
@@ -53,6 +54,7 @@ mod db;
 mod fold;
 mod legacy;
 mod ord;
+mod project;
 mod query;
 mod rebuild;
 mod regen;
@@ -69,6 +71,7 @@ pub(crate) use db::{BUSY_SURFACED, BusyTimeout};
 use fold::*;
 pub(crate) use fold::{unvisited_container, unvisited_within};
 use legacy::*;
+pub(crate) use project::RekeyProjection;
 #[cfg(test)]
 use query::*;
 use regen::*;
@@ -428,7 +431,7 @@ struct VisitRow {
     contained: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct EdgeRow {
     source: String,
     target: String,
@@ -924,15 +927,7 @@ impl ArtifactIndex {
     /// Caller holds the config and capture locks, in that order.
     /// It reads only the logs, never the cache directory.
     pub(crate) fn relearn_evidence(&self) -> Result<(String, Vec<(RecordKey, StoredUrl)>)> {
-        let scan = LogScan::read(&self.storage, &self.root_identity, true)?;
-        anyhow::ensure!(
-            scan.complete,
-            "re-learning review exceeds the log scan limit"
-        );
-        anyhow::ensure!(
-            scan.conflicts.is_empty(),
-            "conflicting recorded event IDs prevent re-learning review"
-        );
+        let scan = self.relearn_state()?;
         let revision = scan.revision()?;
         let evidence = scan
             .events
@@ -949,6 +944,38 @@ impl ArtifactIndex {
             })
             .collect();
         Ok((revision, evidence))
+    }
+
+    /// The strict log-only scan behind re-learning review and projection.
+    /// No checkpoint is trusted, published, regenerated or resumed here.
+    fn relearn_state(&self) -> Result<LogScan> {
+        let scan = LogScan::read(&self.storage, &self.root_identity, true)?;
+        anyhow::ensure!(
+            scan.complete,
+            "re-learning review exceeds the log scan limit"
+        );
+        anyhow::ensure!(
+            scan.conflicts.is_empty(),
+            "conflicting recorded event IDs prevent re-learning review"
+        );
+        Ok(scan)
+    }
+
+    /// Strict, cache-independent preview of the app's derivation under
+    /// `resolution`, from a fresh log scan whose revision must still be
+    /// the reviewed `expected_log_revision`. It never reads `index.db`.
+    pub(crate) fn relearn_projection(
+        &self,
+        resolution: &Resolution,
+        expected_log_revision: &str,
+    ) -> Result<RekeyProjection> {
+        let scan = self.relearn_state()?;
+        anyhow::ensure!(
+            scan.revision()? == expected_log_revision,
+            "log evidence changed during projection; review a fresh plan"
+        );
+        let derived = derive_resolved(&scan, self.adapters.as_deref(), resolution);
+        project::projection(&scan, derived)
     }
 
     /// Latest "why I'm here" context recorded for an artifact, independent of
@@ -1114,7 +1141,6 @@ fn saturating_u32(value: u64) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
-#[cfg(test)]
 fn parse_date(value: &str) -> Result<Date> {
     let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")?;
     Ok(Date::parse(value, &format)?)

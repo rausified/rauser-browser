@@ -325,6 +325,8 @@ pub fn request_kind(request: &Request) -> &'static str {
     match request {
         Request::Hello(_) => "hello",
         Request::GetConfig(_) => "get_config",
+        Request::GetAdapterRepair(_) => "get_adapter_repair",
+        Request::ReplaceAdapters(_) => "replace_adapters",
         Request::UpdateConfig(_) => "update_config",
         Request::ChooseFolder(_) => "choose_folder",
         Request::RecordVisit(_) => "record_visit",
@@ -585,6 +587,103 @@ fn dispatch(
                 }
             }
             config_result(config, value.request_id)
+        }
+        Request::GetAdapterRepair(value) => {
+            let _lock = match config.lock_current() {
+                Ok(lock) => lock,
+                Err(_) => {
+                    return error(
+                        &value.request_id,
+                        ErrorCode::Internal,
+                        "could not lock configuration",
+                    );
+                }
+            };
+            if config.refresh().is_err() || config.config_issue().is_some() {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    "repair the configuration before its adapters",
+                );
+            }
+            if value.expected_revision != config.revision() {
+                return error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "configuration changed; reopen adapter repair",
+                );
+            }
+            if config.adapter_issue().is_none() {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    "there is no adapter issue to repair",
+                );
+            }
+            match config.adapter_repair_original() {
+                Ok(original_toml) => {
+                    Response::AdapterRepairLoaded(brauser_protocol::AdapterRepairLoaded {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: value.request_id,
+                        revision: config.revision().to_owned(),
+                        original_toml,
+                    })
+                }
+                Err(_) => error(
+                    &value.request_id,
+                    ErrorCode::Internal,
+                    "could not read preserved adapter values",
+                ),
+            }
+        }
+        Request::ReplaceAdapters(value) => {
+            if config.refresh().is_err() || config.config_issue().is_some() {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    "repair the configuration before its adapters",
+                );
+            }
+            if value.expected_revision != config.revision() {
+                return error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "configuration changed; reopen adapter repair",
+                );
+            }
+            let next = brauser_protocol::ConfigSnapshot {
+                adapters: value.document.clone(),
+                ..config.snapshot().clone()
+            };
+            // Use the ordinary native authority too. The adapter-only request
+            // cannot select a folder, a harness, or any unrelated setting.
+            if let Err(refused) =
+                consent.authorize_update(config.snapshot(), config.revision(), &next, None, None)
+            {
+                return error(
+                    &value.request_id,
+                    ErrorCode::Unauthorized,
+                    &refused.to_string(),
+                );
+            }
+            match config.replace_adapters(value.document, &value.expected_revision) {
+                Ok(Some(revision)) => Response::ConfigUpdated(ConfigUpdated {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id,
+                    revision,
+                    config: config.snapshot().clone(),
+                }),
+                Ok(None) => error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "configuration changed; reopen adapter repair",
+                ),
+                Err(refused) => error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &refused.to_string(),
+                ),
+            }
         }
         Request::ForgetAdoptedContracts(value) => {
             match config.forget_adopted_contracts(&value.expected_revision) {
@@ -913,7 +1012,7 @@ fn start_auto_summary(
         }
     };
     let _ = config.refresh();
-    if !config.snapshot().auto_summary.enabled {
+    if !config.snapshot().capture_enabled || !config.snapshot().auto_summary.enabled {
         return skipped(Skip::Disabled);
     }
     if config.agent_status().state != brauser_protocol::AgentState::Ready {
@@ -3377,6 +3476,102 @@ id = "work:{host}/{id}"
             Response::Error(value) => assert_eq!(value.code, ErrorCode::InvalidConfig),
             other => panic!("expected invalid_config, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn adapter_repair_native_requests_preserve_pause_and_reject_stale_policy() {
+        use serde_json::json;
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let mut snapshot = config::empty_config();
+        snapshot.strip_params = vec!["utm_*".into()];
+        store.update(snapshot.clone(), "missing").unwrap().unwrap();
+        let original = std::fs::read_to_string(&path).unwrap().replacen(
+            "format = 1",
+            "format = 2\nfuture_mode = \"semantic\"",
+            1,
+        );
+        std::fs::write(&path, &original).unwrap();
+        store.refresh().unwrap();
+        let revision = store.revision().to_owned();
+        let mut consent = ConsentAuthority::new();
+        let context = SetupContext::new();
+        let read = json!({"type":"get_adapter_repair", "protocol_version":PROTOCOL_VERSION, "request_id":"repair-read", "expected_revision":revision});
+        let reply = dispatch_json(
+            &serde_json::to_vec(&read).unwrap(),
+            &mut store,
+            &mut consent,
+            &context,
+        );
+        let Response::AdapterRepairLoaded(result) = reply else {
+            panic!("{reply:?}");
+        };
+        assert!(result.original_toml.contains("future_mode = \"semantic\""));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        let mut replacement = json!({
+            "type":"replace_adapters", "protocol_version":PROTOCOL_VERSION, "request_id":"repair-write", "expected_revision":revision,
+            "document":{"format":1,"artifacts":[{"type":"work.issue", "origin":"https://work.example", "match":[{"path":"/issues/{id:int}"}], "id":"work.issue:{host}/{id}"}]}
+        });
+        // A repair request has no authority to carry unrelated settings.
+        replacement["capture_enabled"] = json!(true);
+        let reply = dispatch_json(
+            &serde_json::to_vec(&replacement).unwrap(),
+            &mut store,
+            &mut consent,
+            &context,
+        );
+        assert!(
+            matches!(reply, Response::Error(ref error) if error.code == ErrorCode::InvalidRequest)
+        );
+        replacement
+            .as_object_mut()
+            .unwrap()
+            .remove("capture_enabled");
+        replacement["expected_revision"] = json!("stale");
+        let reply = dispatch_json(
+            &serde_json::to_vec(&replacement).unwrap(),
+            &mut store,
+            &mut consent,
+            &context,
+        );
+        assert!(matches!(reply, Response::Error(ref error) if error.code == ErrorCode::Conflict));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        replacement["expected_revision"] = json!(revision);
+        let reply = dispatch_json(
+            &serde_json::to_vec(&replacement).unwrap(),
+            &mut store,
+            &mut consent,
+            &context,
+        );
+        let Response::ConfigUpdated(updated) = reply else {
+            panic!("{reply:?}");
+        };
+        assert!(!updated.config.capture_enabled);
+        assert_eq!(updated.config.storage, snapshot.storage);
+        assert_eq!(updated.config.strip_params, snapshot.strip_params);
+        assert_eq!(updated.config.adapters.artifacts.len(), 1);
+        assert_eq!(store.adapter_issue(), None);
+        let backup = std::fs::read_dir(folder.path())
+            .unwrap()
+            .find_map(|entry| {
+                let entry = entry.unwrap();
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("config-invalid-")
+                    .then(|| entry.path())
+            })
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(backup).unwrap(), original);
+        // Reuse after a successful save is stale, never a second write.
+        let reply = dispatch_json(
+            &serde_json::to_vec(&replacement).unwrap(),
+            &mut store,
+            &mut consent,
+            &context,
+        );
+        assert!(matches!(reply, Response::Error(ref error) if error.code == ErrorCode::Conflict));
     }
 
     #[test]
@@ -10870,6 +11065,53 @@ id = "gdoc:{host}/{id}"
                 brauser_protocol::AutoSummarySkipReason::Disabled
             );
             assert_eq!(response.request_id(), "a");
+        }
+
+        #[test]
+        fn auto_summary_skips_when_capture_is_paused_even_after_loading_enabled_config() {
+            for refresh_before_request in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let mut config = auto_store(folder.path(), true, "");
+                assert!(config.snapshot().capture_enabled);
+                assert!(config.snapshot().auto_summary.enabled);
+                assert_eq!(
+                    config.agent_status().state,
+                    brauser_protocol::AgentState::Ready
+                );
+                assert!(config.adapter_match(GDOC_URL, None).is_ok());
+                let path = folder.path().join("config.toml");
+                let original = std::fs::read_to_string(&path).unwrap();
+                std::fs::write(
+                    &path,
+                    original.replace("capture_enabled = true", "capture_enabled = false"),
+                )
+                .unwrap();
+                if refresh_before_request {
+                    config.refresh().unwrap();
+                    assert!(!config.snapshot().capture_enabled);
+                }
+                // With no listener or launcher, contacting the service cannot
+                // produce this skip. Admission must refresh the stale store.
+                let dir = fake::short_dir();
+                let response = call(
+                    &mut config,
+                    &unreachable_link(&dir),
+                    start_auto(GDOC_URL, "paused"),
+                );
+                assert_eq!(
+                    skipped(&response),
+                    brauser_protocol::AutoSummarySkipReason::Disabled
+                );
+                assert_eq!(response.request_id(), "paused");
+                assert!(!config.snapshot().capture_enabled);
+
+                // Explicit summaries remain available while capture is paused.
+                let Request::StartRun(request) = start_run(GDOC_URL, None, &now()) else {
+                    unreachable!()
+                };
+                let manual = crate::native::start_run(request, &mut config, None);
+                assert_eq!(refused(&manual).0, ErrorCode::ServiceUnavailable);
+            }
         }
 
         #[test]

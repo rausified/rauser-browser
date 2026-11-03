@@ -53,6 +53,32 @@ pub struct HelloResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct GetAdapterRepairRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplaceAdaptersRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub document: AdapterDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterRepairLoaded {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub revision: String,
+    pub original_toml: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigResult {
     pub protocol_version: u32,
     pub request_id: String,
@@ -830,12 +856,22 @@ pub enum ImportanceLevel {
 pub struct RunAnswer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_scope: Option<AnswerReadScope>,
     pub document_type: String,
     pub category: String,
     pub importance: ImportanceLevel,
     pub importance_reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<AnswerAccess>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerReadScope {
+    Whole,
+    Partial,
+    PageOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1419,6 +1455,8 @@ pub struct SiteDraftChecked {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
+    GetAdapterRepair(GetAdapterRepairRequest),
+    ReplaceAdapters(ReplaceAdaptersRequest),
     Hello(HelloRequest),
     GetConfig(GetConfigRequest),
     UpdateConfig(UpdateConfigRequest),
@@ -1462,6 +1500,8 @@ pub enum Request {
 impl Request {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::GetAdapterRepair(value) => value.protocol_version,
+            Self::ReplaceAdapters(value) => value.protocol_version,
             Self::Hello(value) => value.protocol_version,
             Self::GetConfig(value) => value.protocol_version,
             Self::UpdateConfig(value) => value.protocol_version,
@@ -1505,6 +1545,8 @@ impl Request {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::GetAdapterRepair(value) => &value.request_id,
+            Self::ReplaceAdapters(value) => &value.request_id,
             Self::Hello(value) => &value.request_id,
             Self::GetConfig(value) => &value.request_id,
             Self::UpdateConfig(value) => &value.request_id,
@@ -1551,6 +1593,7 @@ impl Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
+    AdapterRepairLoaded(AdapterRepairLoaded),
     PreservedNotesListed(PreservedNotesListed),
     HelloResult(HelloResult),
     ConfigResult(ConfigResult),
@@ -1588,6 +1631,7 @@ pub enum Response {
 impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::AdapterRepairLoaded(value) => value.protocol_version,
             Self::PreservedNotesListed(value) => value.protocol_version,
             Self::HelloResult(value) => value.protocol_version,
             Self::ConfigResult(value) => value.protocol_version,
@@ -1625,6 +1669,7 @@ impl Response {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::AdapterRepairLoaded(value) => &value.request_id,
             Self::PreservedNotesListed(value) => &value.request_id,
             Self::HelloResult(value) => &value.request_id,
             Self::ConfigResult(value) => &value.request_id,

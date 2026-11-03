@@ -20,6 +20,7 @@ mod presentation;
 mod reads;
 mod rebuild;
 mod regeneration;
+mod rekey;
 mod scan;
 pub(crate) mod sql;
 mod store;

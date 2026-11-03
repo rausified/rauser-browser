@@ -188,6 +188,8 @@ test("aSignInRunShowsNotSaved: a wall the agent met replaces the answer line", (
     "Not saved: you don't have access to this page.");
   assert.equal(answerLine({ ...ANSWER, access: "not_found" }), "Not saved: the page was not found.");
   assert.equal(answerLine({ ...ANSWER, access: "ok" }), answerLine(ANSWER));
+  assert.equal(answerLine({ ...ANSWER, access: "sign_in", read_scope: "page_only" }),
+    "Not saved: the agent saw a sign-in page. Sign in, then summarize again.");
 });
 
 test("answer line shows type, category and importance", () => {

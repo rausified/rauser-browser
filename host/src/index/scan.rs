@@ -174,10 +174,50 @@ impl LogScan {
         }
     }
 
-    /// The relearn revision: a hash of the scanned events, keyed by ID.
+    /// The relearn revision. Projection depends on durable tie order and
+    /// gap notices as well as event bodies, so it hashes the events keyed by
+    /// ID, their earliest positions and the overflow notices: one
+    /// fingerprint for both review and the projection recheck.
     pub(super) fn revision(&self) -> Result<String> {
-        Ok(sha256_hex(&serde_json::to_vec(&self.events)?))
+        Ok(sha256_hex(&serde_json::to_vec(&(
+            &self.events,
+            &self.positions,
+            &self.gaps,
+        ))?))
     }
+
+    /// The scanned events in `order_key` order (instant, then earliest
+    /// durable log position, then ID), as a rebuild stages them.
+    pub(super) fn ordered(&self) -> Vec<&CachedEvent> {
+        let mut ordered = self
+            .events
+            .iter()
+            .map(|(id, event)| {
+                let position = self
+                    .positions
+                    .get(id)
+                    .map(|(path, line)| (path.as_path(), *line));
+                (ord::order_key(event_time(event), position, None, id), event)
+            })
+            .collect::<Vec<_>>();
+        ordered.sort_by(|left, right| left.0.cmp(&right.0));
+        ordered.into_iter().map(|(_, event)| event).collect()
+    }
+}
+
+/// Fold a log scan with artifact identity projected through `resolution`
+/// at read time. Cached events (summary ownership keys and paths,
+/// stripped-parameter evidence) are never rewritten.
+pub(super) fn derive_resolved(
+    scan: &LogScan,
+    adapters: Option<&Document>,
+    resolution: &Resolution,
+) -> Derived {
+    let mut fold = Fold::resolved(adapters, resolution);
+    for event in scan.ordered() {
+        fold.apply(event);
+    }
+    fold.finish()
 }
 
 pub(super) fn collect_markdown(

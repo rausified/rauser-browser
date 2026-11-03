@@ -38,6 +38,9 @@ pub(super) struct Fold<'a> {
     /// with no row yet: a why can precede the first visit.
     whys: BTreeMap<String, (OffsetDateTime, String)>,
     containers: Containers<'a>,
+    /// Read-time identity projection (re-learn preview). Cached events,
+    /// including summary ownership keys and paths, are never rewritten.
+    resolution: Option<&'a Resolution>,
 }
 
 impl<'a> Fold<'a> {
@@ -49,7 +52,17 @@ impl<'a> Fold<'a> {
             edges: BTreeMap::new(),
             whys: BTreeMap::new(),
             containers: Containers::new(adapters),
+            resolution: None,
         }
+    }
+
+    /// A fold that projects every artifact ID through `resolution`, as
+    /// the re-learn preview does. A URL-keyed summary keeps its own ID.
+    pub(super) fn resolved(adapters: Option<&'a Document>, resolution: &'a Resolution) -> Self {
+        let mut fold = Self::new(adapters);
+        fold.resolution = Some(resolution);
+        fold.containers.resolution = Some(resolution);
+        fold
     }
 
     /// A fold resumed from stored rows, for events that all sort strictly
@@ -100,6 +113,19 @@ impl<'a> Fold<'a> {
     /// Fold in one event. Events must arrive in `order_key` order.
     pub(super) fn apply(&mut self, event: &CachedEvent) {
         let adapters = self.adapters;
+        let resolution = self.resolution;
+        let canonical = |id: &'_ str| -> String {
+            resolution
+                .map_or(id, |resolution| resolution.canonical(id))
+                .to_owned()
+        };
+        let artifact_id = if matches!(&event.data, EventData::Summary(summary)
+            if summary.record_key.kind == RecordKeyKind::Url)
+        {
+            event.artifact_id().to_owned()
+        } else {
+            canonical(event.artifact_id())
+        };
         let Self {
             artifacts,
             visits,
@@ -118,9 +144,9 @@ impl<'a> Fold<'a> {
                     .unwrap_or_default();
                 let title = event.title.clone().unwrap_or_else(|| "Untitled".into());
                 let row = artifacts
-                    .entry(event.artifact_id.clone())
+                    .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
-                        artifact_id: event.artifact_id.clone(),
+                        artifact_id: artifact_id.clone(),
                         artifact_type: event.artifact_type.clone(),
                         site,
                         title: title.clone(),
@@ -168,7 +194,7 @@ impl<'a> Fold<'a> {
                 row.activities.push(event.clone());
                 visits.push(VisitRow {
                     event_id: event.event_id.clone(),
-                    artifact_id: event.artifact_id.clone(),
+                    artifact_id: artifact_id.clone(),
                     occurred_at: event.occurred_at.clone(),
                     local_date: day.clone(),
                     focused_secs: u64::from(event.focused_seconds),
@@ -183,8 +209,15 @@ impl<'a> Fold<'a> {
                 for trail in &event.trails {
                     if trail_transition_is_valid(&trail.transition)
                         && let Some(source) = &trail.from_artifact_id
+                        && canonical(source) != artifact_id
                     {
-                        add_edge(edges, source, &event.artifact_id, &trail.transition, &day);
+                        add_edge(
+                            edges,
+                            &canonical(source),
+                            &artifact_id,
+                            &trail.transition,
+                            &day,
+                        );
                     }
                 }
                 let refs = event
@@ -206,27 +239,28 @@ impl<'a> Fold<'a> {
                     let target = resolved
                         .as_ref()
                         .and_then(|resolved| resolved.get(index))
-                        .and_then(|found| found.artifact_id.clone())
+                        .and_then(|found| found.artifact_id.as_deref())
+                        .map(canonical)
                         .unwrap_or_else(|| {
                             format!("{}:{}", reference.artifact_type, reference.value)
                         });
                     // The host checks each ref but not uniqueness; one event
                     // is one mention of each target.
-                    if target != event.artifact_id {
+                    if target != artifact_id {
                         targets.insert(target);
                     }
                 }
                 for target in targets {
-                    add_edge(edges, &event.artifact_id, &target, "mentions", &day);
+                    add_edge(edges, &artifact_id, &target, "mentions", &day);
                 }
-                if let Some(container) = containers.of(&event.url, &event.artifact_id) {
+                if let Some(container) = containers.of(&event.url, &artifact_id) {
                     roll_up(
                         artifacts,
                         visits,
                         edges,
                         container,
                         ContainedVisit {
-                            child: &event.artifact_id,
+                            child: &artifact_id,
                             event_id: &event.event_id,
                             occurred_at: &event.occurred_at,
                             at,
@@ -245,10 +279,10 @@ impl<'a> Fold<'a> {
                     event.text.clone(),
                 );
                 if whys
-                    .get(&event.artifact_id)
+                    .get(&artifact_id)
                     .is_none_or(|current| candidate.0 >= current.0)
                 {
-                    whys.insert(event.artifact_id.clone(), candidate);
+                    whys.insert(artifact_id.clone(), candidate);
                 }
             }
             EventData::Legacy(event) => {
@@ -259,9 +293,9 @@ impl<'a> Fold<'a> {
                     .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_default();
                 let row = artifacts
-                    .entry(event.artifact_id.clone())
+                    .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
-                        artifact_id: event.artifact_id.clone(),
+                        artifact_id: artifact_id.clone(),
                         artifact_type: "web.page".into(),
                         site,
                         title: event.title.clone(),
@@ -298,7 +332,7 @@ impl<'a> Fold<'a> {
                 }
                 visits.push(VisitRow {
                     event_id: event.marker_id.clone(),
-                    artifact_id: event.artifact_id.clone(),
+                    artifact_id: artifact_id.clone(),
                     occurred_at: event.occurred_at.clone(),
                     local_date: day.clone(),
                     focused_secs: 0,
@@ -310,14 +344,14 @@ impl<'a> Fold<'a> {
                     summary: None,
                     contained: false,
                 });
-                if let Some(container) = containers.of(&event.url, &event.artifact_id) {
+                if let Some(container) = containers.of(&event.url, &artifact_id) {
                     roll_up(
                         artifacts,
                         visits,
                         edges,
                         container,
                         ContainedVisit {
-                            child: &event.artifact_id,
+                            child: &artifact_id,
                             event_id: &event.marker_id,
                             occurred_at: &event.occurred_at,
                             at,
@@ -338,9 +372,9 @@ impl<'a> Fold<'a> {
                     .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_default();
                 let row = artifacts
-                    .entry(event.artifact_id.clone())
+                    .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
-                        artifact_id: event.artifact_id.clone(),
+                        artifact_id: artifact_id.clone(),
                         artifact_type: event.artifact_type.clone(),
                         site,
                         title: event.title.clone(),
@@ -375,7 +409,7 @@ impl<'a> Fold<'a> {
                 row.summaries.push(event.clone());
                 visits.push(VisitRow {
                     event_id: event.event_id.clone(),
-                    artifact_id: event.artifact_id.clone(),
+                    artifact_id: artifact_id.clone(),
                     occurred_at: event.occurred_at.clone(),
                     local_date: day,
                     focused_secs: 0,
@@ -441,22 +475,27 @@ impl<'a> Fold<'a> {
 /// The container (type, ID, adapter origin) a logged visit rolls up into:
 /// only when the current document still recognizes the visit's URL as the
 /// same artifact it was logged as, and that adapter declares `within`.
+/// Under a `resolution`, both the recognized child and the container
+/// endpoint are compared and named by their canonical IDs.
 pub(super) fn container_for(
     adapters: Option<&Document>,
     url: &str,
     artifact_id: &str,
+    resolution: Option<&Resolution>,
 ) -> Option<(String, String, String)> {
+    let canonical = |id: &str| resolution.map_or(id, |r| r.canonical(id)).to_owned();
     let document = adapters?;
     let found = document.evaluate(url, None).ok()?;
-    if found.artifact_id != artifact_id {
+    if canonical(&found.artifact_id) != artifact_id {
         return None;
     }
     let within = found.within?;
-    if within.artifact_id == artifact_id {
+    let container_id = canonical(&within.artifact_id);
+    if container_id == artifact_id {
         return None;
     }
     let origin = document.adapters().get(found.adapter)?.origin().to_owned();
-    Some((within.artifact_type, within.artifact_id, origin))
+    Some((within.artifact_type, container_id, origin))
 }
 
 /// A container ID's native part, after `<scheme>:<host>/`: for GitHub,
@@ -525,6 +564,7 @@ pub(super) struct Containers<'a> {
     /// Types some adapter declares as its `within` container.
     pub(super) types: BTreeSet<&'a str>,
     found: BTreeMap<(String, String), Option<ContainerRef>>,
+    resolution: Option<&'a Resolution>,
 }
 
 impl<'a> Containers<'a> {
@@ -538,6 +578,7 @@ impl<'a> Containers<'a> {
             adapters,
             types,
             found: BTreeMap::new(),
+            resolution: None,
         }
     }
 
@@ -545,10 +586,10 @@ impl<'a> Containers<'a> {
         if self.types.is_empty() {
             return None;
         }
-        let adapters = self.adapters;
+        let (adapters, resolution) = (self.adapters, self.resolution);
         self.found
             .entry((url.to_owned(), artifact_id.to_owned()))
-            .or_insert_with(|| container_for(adapters, url, artifact_id))
+            .or_insert_with(|| container_for(adapters, url, artifact_id, resolution))
             .clone()
     }
 }

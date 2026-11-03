@@ -119,6 +119,20 @@ HTTP/HTTPS merge. Approval now refuses both, but issue codes alone do not tell
 a person how to proceed. Where: host/src/relearn.rs, its strict index scan,
 and the future panel Re-learn review under brwr-6x2. Tracked as brwr-pgxz
 (discovered from both fixes); preserve read-only review and separate recovery.
+
+## 2026-11-02 — Bind the physical note location into Re-learn save revisions
+
+Change: give an alias-resolved note an internal logical key, physical ownership
+key and selected file location, and bind a save's revision check to that
+selection. Why: brwr-ruwj now projects one corrected artifact while retaining
+both original summary paths and raw ownership keys; the migration design
+challenge found that passing a corrected key to the existing note-save API
+would create another file instead of updating the note the person loaded.
+Where: host/src/native.rs note context, host/src/note.rs load/save and the
+remaining brwr-dbp apply integration. Test stale saves across a move and a
+move back, both-side notes and URL copies; preserve copy-out-only browser
+recovery. This belongs to the assigned brwr-dbp work.
+
 ## 2026-11-02 — A `brauser summary-check` command for iterating on SUMMARY.md
 
 What: add a developer command (host CLI, beside `brauser adapters relearn-plan`) that renders `SUMMARY.md` for a given `page.md` and knowledge base (`--print-prompt`), runs the configured harness once on it without the service, and validates the final answer with `answer::parse_answer`, printing the rendered summary file. Optionally `--compare` runs both harnesses.
@@ -226,6 +240,8 @@ legacy answers without scope.
   from the capture flag: a capped page can still yield a whole-artifact summary
   after the agent retrieves it. The run-card projection is pending held PR #249.
 
+- Done 2026-11-02: `brwr-rr93` (cycle commit prepared for driver).
+
 ## 2026-11-02 — Make capture pause stop late automatic starts
 
 Change: check `capture_enabled` under the same native eligibility lock as
@@ -246,6 +262,19 @@ exists), so development, the release app and `brauser register` share one ID
 and the registration code can be tested against it before M5. Where:
 `extension/manifest.json`, `scripts/register-dev-host.mjs`, and the
 self-registration tests when that code is built.
+- Done 2026-11-02: `brwr-q0i4` (cycle commit prepared for driver).
+
+
+## 2026-11-02 — Disclose reading scope when choosing a saved summary
+
+Change: carry validated saved-summary reading scope to the Summary line in
+This page and to Recent, omitting it for legacy records (`brwr-30xv`,
+discovered from `brwr-rr93`). Why: scope is now visible in run cards and Tasks
+detail, but the overview shown while choosing a remembered artifact can still
+look complete when the agent read only its browser viewer. Where:
+`SummaryView` in `protocol/schema.json`, the host's saved-summary projection,
+`extension/summary-text.ts` and the built page-summary/Recent tests. Use
+recorded scope rather than inference from overview text.
 
 ## 2026-11-02 — Give the browser fixture a recognized-artifact panel state
 
@@ -318,3 +347,24 @@ still says only “Runs in your knowledge base”; a person choosing among multi
 note/project folders cannot see the actual working location before Run. Extend
 `extension/panel.ts`'s task context and its built panel tests, retaining setup
 hints and leaving the separate per-task chooser (`brwr-zla`) for later.
+
+## 2026-11-02 — Preview which rules an adapter repair removes
+
+Show a plain-language comparison of recognized adapters kept, changed, added
+and removed before a complete-document repair is saved (`brwr-jxrw`, discovered
+from `brwr-jnj`). The repair workspace protects the exact original with a backup
+and shows preserved values, but manually rebuilding a document can still omit
+useful supported rules. Compare supported-format values only; keep future
+formats opaque and say when a comparison is unavailable. Add this review to
+`extension/adapter-repair-settings.ts` and its offline settings tests, retaining
+the revision gate and explicit replacement action.
+
+## 2026-11-02 — Exercise TOML-only values through the native repair response
+
+Extend the native adapter-repair fixtures with a small TOML value corpus,
+including positive/negative infinity and nested unknown fields. Independent
+review reproduced a repair workspace that could not open when an unknown
+artifact field held NaN: copying from the JSON snapshot lost its type. The
+config-level regression now covers that case and dates; checking the same
+values through `get_adapter_repair` in `host/src/native.rs` would protect the
+complete transport path as it evolves.

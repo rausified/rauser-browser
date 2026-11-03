@@ -39,7 +39,7 @@ pub(super) const MAX_CONTAINED: usize = 20;
 pub(super) const MAX_INCOMING_TRAILS: usize = 5;
 
 /// The most artifact types Recent offers as filters.
-const MAX_TYPES: usize = 64;
+pub(super) const MAX_TYPES: usize = 64;
 
 /// The most overflow notices one worklog reports.
 const MAX_WORKLOG_GAPS: usize = 32;
@@ -362,18 +362,19 @@ pub(super) fn recent(
 }
 
 #[derive(Default)]
-struct WorklogRow {
-    artifact: Option<(String, String, Option<String>)>,
-    focused: u64,
-    background: u64,
-    opens: u64,
+pub(super) struct WorklogRow {
+    /// The artifact's type, title and why, when it has a row.
+    pub(super) artifact: Option<(String, String, Option<String>)>,
+    pub(super) focused: u64,
+    pub(super) background: u64,
+    pub(super) opens: u64,
     /// Focus and opens from the artifact's own visits, without those of
     /// artifacts within it, for the range's totals.
-    own_focused: u64,
-    own_opens: u64,
+    pub(super) own_focused: u64,
+    pub(super) own_opens: u64,
     /// The latest summary (by `occurred_at`) among this artifact's visits
     /// within the worklog's date range, if any.
-    summary: Option<SummaryEvent>,
+    pub(super) summary: Option<SummaryEvent>,
 }
 
 /// A measured, agent-free summary of an inclusive range of local dates
@@ -442,7 +443,7 @@ pub(super) fn worklog(
     Ok((text, count, gaps, gaps_truncated))
 }
 
-fn worklog_text(rows: BTreeMap<String, WorklogRow>) -> (String, usize) {
+pub(super) fn worklog_text(rows: BTreeMap<String, WorklogRow>) -> (String, usize) {
     // A container is still listed with its rolled-up measures, but the
     // range's totals count each visit once, by its own artifact. A
     // summary is not measured activity: it is counted on its own and
@@ -540,10 +541,24 @@ fn worklog_gaps(
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut gaps = Vec::with_capacity(found.len());
+    let mut markers = Vec::with_capacity(found.len());
     for (id, marker) in found {
         let marker: OverflowMarker = serde_json::from_str(&marker)
             .context("artifact history is unavailable: unreadable overflow notice")?;
+        markers.push((id, marker));
+    }
+    Ok(gaps_in_range(markers, start, end))
+}
+
+/// Of `found` (ID, notice) pairs, those whose span intersects the range,
+/// oldest first, at most `MAX_WORKLOG_GAPS`, and whether more did.
+pub(super) fn gaps_in_range(
+    found: impl IntoIterator<Item = (String, OverflowMarker)>,
+    start: Date,
+    end: Date,
+) -> (Vec<OverflowMarker>, bool) {
+    let mut gaps = Vec::new();
+    for (id, marker) in found {
         let Ok(first) = OffsetDateTime::parse(&marker.first_occurred_at, &Rfc3339) else {
             continue;
         };
@@ -559,8 +574,8 @@ fn worklog_gaps(
     gaps.sort_by(|left, right| (&left.0, &left.1, &left.2).cmp(&(&right.0, &right.1, &right.2)));
     let truncated = gaps.len() > MAX_WORKLOG_GAPS;
     gaps.truncate(MAX_WORKLOG_GAPS);
-    Ok((
+    (
         gaps.into_iter().map(|(_, _, _, marker)| marker).collect(),
         truncated,
-    ))
+    )
 }

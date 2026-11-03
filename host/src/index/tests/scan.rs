@@ -111,7 +111,7 @@ fn a_log_scan_stops_at_the_pass_bound_and_relearn_refuses_it() {
 }
 
 #[test]
-fn relearn_evidence_hashes_the_scanned_events_and_never_touches_the_cache() {
+fn relearn_evidence_hashes_the_scanned_snapshot_and_never_touches_the_cache() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
     let cache_dir = cache.path().join("never");
@@ -124,9 +124,16 @@ fn relearn_evidence_hashes_the_scanned_events_and_never_touches_the_cache() {
         (A.to_owned(), cached(&first)),
         (B.to_owned(), cached(&second)),
     ]);
+    // Events keyed by ID, their earliest positions and the overflow
+    // notices: the one fingerprint review and projection share.
+    let positions = BTreeMap::from([
+        (A.to_owned(), (PathBuf::from("2026-10-01.md"), 1u64)),
+        (B.to_owned(), (PathBuf::from("2026-10-01.md"), 2u64)),
+    ]);
+    let gaps = BTreeMap::<String, CachedGap>::new();
     assert_eq!(
         revision,
-        sha256_hex(&serde_json::to_vec(&expected).unwrap())
+        sha256_hex(&serde_json::to_vec(&(&expected, &positions, &gaps)).unwrap())
     );
     let keys = evidence
         .iter()
