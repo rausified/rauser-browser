@@ -1,19 +1,38 @@
 #!/usr/bin/env python3
 """Keep the short project-status summaries aligned with shipped M1.5a work.
 
-Also runs scripts/check_improvement_feed.py, so CI checks the feed's layout.
+Also runs scripts/check_improvement_feed.py, so CI checks the feed's layout,
+and fails when the work queue is committed here: `.beads/issues.jsonl` and
+`BOSUN_FEATURE_BACKLOG.md` are not in git: the queue lives in bd's Dolt database
+and the backlog is rendered from docs/backlog/ (AGENTS.md "Work queue",
+worker-contract.json `never_commit`). It also checks the backlog frame's
+GENERATED markers.
 """
 
 from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 import sys
 
 import check_improvement_feed
+import render_backlog
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+QUEUE_FILES = (".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md")
+
+
+def committed_queue_files(root: pathlib.Path) -> list[str]:
+    """Queue files tracked in ROOT's checkout (worker-contract.json never_commit)."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--", *QUEUE_FILES], cwd=root, capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return []
+    return result.stdout.split() if result.returncode == 0 else []
 
 
 def normalized(text: str) -> str:
@@ -164,6 +183,19 @@ def main() -> int:
         errors.append("DESIGN.md status no longer records shipped record keys and views")
 
     errors.extend(check_improvement_feed.check(ROOT))
+    frame = ROOT / render_backlog.FRAME_PATH
+    try:
+        text = frame.read_text(encoding="utf-8")
+        if render_backlog.strip_generated(text) != text.replace("\r\n", "\n"):
+            errors.append(f"{render_backlog.FRAME_PATH} has text inside a GENERATED block; the beads fill those")
+    except (OSError, render_backlog.BacklogError) as error:
+        errors.append(f"{render_backlog.FRAME_PATH}: {error}")
+    for file in committed_queue_files(ROOT):
+        errors.append(
+            f"{file} is committed, but the work queue lives in bd's Dolt database: "
+            f"`git rm --cached {file}`, and publish bead edits with bd and scripts/dev/queue sync "
+            f"(AGENTS.md \"Work queue\")"
+        )
 
     for error in errors:
         print(error, file=sys.stderr)

@@ -2,21 +2,13 @@
 # their line endings on checkout (Windows CI would otherwise see CRLF).
 host/tests/fixtures/** -text
 
-# Bookkeeping files every worker cycle, queue PR and human PR touches merge
-# without conflicts once the drivers are registered in a clone
-# (`sh scripts/install-merge-drivers.sh`; without them git does a normal text
-# merge, and `python3 scripts/render_backlog.py --resolve` finishes it):
-# - the beads queue merges bead by bead (newer updated_at wins a field both
-#   sides changed);
-# - BOSUN_FEATURE_BACKLOG.md merges its hand-written text and re-renders its
-#   generated blocks from the merged queue;
-# - the append-only logs keep both sides' new entries (git's built-in union
-#   driver, which needs no registration).
-# None of these drivers runs in GitHub's mergeability check or merge queue,
-# which merge as plain text. The improvement feed avoids needing one: each
-# entry is its own file under docs/improvement-feed/ (BRAUSER_IMPROVEMENT_FEED.md).
-.beads/issues.jsonl merge=beads-jsonl
-BOSUN_FEATURE_BACKLOG.md merge=bosun-backlog
+# The append-only logs every worker cycle and human PR touches keep both
+# sides' new entries (git's built-in union driver, which needs no
+# registration). It does not run in GitHub's mergeability check, which merges
+# as plain text. The improvement feed avoids needing one: each entry is its
+# own file under docs/improvement-feed/ (BRAUSER_IMPROVEMENT_FEED.md). The work
+# queue is not in git at all: bd keeps it in Dolt, synced through
+# refs/dolt/data, and merges concurrent edits itself (AGENTS.md "Work queue").
 PENDING_AMOS_DOC_UPDATES.md merge=union
 CookieFeature.md merge=union
 
