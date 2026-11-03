@@ -353,3 +353,13 @@
   submissions and retains recorded identity protection. Future formats remain
   opaque; remove-all recovery is still available. Project details remain in
   Brauser's README, DESIGN.md §7.2, TESTING.md and CookieFeature.md.
+
+- **Brauser — preserve note ownership through re-keying (2026-11-03, brwr-c1bq):**
+  Native note requests now distinguish logical artifact identity from the
+  physical note owner, retaining original filenames and provenance while
+  rejecting stale selection/history revisions. Twelve offline regressions
+  cover original-path saves, canonical preference, ambiguous fallback,
+  move-back/unalias, ownership/symlink refusal and logical native conflicts.
+  Ordinary requests retain empty replay; durable apply and panel Re-learn
+  remain assigned work. This is an internal prerequisite, not enabled
+  migration. Brauser's design, staged plan and testing guidance stay here.

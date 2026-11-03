@@ -1515,6 +1515,16 @@ platform. The library request/JSON output path is tested with that same seam.
 regression that truncates a valid why marker: both commands refuse even when
 the caller supplies a previously valid empty-plan revision. It checks exact
 config/log bytes and the absence of cache and journal writes.
+`cargo test --locked -p brauser note::location --lib` exercises physical
+note selection with host-built alias replay: original-path saves and preserved
+ownership/provenance, both-side notes, missing canonical ambiguity, move-back
+and unalias revisions, foreign ownership and symlinks, and separate URL copies.
+`cargo test --locked -p brauser resolved_note_requests --lib` runs the native
+load/save handlers with the same replay and verifies logical response keys,
+physical save paths, `key_changed` and stale-selection conflicts. Ordinary
+requests use empty replay until durable application ships. These checks prove
+the location contract, not applied-history recovery or alias-note panel UI.
+
 These tests use no browser or harness and do not establish panel Re-learn or
 migration acceptance. POSIX symlink fixtures state their Windows exclusion;
 all other planning tests are portable.

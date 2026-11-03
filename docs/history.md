@@ -1272,3 +1272,26 @@ sides only inserted text. A dry run on the four PRs found two resolvable
 Pushing needs the `PR_DOCTOR_TOKEN` secret, because pushes made with
 `GITHUB_TOKEN` start no CI. Main has no merge queue, so `gh pr merge --auto`
 needs `--merge`. AGENTS.md "PR doctor" holds the rule.
+
+
+## 2026-11-03 — Physical note ownership for Re-learn (brwr-c1bq)
+
+The direct prerequisite of assigned brwr-dbp separates a logical response key
+from a physical note owner in host/src/note/location.rs and native load/save
+handlers. It follows §6.2's original-file preservation and canonical preference.
+The sole-alias fallback keeps the old owner, filename, title, creation address
+and stripped names; multiple noncanonical notes without a canonical note
+refuse. URL-note adoption remains explicit. Affected optimistic revisions
+bind both keys, content and complete replay history, including unalias, so
+changed selection and move-away/back do not revive a stale edit. Unaffected
+keys retain raw revisions and the ordinary save fast path.
+
+Before implementation, /root/note_contract_challenge reviewed the mechanism
+and recommended integrating the shared wrappers into ordinary native calls
+with empty replay, rather than adding another preview. Hashing only the final
+map was rejected because it misses move-away/back history; whole-history
+invalidation is conservative until component generations are justified.
+Twelve new offline regressions include the real native request handlers with
+host-built replay. No native alias input or applied-history publication is
+added, and the ordinary ID freeze remains. Durable recovery/config/history
+integration and panel Re-learn still do not satisfy their parent acceptance.
