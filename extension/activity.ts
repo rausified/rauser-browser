@@ -1,10 +1,12 @@
-import type { ActivityEvent, ActivityMode, ActivityTrail } from "../protocol/ts/generated.js";
+import type { ActivityEvent, ActivityMode, ActivityTrail, FocusSession } from "../protocol/ts/generated.js";
+import { nextFocus, sameFocus } from "./focus-session.js";
 import type { EvaluateResult, Mode } from "./adapter-templates.js";
 import { localTimestamp } from "./model.js";
 
 export type ArtifactMatch = Extract<EvaluateResult, { match: true }>;
 
 export interface ActivityTotal {
+  focus_session?: FocusSession;
   event_id: string;
   artifact_id: string;
   artifact_type: string;
@@ -29,6 +31,7 @@ export interface ActivityTab {
 }
 
 export interface ActivityState {
+  focus_session: FocusSession | null;
   version: 1;
   totals: ActivityTotal[];
   tabs: Record<string, ActivityTab>;
@@ -55,7 +58,7 @@ const MAX_REFS = 20;
 
 export function emptyActivityState(now = Date.now()): ActivityState {
   return {
-    version: 1, totals: [], tabs: {}, pending_sources: {}, active_by_window: {},
+    version: 1, focus_session: null, totals: [], tabs: {}, pending_sources: {}, active_by_window: {},
     last_focused_window: null, chrome_focused: false, idle: false, measured_at: now,
   };
 }
@@ -82,9 +85,11 @@ function totalFor(
 ): ActivityTotal {
   const hour = hourStart(at);
   let total = state.totals.find((candidate) =>
-    candidate.artifact_id === tab.artifact_id && candidate.hour_start === hour);
+    candidate.artifact_id === tab.artifact_id && candidate.hour_start === hour &&
+    sameFocus(candidate.focus_session, state.focus_session));
   if (!total) {
     total = {
+      ...(state.focus_session ? { focus_session: { ...state.focus_session } } : {}),
       event_id: uuid(), artifact_id: tab.artifact_id, artifact_type: tab.artifact_type,
       hour_start: hour, url: tab.url, title: tab.title, opens: 0,
       focused_ms: 0, background_ms: 0, modes: [], trails: [], refs: [],
@@ -165,7 +170,8 @@ export function recordNavigation(
     (changed && !context.reload);
   const currentHour = hourStart(now);
   let total = state.totals.find((candidate) =>
-    candidate.artifact_id === tab.artifact_id && candidate.hour_start === currentHour);
+    candidate.artifact_id === tab.artifact_id && candidate.hour_start === currentHour &&
+    sameFocus(candidate.focus_session, state.focus_session));
   if (!total && contributes) total = totalFor(state, tab, now, uuid);
   if (total) {
     total.url = context.url;
@@ -273,14 +279,29 @@ export function freezeCompleted(
 ): ActivityEvent[] {
   settleActivity(state, now, uuid);
   const current = hourStart(now);
-  const frozen = state.totals.filter((total) => total.hour_start !== current);
-  state.totals = state.totals.filter((total) => total.hour_start === current);
+  const keep = (total: ActivityTotal): boolean => total.hour_start === current &&
+    sameFocus(total.focus_session, state.focus_session);
+  const frozen = state.totals.filter((total) => !keep(total));
+  state.totals = state.totals.filter(keep);
   return frozen.map((total) => ({
+    ...(total.focus_session ? { focus_session: total.focus_session } : {}),
     event_id: total.event_id, artifact_id: total.artifact_id,
     artifact_type: total.artifact_type, url: total.url, title: total.title,
     occurred_at: total.hour_start, incognito: false, opens: total.opens,
     focused_seconds: Math.floor(total.focused_ms / 1_000),
     background_seconds: Math.floor(total.background_ms / 1_000),
     modes: total.modes, trails: total.trails, refs: total.refs,
-  }));
+  })).filter((event) => event.opens > 0 || event.focused_seconds > 0 ||
+    event.background_seconds > 0 || event.modes.length > 0);
+}
+
+/** Settle the old bucket before changing its label. Persist with the queue
+ * handoff; callers must hold the worker's serialization chain. */
+export function changeFocus(
+  state: ActivityState, expected: FocusSession | null, name: string | null,
+  now: number, uuid: () => string,
+): void {
+  const next = nextFocus(state.focus_session, expected, name, uuid);
+  settleActivity(state, now, uuid);
+  state.focus_session = next;
 }

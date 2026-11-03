@@ -11,6 +11,7 @@ import {
   type WorkerStatus,
 } from "./model.js";
 import { ConfigSession, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
+import { focusName, sameFocus } from "./focus-session.js";
 import { evaluate } from "./adapter-templates.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import { CaptureSitePanel } from "./capture-site-panel.js";
@@ -49,11 +50,73 @@ import type {
   WorklogReported,
   WorklogChoice,
   WorklogChoicesResult,
+  FocusSession,
 } from "../protocol/ts/generated.js";
 
 initDiag("panel");
 
 const status = element<HTMLDivElement>("status");
+const focusCurrent = element<HTMLElement>("focus-current");
+const focusForm = element<HTMLFormElement>("focus-form");
+const focusInput = element<HTMLInputElement>("focus-name");
+const focusSave = element<HTMLButtonElement>("focus-save");
+const focusEnd = element<HTMLButtonElement>("focus-end");
+const focusMessage = element<HTMLElement>("focus-message");
+let focusBusy = false;
+let focusDirty = false;
+let focusDisplayed: FocusSession | null = null;
+let focusExpected: FocusSession | null = null;
+
+function renderFocus(): void {
+  const active = session.status?.focus_session ?? null;
+  if (!sameFocus(active, focusDisplayed)) {
+    focusDisplayed = active;
+    if (!focusDirty) {
+      focusExpected = active;
+      focusInput.value = active?.name ?? "";
+    }
+  }
+  focusCurrent.textContent = active?.name ?? "None";
+  focusSave.textContent = active ? "Rename session" : "Start session";
+  focusEnd.hidden = active === null;
+  focusInput.disabled = focusBusy;
+  focusSave.disabled = focusBusy || !session.status || !focusInput.value.trim();
+  focusEnd.disabled = focusBusy || !session.status;
+}
+
+async function saveFocus(end: boolean): Promise<void> {
+  if (focusBusy || !session.status) return;
+  let name: string | null;
+  try { name = end ? null : focusName(focusInput.value); }
+  catch (error) { focusMessage.textContent = describe(error); return; }
+  focusBusy = true;
+  renderFocus();
+  try {
+    await worker<WorkerStatus>({ kind: "change_focus", expected: end ? focusDisplayed : focusExpected, name });
+    focusDirty = false;
+    focusMessage.textContent = end ? "Session ended. New activity is ungrouped." : "New activity uses this session name.";
+    await session.refreshStatus();
+    focusDisplayed = session.status?.focus_session ?? null;
+    focusExpected = focusDisplayed;
+    focusInput.value = focusDisplayed?.name ?? "";
+  } catch (error) {
+    focusMessage.textContent = describe(error);
+    await session.refreshStatus().catch(() => undefined);
+    // A retry follows the current session shown above, preserving the draft.
+    focusExpected = session.status?.focus_session ?? null;
+  } finally {
+    focusBusy = false;
+    renderFocus();
+  }
+}
+
+focusInput.addEventListener("input", () => {
+  if (!focusDirty) focusExpected = focusDisplayed;
+  focusDirty = true;
+  renderFocus();
+});
+focusForm.addEventListener("submit", (event) => { event.preventDefault(); void saveFocus(false); });
+focusEnd.addEventListener("click", () => { void saveFocus(true); });
 const buildId = element<HTMLSpanElement>("build-id");
 const hostBuild = element<HTMLSpanElement>("host-build");
 const updateWarning = element<HTMLDivElement>("update-warning");
@@ -1025,6 +1088,7 @@ function render(): void {
   artifactHostConnected = connected;
   artifactDeliveryGeneration = generation;
   renderSetupWarning();
+  renderFocus();
   if (session.status) renderQueue(session.status);
   updateControls();
   retryWaitingHistory();

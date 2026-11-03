@@ -11,6 +11,7 @@ mod catch_up;
 mod choices;
 mod containers;
 mod database;
+mod focus;
 mod gaps;
 mod golden;
 mod identity;
@@ -44,6 +45,7 @@ fn storage(root: &Path) -> StorageConfig {
 
 fn activity(id: &str, native_id: &str, title: &str, at: &str) -> ActivityEvent {
     ActivityEvent {
+        focus_session: None,
         event_id: id.into(),
         artifact_id: format!("work:example.com/{native_id}"),
         artifact_type: "work.item".into(),

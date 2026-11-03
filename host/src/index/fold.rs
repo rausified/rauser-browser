@@ -897,6 +897,7 @@ mod tests {
                     })
                     .collect();
                 EventData::Activity(ActivityEvent {
+                    focus_session: None,
                     event_id: id,
                     artifact_id,
                     artifact_type,

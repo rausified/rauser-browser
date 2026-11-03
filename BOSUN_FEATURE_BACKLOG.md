@@ -103,6 +103,7 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
   case-safe paths and bounded Timeline rollups; `brauser reindex` recreates
   both cache and files from bounded owned log markers.
 <!-- BEGIN GENERATED section=plan: edit the beads, then run python3 scripts/render_backlog.py -->
+- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** Shared replay, history preview and physical-note ownership are integrated. Local history includes merged PR #262; its human/pr-held bead `brwr-9eio` needs driver reconciliation. Recovery/history/downgrade decisions remain open. Next: authoritative applied home history, exact config preparation and universal recovery/refusal, replay-aware readers, preserved alias-note viewing, stubs and crash/reindex acceptance. Ordinary saves keep the ID freeze.
 <!-- END GENERATED section=plan -->
 
 ### Gated plan work (do not start yet)
@@ -123,7 +124,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 ### Focused quality follow-up
 
 <!-- BEGIN GENERATED section=quality: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-d586` **Resolve historical refs under the recorded contract in relearn-preview.** Codex review P2 on PR #238 (cookie-pr-repair, 2026-11-03), host/src/index.rs:2324-2325: when a proposal changes which URL capture supplies the ID, `resolved` is computed under the proposed policy, so the historical ref lookup receives a newly synthesized ID instead of the… _(P2)_
 - [ ] `brwr-ys8y` **Generate padded token values in adapter differential tests.** Discovered while fixing brwr-tp1: scripts/adapter-templates-diff.mjs genValue only emits the token body alphabet, so random URL/title/alias cases never exercise the supported base64 padding grammar. Shared fixed vectors caught title-run drift, but the property generator still… _(P3)_
 - [ ] `brwr-1xmv` **Share keyboard entry for composite controls in browser journeys.** Cycle 6 worklog curation was quarantined because its keyboard journey tried to Tab directly to inactive Recent, which intentionally has tabindex=-1. Repeated inline entry sequences make it easy to miss the existing roving-tabindex contract, especially where local Chromium cannot… _(P3; blocked)_
 - [ ] `brwr-0d25` **Windows CI: adapter-template eval bounds case exceeded its 50ms wall-clock bound.** Seen on PR #249's CI run 41504471139, job 125480208595 (Windows / Build and check (windows-latest), 2026-11-02T19:00Z) in npm run test:extension: `eval.bounds.64x16_none` failed with `AssertionError [ERR_ASSERTION]: 54.5 ms over 50 ms`. It passed on the rerun and the PR did not… _(P3)_
@@ -157,6 +157,9 @@ strip_params note-identity follow-up has shipped (see Shipped).
 - [ ] `brwr-k6rg` **Show the original page while recalling an earlier task.** Keyboard recall intentionally reuses the stored instruction on the current page, while Tasks-page Reuse also reopens the original page. The context line names the current page but the recalled instruction has no visible source provenance; a person repeating a page-specific task… _(P3)_
 - [ ] `brwr-5xpb` **Name the task working folder in the context line.** Tasks without a page show No page and say they run in the knowledge base, but the bar does not name the configured folder. Someone with several note or project folders should know which one the agent will use before pressing Run. Show a compact, text-only folder cue from… _(P3)_
 - [ ] `brwr-jxrw` **Review which adapter rules a repair will remove before saving.** The complete-document repair workspace (brwr-jnj) preserves the original values and backs up exact config bytes, but a person manually copying useful rules from a damaged document can omit a supported adapter unintentionally. Add a plain-language review of recognized adapters… _(P3)_
+- [ ] `brwr-fzya` **Compare saved evidence with a later page on explicit request.** Selected-passage cards freeze useful evidence, but a reader must manually compare a saved passage with a changed source. Add an explicit user-requested agent comparison that cites the immutable card and separately supplied current page, identifies changed or missing wording, and… _(P3)_
+- [ ] `brwr-vuvc` **Open the page note after saving a task report.** Save to note preserves a useful task report beside its source, but the confirmation has no direct route to read that note. Add an explicit Open note action after saving, resolved by the host from the task's source page through the ordinary note location and ownership checks, so… _(P3)_
+- [ ] `brwr-1jeb` **Choose a focus session when sharing captured work.** Named focus sessions group the full worklog, but selected-work curation currently selects whole artifact-days. When one artifact spans two sessions, that picker cannot share just the deliberate block. Add an explicit focus-session selector whose preview includes only that… _(P3)_
 <!-- END GENERATED section=proposals -->
 
 ### Task bar follow-ups
@@ -168,7 +171,6 @@ the plan work above.
 - [ ] `brwr-8qm` **Task completion notifications when the panel is closed.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decisions 21 and 26). Today a finished task announces itself only through #task-announce while the panel is open. Seam: the notifications permission in extension/manifest.json (a new permission, so it needs… _(P3; labels: task-bar)_
 - [ ] `brwr-cdq` **Omnibar: slash commands and custom [[commands]] config.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26; DESIGN.md §5.6). The task bar built the Omnibar's free-text row only. Slash commands (for example /summarize) and user-defined [[commands]] in config.toml are still not built. Seam: the… _(P3; labels: task-bar)_
 - [ ] `brwr-zla` **Tasks: choose the working folder per task.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). A task always runs in the knowledge base folder (task_setup in host/src/service/server.rs). Seam: an optional per-task cwd chosen by the host from a configured allowlist, never a path from the… _(P3; labels: task-bar)_
-- [ ] `brwr-bsx` **Tasks: save a task report as a page note.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 26). Brauser writes nothing for a task (TaskFinisher::save in host/src/service/finisher.rs is a no-op). Seam: a user action on a terminal task card that saves the report into the page note through… _(P3; labels: task-bar)_
 - [ ] `brwr-0yb` **Tasks: log a task event in the daily log.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decisions 8 and 26). TaskFinisher::save (host/src/service/finisher.rs) writes no daily-log event. Seam: an optional task event written by TaskFinisher::save, carrying only what decision 28 allows in records… _(P3; labels: task-bar)_
 - [ ] `brwr-tm2` **Service queue: per-kind slot configuration.** Task bar follow-up (plan docs/superpowers/plans/2026-10-28-task-bar.md, decision 10). host/src/service/queue.rs hard-codes MAX_RUNNING = 2, MAX_RUNNING_TASKS = 1 and MAX_ACTIVE_TASKS = 4. Seam: a per-kind slot table in Scheduler (next_ready, submit) so each kind gets its own… _(P3; labels: task-bar)_
 <!-- END GENERATED section=task-bar -->
@@ -181,11 +183,12 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
+- [ ] `brwr-9eio` **Held PR #262: CI still red after 1 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/262 (branch cookie/cookie-overnight/cycle-1-bdae482): CI still pending after 2700s. It stays open with the held label; nothing new is built on it. Fix it on its branch, or close it. _(P1; labels: human, pr-held)_
+- [ ] `brwr-p9vo` **Held PR #265: CI still red after 1 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/265 (branch cookie/cookie-overnight/cycle-5-ebd37e6): failed checks: macOS / Build and check (macos-15); Windows / Build and check (windows-latest); Build and check. It stays open with the held label… _(P1; labels: human, pr-held)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2; blocked)_
 - [ ] `brwr-cf2` **[human] Live-certify the confluence.page starter.** The Confluence pages starter (brwr-cf1) ships as a development draft. Check it against a real Atlassian Cloud site on macOS with real Chrome, following the 'Live check still needed' list in docs/adapters/confluence.page.md: both Atlassian checkboxes in Capture Site, the settings… _(P2; labels: human, starters)_
-- [ ] `brwr-ued` **Group cross-tool work into named focus sessions.** Recent and the worklog explain which artifacts were active, but they cannot express why a Jira issue, design document, and pull request belonged to the same deliberate block of work. Add an explicit local focus session a user can start/name/end from the panel; associate measured… _(P3)_
 - [ ] `brwr-x0d` **Share panel list or run-card text rendering when a second consumer needs it.** Recent, the worklog and the artifact card shipped without a shared helper, and DESIGN §12.2 step 6.7 is done, so there is no longer a before-6.7 prerequisite. Open access agent runs (spec 2026-10-26 §5.3) are polled through get_run with since_offset, not streamed over a host… _(P3)_
 - [ ] `brwr-o1l` **Share one authorize-and-open path across the delivery entry points.** record_visit, record_activity and record_batch (native.rs) each repeat lock, refresh, policy checks and CaptureStore/CapturePolicy setup, and capture.rs has near-identical mode/trail authorization loops and two persistence pipelines. Extract the shared steps and set a release to… _(P3)_
 - [ ] `brwr-dfd` **Container roll-up follow-ups (from PR #126 final review).** Deferred minors from the GitHub repo containers work (PR #126): (1) a rolled-up visit never advances a container row's latest_at (index.rs roll_up), a trap for future consumers; (2) a repos-only setup (no linked PR/issue rule) shows the latest sub-page title instead of… _(P3)_
@@ -198,7 +201,7 @@ queue".
 ## In Progress / This Iteration
 
 <!-- BEGIN GENERATED section=in-progress: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.** John approved the append-only re-key direction. Alias rehearsal, impact review, the decision journal and shared history projection are integrated. Physical note ownership/revisions are the current brwr-dbp slice; durable application and panel review remain. No migration is enabled and ordinary ID freezing stays enforced.
+- [ ] `brwr-6x2` **Re-learn capture while preserving artifact history and notes.** John approved append-only re-keying. Replay, impact review, journal, history projection and physical-note ownership are integrated. Apply and panel review remain incomplete; recovery/history/downgrade decisions are open. Local history includes PR #262 while its human/pr-held bead awaits driver reconciliation. Ordinary ID freezing stays enforced.
 - [ ] `brwr-9xg` **Exercise artifact panel interactions in headless Chrome.**
   **Blocked on platform execution; implementation complete.** The built-page
   smoke covers artifact/context interactions, Recent filters, worklog Copy,
@@ -219,7 +222,6 @@ queue".
   action is to record current Windows and macOS green CI against a named
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
-- [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** The shared resolver/preview is integrated; brwr-c1bq adds the physical note ownership/revision contract. Remaining: authoritative applied home history, exact config preparation and universal recovery/refusal, replay-aware readers and summary/run identity, preserved alias-note viewing, old-path stubs and crash/reindex acceptance. Ordinary config saves keep the ID freeze.
 <!-- END GENERATED section=in-progress -->
 
 
@@ -228,6 +230,14 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 ## Shipped
 
 <!-- BEGIN GENERATED section=shipped: edit the beads, then run python3 scripts/render_backlog.py -->
+- **Category:** New Feature. **Group captured work into named focus sessions (2026-11-03).** Explicit panel Start/Rename/End attaches immutable labels to authorized activity across windows and restarts. Session boundaries preserve frozen retries, pause/offline time remains unmeasured, and replayable worklog groups show direct artifacts and captured name changes without increasing period totals. **Metrics:** 1,560 workspace Rust-reported passes (+7; 2 ignored), 46 extension files (+13 offline cases), both Clippy builds, 229 Python checks (92 platform skips); 2 accessibility fixtures pass and 43 browser cases skip in sandbox.
+
+- **Category:** New Capability. **Keep finished task reports beside their source pages (2026-11-03).** Tasks offers an explicit Save to note for successful page tasks. The host fetches the retained report and appends through current config, physical-note identity, ownership and version checks, preserving user text and recognizing exact retries. Report reference definitions cannot activate earlier note images or links; no task finish writes content. **Metrics:** 12 new Rust/wire regressions, 4 offline extension cases and 1 browser journey; 1,565 Rust-reported outcomes (94 IPC guards), 44 extension files and both Clippy builds pass; 2 a11y fixtures pass, 43 browser cases skip in sandbox.
+
+- **Category:** Bug Fix. **Keep saved mentions attached during Re-learn preview (2026-11-03).** Resolve recorded mention values before applying reviewed aliases, retaining proposed rules for container membership. Changed URL ID captures preserve the intended target; duplicate/self mentions and unknown targets keep their existing semantics. Library and real CLI fixtures preserve config/home bytes. Durable apply remains unfinished. **Metrics:** 1,555 Rust-reported outcomes (+2; 94 explicit IPC skips), 44 extension files, both Clippy configurations and README checks; 2 accessibility fixtures pass, 42 browser cases skip in sandbox.
+
+- **Category:** New Capability. **Keep the exact passage behind a decision (2026-11-03).** A selection-only context menu saves an immutable local evidence card with host-derived source identity, first capture time, exact UTF-8 text and SHA-256. Exact retries retain the original card; changed text creates another; hostile markup, invalid sources and conflicting files are handled without extraction, agents or network. **Metrics:** 1,418 Rust-reported outcomes (+9), 45 extension files (+5 cases), both Clippy builds and README checks; 2 accessibility fixtures pass and 42 browser cases explicitly skip in sandbox.
+
 - **Category:** New Capability. **Preserve original notes across resolved artifact keys (2026-11-03).** Native note requests share a logical-versus-physical ownership contract, retaining original filenames and provenance while preferring a canonical note and refusing ambiguous fallback. Affected revisions bind replay history and file selection; move-back, unalias and stale native conflicts preserve both files. This completes the internal brwr-dbp prerequisite only; ordinary requests still use empty replay and durable application/panel review remain unfinished. **Metrics:** 1,421 Rust-reported outcomes (+12; 94 explicit IPC skips), 44 extension files, both Clippy builds; 2 accessibility fixtures pass, 42 browser cases skip in sandbox.
 
 - **Category:** New Capability. **Repair capture rules without discarding the original (2026-11-02).** Settings offers copyable preserved values and a complete format-1 replacement with preview on every site. The host backs up the exact original config, preserves pause and other settings, refuses stale or invalid replacements and retains recorded identity checks. Future formats remain opaque and remove-all recovery stays available. **Metrics:** 4 new Rust/wire tests and 5 offline UI cases; 1,386 Rust-reported outcomes (94 IPC sandbox skips), 44 extension files and 95 settings cases pass; 2 accessibility fixtures pass, 41 browser cases explicitly skip in sandbox.
@@ -2153,3 +2163,36 @@ brwr-pgxz with concrete evidence: A/B notes in a chain to C need original owner
 keys and read-only inspection when C has no primary. Driver owns external
 verification, independent approval and publication. No live service, API,
 remote Git or real harness was used.
+
+
+### Cycle observations (2026-11-03 — named focus sessions)
+
+The required baseline gate passed on `ec258171`; no quarantine report or
+broken working tree was present. The pre-existing queue diff includes driver
+and earlier-cycle metadata, retained through hydration/export. Assigned
+Re-learn remains gated by human/pr-held `brwr-9eio` and its open apply decisions;
+this cycle neither closes that gate nor duplicates held implementation.
+With no actionable assigned or P2 work, `brwr-ued` adds a new captured-work
+concept rather than another task-card refinement. Names are explicit,
+profile-local and append-only snapshots, with no inferred intent or API use.
+
+The independent design challenge caught both bucket lookups and frozen
+pressure merging before implementation. One independent Codex diff review
+found no P1/P2 and one P3 omission-notice issue; a failing regression preceded
+the fix in the existing renderer. Initial final-gate Rust compilation included
+that deliberate failing reproduction; the corrected focused suite passes and
+the complete gate is rerunning. Browser keyboard acceptance still belongs to
+the existing driver/platform gate. New `brwr-1jeb` proposes choosing one session
+in the curated worklog picker; artifact-day selection cannot express two
+sessions touching the same artifact. The related-tabs scope ask above was
+posted to Wardroom; no new human decision blocks the focus-session feature.
+
+
+Final result for this cycle: all required and README checks pass after the
+review correction (`target/cookie-focus-reviewed/`). `brwr-ued` is closed;
+1,560 Rust-reported passes (+7; 2 ignored), all 46 extension files, 13 new
+offline extension cases, both Clippy builds and 229 Python tests (92 platform
+skips). Accessibility is 2 fixture passes and 43 explicit browser sandbox
+skips, so the driver/CI must establish keyboard/browser acceptance. The
+scripted-dialog count is unchanged. `.bosun_commit_msg` is prepared; publication
+and the final commit SHA belong to the driver.

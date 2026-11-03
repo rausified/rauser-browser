@@ -4958,6 +4958,7 @@ id = "work:{host}/{id}"
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "activity-1".into(),
                 event: ActivityEvent {
+                    focus_session: None,
                     event_id: uuid::Uuid::new_v4().to_string(),
                     artifact_id: "work:work.example/7".into(),
                     artifact_type: "work.item".into(),
@@ -5315,6 +5316,7 @@ id = "jira:{host}/{key}"
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "modal-activity".into(),
                     event: ActivityEvent {
+                        focus_session: None,
                         event_id: uuid::Uuid::new_v4().to_string(),
                         artifact_id: format!("jira:acme.atlassian.net/{issue}"),
                         artifact_type: "jira.issue".into(),
@@ -6003,6 +6005,7 @@ id = "work:{host}/{id}"
 
             fn activity(&self) -> ActivityEvent {
                 ActivityEvent {
+                    focus_session: None,
                     event_id: uuid::Uuid::new_v4().to_string(),
                     artifact_id: "work:work.example/7".into(),
                     artifact_type: "work.item".into(),
@@ -6133,6 +6136,7 @@ id = "work:{host}/{id}"
                         protocol_version: PROTOCOL_VERSION,
                         request_id: "must-stay-off".into(),
                         event: ActivityEvent {
+                            focus_session: None,
                             event_id: uuid::Uuid::new_v4().to_string(),
                             ..event.clone()
                         },
@@ -7595,6 +7599,7 @@ id = "work:{host}/{id}"
 
     fn activity_for_invalid_policy() -> ActivityEvent {
         ActivityEvent {
+            focus_session: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: "work:work.example/1".into(),
             artifact_type: "work.item".into(),
@@ -9349,6 +9354,7 @@ id = "work:{host}/{id}"
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap();
         let event = |artifact_id: &str, trails: Vec<ActivityTrail>| ActivityEvent {
+            focus_session: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: artifact_id.into(),
             artifact_type: "work.item".into(),
@@ -9496,6 +9502,7 @@ id = "work:{host}/{id}"
 
     fn work_item_activity(occurred_at: &str, trails: Vec<ActivityTrail>) -> ActivityEvent {
         ActivityEvent {
+            focus_session: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: "work:work.example/7".into(),
             artifact_type: "work.item".into(),
@@ -11947,6 +11954,7 @@ id = "work:{host}/{id}"
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "deliver".into(),
                     event: ActivityEvent {
+                        focus_session: None,
                         event_id: uuid::Uuid::new_v4().to_string(),
                         artifact_id: "work:work.example/7".into(),
                         artifact_type: "work.item".into(),
