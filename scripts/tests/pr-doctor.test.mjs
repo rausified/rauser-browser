@@ -143,7 +143,10 @@ test("adopt syncs only when the doctor may push, and checks against a given fram
 // edits through bd, moves the backlog prose into the frame, and drops the
 // files. Needs bd; skipped where it is not installed.
 const hasBd = spawnSyncTop("bd", ["version"]).status === 0;
-test("tryRepair applies a PR's queue edits through bd and drops the files", { skip: process.platform === "win32" || !hasBd }, async () => {
+test("tryRepair applies a PR's queue edits through bd and drops the files", { skip: process.platform === "win32" || !hasBd }, () => doctorRepair({ conflicting: false }));
+test("tryRepair refuses, naming the bead and field, when the database changed a field the PR also changed", { skip: process.platform === "win32" || !hasBd }, () => doctorRepair({ conflicting: true }));
+
+async function doctorRepair({ conflicting }) {
   const { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join, dirname } = await import("node:path");
@@ -202,11 +205,25 @@ test("tryRepair applies a PR's queue edits through bd and drops the files", { sk
     git(root, "clone", "-q", origin, ws);
     run("bd", ws, "bootstrap");
     process.env.BRAUSER_QUEUE_WORKSPACE = ws;
+    if (conflicting) {
+      // Since the PR was cut, the database set the field the PR also sets.
+      run("bd", ws, "update", "brwr-a1", "--status", "blocked");
+      run("python3", ws, join(scripts, "work_queue.py"), "--repo", ws, "sync");
+    }
 
     const clone = join(root, "clone");
     git(root, "clone", "-q", origin, clone);
     process.chdir(clone);
     const result = tryRepair({ number: 9, headRefName: "feat/old" }, scripts, true);
+    if (conflicting) {
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.match(result.files.join("\n"), /brwr-a1 status: database 'blocked', branch 'closed'/);
+      assert.equal(commentBody({ outcome: "needs-person", files: result.files }).includes("brwr-a1 status"), true);
+      const after = run("bd", ws, "export");
+      assert.match(after, /"id":"brwr-a1"[^\n]*"status":"blocked"/);
+      assert.doesNotMatch(after, /"id":"brwr-p1"/);
+      return;
+    }
     assert.equal(result.ok, true, JSON.stringify(result));
     const tree = git(clone, "ls-tree", "-r", "--name-only", "HEAD").split("\n");
     assert.ok(!tree.includes(".beads/issues.jsonl") && !tree.includes("BOSUN_FEATURE_BACKLOG.md"), tree.join(","));
@@ -226,4 +243,4 @@ test("tryRepair applies a PR's queue edits through bd and drops the files", { sk
     Object.assign(process.env, saved);
     rmSync(root, { recursive: true, force: true });
   }
-});
+}

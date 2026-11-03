@@ -67,6 +67,42 @@ class PlanAdoptionTests(unittest.TestCase):
         self.assertEqual(labels, {"brwr-a1": ["y"]})
         self.assertEqual(deps, {"brwr-a1": [("brwr-b2", "blocks")]})
 
+    def test_a_field_both_sides_changed_differently_refuses_even_when_timestamps_order_them(self) -> None:
+        # Codex P1 on #274: merge_jsonl would take the newer side, turning the
+        # database's `blocked` into the branch's `closed` without a word.
+        base = bead("brwr-a1", updated_at="2026-11-01T00:00:00Z")
+        current = dict(base, status="blocked", updated_at="2026-11-02T00:00:00Z")
+        theirs = dict(base, status="closed", updated_at="2026-11-03T00:00:00Z")
+        with self.assertRaisesRegex(work_queue.QueueError, r"brwr-a1 status: database 'blocked', branch 'closed'"):
+            self.plan([base], [current], [theirs])
+
+    def test_a_metadata_key_both_sides_changed_differently_refuses(self) -> None:
+        base = bead("brwr-a1", metadata={"backlog_section": "plan", "backlog_order": 1})
+        current = dict(base, metadata={"backlog_section": "quality", "backlog_order": 1})
+        theirs = dict(base, metadata={"backlog_section": "gated", "backlog_order": 2})
+        with self.assertRaisesRegex(work_queue.QueueError, r"brwr-a1 metadata\.backlog_section"):
+            self.plan([base], [current], [theirs])
+
+    def test_the_same_change_on_both_sides_is_no_conflict(self) -> None:
+        base = bead("brwr-a1")
+        imports, _, _, _ = self.plan([base], [dict(base, status="closed")], [dict(base, status="closed")])
+        self.assertEqual(imports, [])
+
+    def test_adopted_rows_are_stamped_after_their_current_updated_at(self) -> None:
+        # Codex P2: a stamp equal to the row's own second lets bd import keep the old fields.
+        future = "2999-01-01T00:00:00Z"
+        base = bead("brwr-a1", updated_at="2026-11-01T00:00:00Z")
+        current = dict(base, updated_at=future)
+        imports, _, _, _ = self.plan([base], [current], [dict(base, title="New")])
+        self.assertEqual(imports[0]["updated_at"], "2999-01-01T00:00:01Z")
+
+    def test_a_dependency_type_change_removes_the_old_edge(self) -> None:
+        base = bead("brwr-a1", dependencies=[{"depends_on_id": "brwr-b2", "type": "blocks"}])
+        theirs = dict(base, dependencies=[{"depends_on_id": "brwr-b2", "type": "related"}])
+        imports, _, deps, _ = self.plan([base, bead("brwr-b2")], [base, bead("brwr-b2")], [theirs, bead("brwr-b2")])
+        self.assertEqual(deps, {"brwr-a1": [("brwr-b2", "blocks")]})
+        self.assertEqual(imports[0]["dependencies"], [{"issue_id": "brwr-a1", "depends_on_id": "brwr-b2", "type": "related"}])
+
     def test_a_field_both_changed_without_order_refuses_everything(self) -> None:
         a = bead("brwr-a1")
         with self.assertRaisesRegex(work_queue.QueueError, "brwr-a1"):
@@ -270,6 +306,53 @@ class DoltIntegrationTests(unittest.TestCase):
         self.assertEqual(failed.returncode, 1)
         self.assertEqual(len(failed.stderr.strip().splitlines()), 1, failed.stderr)
         self.assertIn("unknown-backlog-section", failed.stderr)
+
+    def test_adopt_changes_a_dependency_type_end_to_end(self) -> None:
+        self.seed(bead("brwr-a1", dependencies=[{"issue_id": "brwr-a1", "depends_on_id": "brwr-b2", "type": "blocks"}]),
+                  bead("brwr-b2"))
+        a = self.bootstrap(self.a)
+        base, _ = self.branch(a, [GATE, bead("brwr-a1", dependencies=[{"issue_id": "brwr-a1", "depends_on_id": "brwr-b2", "type": "blocks"}]), bead("brwr-b2")],
+                              [GATE, bead("brwr-a1", dependencies=[{"issue_id": "brwr-a1", "depends_on_id": "brwr-b2", "type": "related"}]), bead("brwr-b2")])
+        self.ok(a, "adopt", "--from", "HEAD", "--base", base)
+        edges = [(d["depends_on_id"], d["type"]) for d in self.exported(a)["brwr-a1"].get("dependencies") or []]
+        self.assertEqual(edges, [("brwr-b2", "related")])
+
+    def test_adopt_refuses_a_field_the_database_changed_differently(self) -> None:
+        self.seed(bead("brwr-a1"))
+        a = self.bootstrap(self.a)
+        self.bd(a, "update", "brwr-a1", "--status", "blocked")
+        base, _ = self.branch(a, [GATE, bead("brwr-a1")], [GATE, bead("brwr-a1", status="closed", updated_at="2999-01-01T00:00:00Z")])
+        before = self.dolt_head()
+        result = self.queue(a, "adopt", "--from", "HEAD", "--base", base)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("brwr-a1 status: database 'blocked', branch 'closed'", result.stderr)
+        self.assertEqual(self.exported(a)["brwr-a1"]["status"], "blocked")
+        self.assertEqual(self.dolt_head(), before)
+
+    def test_sync_passes_bd_syncs_exit_status_through(self) -> None:
+        self.seed(bead("brwr-a1"))
+        a = self.bootstrap(self.a)
+        fake = self.tmp / "fakebin"
+        fake.mkdir()
+        real = shutil.which("bd")
+        (fake / "bd").write_text(f'#!/bin/sh\nif [ "$1" = sync ]; then echo "push race" >&2; exit 3; fi\nexec {real} "$@"\n')
+        (fake / "bd").chmod(0o755)
+        result = subprocess.run([sys.executable, str(SCRIPTS / "dev" / "queue"), "--repo", str(a), "sync"],
+                                capture_output=True, text=True, env={**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"})
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("bd sync exited 3", result.stderr)
+
+    def branch(self, repo, base_rows, branch_rows):
+        """A branch that committed the old queue file: (base commit, tip)."""
+        self.git(repo, "checkout", "-q", "-b", "feat/old")
+        (repo / ".beads").mkdir(exist_ok=True)
+        (repo / work_queue.QUEUE_PATH).write_text(jsonl(*base_rows), encoding="utf-8")
+        self.git(repo, "add", "-f", work_queue.QUEUE_PATH)
+        self.git(repo, "commit", "-qm", "base")
+        base = self.git(repo, "rev-parse", "HEAD")
+        (repo / work_queue.QUEUE_PATH).write_text(jsonl(*branch_rows), encoding="utf-8")
+        self.git(repo, "commit", "-qam", "branch edits the queue")
+        return base, self.git(repo, "rev-parse", "HEAD")
 
     def test_backlog_renders_the_beads_into_the_frame(self) -> None:
         self.seed(bead("brwr-a1", metadata={"backlog_section": "plan"}))

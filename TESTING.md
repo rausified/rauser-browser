@@ -846,7 +846,11 @@ retired. What is tested:
 - `scripts/tests/test_work_queue.py`. Unit tests (no bd): adopt's
   field-level plan (only the branch's changed fields apply, a field changed
   differently on both sides or a deleted bead refuses everything, removed
-  labels and dependencies become explicit bd calls), the seed inputs (extra
+  labels and dependencies become explicit bd calls), the Codex review
+  findings on #274 (a field both sides changed differently refuses even when
+  timestamps would order it, including one metadata key; rows are stamped
+  after their current `updated_at`; a dependency type change removes the
+  old edge first), the seed inputs (extra
   rows added, an identical duplicate accepted, a conflicting or malformed one
   refused) and the committed `brwr-9eio` extra row. Integration tests run the
   real bd against a scratch bare remote, as on GitHub, and skip where bd is
@@ -856,7 +860,10 @@ retired. What is tested:
   fields of one bead and both survive `bd sync`; a queue that fails the
   check is not pushed; `backlog` renders the beads into the frame; and adopt
   applies an old branch's edits (a status, a removed label, a title, a new
-  bead) on top of a priority changed since in the database. The worker
+  bead) on top of a priority changed since in the database, refuses a
+  status the database changed differently (nothing applied, nothing
+  pushed), and changes a dependency's type end to end; `sync` passes bd
+  sync's exit status 3 through. The worker
   interface: `export` prints the whole queue on stdout (and writes a given
   path), an empty queue fails with one stderr line, and the contract's
   `bootstrap`, `sync` and `export` run as the shared driver runs them (new
@@ -869,7 +876,9 @@ retired. What is tested:
   and the consistency check.
 - `scripts/tests/pr-doctor.test.mjs`: with bd installed, the doctor repairs
   a real old PR that edits the committed queue (bead edits reach a fresh
-  bootstrap, the backlog prose lands in the frame, both files leave the PR).
+  bootstrap, the backlog prose lands in the frame, both files leave the PR),
+  and refuses one whose status the database changed differently, naming
+  the bead and field for the needs-merge comment.
 - `scripts/tests/test_worker_contract.py`: `worker-contract.json` against its
   schema, and that it names the tools and files CI enforces.
 

@@ -44,13 +44,17 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Is the queue seeded?
         id: seeded
+        # Only status 2 means "no such ref"; any other failure (auth,
+        # network) fails the run rather than passing it green.
         run: |
-          if git ls-remote --exit-code origin refs/dolt/data > /dev/null; then
-            echo "seeded=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "seeded=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::origin has no refs/dolt/data yet (scripts/dev/queue seed); nothing to check."
-          fi
+          status=0
+          git ls-remote --exit-code origin refs/dolt/data > /dev/null || status=$?
+          case "$status" in
+            0) echo "seeded=true" >> "$GITHUB_OUTPUT" ;;
+            2) echo "seeded=false" >> "$GITHUB_OUTPUT"
+               echo "::notice::origin has no refs/dolt/data yet (scripts/dev/queue seed); nothing to check." ;;
+            *) echo "::error::git ls-remote origin refs/dolt/data failed with status $status"; exit "$status" ;;
+          esac
       - name: Bootstrap the queue and check it
         id: check
         if: steps.seeded.outputs.seeded == 'true'

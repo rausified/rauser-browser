@@ -96,6 +96,12 @@ class WorkerContractTests(unittest.TestCase):
                 work_queue.main([command[1], "--help"])
             self.assertEqual(raised.exception.code, 0)
         self.assertEqual(self.contract["queue"]["transport"], "bd-dolt")
+
+    def test_the_sync_exit_codes_are_the_tools(self) -> None:
+        codes = {int(code): meaning for code, meaning in self.contract["queue"]["sync_exit_codes"].items()}
+        self.assertEqual(set(codes), {0, 1, 2, 3, 4})
+        self.assertEqual(set(codes) - {0, 1}, set(work_queue.SYNC_EXITS) - {1})
+        self.assertEqual((codes[2], codes[3], codes[4]), ("conflict", "retry", "stuck"))
         self.assertIn("bd bootstrap", self.contract["queue"]["bootstrap"])
 
 

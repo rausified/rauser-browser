@@ -70,7 +70,16 @@ SYNC_EXITS = {
 
 
 class QueueError(Exception):
-    """A queue operation cannot go ahead; the message says why and what to do."""
+    """A queue operation cannot go ahead; the message says why and what to do.
+
+    `code` is the exit status: 1, or bd sync's own 2, 3 or 4 (SYNC_EXITS),
+    which the shared driver branches on (worker-contract.json
+    queue.sync_exit_codes).
+    """
+
+    def __init__(self, message: str, code: int = 1) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _modules():
@@ -209,7 +218,9 @@ def sync(repo: pathlib.Path) -> None:
     require_clean(repo, export(repo).read_text(encoding="utf-8"), "the queue merged with the remote")
     result = bd("sync", cwd=ws, check=False)
     if result.returncode:
-        raise QueueError(f"bd sync: {SYNC_EXITS.get(result.returncode, 'failed')}\n{(result.stderr or result.stdout).strip()}")
+        code = result.returncode if result.returncode in SYNC_EXITS else 1
+        raise QueueError(f"bd sync exited {result.returncode}: {SYNC_EXITS.get(result.returncode, 'failed')}\n"
+                         f"{(result.stderr or result.stdout).strip()}", code)
     # bd sync may have pulled again; report (it already pushed) if that broke anything.
     late = problems(repo, export(repo).read_text(encoding="utf-8"))
     if late:
@@ -227,18 +238,76 @@ def _show(repo: pathlib.Path, rev: str, file: str) -> Optional[str]:
 
 # Fields bd derives on export; they say nothing about an edit.
 DERIVED_FIELDS = ("dependency_count", "dependent_count", "comment_count")
+# bd sets these itself; comparing them would make every adopt a conflict.
+UNCOMPARED_FIELDS = ("updated_at",)
+
+
+def _edge(dep: dict, issue_id: object) -> dict:
+    return {"issue_id": dep.get("issue_id") or issue_id, "depends_on_id": dep.get("depends_on_id"), "type": dep.get("type")}
+
+
+def normalize_record(record: dict) -> dict:
+    """A row comparable across bd exports: labels a sorted set, dependencies
+    sorted (endpoint, type) edges, derived counts dropped."""
+    record = {k: v for k, v in record.items() if k not in DERIVED_FIELDS}
+    if isinstance(record.get("labels"), list):
+        record["labels"] = sorted(set(record["labels"]))
+    if isinstance(record.get("dependencies"), list):
+        edges = [_edge(dep, record.get("id")) for dep in record["dependencies"] if isinstance(dep, dict)]
+        record["dependencies"] = sorted(edges, key=lambda e: (str(e["depends_on_id"]), str(e["type"])))
+        if not record["dependencies"]:
+            del record["dependencies"]
+    if not record.get("labels") and "labels" in record:
+        del record["labels"]
+    return record
 
 
 def normalized(text: str) -> str:
-    """Rows comparable across bd exports: labels as a sorted set, derived counts dropped."""
     rb, _ = _modules()
-    out = []
-    for _key, (_line, record) in rb._records(text, "queue").items():
-        record = {k: v for k, v in record.items() if k not in DERIVED_FIELDS}
-        if isinstance(record.get("labels"), list):
-            record["labels"] = sorted(set(record["labels"]))
-        out.append(rb.dump_record(record))
-    return "".join(line + "\n" for line in out)
+    return "".join(rb.dump_record(normalize_record(record)) + "\n"
+                   for _key, (_line, record) in rb._records(text, "queue").items())
+
+
+_MISSING = object()
+
+
+def _fields(record: Optional[dict]) -> dict[str, object]:
+    """Comparable fields of a row, metadata flattened to metadata.<key>."""
+    if record is None:
+        return {}
+    out: dict[str, object] = {}
+    for key, value in record.items():
+        if key in UNCOMPARED_FIELDS:
+            continue
+        if key == "metadata" and isinstance(value, dict):
+            out.update({f"metadata.{k}": v for k, v in value.items()})
+        else:
+            out[key] = value
+    return out
+
+
+def field_conflicts(base: dict, current: dict, theirs: dict) -> list[str]:
+    """Every field the database and the branch both changed from BASE, to different values."""
+    found = []
+    for issue_id in sorted(set(current) & set(theirs)):
+        b, c, t = (_fields(rows.get(issue_id)) for rows in (base, current, theirs))
+        for field in sorted(set(b) | set(c) | set(t)):
+            bv, cv, tv = (side.get(field, _MISSING) for side in (b, c, t))
+            if cv != bv and tv != bv and cv != tv:
+                show = lambda v: "(absent)" if v is _MISSING else json.dumps(v)[:60].replace('"', "'")
+                found.append(f"{issue_id} {field}: database {show(cv)}, branch {show(tv)}")
+    return found
+
+
+def _after(stamp: Optional[str], floor: datetime.datetime) -> str:
+    """An updated_at strictly after STAMP (bd import keeps a tie), and not before FLOOR."""
+    rb, _ = _modules()
+    parsed = rb._timestamp({"updated_at": stamp}) if stamp else None
+    later = floor
+    if parsed:
+        existing = datetime.datetime.strptime(parsed, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=datetime.timezone.utc)
+        later = max(floor, existing.replace(microsecond=0) + datetime.timedelta(seconds=1))
+    return later.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def plan_adoption(base: str, current: str, theirs: str) -> tuple[list[dict], dict[str, list[str]], dict[str, list[tuple[str, str]]], str]:
@@ -252,6 +321,13 @@ def plan_adoption(base: str, current: str, theirs: str) -> tuple[list[dict], dic
     """
     rb, _ = _modules()
     base, current, theirs = (normalized(text) for text in (base, current, theirs))
+    by_id = lambda text, label: {key: record for key, (_, record) in rb._records(text, label).items()}
+    # merge_jsonl lets the newer updated_at win a field both sides changed;
+    # adopt must not, so any such field refuses the whole adopt here.
+    clashes = field_conflicts(by_id(base, "base"), by_id(current, "current"), by_id(theirs, "theirs"))
+    if clashes:
+        raise QueueError("the database and the branch changed the same field differently; nothing applied. "
+                         + "; ".join(clashes))
     merged_text, conflicts, _notes = rb.merge_jsonl(base, current, theirs)
     if conflicts:
         raise QueueError(f"bead(s) {', '.join(conflicts)} changed differently here and on the branch; carry them by hand")
@@ -265,15 +341,16 @@ def plan_adoption(base: str, current: str, theirs: str) -> tuple[list[dict], dic
     lost = sorted(set(current_rows) - set(merged_rows))
     if lost:
         raise QueueError(f"adopting would drop bead(s) {', '.join(lost)}; refusing")
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_utc = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     rows, labels, deps = [], {}, {}
     for key, record in merged_rows.items():
         now = current_rows.get(key)
         if record == now:
             continue
         row = dict(record)
-        # Newer than the database's row, so bd import's updated_at guard applies it.
-        row["updated_at"] = stamp
+        # Strictly newer than the database's row, so bd import's updated_at
+        # guard applies it (a tie keeps the database's fields).
+        row["updated_at"] = _after(now.get("updated_at") if now else None, now_utc)
         rows.append(row)
         if now:
             gone = sorted(set(now.get("labels") or []) - set(record.get("labels") or []))
@@ -346,6 +423,22 @@ def merge_prose(base: str, ours: str, theirs: str) -> Optional[str]:
     return result.stdout if result.returncode == 0 else resolve_insertions(result.stdout)
 
 
+def not_landed(rows: list[dict], exported: str) -> list[str]:
+    """Each adopted field that the database does not now hold."""
+    rb, _ = _modules()
+    got = {key: normalize_record(record) for key, (_, record) in rb._records(exported, "database").items()}
+    missing = []
+    for row in rows:
+        want, have = _fields(normalize_record(row)), _fields(got.get(row["id"]))
+        if row["id"] not in got:
+            missing.append(f"{row['id']} (absent)")
+            continue
+        for field, value in want.items():
+            if have.get(field, _MISSING) != value:
+                missing.append(f"{row['id']} {field}")
+    return missing
+
+
 def adopted_frame(repo: pathlib.Path, source: str, base: str, frame_path: pathlib.Path) -> Optional[str]:
     """The checkout's frame with the hand-written backlog edits SOURCE committed, or None.
 
@@ -413,16 +506,22 @@ def adopt(repo: pathlib.Path, source: str, base: Optional[str], *, dry_run: bool
         return len(rows)
     if rows:
         rb, _ = _modules()
+        # Removals first: `bd dep remove` deletes by endpoints, so after the
+        # import it would also delete an edge whose type the branch changed.
+        for key, edges in deps.items():
+            for target, _kind in edges:
+                bd("dep", "remove", key, str(target), cwd=ws)
+        for key, names in labels.items():
+            for name in names:
+                bd("label", "remove", key, name, cwd=ws)
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "adopt.jsonl"
             path.write_text("".join(rb.dump_record(row) + "\n" for row in rows), encoding="utf-8")
             bd("import", str(path), cwd=ws)
-        for key, names in labels.items():
-            for name in names:
-                bd("label", "remove", key, name, cwd=ws)
-        for key, edges in deps.items():
-            for target, _kind in edges:
-                bd("dep", "remove", key, str(target), cwd=ws)
+        missing = not_landed(rows, export(repo).read_text(encoding="utf-8"))
+        if missing:
+            raise QueueError("bd import reported success but these edits did not land (nothing synced): "
+                             + "; ".join(missing))
     if frame is not None:
         rb.write(frame_path, frame)
     sync(repo)
@@ -557,7 +656,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         # One line: the driver reads the first stderr line as the reason.
         reason = "; ".join(line.strip() for line in str(error).splitlines() if line.strip())
         print(f"queue {args.command}: {reason or type(error).__name__}", file=sys.stderr)
-        return 1
+        return getattr(error, "code", 1)
 
 
 if __name__ == "__main__":
