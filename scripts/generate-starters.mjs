@@ -308,7 +308,12 @@ function validateType(problems, file, type, where, originKind) {
   }
 }
 
-function validateFamily(problems, file, family) {
+/** Validates one family object exactly as `loadFamilies` does for a family
+ * file, appending a "<file>: <message>" problem per issue to `problems`.
+ * Exported so a fixture that stands in for a family file in a test (for
+ * example `extension/tests/starter-fixtures.mjs`) can be checked against
+ * the same rules, instead of drifting from the file format unnoticed. */
+export function validateFamily(problems, file, family) {
   if (!isPlainObject(family)) {
     fail(problems, file, "must be an object");
     return;
@@ -488,7 +493,7 @@ function main(argv) {
   const catalogSource = readFileSync(catalogPath, "utf8");
   const current = JSON.parse(catalogSource).starter_types;
   const catalogOrder = catalogTypeOrder(families, current);
-  const catalogLine = `  "starter_types": [${catalogOrder.map((type) => JSON.stringify(type)).join(", ")}],`;
+  const catalogLine = renderCatalogLine(families, current);
   const updatedCatalog = catalogSource.replace(CATALOG_LINE_RE, catalogLine);
 
   const ts = renderTs(families, catalogOrder);

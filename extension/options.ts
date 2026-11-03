@@ -490,6 +490,7 @@ function renderScopeField(card: HTMLElement, origin: string, input: ScopeInput):
   label.textContent = input.galleryLabel;
   const field = document.createElement("input");
   field.type = "text";
+  field.maxLength = input.maxLength;
   field.value = scopeTexts.get(origin) ?? "";
   field.placeholder = input.galleryPlaceholder;
   field.autocomplete = "off";

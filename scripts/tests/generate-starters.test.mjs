@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { checkLock, loadFamilies, renderCatalogLine, renderTs } from "../generate-starters.mjs";
+import { checkLock, loadFamilies, renderCatalogLine, renderTs, validateFamily } from "../generate-starters.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = path.join(REPO, "scripts", "generate-starters.mjs");
@@ -313,4 +313,20 @@ test('example_path must start with "/"', (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stdout + result.stderr,
     /protocol\/starters\/atlassian\.json: types\[0\]\.example_path must start with "\/"/);
+});
+
+test("the test-only tenant_name and unscoped fixtures pass the generator's own family validation", async () => {
+  // extension/tests/starter-fixtures.mjs stands in for a protocol/starters/
+  // family file in panel, gallery and capture-site tests. Running it through
+  // the same validateFamily the generator applies to every real family file
+  // means it cannot quietly drift out of the file format (as
+  // EXAMPLE_UNSCOPED_FAMILY once did with a null review_prompt on a scoped
+  // family) without a test catching it.
+  const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY } =
+    await import("../../extension/tests/starter-fixtures.mjs");
+  for (const fixture of [EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY]) {
+    const problems = [];
+    validateFamily(problems, "<fixture>", fixture);
+    assert.deepEqual(problems, [], fixture.family);
+  }
 });

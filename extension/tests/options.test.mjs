@@ -1127,6 +1127,36 @@ test("each scoped origin gets its own scope input", async (t) => {
   assert.equal(prButton.dataset.available, before);
 });
 
+test("the gallery scope field caps input length at the scope-kind registry's bound", async (t) => {
+  // The panel's scope field (extension/starter-choice-view.ts) has always
+  // set maxLength from the registry; the gallery's equivalent field
+  // (renderScopeField in extension/options.ts) did not, so an overlong
+  // value was refused only after being typed. Both fields must share one
+  // bound (docs/improvement-feed/2026-11-03-settings-gallery-scope-fields-have-no-length-cap.md).
+  setStarterFamiliesForTest([...STARTER_FAMILIES, EXAMPLE_TENANT_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const githubAdapter = {
+    type: "github.issue", origin: "https://github.com", scope: { owner: ["acme"] },
+    match: [{ path: "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
+    id: "github.issue:{host}/{owner}/{repo}/{number}",
+  };
+  const exampleAdapter = {
+    type: "example.item", origin: "https://example.test", scope: { workspace: ["acme"] },
+    match: [{ path: "/{workspace:name|lower}/item/{id:int}" }],
+    id: "example.item:{host}/{workspace}/{id}",
+  };
+  install({ adapters: [githubAdapter, exampleAdapter] });
+  await openSettings();
+  const gallery = env.elements.get("starter-gallery");
+  const labels = gallery.querySelectorAll("label");
+  const orgsInput = labels.find((label) => label.textContent === "Work organizations (comma-separated)").children[0];
+  const workspacesInput = labels.find((label) => label.textContent === "Workspaces (comma-separated)").children[0];
+  assert.equal(orgsInput.maxLength, 1312);
+  // EXAMPLE_TENANT_FAMILY's max is 4, each name capped at 100 characters
+  // plus its ", " separator.
+  assert.equal(workspacesInput.maxLength, 4 * 102);
+});
+
 test("an unscoped card shows its notice and no input", async (t) => {
   setStarterFamiliesForTest([EXAMPLE_UNSCOPED_FAMILY]);
   t.after(() => setStarterFamiliesForTest(null));

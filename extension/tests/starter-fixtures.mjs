@@ -53,7 +53,7 @@ export const EXAMPLE_TENANT_FAMILY = {
 export const EXAMPLE_UNSCOPED_FAMILY = {
   family: "everyone",
   display_name: "Everyone",
-  review_prompt: null,
+  review_prompt: "Choose whether to remember Everyone pages.",
   // The real adapter-templates engine (extension/adapter-templates.ts
   // `SHARED_ORIGINS`) only allows an `unscoped` marker on its five hardcoded
   // shared origins; an unscoped family's fixture has to use one of them, not

@@ -125,6 +125,18 @@ test("configuredScope reads every scope value on the origin", () => {
   assert.deepEqual(configuredScope(artifacts, "https://github.com"), ["a", "b"]);
 });
 
+test("configuredScope reads only the scope key the family's templates mark, not every key on the adapter", () => {
+  // github.json's adapters mark only "owner" with {"$scope": true}; a
+  // hand-written GitHub adapter scoped by a second capture (for example a
+  // user who narrowed the match to one repository) must not leak that
+  // "repo" key into the gallery's organization field as if it were an
+  // organization the starter itself recorded.
+  const artifacts = [
+    { type: "github.repo", origin: "https://github.com", scope: { owner: ["acme"], repo: ["api"] } },
+  ];
+  assert.deepEqual(configuredScope(artifacts, "https://github.com"), ["acme"]);
+});
+
 test("the test seam swaps and restores the family list", () => {
   setStarterFamiliesForTest([EXAMPLE_TENANT_FAMILY]);
   try {

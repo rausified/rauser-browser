@@ -335,6 +335,9 @@ test("a tenant_name starter renders its own field", async (t) => {
   const labels = descendants(starterGroup(page)).filter((node) => node.tagName === "LABEL");
   assert.equal(labels.find((label) => label.htmlFor === "capture-site-starter-scope").textContent, "Workspaces");
   assert.equal(scope.value, "");
+  // max: 4, each name capped at 100 characters plus its ", " separator (the
+  // `name` capture's bound, extension/starter-scopes.ts).
+  assert.equal(scope.maxLength, 4 * 102);
   assert.equal(starterLabelText(page, "example.item"), "Example items · not yet checked on a real account");
   assert.equal(starterLabelText(page, "example.note"), "Example notes · not yet checked on a real account");
   scope.value = "acme";

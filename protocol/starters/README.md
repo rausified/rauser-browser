@@ -56,7 +56,7 @@ SharePoint, Miro, Atlassian) or one of three kinds:
 
 - `{ "kind": "github_org" }` — today's GitHub organization scope. No extra
   fields; the UI's organization field copy is built in
-  `extension/starter-adapters.ts`.
+  `extension/starter-scopes.ts`.
 - `{ "kind": "tenant_name", "max": 4, "label": "Workspaces", "placeholder": "acme" }`
   — a typed, comma-separated list of 1 to `max` (1-32) shared-origin tenant
   names (workspaces, accounts). `label` and `placeholder` drive the field's
@@ -64,7 +64,11 @@ SharePoint, Miro, Atlassian) or one of three kinds:
 - `{ "kind": "unscoped", "notice": "Records every … from every account in
   this Chrome profile." }` — the family has no scope values; every account
   signed in to the browser profile is recorded, and `notice` is shown
-  instead of a scope field or acknowledgement checkbox.
+  instead of a scope field or acknowledgement checkbox. The engine only
+  allows `unscoped` on one of its hard-coded shared origins
+  (`extension/adapter-templates.ts` `SHARED_ORIGINS`), so a new family using
+  this kind must sit on one of those origins, never a subdomain or any other
+  host.
 
 A scoped family (`github_org` or `tenant_name`) must mark every type's
 adapter with a `{"$scope": true}` placeholder somewhere in its `scope`

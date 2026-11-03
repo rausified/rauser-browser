@@ -140,7 +140,7 @@ function withinTarget(type: StarterTypeData): string | null {
 /** `family`'s types in display order: every type that is another type's
  * `within.type` target (a container, such as `github.repo`) first, each
  * group in the family's own source order, then every other type, also in
- * source order. This is today's checkbox order (`GITHUB_RECORD_ORDER`). */
+ * source order. This is today's GitHub checkbox order. */
 export function displayTypes(family: StarterFamilyData): StarterTypeData[] {
   const containerTypes = new Set<string>();
   for (const type of family.types) {
@@ -473,18 +473,44 @@ export function withContainerLinks(artifacts: AdapterObject[], repo: AdapterObje
     : adapter);
 }
 
-/** The union of every scope table value (lower-cased) across `origin`'s
- * adapters, in adapter order, to pre-fill a scoped starter's input: GitHub's
- * `scope.owner`, or a future `tenant_name` family's own scope key. Adapters
- * on another origin are ignored. */
+/** The scope-table key(s) `family`'s templates mark with a bare
+ * `{"$scope": true}` entry (today, GitHub's `owner`; a `tenant_name`
+ * family's own key). Only these keys hold the account data the starter
+ * itself records; a hand-written adapter can carry other scope keys (a
+ * second capture narrowing the match further), and those must not be read
+ * back into the UI as if the starter had recorded them. */
+function markedScopeKeys(family: StarterFamilyData): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const type of family.types) {
+    const scope = (type.adapter as Record<string, unknown>).scope;
+    if (!scope || typeof scope !== "object" || Array.isArray(scope)) continue;
+    for (const [key, value] of Object.entries(scope as Record<string, unknown>)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length === 1 && entries[0]![0] === "$scope" && entries[0]![1] === true) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+/** The union of every value (lower-cased) under `origin`'s adapters' marked
+ * scope key(s), in adapter order, to pre-fill a scoped starter's input:
+ * GitHub's `scope.owner`, or a future `tenant_name` family's own scope key.
+ * A scope table entry whose key the family's templates do not mark
+ * `{"$scope": true}` is a hand-written narrowing, not account data the
+ * starter recorded, and is left out. Adapters on another origin, or when
+ * `origin` names no known family, are ignored. */
 export function configuredScope(artifacts: AdapterObject[], origin: string): string[] {
+  const family = starterFamily(origin);
+  if (!family) return [];
+  const keys = markedScopeKeys(family);
   const values: string[] = [];
   for (const adapter of artifacts) {
     if (adapter.origin !== origin) continue;
     const scope = adapter.scope;
     if (!scope || typeof scope !== "object" || Array.isArray(scope)) continue;
-    for (const entry of Object.values(scope as Record<string, unknown>)) {
-      if (!Array.isArray(entry)) continue;
+    for (const [key, entry] of Object.entries(scope as Record<string, unknown>)) {
+      if (!keys.has(key) || !Array.isArray(entry)) continue;
       for (const value of entry) if (typeof value === "string") values.push(value.toLowerCase());
     }
   }

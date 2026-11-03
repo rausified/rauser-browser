@@ -5,6 +5,17 @@
 import { githubOwnerFromUrl, parseGitHubOrganizations, parseTenantList } from "./starter-adapters.js";
 import type { StarterFamilyData } from "./starter-families.generated.js";
 
+// The `name` capture's bound (extension/adapter-templates.ts
+// `DEFAULT_BOUNDS.name`, frozen by the protocol) is 1-100 characters, and a
+// tenant_name family's scope values are captured as `name`. Each name in the
+// typed comma-separated list also needs room for its ", " separator, so the
+// field must allow 100 + 2 characters per name the family's `max` admits.
+// This is the one place both the Capture Site panel field
+// (starter-choice-view.ts) and the settings gallery field (options.ts) get
+// their `maxLength` from, so a change here reaches both.
+const NAME_CAPTURE_MAX_CHARS = 100;
+const TENANT_NAME_CHARS_PER_NAME = NAME_CAPTURE_MAX_CHARS + ", ".length;
+
 export interface ScopeInput {
   label: string;
   placeholder: string;
@@ -46,7 +57,7 @@ export function scopeInput(family: StarterFamilyData): ScopeInput | null {
     return {
       label,
       placeholder: scope.placeholder,
-      maxLength: scope.max * 41,
+      maxLength: scope.max * TENANT_NAME_CHARS_PER_NAME,
       galleryLabel: `${label} (comma-separated)`,
       galleryPlaceholder: scope.placeholder,
       guidance: `Required: ${display} is shared across accounts, so the starter records only the ${label.toLowerCase()} you name.`,
