@@ -13,16 +13,21 @@ source of truth for the current shape.
 ```jsonc
 {
   "family": "atlassian",
+  "display_name": "Atlassian Cloud (Jira or Confluence)",  // the family's name in the UI
+  "review_prompt": "Choose the kinds of work to remember on this Atlassian site.",
+  // or null, only when the family has exactly one type and no scope (today: sharepoint, miro)
   "origin": { "kind": "subdomain", "suffix": ".atlassian.net" },
   // or: { "kind": "exact", "origin": "https://miro.com" }
   "scope": null,
-  // or: { "kind": "github_org" }
+  // or one of the three scope kinds below
   "types": [{
     "type": "jira.issue",
     "key": "jira:{origin}",
     "label": "Jira issues",
     "label_variants": [],          // e.g. [{"host_suffix": "-my.sharepoint.com", "label": "..."}]
     "description": "...",
+    "record_label": null,          // e.g. "pull requests"; the noun a "Remember: …" summary uses
+    "example_path": null,          // e.g. "/{scope}/example-repository/pull/123"; must start with "/"
     "adapter": { "type": "jira.issue", "match": [...], "id": "...", ... },
     "history": [],                 // earlier shipped { "match": [...] } entries, oldest first
     "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
@@ -33,8 +38,9 @@ source of truth for the current shape.
 
 `adapter` is an adapter-template document (`adapter-templates.md` §3) with
 `origin` omitted: the generator and, at runtime, `starterOffers` fill it in
-for the site the starter is offered on. A scoped family (GitHub's `owner`)
-writes the placeholder `{"$scope": true}` where the real scope value goes.
+for the site the starter is offered on. A scoped family writes the
+placeholder `{"$scope": true}` where the real scope value goes (GitHub's
+`owner`).
 
 `status.state` is `"certified"` or `"development"`. A certified type's
 `method` says how: `"live"` (a person ran the starter's checklist on a real
@@ -42,6 +48,32 @@ account; `checked_by` names them) or `"history"` (real browsing history
 confirmed every rule and title; `checked_by` names the agent session). A
 development type has not been certified yet and carries `method: null`,
 `checked_on: null`, `checked_by: null`.
+
+## Scope kinds
+
+`scope` is `null` (the family has no account-scoped values at all, e.g.
+SharePoint, Miro, Atlassian) or one of three kinds:
+
+- `{ "kind": "github_org" }` — today's GitHub organization scope. No extra
+  fields; the UI's organization field copy is built in
+  `extension/starter-adapters.ts`.
+- `{ "kind": "tenant_name", "max": 4, "label": "Workspaces", "placeholder": "acme" }`
+  — a typed, comma-separated list of 1 to `max` (1-32) shared-origin tenant
+  names (workspaces, accounts). `label` and `placeholder` drive the field's
+  UI copy.
+- `{ "kind": "unscoped", "notice": "Records every … from every account in
+  this Chrome profile." }` — the family has no scope values; every account
+  signed in to the browser profile is recorded, and `notice` is shown
+  instead of a scope field or acknowledgement checkbox.
+
+A scoped family (`github_org` or `tenant_name`) must mark every type's
+adapter with a `{"$scope": true}` placeholder somewhere in its `scope`
+table; an unscoped family (`scope: null` or `{"kind": "unscoped"}`) must
+have neither that marker nor `{scope}` in an `example_path`. A `"kind":
+"unscoped"` family's adapters must also each carry `"unscoped":
+"acknowledged"`, the config-level marker the engine requires for shared
+origins. `scripts/generate-starters.mjs` enforces all of this, file and
+field named.
 
 ## Adding a type
 

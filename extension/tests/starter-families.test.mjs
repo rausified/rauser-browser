@@ -3,7 +3,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { starterKind, starterStatus, starterOffers } = await import("../dist/starter-adapters.js");
+const {
+  starterKind,
+  starterStatus,
+  starterOffers,
+  starterFamily,
+  displayTypes,
+  recordLabel,
+  recordOrder,
+  isContainerType,
+  configuredScope,
+  setStarterFamiliesForTest,
+} = await import("../dist/starter-adapters.js");
+const { EXAMPLE_TENANT_FAMILY } = await import("./starter-fixtures.mjs");
 
 // [origin, expected StarterKind | null], computed from today's rules
 // (secureHostname: canonical https origin only; a subdomain suffix match
@@ -83,4 +95,46 @@ test("every family type exposes its status", () => {
   assert.equal(starterStatus("jira.issue")?.state, "certified");
   assert.equal(starterStatus("confluence.page")?.state, "development");
   assert.equal(starterStatus("nope"), null);
+});
+
+test("displayTypes puts containers first", () => {
+  const github = starterFamily("https://github.com");
+  assert.deepEqual(displayTypes(github).map((type) => type.type), ["github.repo", "github.pr", "github.issue"]);
+  const atlassian = starterFamily("https://acme.atlassian.net");
+  assert.deepEqual(displayTypes(atlassian).map((type) => type.type), ["jira.issue", "confluence.page"]);
+});
+
+test("record labels and order come from the family files", () => {
+  assert.equal(recordLabel("github.pr"), "pull requests");
+  assert.equal(recordLabel("jira.issue"), null);
+  assert.deepEqual(recordOrder(), ["github.repo", "github.pr", "github.issue"]);
+});
+
+test("isContainerType", () => {
+  assert.equal(isContainerType("github.repo"), true);
+  assert.equal(isContainerType("github.pr"), false);
+  assert.equal(isContainerType("jira.issue"), false);
+});
+
+test("configuredScope reads every scope value on the origin", () => {
+  const artifacts = [
+    { type: "github.repo", origin: "https://github.com", scope: { owner: ["A"] } },
+    { type: "github.repo", origin: "https://github.com", scope: { owner: ["b", "a"] } },
+    { type: "jira.issue", origin: "https://acme.atlassian.net", scope: { owner: ["ignored"] } },
+  ];
+  assert.deepEqual(configuredScope(artifacts, "https://github.com"), ["a", "b"]);
+});
+
+test("the test seam swaps and restores the family list", () => {
+  setStarterFamiliesForTest([EXAMPLE_TENANT_FAMILY]);
+  try {
+    assert.equal(starterKind("https://example.test"), "example");
+    assert.equal(starterKind("https://github.com"), null);
+    const offers = starterOffers("https://example.test", ["acme"]);
+    assert.deepEqual(offers[0].adapter.scope, { workspace: ["acme"] });
+  } finally {
+    setStarterFamiliesForTest(null);
+  }
+  assert.equal(starterKind("https://example.test"), null);
+  assert.equal(starterKind("https://github.com"), "github");
 });

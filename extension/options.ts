@@ -43,7 +43,7 @@ import {
   type AdapterObject,
 } from "./adapter-review.js";
 import {
-  configuredGitHubOrganizations,
+  configuredScope,
   containerLinks,
   hasAdapter,
   linkedToPresentContainers,
@@ -452,7 +452,7 @@ function setStarterButtonState(button: HTMLButtonElement, origin: string, key: s
 function renderStarterGallery(): void {
   starterGallery.replaceChildren();
   if (!githubScopeEdited) {
-    githubScopeText = configuredGitHubOrganizations(session.config?.adapters.artifacts ?? []).join(", ");
+    githubScopeText = configuredScope(session.config?.adapters.artifacts ?? [], "https://github.com").join(", ");
   }
   // The typed site address first, then the sites that already have adapters.
   const typed = typedOrigin();
