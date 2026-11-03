@@ -363,3 +363,11 @@
   Ordinary requests retain empty replay; durable apply and panel Re-learn
   remain assigned work. This is an internal prerequisite, not enabled
   migration. Brauser's design, staged plan and testing guidance stay here.
+
+- **Brauser personal summary style (2026-11-03, `brwr-sm4`):** Users can tailor
+  summary language, emphasis and presentation through an optional home-root
+  `SUMMARY_STYLE.md`. Each new summary snapshots bounded UTF-8 guidance before
+  queuing, preserving it across restarts; compiled core instructions and answer
+  validation remain. Settings, README and DESIGN.md describe defaults, repair
+  and rollback. Offline tests use an in-process fake harness; no live model or
+  deployed service was touched. Project documentation remains in this repo.
