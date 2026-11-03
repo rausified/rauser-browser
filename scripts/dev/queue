@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Brauser's work queue on the `beads` branch: path, pull, push, from-db, adopt.
+
+The implementation and its documentation are in scripts/work_queue.py
+(AGENTS.md "Work queue"). Typical use:
+
+    scripts/dev/queue pull
+    $EDITOR "$(scripts/dev/queue path)/.beads/issues.jsonl"   # one bead's row
+    scripts/dev/queue push -m "queue: close brwr-xyz"
+"""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from work_queue import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

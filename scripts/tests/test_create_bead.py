@@ -29,10 +29,12 @@ class CreateBeadTests(unittest.TestCase):
         self.source = self.root / ".beads" / "issues.jsonl"
         self.closed = {"id": "brwr-t33", "title": "Already shipped", "status": "closed"}
         self.source.write_text(json.dumps(self.closed) + "\n", encoding="utf-8")
+        # The queue worktree is the fixture root; bd's export is faked.
+        self.kw = {"root": self.root, "queue": self.root, "rows": lambda _root: {}}
 
     def run_create(self, args, run):
         with patch("subprocess.run", side_effect=run), contextlib.redirect_stderr(io.StringIO()):
-            return create_bead(args, root=self.root)
+            return create_bead(args, **self.kw)
 
     def test_closed_ids_are_reserved_before_create_and_arguments_stay_literal(self) -> None:
         # Reproduce a DB missing the tracked closed row: create would reuse
@@ -62,6 +64,18 @@ class CreateBeadTests(unittest.TestCase):
         # Import chatter cannot corrupt `bd create --json` on stdout.
         self.assertIsInstance(calls[0][1]["stdout"], io.StringIO)
 
+    def test_the_new_bead_row_is_copied_into_the_queue(self) -> None:
+        # bd export lists a DB-only row before and after create; only the
+        # bead create added is copied, in bd export's line order.
+        local = json.dumps({"id": "brwr-local", "title": "Unexported work", "priority": 2})
+        new = json.dumps({"id": "brwr-n3w", "title": "New work", "priority": 0, "status": "open"})
+        exports = iter([{"brwr-local": local}, {"brwr-local": local, "brwr-n3w": new}])
+        self.kw["rows"] = lambda _root: next(exports)
+        self.assertEqual(self.run_create(["New work"], lambda command, **_: subprocess.CompletedProcess(command, 0)), 0)
+        lines = self.source.read_text(encoding="utf-8").splitlines()
+        self.assertEqual([json.loads(line)["id"] for line in lines], ["brwr-n3w", "brwr-t33"])
+        self.assertEqual(lines[0], new)
+
     def test_import_failure_prevents_creation(self) -> None:
         calls = []
 
@@ -80,7 +94,7 @@ class CreateBeadTests(unittest.TestCase):
                 else:
                     self.source.write_text(text, encoding="utf-8")
                 with patch("subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(create_bead(["New work"], root=self.root), 1)
+                    self.assertEqual(create_bead(["New work"], **self.kw), 1)
                     run.assert_not_called()
 
     def test_worktree_and_redirect_refuse_shared_database(self) -> None:
@@ -94,27 +108,27 @@ class CreateBeadTests(unittest.TestCase):
                     (self.root / ".git").mkdir()
                     (self.root / ".beads" / "redirect").write_text("/another/checkout", encoding="utf-8")
                 with patch("subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(create_bead(["New work"], root=self.root), 2)
+                    self.assertEqual(create_bead(["New work"], **self.kw), 2)
                     run.assert_not_called()
 
     def test_routing_overrides_are_rejected_before_hydration(self) -> None:
         for arg in ("--db", "--db=other", "--database=other", "--directory", "-C", "-Cother",
                     "-qC", "-vCother", "-vqC=other", "--global", "--repo", "--repo=other"):
             with self.subTest(arg=arg), patch("subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(create_bead(["New work", arg], root=self.root), 2)
+                self.assertEqual(create_bead(["New work", arg], **self.kw), 2)
                 run.assert_not_called()
 
     def test_create_failure_is_reported(self) -> None:
         results = [subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 9)]
-        with patch("subprocess.run", side_effect=results):
-            self.assertEqual(create_bead(["New work"], root=self.root), 9)
+        with patch("subprocess.run", side_effect=results), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(create_bead(["New work"], **self.kw), 9)
 
     def test_missing_bd_reports_failure(self) -> None:
         with patch("subprocess.run", side_effect=FileNotFoundError("bd")), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(create_bead(["New work"], root=self.root), 1)
+            self.assertEqual(create_bead(["New work"], **self.kw), 1)
 
     def test_help_does_not_touch_the_database(self) -> None:
         with patch("subprocess.run") as run, contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(create_bead(["--help"], root=self.root), 0)
-            self.assertEqual(create_bead([], root=self.root), 2)
+            self.assertEqual(create_bead(["--help"], **self.kw), 0)
+            self.assertEqual(create_bead([], **self.kw), 2)
             run.assert_not_called()

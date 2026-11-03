@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Hydrate this checkout's beads database before creating an issue.
+"""Hydrate this checkout's beads database from the queue, then create an issue.
 
 Usage: scripts/dev/create-bead <bd create arguments>
 
-Run in the checkout that owns the database. Linked worktrees must instead
-use a scratch database under target/ (see AGENTS.md "Work queue").
+Run in the checkout that owns the database. It pulls the queue worktree of
+the `beads` branch (scripts/dev/queue pull), imports every row there, runs
+`bd create`, and copies the new bead's row into the queue worktree; publish
+it with `scripts/dev/queue push`. Linked worktrees must instead edit the
+queue worktree's JSONL directly (see AGENTS.md "Work queue").
 """
 
 from __future__ import annotations
@@ -16,10 +19,12 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import work_queue  # noqa: E402
 from render_backlog import BacklogError, load_issues  # noqa: E402
 
 
-def main(argv: list[str] | None = None, *, root: pathlib.Path | None = None) -> int:
+def main(argv: list[str] | None = None, *, root: pathlib.Path | None = None,
+         queue: pathlib.Path | None = None, rows=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args == ["--help"] or args == ["-h"]:
         print(__doc__)
@@ -37,14 +42,16 @@ def main(argv: list[str] | None = None, *, root: pathlib.Path | None = None) -> 
     if not (root / ".git").is_dir() or (root / ".beads" / "redirect").exists():
         print(
             "create-bead: use the checkout that owns the database; in a linked "
-            "worktree, import this branch's JSONL into a scratch database under "
-            "target/ before creating (AGENTS.md: Work queue)",
+            "worktree, add the bead's row to the queue worktree's JSONL instead "
+            "(AGENTS.md: Work queue)",
             file=sys.stderr,
         )
         return 2
 
-    source = root / ".beads" / "issues.jsonl"
+    rows = rows or work_queue.bd_rows
     try:
+        queue = queue or work_queue.pull(root)
+        source = queue / ".beads" / "issues.jsonl"
         load_issues(source)
         # Default import keeps newer local scalar fields. Never pass
         # --allow-stale or rebuild the database: DB-only work must survive.
@@ -53,8 +60,22 @@ def main(argv: list[str] | None = None, *, root: pathlib.Path | None = None) -> 
         )
         if hydrated.returncode:
             return hydrated.returncode
-        return subprocess.run(["bd", "create", *args], cwd=root, check=False).returncode
-    except (BacklogError, OSError) as error:
+        before = set(rows(root))
+        created = subprocess.run(["bd", "create", *args], cwd=root, check=False).returncode
+        if created:
+            return created
+        new = {issue_id: row for issue_id, row in rows(root).items() if issue_id not in before}
+        if new:
+            work_queue.upsert_rows(source, list(new.values()))
+            print(
+                f"create-bead: added {', '.join(sorted(new))} to {source}; "
+                f"publish it with scripts/dev/queue push",
+                file=sys.stderr,
+            )
+        else:
+            print("create-bead: bd export shows no new bead; nothing copied to the queue", file=sys.stderr)
+        return 0
+    except (BacklogError, work_queue.QueueError, OSError) as error:
         print(f"create-bead: {error}", file=sys.stderr)
         return 1
 

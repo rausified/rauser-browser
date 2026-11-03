@@ -15,6 +15,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import unittest.mock
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS))
@@ -327,6 +328,10 @@ class GitIntegrationTests(unittest.TestCase):
         (self.repo / ".gitattributes").write_text(
             ".beads/issues.jsonl merge=beads-jsonl\n", encoding="utf-8"
         )
+        # The scripts' default queue location is this repository's root.
+        environ = unittest.mock.patch.dict(os.environ, {"BRAUSER_QUEUE_DIR": str(self.repo)})
+        environ.start()
+        self.addCleanup(environ.stop)
         self.write_queue(bead("brwr-a1", metadata={"backlog_section": "plan"}))
         git(self.repo, "add", ".")
         git(self.repo, "commit", "-qm", "base")

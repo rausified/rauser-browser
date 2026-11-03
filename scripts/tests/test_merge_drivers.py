@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent.parent
 ROOT = SCRIPTS.parent
@@ -379,6 +380,9 @@ PENDING = "# Pending AMOS Documentation Updates\n\n- **Brauser — base entry:**
 COOKIE = "# Cookie Feature Notes\n\n## 2026-10-16 — Base entry\n\nBase paragraph.\n"
 
 
+QUEUE_ATTRIBUTES = ".beads/issues.jsonl merge=beads-jsonl\nBOSUN_FEATURE_BACKLOG.md merge=bosun-backlog\n"
+
+
 class GitMergeDriverTests(unittest.TestCase):
     """A real repository with the committed .gitattributes and installed drivers."""
 
@@ -391,7 +395,15 @@ class GitMergeDriverTests(unittest.TestCase):
         (self.repo / ".beads").mkdir()
         for name in ("render_backlog.py", "check_queue_consistency.py", "install-merge-drivers.sh"):
             shutil.copy(SCRIPTS / name, self.repo / "scripts" / name)
-        shutil.copy(ROOT / ".gitattributes", self.repo / ".gitattributes")
+        # Main's union rules plus the beads branch's two queue drivers; the
+        # queue files live on that branch now (AGENTS.md "Work queue").
+        (self.repo / ".gitattributes").write_text(
+            (ROOT / ".gitattributes").read_text(encoding="utf-8") + QUEUE_ATTRIBUTES, encoding="utf-8"
+        )
+        # The scripts' default queue location is this repository's root.
+        environ = unittest.mock.patch.dict(os.environ, {"BRAUSER_QUEUE_DIR": str(self.repo)})
+        environ.start()
+        self.addCleanup(environ.stop)
         self.target = row("brwr-e7b0", priority=1)
         self.commit("base", [self.target], pending=PENDING, cookie=COOKIE)
         self.install()

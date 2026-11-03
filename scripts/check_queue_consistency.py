@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Assert that Brauser's backlog is a faithful rendering of its beads queue.
 
-Beads (`.beads/issues.jsonl`) is authoritative. `BOSUN_FEATURE_BACKLOG.md`'s
+Beads (`.beads/issues.jsonl`) is authoritative. Both files live on the
+`beads` branch, not on main (AGENTS.md "Work queue"): by default this checks
+the clone's queue worktree (`scripts/dev/queue path`), `--ref origin/beads`
+checks a commit without one, and `--issues`/`--backlog` name files. `BOSUN_FEATURE_BACKLOG.md`'s
 item lists are generated from it by `scripts/render_backlog.py` between
 `BEGIN/END GENERATED` markers, and the overnight loop reads them between
 launches, so a stale rendering steers a cycle wrong. This check:
@@ -14,8 +17,7 @@ launches, so a stale rendering steers a cycle wrong. This check:
   closed bead named in a Proposed section's prose.
 
 It reads only the two files and needs no `bd`, so it runs inside a cycle
-before `bd` has rebuilt its database, and on the scaffold's committed copies
-(`--issues`, `--backlog`). Exit status is 0 when everything holds, 1 otherwise.
+before `bd` has rebuilt its database, and on any copy of the two files. Exit status is 0 when everything holds, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ import json
 import pathlib
 import re
 import sys
+import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -80,7 +83,7 @@ def check_generated(
             Violation(
                 "generated-section-stale",
                 f"generated section(s) {', '.join(stale)} do not match the queue; "
-                f"run python3 scripts/render_backlog.py and commit the result "
+                f"run scripts/dev/queue push, which re-renders and publishes it "
                 f"(never hand-edit a GENERATED block)",
             )
         )
@@ -140,17 +143,36 @@ def check_generated(
     return violations
 
 
+def read_ref(ref: str, cwd: pathlib.Path, scratch: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    """Copy REF's two queue files into SCRATCH (`git show`), for checking."""
+    paths = []
+    for file in (render_backlog.QUEUE_PATH, render_backlog.BACKLOG_PATH):
+        target = scratch / pathlib.Path(file).name
+        result = render_backlog.git("show", f"{ref}:{file}", cwd=cwd, check=False)
+        if result.returncode == 0:
+            target.write_text(result.stdout, encoding="utf-8", newline="\n")
+        paths.append(target)
+    return paths[0], paths[1]
+
+
 def main(argv: list[str] | None = None) -> int:
-    repo_root = pathlib.Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--issues", type=pathlib.Path, default=repo_root / ".beads" / "issues.jsonl",
-                        help="committed beads export (default: %(default)s)")
-    parser.add_argument("--backlog", type=pathlib.Path, default=repo_root / "BOSUN_FEATURE_BACKLOG.md",
-                        help="generated backlog (default: %(default)s)")
+    parser.add_argument("--issues", type=pathlib.Path,
+                        help="beads export (default: the queue worktree's .beads/issues.jsonl)")
+    parser.add_argument("--backlog", type=pathlib.Path,
+                        help="generated backlog (default: the queue worktree's BOSUN_FEATURE_BACKLOG.md)")
+    parser.add_argument("--ref", help="check this commit's files instead, e.g. origin/beads (fetch it first)")
     parser.add_argument("--prefix", default=DEFAULT_PREFIX, help="beads issue id prefix (default: %(default)s)")
     parser.add_argument("--json", action="store_true", help="emit a JSON report")
     args = parser.parse_args(argv)
+    if args.ref:
+        with tempfile.TemporaryDirectory() as scratch:
+            args.issues, args.backlog = read_ref(args.ref, pathlib.Path.cwd(), pathlib.Path(scratch))
+            return check(args)
+    return check(args)
 
+
+def check(args: argparse.Namespace) -> int:
     def fail(message: str) -> int:
         if args.json:
             print(json.dumps({"status": "error", "message": message}, indent=2))
@@ -158,6 +180,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"queue consistency check ERROR: {message}", file=sys.stderr)
         return 1
 
+    if args.issues is None or args.backlog is None:
+        try:
+            where = render_backlog.default_queue_dir()
+        except BacklogError as error:
+            return fail(str(error))
+        args.issues = args.issues or where / render_backlog.QUEUE_PATH
+        args.backlog = args.backlog or where / render_backlog.BACKLOG_PATH
     for path in (args.issues, args.backlog):
         if not path.is_file():
             # A missing export is exactly how a night's queue reasoning is lost.
@@ -189,9 +218,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {violation}")
         print()
         print("Beads is authoritative and the backlog's item lists are generated from it:")
-        print("edit the bead (one JSONL row, or bd update in this workspace), then run")
-        print("python3 scripts/render_backlog.py. After a merge or rebase conflict in either")
-        print("file, run python3 scripts/render_backlog.py --resolve.")
+        print("edit the bead's row in the queue worktree (scripts/dev/queue path), then run")
+        print("scripts/dev/queue push, which re-renders the backlog. After a rebase conflict")
+        print("there, run python3 scripts/render_backlog.py --resolve in that worktree.")
         return 1
 
     print(f"queue consistency check passed: {live} live issue(s), generated sections up to date")

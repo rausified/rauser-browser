@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Render BOSUN_FEATURE_BACKLOG.md's queue sections from .beads/issues.jsonl.
 
-The beads queue is authoritative. The backlog's item lists are generated from
+Both files live on the `beads` branch, not on main (AGENTS.md "Work queue");
+by default this reads and writes them in the clone's queue worktree
+(`scripts/dev/queue path`, or $BRAUSER_QUEUE_DIR). The beads queue is
+authoritative. The backlog's item lists are generated from
 it between marker comments, so that no branch hand-edits them and two branches
 that each add a bead never conflict on hand-written Markdown:
 
@@ -29,9 +32,9 @@ ordered by `backlog_order`, then priority, `created_at` and id, so output never
 depends on the JSONL's line order.
 
 Usage:
-    python3 scripts/render_backlog.py            # rewrite the backlog in place
+    python3 scripts/render_backlog.py            # rewrite the queue worktree's backlog
     python3 scripts/render_backlog.py --check    # exit 1 when it is stale
-    python3 scripts/render_backlog.py --resolve  # finish a merge/rebase conflict
+    python3 scripts/render_backlog.py --resolve  # finish a conflict (run in the queue worktree)
     python3 scripts/render_backlog.py --install-merge-driver
     python3 scripts/render_backlog.py --merge-jsonl BASE OURS THEIRS    # git driver
     python3 scripts/render_backlog.py --merge-backlog BASE OURS THEIRS  # git driver
@@ -56,6 +59,7 @@ QUEUE_PATH = ".beads/issues.jsonl"
 BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md"
 MERGE_DRIVER = "beads-jsonl"
 BACKLOG_DRIVER = "bosun-backlog"
+RENDERER_ENV = "BRAUSER_RENDER_BACKLOG"  # work_queue.RENDERER_ENV
 LEAD_LIMIT = 280
 
 BEGIN_PATTERN = re.compile(
@@ -745,6 +749,8 @@ def install_merge_driver(root: pathlib.Path) -> None:
     """
     python = shlex.quote(pathlib.Path(sys.executable).as_posix())
     fallback = "git merge-file -L ours -L base -L theirs %A %O %B"
+    # The queue worktree (the beads branch) has no scripts/, so there the
+    # driver runs the renderer `scripts/dev/queue` names in the environment.
     for name, label, flag, path in (
         (MERGE_DRIVER, "beads JSONL merge, bead by bead", "--merge-jsonl", QUEUE_PATH),
         (BACKLOG_DRIVER, "backlog merge, generated sections re-rendered", "--merge-backlog", BACKLOG_PATH),
@@ -752,8 +758,9 @@ def install_merge_driver(root: pathlib.Path) -> None:
         git("config", f"merge.{name}.name", label, cwd=root)
         git(
             "config", f"merge.{name}.driver",
-            f"if test -f scripts/render_backlog.py; then "
-            f"{python} scripts/render_backlog.py {flag} %O %A %B; "
+            f"r=scripts/render_backlog.py; test -f \"$r\" || r=\"${{{RENDERER_ENV}:-}}\"; "
+            f"if test -n \"$r\" && test -f \"$r\"; then "
+            f"{python} \"$r\" {flag} %O %A %B; "
             f"else {fallback}; fi",
             cwd=root,
         )
@@ -943,11 +950,25 @@ def backlog_driver(base: pathlib.Path, ours: pathlib.Path, theirs: pathlib.Path)
 # CLI
 
 
+def default_queue_dir() -> pathlib.Path:
+    """$BRAUSER_QUEUE_DIR, else this clone's queue worktree (created on demand)."""
+    override = os.environ.get("BRAUSER_QUEUE_DIR")  # work_queue.DIR_ENV
+    if override:
+        return pathlib.Path(override).expanduser()
+    import work_queue  # local: it imports this module
+
+    try:
+        return work_queue.ensure(work_queue.repo_root())
+    except work_queue.QueueError as error:
+        raise BacklogError(f"cannot find the queue worktree: {error}") from error
+
+
 def main(argv: list[str] | None = None) -> int:
-    default_root = pathlib.Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--issues", type=pathlib.Path, default=default_root / QUEUE_PATH)
-    parser.add_argument("--backlog", type=pathlib.Path, default=default_root / BACKLOG_PATH)
+    parser.add_argument("--issues", type=pathlib.Path,
+                        help="the queue (default: the queue worktree's .beads/issues.jsonl)")
+    parser.add_argument("--backlog", type=pathlib.Path,
+                        help="the backlog (default: the queue worktree's BOSUN_FEATURE_BACKLOG.md)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="exit 1 if the backlog is stale")
     mode.add_argument("--resolve", action="store_true",
@@ -970,6 +991,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.resolve:
             return resolve(repo_root(pathlib.Path.cwd()))
+        if args.issues is None or args.backlog is None:
+            where = default_queue_dir()
+            args.issues = args.issues or where / QUEUE_PATH
+            args.backlog = args.backlog or where / BACKLOG_PATH
         issues = load_issues(args.issues)
         current = args.backlog.read_text(encoding="utf-8")
         rendered = render(current, issues)
