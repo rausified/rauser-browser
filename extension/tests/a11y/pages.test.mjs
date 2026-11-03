@@ -103,9 +103,26 @@ for (const colorScheme of ["light", "dark"]) {
     assert.deepEqual(results.incomplete.filter(({ id }) => id === "color-contrast").flatMap(({ nodes }) => nodes.map(({ target }) => target)), [],
       "no panel text may sit on a surface axe cannot measure");
     const measured = results.passes.find(({ id }) => id === "color-contrast")?.nodes.map(({ target }) => String(target)) ?? [];
-    for (const selector of ["#capture-pill-label", "#page-title", "#page-url", ".brand-mark", "#task-run"]) {
+    for (const selector of ["#capture-pill-label", "#page-title", "#page-url", ".brand-mark"]) {
       assert.ok(measured.some((target) => target.includes(selector)), `${selector} contrast must be measured and pass`);
     }
+    // Run is an icon-only button, which axe's text check skips: its arrow
+    // (drawn in currentColor) needs 3:1 against the button (WCAG 1.4.11).
+    const ratio = await page.locator("#task-run").evaluate((button) => {
+      const rgb = (value) => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+      const luminance = (value) => {
+        const [r, g, b] = rgb(value).map((channel) => {
+          const c = channel / 255;
+          return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const style = getComputedStyle(button);
+      if (!/^rgb\(/.test(style.backgroundColor)) return 0;
+      const [a, b] = [luminance(style.color), luminance(style.backgroundColor)].sort((x, y) => y - x);
+      return (a + 0.05) / (b + 0.05);
+    });
+    assert.ok(ratio >= 3, `the Run arrow's contrast is ${ratio.toFixed(2)}:1, below 3:1`);
   });
 }
 

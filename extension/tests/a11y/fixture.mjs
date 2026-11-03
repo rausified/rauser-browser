@@ -25,7 +25,7 @@ export function task(n, state = "succeeded") {
 }
 
 // Serialized into the browser before any product module executes.
-export function installChrome({ state, runs, pageUrl, pageName }) {
+export function installChrome({ state, runs, pageUrl, pageName, summary = null }) {
   const event = () => {
     const listeners = [];
     return { addListener: (listener) => listeners.push(listener), fire: (...args) => listeners.forEach((listener) => listener(...args)) };
@@ -90,7 +90,7 @@ export function installChrome({ state, runs, pageUrl, pageName }) {
         fixture.adapterIssue = null;
         fixture.revision = String(Number(fixture.revision) + 1);
         return { type: "config_updated", config: fixture.config, revision: fixture.revision };
-      case "get_artifact": return { type: "artifact_result", recognized: false, artifact: null, summary: null };
+      case "get_artifact": return { type: "artifact_result", recognized: false, artifact: null, summary };
       case "load_note": return {
         type: "note_loaded", exists: false, revision: "", title: "", body: "",
         key: { kind: "url", value: request.url }, older_notes: [],
@@ -213,7 +213,7 @@ export async function browserFixture(t, pageName, state = "configured", options 
   page.setDefaultTimeout(10_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL });
+  await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL, summary: options.summary ?? null });
   await page.goto(`${ORIGIN}/${pageName}.html`);
   const status = page.locator(pageName === "tasks" ? "#tasks-status" : "#status");
   if (state === "disconnected") await status.filter({ hasText: /unavailable|Could not list tasks/ }).waitFor();
