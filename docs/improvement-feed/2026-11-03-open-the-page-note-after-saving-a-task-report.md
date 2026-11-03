@@ -13,3 +13,5 @@ result. A direct action would complete that verification step without requiring
 another task or manual folder browsing. Implement beside `extension/run-card.ts`
 and `host/src/native/task_note.rs`, with an injected opener and no automatic
 navigation or writes to recovery copies.
+
+- +1 2026-11-03: Independent review reproduced a 4,096-character instruction losing its final 96 characters in the saved note; the rendering now uses the shared task limit and has a save/load regression. Opening the combined note would also let users verify persisted content after copying a report.

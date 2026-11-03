@@ -161,7 +161,10 @@ fn report_block(run: &RunView) -> Option<String> {
     // remote embeds, raw HTML, plugin code blocks or executable inline code.
     Some(format!(
         "## Task report\n\n**Task:** {}\n\n**Finished:** {}\n\n{}\n\n<!-- {}:task-report {} -->\n",
-        crate::markdown::inline(instruction, 4000),
+        crate::markdown::inline(
+            instruction,
+            crate::service::record::MAX_TASK_INSTRUCTION_CHARS
+        ),
         crate::markdown::inline(finished, 64),
         crate::markdown::neutralize_note_append(report),
         crate::brand::NAMESPACE,

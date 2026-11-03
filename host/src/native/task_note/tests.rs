@@ -127,6 +127,23 @@ fn an_explicit_append_creates_the_host_resolved_note_and_no_other_content() {
 }
 
 #[test]
+fn saving_keeps_the_entire_longest_accepted_instruction() {
+    let (_folder, mut config, _root) = world();
+    let mut task = run();
+    let limit = crate::service::record::MAX_TASK_INSTRUCTION_CHARS;
+    let ending = " Keep this final requirement.";
+    let instruction = format!("{}{ending}", "界".repeat(limit - ending.chars().count()));
+    assert_eq!(instruction.chars().count(), limit);
+    crate::service::record::check_task_instruction(&instruction).unwrap();
+    task.instruction = Some(instruction.clone());
+    assert_saved(append(&mut config, task), false);
+    assert!(load(&mut config).body.contains(&format!(
+        "**Task:** {}\n\n**Finished:**",
+        crate::markdown::inline(&instruction, limit),
+    )));
+}
+
+#[test]
 fn current_artifact_identity_and_stripped_url_provenance_come_from_the_host() {
     let (folder, mut config, root) = world();
     config::fixtures::write(
@@ -386,7 +403,10 @@ fn report_and_instruction_use_the_shared_markdown_safety_helpers() {
     run.instruction = Some(hostile.into());
     let block = report_block(&run).unwrap();
     assert!(block.contains(&crate::markdown::neutralize_note_append(hostile)));
-    assert!(block.contains(&crate::markdown::inline(hostile, 4000)));
+    assert!(block.contains(&crate::markdown::inline(
+        hostile,
+        crate::service::record::MAX_TASK_INSTRUCTION_CHARS,
+    )));
     let content = block.split("<!--").next().unwrap();
     for active in ['`', '$'] {
         assert!(!content.contains(active));
