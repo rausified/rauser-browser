@@ -3,7 +3,7 @@ import test from "node:test";
 import { Buffer } from "node:buffer";
 
 import {
-  ADMIT_GRACE_MINUTES, CONDITIONS_GRACE_MINUTES, DOCTOR_GRACE_MINUTES, EXIT, analyzeChecks, classifyConflicts, decide, decideConflict,
+  ADMIT_GRACE_MINUTES, CONDITIONS_GRACE_MINUTES, QUEUE_COMMENT, DOCTOR_GRACE_MINUTES, EXIT, analyzeChecks, classifyConflicts, decide, decideConflict,
   doctorComment, enqueueCommand, mergifyMeta, mergifyQueueStatus, unmetConditions, latestChecks, parseArgs, snapshotFromGraphql, statusLine,
 } from "../dev/pr-watch.mjs";
 
@@ -403,6 +403,25 @@ for (const label of ["pr-doctor:skip", "needs-merge"]) {
     assert.match(statusLine(s, d), new RegExp(`blocked by ${label}`));
   });
 }
+
+test('labeled, green and stuck at "Merge queue is ready": advise the contract\'s queue comment', () => {
+  // Label-only auto-queue needs Mergify's Merge Protections activated in the
+  // dashboard; without them the PR sits at "ready" until someone comments.
+  const contexts = rollup([mq("Merge queue is ready")]);
+  assert.equal(decide(snap({ contexts }), { now: NOW, admitWaitSince: NOW }).action, "awaiting-admission");
+  const since = new Date(Date.parse(NOW) - (ADMIT_GRACE_MINUTES + 1) * 60000).toISOString();
+  const d = decide(snap({ contexts }), { now: NOW, admitWaitSince: since });
+  assert.equal(d.exitCode, EXIT.QUEUE_BLOCKED);
+  assert.equal(d.action, "queue-ready-not-admitted");
+  assert.match(d.message, /gh pr comment 243 --body "@Mergifyio queue"/);
+  assert.match(d.message, /Merge Protections/);
+});
+
+test("the queue comment pr-watch advises is the worker contract's merge.comment", async () => {
+  const { readFileSync } = await import("node:fs");
+  const contract = JSON.parse(readFileSync(new URL("../../worker-contract.json", import.meta.url), "utf8"));
+  assert.equal(QUEUE_COMMENT, contract.merge.comment);
+});
 
 test("green and labeled but never admitted: act after the admission grace period", () => {
   const s = snap({ contexts: NOT_ADMITTED });
