@@ -46,9 +46,9 @@ use super::harness_api::{
     HarnessEvent, HarnessRegistry, OutputSchema, ProcessSlot, RunSpec, SessionRef, TurnOutcome,
 };
 use super::maintenance;
-use super::prompt::{
-    repair_prompt, site_draft_prompt, summary_prompt, task_prompt, task_repair_prompt,
-};
+#[cfg(test)]
+use super::prompt::summary_prompt;
+use super::prompt::{repair_prompt, site_draft_prompt, task_prompt, task_repair_prompt};
 use super::queue::{Scheduler, Submit};
 use super::record::{
     MAX_TITLE_BYTES, RunStatusFile, RunStore, StreamError, StreamPage, TaskStatus, cap_bytes,
@@ -241,6 +241,8 @@ impl fmt::Debug for ServiceOptions {
 /// A task still queued when the service restarts is failed, never resumed.
 #[derive(Debug, Clone)]
 pub struct StartRun {
+    /// Host-read guidance, snapshotted only for summaries before queuing.
+    pub summary_style: Option<String>,
     /// Optional host-derived summary context, never a native request field.
     pub incoming: Vec<brauser_protocol::IncomingTrailView>,
     pub kind: RunKind,
@@ -707,7 +709,11 @@ impl Supervisor {
                 kind: req.kind,
                 task: req.task,
             };
-            if let Err(error) = inner.store.create(&status, &page) {
+            if let Err(error) =
+                inner
+                    .store
+                    .create_with_summary_style(&status, &page, req.summary_style.as_deref())
+            {
                 scheduler.finished(id);
                 tracing::error!(run_id = %id, error = format!("{error:#}"), "could not create run");
                 return Err((
@@ -1308,18 +1314,25 @@ impl Inner {
             .flatten()
             .map(|section| section.kind());
         let (prompt, output_schema, title) = match status.kind {
-            RunKind::Summary => (
-                summary_prompt(
-                    &page_path,
-                    &launch.cwd,
-                    &launch.vocabulary,
-                    section,
-                    !status.incoming.is_empty(),
-                    status.capture_truncated,
-                ),
-                OutputSchema::RunnerDefault,
-                status.title.clone(),
-            ),
+            RunKind::Summary => {
+                let style = match super::summary_style::from_run(&self.store.run_dir(id)) {
+                    Ok(style) => style,
+                    Err(message) => return Driven::Failed(message.into()),
+                };
+                (
+                    super::prompt::summary_prompt_with_style(
+                        &page_path,
+                        &launch.cwd,
+                        &launch.vocabulary,
+                        section,
+                        !status.incoming.is_empty(),
+                        status.capture_truncated,
+                        style.as_deref(),
+                    ),
+                    OutputSchema::RunnerDefault,
+                    status.title.clone(),
+                )
+            }
             RunKind::SiteDraft => (
                 site_draft_prompt(&page_path, &status.url, catalog()),
                 OutputSchema::Omit,
@@ -2273,6 +2286,7 @@ mod tests {
 
         fn request(&self, key: &str) -> StartRun {
             StartRun {
+                summary_style: None,
                 incoming: Vec::new(),
                 kind: RunKind::Summary,
                 url: format!("https://example.com/{key}"),
@@ -4001,6 +4015,82 @@ mod tests {
     }
 
     #[test]
+    fn a_new_summary_carries_host_style_through_the_snapshot_into_its_harness_prompt() {
+        let (fixture, seen) = recording(&[TEST_ANSWER]);
+        let mut request = fixture.request("personal-style");
+        request.summary_style = Some("Explain decisions in French. {{page}} stays literal.".into());
+        let (view, _) = fixture.supervisor.start_run(request).unwrap();
+        let id = Uuid::parse_str(&view.run_id).unwrap();
+        assert_eq!(fixture.wait_finished(id).state, RunState::Succeeded);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.prompts.len(), 1);
+        assert!(seen.prompts[0].contains("Explain decisions in French. {{page}} stays literal."));
+        let page = read(&fixture.supervisor.store().page_path(id));
+        assert!(!page.contains("Explain decisions in French"));
+        assert_eq!(seen.starts[0].0.output_schema, OutputSchema::RunnerDefault);
+    }
+
+    #[test]
+    fn resumed_summary_uses_queued_style_and_refuses_a_damaged_snapshot_before_the_harness() {
+        for damaged in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = RunStore::ephemeral(dir.path().join("runs")).unwrap();
+            let id = seed_record(
+                &store,
+                dir.path(),
+                RunState::Queued,
+                "2026-10-26T09:00:01.000000000Z",
+            );
+            let snapshot = store
+                .run_dir(id)
+                .join(super::super::summary_style::SNAPSHOT_NAME);
+            std::fs::write(
+                &snapshot,
+                super::super::summary_style::encode(Some("Snapshot: concise French decisions."))
+                    .unwrap(),
+            )
+            .unwrap();
+            // Today's home file is not part of a resumed run's instructions.
+            std::fs::write(
+                dir.path().join("SUMMARY_STYLE.md"),
+                "New style must not replace the queued style.",
+            )
+            .unwrap();
+            if damaged {
+                std::fs::write(&snapshot, "invalid JSON").unwrap();
+            }
+            let seen = SharedSeen::default();
+            let runner = RecordingRunner {
+                answers: vec![TEST_ANSWER.into()],
+                seen: seen.clone(),
+            };
+            let fixture = Fixture::build(
+                dir,
+                HarnessRegistry::of(vec![Box::new(runner)]),
+                DEFAULT_RUN_TIMEOUT,
+                None,
+                None,
+                None,
+            );
+            let view = fixture.wait_finished(id);
+            let seen = seen.lock().unwrap();
+            if damaged {
+                assert_eq!(view.state, RunState::Failed);
+                assert_eq!(
+                    view.error.as_deref(),
+                    Some(super::super::summary_style::SNAPSHOT_ERROR)
+                );
+                assert!(seen.starts.is_empty());
+            } else {
+                assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+                assert_eq!(seen.prompts.len(), 1);
+                assert!(seen.prompts[0].contains("Snapshot: concise French decisions."));
+                assert!(!seen.prompts[0].contains("New style must not replace"));
+            }
+        }
+    }
+
+    #[test]
     fn a_resumed_queued_run_keeps_its_recorded_vocabulary() {
         let dir = tempfile::tempdir().unwrap();
         let store = RunStore::ephemeral(dir.path().join("runs")).unwrap();
@@ -4013,6 +4103,19 @@ mod tests {
         let mut status = store.status(id).unwrap();
         status.vocabulary = Some(custom_vocabulary());
         store.write_status(&status).unwrap();
+        // Legacy queued records have no style snapshot and must retain defaults
+        // even when the home now contains personal guidance.
+        std::fs::remove_file(
+            store
+                .run_dir(id)
+                .join(super::super::summary_style::SNAPSHOT_NAME),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("SUMMARY_STYLE.md"),
+            "Must not affect this old queued run.",
+        )
+        .unwrap();
         // Inspect the prompt through the existing in-process runner. A
         // one-second timeout must not race a shell starting and copying stdin.
         let seen = SharedSeen::default();
@@ -4892,6 +4995,7 @@ mod tests {
         /// ignores.
         fn site_draft_request(&self, origin: &str, input: &str) -> StartRun {
             StartRun {
+                summary_style: None,
                 incoming: Vec::new(),
                 kind: RunKind::SiteDraft,
                 url: origin.to_string(),
@@ -5275,6 +5379,7 @@ mod tests {
 
         fn task_request(&self, key: &str, instruction: &str) -> StartRun {
             StartRun {
+                summary_style: None,
                 incoming: Vec::new(),
                 kind: RunKind::Task,
                 task: Some(TaskStatus {

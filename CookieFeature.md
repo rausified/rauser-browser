@@ -1440,3 +1440,27 @@ images or links already in the user's note. A retry after an uncertain answer
 recognizes the whole exact saved section without duplicating it or replacing
 later edits. If the note is full or unsafe to replace, the report stays
 available to copy. The confirmation returns keyboard focus to Save to note.
+
+## 2026-11-03 — Personalize summary language and emphasis (`brwr-sm4`)
+
+Brauser can now take personal summary guidance from `SUMMARY_STYLE.md` in the
+home folder selected in settings. A user can ask for French prose, more emphasis
+on decisions and deadlines, or a concise assessment without rebuilding the host.
+Settings explains the file and README gives a copyable example. The file is
+optional: missing or blank keeps the default style. A malformed, oversized,
+unreadable or symlinked file produces a message explaining how to fix or rename
+it, while tasks, Capture Site, capture and notes continue using their own paths.
+
+The service reads a bounded regular UTF-8 file under the picked folder's
+identity, then writes a private guidance snapshot before it publishes a queued
+summary. A queued run keeps that same guidance across a service restart even
+if the user edits the home file meanwhile. The existing one-pass renderer inserts
+it as one JSON value into compiled `SUMMARY.md`; literal template markers stay
+literal. The required answer fields and built-in core instructions stay in the
+compiled prompt, and the existing answer validator still rejects incomplete
+answers. Full-access tool restrictions remain prompt instructions. A separate
+snapshot avoids changing the strict run-status format, so older services can
+still read process-recovery information and use their defaults on rollback.
+Offline reader, setup, storage, prompt and in-process harness tests exercise the
+feature; no real model was called. `brwr-myn8` proposes a settings preview so
+users can validate guidance before launching a summary.
