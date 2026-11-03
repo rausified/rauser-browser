@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rausified/rauser-browser/worker-contract.schema.json",
+  "title": "Brauser worker contract",
+  "description": "How every worker (the shared worker driver, Cookie, any session) merges pull requests and moves the work queue in this repository. AGENTS.md \"Worker contract\" explains each field. A new field or meaning bumps version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "merge", "queue", "never_commit"],
+  "properties": {
+    "version": {
+      "description": "The contract version a worker must understand before acting on it.",
+      "const": 1
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "label", "never"],
+      "properties": {
+        "method": {
+          "description": "How a worker asks for a merge: `label` means add the label below to a green PR.",
+          "enum": ["label"]
+        },
+        "label": {
+          "description": "The label that requests the merge.",
+          "type": "string",
+          "minLength": 1
+        },
+        "never": {
+          "description": "Commands a worker must never run to merge.",
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transport", "bootstrap", "sync", "export"],
+      "properties": {
+        "transport": {
+          "description": "`bd-dolt`: beads live in bd's Dolt database, synced through this repository's refs/dolt/data.",
+          "enum": ["bd-dolt"]
+        },
+        "bootstrap": {
+          "description": "Run once in a fresh clone, from the repository root, to get the queue.",
+          "type": "string",
+          "minLength": 1
+        },
+        "sync": {
+          "description": "Run from the repository root after editing beads with bd: checks, then publishes.",
+          "type": "string",
+          "minLength": 1
+        },
+        "export": {
+          "description": "Prints the path of a fresh JSONL export of the queue (git-ignored).",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "never_commit": {
+      "description": "Paths no commit may add or change; CI fails a change that tracks them.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  }
+}
