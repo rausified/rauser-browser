@@ -1,0 +1,36 @@
+name: Queue check
+
+# This branch holds only the work queue (.beads/issues.jsonl) and its
+# rendered view (BOSUN_FEATURE_BACKLOG.md); sessions and Cookie push it
+# directly with main's scripts/dev/queue push (main's AGENTS.md "Work
+# queue"). A push event runs the workflow file of the pushed commit, so this
+# file lives here, not on main. It re-runs main's queue check on every push,
+# so a bad push shows up as a failed run on the branch.
+on:
+  push:
+    branches: [beads]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Queue consistency
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: queue
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Check the backlog against the queue (main's checker)
+        run: >-
+          python main/scripts/check_queue_consistency.py
+          --issues queue/.beads/issues.jsonl
+          --backlog queue/BOSUN_FEATURE_BACKLOG.md

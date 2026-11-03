@@ -1,0 +1,7 @@
+# The work queue merges bead by bead and the backlog re-renders its generated
+# blocks from the merged queue. scripts/dev/queue (on main) registers these
+# drivers and points them at main's scripts/render_backlog.py, so a push race
+# replays cleanly; a plain `git pull` here without the drivers falls back to a
+# line merge, which `python3 <main>/scripts/render_backlog.py --resolve` finishes.
+.beads/issues.jsonl merge=beads-jsonl
+BOSUN_FEATURE_BACKLOG.md merge=bosun-backlog
