@@ -255,12 +255,12 @@ test("the hint explains each disabled state in order", async () => {
   type(page, "Summarize the comments");
   enter(page);
   await until(() => page.sent("start_task").length === 1, "start_task");
-  assert.equal(page.el("task-run").textContent, "Starting…");
+  assert.equal(page.el("task-run-label").textContent, "Starting…");
   assert.equal(page.el("task-run").disabled, true);
   assert.equal(page.el("task-input").readOnly, true);
   start.release({ type: "run_started", run: TASK_VIEW, existing: false });
   await until(() => page.el("task-input").readOnly === false, "the bar to reopen");
-  assert.equal(page.el("task-run").textContent, "Run");
+  assert.equal(page.el("task-run-label").textContent, "Run");
 });
 
 test("the panel does not list task runs without a harness or a run record", async () => {
@@ -793,7 +793,7 @@ test("the task bar shows only the field, Run and Tasks", async () => {
   assert.equal(taskCards(page).length, 0);
   assert.equal(descendants(page.el("task-run-area")).length, 0);
   assert.doesNotMatch(page.el("task-bar").textContent, /List every link on this page/);
-  assert.equal(page.el("task-run").textContent, "Run");
+  assert.equal(page.el("task-run-label").textContent, "Run");
   assert.equal(page.el("task-open").textContent, runningButton(1));
   assert.equal(page.el("task-open").hidden, false);
 });
