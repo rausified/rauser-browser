@@ -888,12 +888,22 @@ pub enum ImportanceLevel {
 pub struct RunAnswer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_scope: Option<AnswerReadScope>,
     pub document_type: String,
     pub category: String,
     pub importance: ImportanceLevel,
     pub importance_reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<AnswerAccess>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerReadScope {
+    Whole,
+    Partial,
+    PageOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

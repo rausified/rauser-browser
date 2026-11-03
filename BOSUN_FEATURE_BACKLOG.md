@@ -123,7 +123,6 @@ PR 3 (real runners, extraction, and the run card) is merged (#98), and PR 4
 ### Focused quality follow-up
 
 <!-- BEGIN GENERATED section=quality: edit the beads, then run python3 scripts/render_backlog.py -->
-- [ ] `brwr-q0i4` **Honor capture pause when an automatic summary reaches the host.** While fixing brwr-sm7, start_auto_summary checks auto_summary.enabled and current adapter identity but never snapshot.capture_enabled. The worker normally removes candidates while capture is paused, yet a pause during readTab leaves an in-flight request that can start a new… _(P2; blocked)_
 - [ ] `brwr-d586` **Resolve historical refs under the recorded contract in relearn-preview.** Codex review P2 on PR #238 (cookie-pr-repair, 2026-11-03), host/src/index.rs:2324-2325: when a proposal changes which URL capture supplies the ID, `resolved` is computed under the proposed policy, so the historical ref lookup receives a newly synthesized ID instead of the… _(P2)_
 - [ ] `brwr-ys8y` **Generate padded token values in adapter differential tests.** Discovered while fixing brwr-tp1: scripts/adapter-templates-diff.mjs genValue only emits the token body alphabet, so random URL/title/alias cases never exercise the supported base64 padding grammar. Shared fixed vectors caught title-run drift, but the property generator still… _(P3)_
 - [ ] `brwr-1xmv` **Share keyboard entry for composite controls in browser journeys.** Cycle 6 worklog curation was quarantined because its keyboard journey tried to Tab directly to inactive Recent, which intentionally has tabindex=-1. Repeated inline entry sequences make it easy to miss the existing roving-tabindex contract, especially where local Chromium cannot… _(P3; blocked)_
@@ -151,7 +150,6 @@ strip_params note-identity follow-up has shipped (see Shipped).
   primary key from a canonical address.
 - [ ] `brwr-pgxz` **Explain blocked Re-learn reviews with actionable local evidence.** The brwr-eo7/brwr-r62 fixes refuse damaged owned markers and foreign-occupied record keys, but the report currently exposes issue codes for cross-origin conflicts and a CLI path/line for marker damage. Before the panel consumes these plans, show why approval is blocked and how… _(P3)_
 - [ ] `brwr-khqi` **Find saved summaries by their overview in Tasks history.** Summary overviews now reach RunAnswer and the Tasks detail view, but history search still matches only the page title and task instruction. Someone who remembers the decision or topic in a summary should be able to find the corresponding run without opening every detail. _(P3)_
-- [ ] `brwr-rr93` **Show summary read scope in the run card.** Summary overviews can look complete even when the validated answer and saved summary record read_scope partial or page_only. Next-day auto-summary retry (brwr-sm9) relies on that distinction, but extension summary-text.ts and run-card.ts do not show it. Expose the validated… _(P3; blocked)_
 - [ ] `brwr-30xv` **Show summary reading scope beside saved summaries in Recent and This page.** Recent and This page show saved summaries with the overview and type but no reading scope. A reader choosing a remembered artifact should be able to spot a browser-viewer-only or partial summary before reopening it. Extend the saved-summary projection and shared summaryLine… _(P3)_
 - [ ] `brwr-p71k` **Page through selected-work choices beyond the response cap.** The selected-work preview (brwr-ppn) deliberately bounds a report to 200 artifact-day rows and 96 KiB serialized data. Shortening a week can expose omitted days, but a single busy day can still exceed those limits, leaving later entries unavailable for a concise update. Add… _(P3)_
 - [ ] `brwr-k6rg` **Show the original page while recalling an earlier task.** Keyboard recall intentionally reuses the stored instruction on the current page, while Tasks-page Reuse also reopens the original page. The context line names the current page but the recalled instruction has no visible source provenance; a person repeating a page-specific task… _(P3)_
@@ -181,7 +179,6 @@ queue".
 
 <!-- BEGIN GENERATED section=new: edit the beads, then run python3 scripts/render_backlog.py -->
 - [ ] `brwr-hpo` **HUMAN GATE: real macOS Chrome, live work tools, or John's accounts.** Holding issue for steps that need John on macOS with real Chrome, a live Jira/SharePoint/OneDrive/GitHub account, or store/signing access ([human] items in BOSUN_FEATURE_BACKLOG.md). Cookie must not fake their evidence. Keep dependent items gated until John records the human… _(P1; deferred; labels: human)_
-- [ ] `brwr-tcfc` **Held PR #249: CI still red after 1 repair attempt(s).** The overnight driver held https://github.com/rausified/rauser-browser/pull/249 (branch cookie/cookie-overnight/cycle-3-2912754): failed checks: Windows / Build and check (windows-latest); Build and check. It stays open with the held label; nothing new is built on it. Fix it on… _(P1; labels: human, pr-held)_
 - [ ] `brwr-ooy` **Windows equivalent of the Brauser service agent runs.** Retargeted 2026-10-26: the cleared-allowlisted-environment harness lockdown this item described is superseded by open access (spec docs/superpowers/specs/2026-10-26-open-access-and-agent-service-design.md). Agent runs now happen in the per-user Brauser service, which is… _(P2; deferred)_
 - [ ] `brwr-i1g` **[human] Accept the core Chrome workflow on Windows.** Windows is in scope (DESIGN §14, reinstated 2026-10-16). Open access PR 1 carries a windows-latest CI job (brwr-bzx). After Windows CI is green and a documented Windows baseline exists, record a real Chrome development run for native host registration, the knowledge base folder… _(P2; labels: human)_
 - [ ] `brwr-sm2` **Summaries: related open tabs.** John wants each summary to name the other tabs open at the time that relate to the artifact. Needs new data flow: the extension sends a bounded list of the window's other tabs (title, URL; no page text) with start_summary (protocol change, additive), the host writes it into… _(P2; blocked)_
@@ -242,6 +239,10 @@ Completed foundations: Open access PR 1 (`brwr-oa1`, #69) and PR 2 (`brwr-sv2`, 
 - **Category:** New Capability. **Recall full task instructions without losing a draft (2026-11-02).** ArrowUp and ArrowDown browse retained user instructions, preserve edits and restore the unsent draft. Lazy service reads use full records, keep cross-page chronology and discard late replacements after typing, Reuse, submission or teardown; no second persistent history is written. **Metrics:** 51 focused cases pass; 16 new offline cases across this cycle, all 44 extension files and required/README gates green with explicit sandbox skips.
 
 - **Category:** Bug Fix. **Tell agents when browser capture is only an excerpt (2026-11-02).** Manual summaries, automatic summaries and tasks preserve the extractor truncation flag, disclose the cut before page content and select fixed instructions from stored run metadata. Queued recovery keeps that provenance; summaries retrieve the full artifact or report limited reading, while tasks retain the user request boundary. Host and extension deploy together. **Metrics:** 1,374 Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension files; 12 new regressions, both Clippy builds, 2 accessibility fixtures pass and 36 browser cases explicitly skip.
+
+- **Category:** User Experience. **Show how much the summary agent read (2026-11-02).** Summary run cards and Tasks detail put the validated whole-artifact, partial-artifact or browser-page-only reading label beside the overview through one text-only formatter. Legacy answers omit the label, access walls keep their explanation, and the card preserves separate overview/scope/metadata lines. Host and extension deploy together; stored answers and retrieval permissions are unchanged. **Metrics:** 1,369 workspace Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension test files; both Clippy configurations; 2 accessibility fixtures pass and 36 browser cases explicitly skip. Two new Rust cases and eight new built panel/detail cases; 125 focused extension cases pass.
+
+- **Category:** Bug Fix. **Honor capture pause before starting automatic summaries (2026-11-02).** The host refreshes capture settings under its existing admission lock and returns disabled before service contact when capture is paused, including requests read under older settings. Explicit summaries remain available, and already admitted runs keep their lifecycle. **Metrics:** 1,369 workspace Rust-reported outcomes (94 explicit IPC sandbox skips), all 41 extension test files; both Clippy configurations; 2 accessibility fixtures pass and 36 browser cases explicitly skip. One new failing-first native regression covers fresh/stale pause and manual forwarding.
 
 - **Category:** Bug Fix. **Retry viewer-only summaries on a new local day (2026-11-02).** Browser suppression expires by local calendar day without restarting Chrome, while retaining dwell and retry state. A late reply carries the request day and cannot suppress the newly eligible day. Older undated caches expire once; the host still decides whether another summary is needed. **Metrics:** 14 pure-state tests pass in UTC and Pacific time; 102 worker cases pass, including same-session rollover and delayed midnight replies; full gate green with explicit sandbox skips.
 
@@ -1948,6 +1949,50 @@ be rechecked by the native automatic-start path after page extraction. For
 product value after the P2 work, expose read scope in summary cards
 (brwr-rr93), so people can tell a viewer-only overview from a complete read.
 
+
+## Asks for John
+
+- `brwr-sm2` (related open tabs): should summaries consider tabs in the current
+  window or all windows, and all HTTP(S) tabs or only recognized artifacts?
+  The bead leaves both product choices open. Implementation waits for the
+  coordinator to record those decisions; no scope is inferred overnight.
+
+
+### Cycle observations (2026-11-02 — paused admission and visible reading scope)
+
+Started clean on b00a6802 with no quarantine report. Both the required and
+README health gates passed before work. The three assigned Re-learn beads
+remain blocked on their existing human/held integration chain; none of those
+states or labels changed. Ready P2 brwr-sm2 still leaves window/tab scope
+open, and brwr-sm5 has an archived implementation awaiting driver/coordinator
+integration. Selected the next decided P2 brwr-q0i4, then the independent
+user-facing brwr-rr93 follow-up. Their acceptance criteria now hold locally.
+
+Full gate passed again after one review P3: preserve answer-line newlines
+in the card's CSS. No P1/P2 findings. Final logs are in
+`target/cookie-cycle/final-gate.log`: 1,369 workspace Rust-reported outcomes
+(94 explicit IPC skips), all 41 extension files, both Clippy configurations,
+2 accessibility fixture passes and 36 browser skips. README checks also pass
+(10,696 inert Markdown renderings, 8 script files, 221 Python cases with
+92 platform skips). Eleven new test cases across the cycle; 125 focused
+extension cases pass. The built fake DOM proves text and response handling,
+not real Chrome layout or screen-reader behavior. Smoke steps and dialog
+counts are unchanged. Host and extension must deploy together for scope.
+
+The initial combined no-isolation focused test invocation mixed unrelated
+global mock timers. Running each file in a fresh process, as its harness
+expects, passes. The new protocol test also preserves the established Serde
+optional-field convention: schema/extension reject null, Rust reads it as
+absent; the host never emits it. Neither issue required a production redesign.
+
+The next useful product work is the related-tabs capability once its two
+scope decisions are recorded (ask retained above and posted to Wardroom).
+Recover archived brwr-sm5 through the driver/coordinator instead of duplicating
+it. New proposal brwr-30xv brings reading scope to saved-summary selection in
+Recent and This page; it is discovered-from brwr-rr93, not assigned. Prefer
+contextual capabilities over another automatic-summary hardening loop once
+the remaining P2 work is resolved. Driver owns commit/publication and its
+independent approval; no live service, real harness/API or git remote used.
 
 ### Cycle observations (2026-11-02 — complete capture-limit disclosure)
 

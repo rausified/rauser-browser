@@ -164,22 +164,25 @@ function isSiteDraftAnswer(value: unknown): boolean {
 const IMPORTANCE_LEVELS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 
 const ANSWER_ACCESS: ReadonlySet<string> = new Set(["ok", "sign_in", "denied", "not_found"]);
+const ANSWER_READ_SCOPES: ReadonlySet<string> = new Set(["whole", "partial", "page_only"]);
 
 function isOverview(value: unknown): boolean {
   return typeof value === "string" && value.length > 0 && Array.from(value).length <= 300;
 }
 
 /** The `RunAnswer` keys: `overview` is optional for results retained from
- * before SUMMARY.md v2, and the host sends `access` only for a wall the agent
- * met (an older service never sends it). */
+ * before SUMMARY.md v2, `read_scope` is absent for legacy results, and the
+ * host sends `access` only for a wall the agent met. */
 function isRunAnswer(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const answer = value as Record<string, unknown>;
   const hasOverview = Object.hasOwn(answer, "overview");
   const hasAccess = Object.hasOwn(answer, "access");
-  return Object.keys(answer).length === 4 + Number(hasOverview) + Number(hasAccess) &&
+  const hasScope = Object.hasOwn(answer, "read_scope");
+  return Object.keys(answer).length === 4 + Number(hasOverview) + Number(hasAccess) + Number(hasScope) &&
     (!hasOverview || isOverview(answer.overview)) &&
     (!hasAccess || (typeof answer.access === "string" && ANSWER_ACCESS.has(answer.access))) &&
+    (!hasScope || (typeof answer.read_scope === "string" && ANSWER_READ_SCOPES.has(answer.read_scope))) &&
     typeof answer.document_type === "string" && typeof answer.category === "string" &&
     typeof answer.importance === "string" && IMPORTANCE_LEVELS.has(answer.importance) &&
     typeof answer.importance_reason === "string";

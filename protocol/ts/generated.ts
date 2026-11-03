@@ -645,12 +645,15 @@ export type ImportanceLevel = "high" | "medium" | "low";
 
 export interface RunAnswer {
   overview?: string;
+  read_scope?: AnswerReadScope;
   document_type: string;
   category: string;
   importance: ImportanceLevel;
   importance_reason: string;
   access?: AnswerAccess;
 }
+
+export type AnswerReadScope = "whole" | "partial" | "page_only";
 
 export type AnswerAccess = "ok" | "sign_in" | "denied" | "not_found";
 
