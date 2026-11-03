@@ -19,9 +19,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Docs-only changes (root Markdown, docs/**, .beads/**; scripts/ci-changes.mjs
-  # has the exact rule) skip the macOS and Windows builds and run the cheap
-  # docs-checks job instead. A PR compares its merge commit with that commit's
+  # Docs-only changes (root Markdown, docs/**, .beads/** config;
+  # scripts/ci-changes.mjs has the exact rule) skip the macOS and Windows
+  # builds and run the cheap docs-checks job instead. A PR compares its merge commit with that commit's
   # base parent; a merge group compares its head with the queue's base commit.
   # Pushes to main always build.
   changes:
@@ -77,33 +77,10 @@ jobs:
           python-version: "3.11"
       - name: Check contributor status documentation
         run: python scripts/check_current_state.py
-      # Fails only on queue disagreements this change adds, so a disagreement
-      # already on the base does not block every unrelated docs change (it
-      # still shows as a warning); the PR that fixes it passes either way.
-      - name: Check the work queue's two views agree
-        env:
-          BASE: ${{ needs.changes.outputs.base }}
-        run: |
-          if python scripts/check_queue_consistency.py; then exit 0; fi
-          git cat-file -e "$BASE^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$BASE"
-          dir="$RUNNER_TEMP/queue-base"
-          mkdir -p "$dir"
-          git show "$BASE:.beads/issues.jsonl" > "$dir/issues.jsonl" || true
-          git show "$BASE:BOSUN_FEATURE_BACKLOG.md" > "$dir/backlog.md" || true
-          python scripts/check_queue_consistency.py --json > "$dir/head.json" || true
-          python scripts/check_queue_consistency.py --json --issues "$dir/issues.jsonl" --backlog "$dir/backlog.md" > "$dir/base.json" || true
-          if jq -e '.status == "error"' "$dir/head.json" > /dev/null; then exit 1; fi
-          # Counted per detail, so a second copy of a base disagreement is new.
-          added=$(jq -r --slurpfile base "$dir/base.json" '
-            (reduce ($base[0].violations[]?.detail) as $d ({}; .[$d] += 1)) as $b
-            | reduce (.violations[]?.detail) as $d ({}; .[$d] += 1)
-            | to_entries[] | select(.value > ($b[.key] // 0)) | .key' "$dir/head.json")
-          if [ -n "$added" ]; then
-            echo "::error::This change adds queue disagreements:"
-            echo "$added"
-            exit 1
-          fi
-          echo "::warning::The queue views already disagree on the base commit; this change adds no new disagreement."
+      # The work queue lives on the beads branch, which has its own check
+      # (queue-check.yml there, on every push); check_current_state.py above
+      # fails a change that commits a queue file here. The queue tools' own
+      # tests are scripts, so a change to them is code and builds.
 
   # Every platform runs the same steps from build-os.yml. macOS runs only for
   # a change that can behave differently there (scripts/ci-macos.mjs: macOS

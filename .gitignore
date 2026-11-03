@@ -46,3 +46,9 @@ BOSUN_FEATURE_BACKLOG.md.bak-*
 # Python bytecode from scripts/ (render_backlog.py and its tests)
 __pycache__/
 .wardroom/
+
+# The work queue lives on the `beads` branch (AGENTS.md "Work queue"); edit it
+# in `scripts/dev/queue path` and publish with `scripts/dev/queue push`. bd's
+# auto-export may still write .beads/issues.jsonl here; never commit it.
+/.beads/issues.jsonl
+/BOSUN_FEATURE_BACKLOG.md

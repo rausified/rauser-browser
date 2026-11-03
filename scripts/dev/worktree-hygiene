@@ -23,7 +23,8 @@ A candidate is kept, with the reason printed, when it
   * has any process with its cwd or an open file inside it (lsof),
   * is named by the Chrome native-messaging manifest or the Brauser
     LaunchAgent plist (a live install may be running from it),
-  * is locked (`git worktree lock`), is the main worktree, or is missing.
+  * is locked (`git worktree lock`), is the main worktree, is the shared
+    work-queue worktree (branch `beads`, scripts/dev/queue), or is missing.
 If lsof cannot be run, every candidate is kept (fail closed).
 
 Nothing changes without --apply; removal is plain `git worktree remove`
@@ -83,6 +84,11 @@ def git(cwd: Path | str, *args: str, check: bool = True) -> subprocess.Completed
     if check and proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed in {cwd}: {proc.stderr.strip()}")
     return proc
+
+
+# The beads branch's worktree is shared by every session (scripts/dev/queue
+# path); it never merges into main, so it is never finished.
+QUEUE_BRANCH = "beads"
 
 
 @dataclass
@@ -367,6 +373,9 @@ def classify(repo: Path, tree: Worktree, base: str, pr_lookup: Optional[PrLookup
     v = Verdict(tree)
     if tree.main or tree.bare:
         v.why = "main worktree"
+        return v
+    if tree.branch == QUEUE_BRANCH:
+        v.why = "the shared work-queue worktree (scripts/dev/queue)"
         return v
     if tree.prunable or not tree.path.exists():
         v.why = "directory is missing (run `git worktree prune`)"

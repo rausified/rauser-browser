@@ -28,9 +28,9 @@ const CONFLUENCE = [
   "README.md",
   "docs/adapters/confluence.page.md",
 ];
+// Its queue edits (.beads/issues.jsonl, BOSUN_FEATURE_BACKLOG.md) now go to
+// the beads branch, not into the change.
 const MIRO = [
-  ".beads/issues.jsonl",
-  "BOSUN_FEATURE_BACKLOG.md",
   "DESIGN.md",
   "README.md",
   "adapter-templates.md",
@@ -51,12 +51,12 @@ test("the Confluence and Miro starter changes are in scope", () => {
   assert.deepEqual(outOfScope(MIRO), []);
 });
 
-test("docs, queue files and site-draft fixtures are in scope", () => {
+test("docs, beads config and site-draft fixtures are in scope", () => {
   for (const file of [
     "AGENTS.md",
     "TESTING.md",
     "docs/adapters/github.pr.md",
-    ".beads/issues.jsonl",
+    ".beads/config.yaml",
     "extension/capture-site-handoff.ts",
     "extension/site-coverage.ts",
     "extension/tests/a11y/pages.test.mjs",
@@ -112,16 +112,16 @@ test("the Confluence change runs every extension, engine and host check plus a11
   ]);
 });
 
-test("the Miro change checks the queue and skips a11y (no page markup changed)", () => {
+test("the Miro change skips a11y (no page markup changed)", () => {
   const steps = names(MIRO);
-  assert.ok(steps.includes("queue consistency"));
   assert.ok(!steps.includes("test:a11y"));
   assert.ok(steps.includes("host capture_site tests"));
 });
 
 test("a docs-only change runs only the cheap docs checks", () => {
   assert.deepEqual(names(["docs/adapters/miro.board.md", "README.md"]), ["status docs"]);
-  assert.deepEqual(names([".beads/issues.jsonl"]), ["status docs", "queue consistency"]);
+  // status docs also refuses a committed queue file (check_current_state.py).
+  assert.deepEqual(names([".beads/issues.jsonl"]), ["status docs"]);
 });
 
 test("a vectors-only change skips the host and Rust lints", () => {

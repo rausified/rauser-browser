@@ -1,19 +1,34 @@
 #!/usr/bin/env python3
 """Keep the short project-status summaries aligned with shipped M1.5a work.
 
-Also runs scripts/check_improvement_feed.py, so CI checks the feed's layout.
+Also runs scripts/check_improvement_feed.py, so CI checks the feed's layout,
+and fails when the work queue is committed here: `.beads/issues.jsonl` and
+`BOSUN_FEATURE_BACKLOG.md` live on the `beads` branch (AGENTS.md "Work queue").
 """
 
 from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 import sys
 
 import check_improvement_feed
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+QUEUE_FILES = (".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md")
+
+
+def committed_queue_files(root: pathlib.Path) -> list[str]:
+    """Queue files tracked in ROOT's checkout (they belong on the beads branch)."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--", *QUEUE_FILES], cwd=root, capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return []
+    return result.stdout.split() if result.returncode == 0 else []
 
 
 def normalized(text: str) -> str:
@@ -164,6 +179,12 @@ def main() -> int:
         errors.append("DESIGN.md status no longer records shipped record keys and views")
 
     errors.extend(check_improvement_feed.check(ROOT))
+    for file in committed_queue_files(ROOT):
+        errors.append(
+            f"{file} is committed, but the work queue lives on the beads branch: "
+            f"`git rm --cached {file}`, and publish bead edits with scripts/dev/queue push "
+            f"(AGENTS.md \"Work queue\")"
+        )
 
     for error in errors:
         print(error, file=sys.stderr)

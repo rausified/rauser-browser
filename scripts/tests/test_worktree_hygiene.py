@@ -185,6 +185,17 @@ class Candidates(Fixture):
             self.assertEqual(self.line_for(out, path)[0], "skip", out)
             self.assertTrue(path.exists())
 
+    def test_the_shared_queue_worktree_is_never_a_candidate(self):
+        # Even when its branch tip is merged into main, as a branch cut from
+        # main and merged back would be.
+        path = self.merged_worktree("repo-queue-beads", "beads")
+        code, out = self.hygiene("--apply")
+        self.assertEqual(code, 0, out)
+        action, line = self.line_for(out, path)
+        self.assertEqual(action, "skip")
+        self.assertIn("work-queue worktree", line)
+        self.assertTrue(path.exists())
+
     def test_detached_worktree_at_main_is_not_a_candidate(self):
         path = self.worktree("wt-detached")
         _, out = self.hygiene("--apply")
