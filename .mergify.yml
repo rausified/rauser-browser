@@ -4,10 +4,12 @@
 # personal account. Mergify tests each queued PR on top of current main and
 # merges it with a merge commit, one PR at a time.
 #
-# Entering the queue: the `queue` label (`gh pr edit <n> --add-label queue`).
-# `gh pr merge --auto --merge <n>` also works: .github/workflows/mergify-enqueue.yml
-# turns an auto-merge request into the label and disarms GitHub's auto-merge,
-# so Mergify is the only thing that merges. Removing the label dequeues.
+# Entering the queue: the `queue` label (`gh pr edit <n> --add-label queue`),
+# the only supported way in. Never `gh pr merge` a PR into main: on a PR whose
+# checks are already green, even `--auto` merges at once, around the queue.
+# .github/workflows/mergify-enqueue.yml is only a safety net: an auto-merge
+# someone arms anyway on a pending PR becomes the label and is disarmed.
+# Removing the label dequeues.
 #
 # How a PR is tested: Mergify opens a draft PR on a `mergify/merge-queue/<hex>`
 # branch (main plus the PR), CI runs on it through ordinary pull_request events,

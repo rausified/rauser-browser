@@ -1,11 +1,13 @@
 name: Mergify enqueue
 
-# `gh pr merge --auto --merge <n>` (how sessions and Cookie's driver have
-# always merged) now means "put it in the Mergify queue" (.mergify.yml,
-# AGENTS.md "Review and merge cadence"). Mergify cannot see GitHub's
-# auto-merge, so this adds the `queue` label it does see, then disarms
-# GitHub's auto-merge: left armed, GitHub would merge the PR itself as soon as
-# its checks pass, around the queue.
+# Safety net only. The way into main's Mergify queue is the `queue` label
+# (`gh pr edit <n> --add-label queue`; .mergify.yml, AGENTS.md "Review and
+# merge cadence"), never `gh pr merge`. This catches a GitHub auto-merge armed
+# anyway on a PR whose checks are still pending: Mergify cannot see
+# auto-merge, so it adds the label Mergify does see, then disarms the
+# auto-merge, which would otherwise merge the PR around the queue once its
+# checks pass. It cannot help a PR whose checks were already green: there
+# `gh pr merge --auto` merges at once and no auto_merge_enabled event fires.
 #
 # pull_request_target so fork PRs get a write token too. Safe: nothing from
 # the PR is checked out or run; only its number is used.
