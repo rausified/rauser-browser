@@ -68,6 +68,55 @@ test("worklog curation selects and copies checked work entirely by keyboard", as
   await audit(t, page, "panel/selected-work-all");
 });
 
+test("the worklog period segments are one tab stop that arrows move, with a visible ring", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await enterPanelTab(page, "tab-recent");
+  await page.locator("#copy-worklog:enabled").waitFor();
+  for (let n = 0; n < 40 && !(await page.locator("#worklog-today").evaluate((input) => input === document.activeElement)); n++) {
+    await page.keyboard.press("Tab");
+  }
+  await focused(page, "#worklog-today");
+  assert.equal(await page.getByRole("radio").count(), 3);
+  assert.equal(await page.getByRole("group", { name: "Worklog period" }).count(), 1);
+  const ring = await page.locator('label[for="worklog-today"]').evaluate((label) => getComputedStyle(label).outlineStyle);
+  assert.equal(ring, "solid", "the focused segment's label carries the focus ring");
+  const before = await page.evaluate(() => fixture.requests.filter((r) => r.type === "worklog_report").length);
+  await page.keyboard.press("ArrowRight");
+  await focused(page, "#worklog-yesterday");
+  assert.equal(await page.locator("#worklog-yesterday").isChecked(), true);
+  assert.equal(await page.locator("#worklog-today").isChecked(), false);
+  await page.waitForFunction((count) => fixture.requests.filter((r) => r.type === "worklog_report").length > count, before);
+  const range = await page.evaluate(() => fixture.requests.filter((r) => r.type === "worklog_report").at(-1));
+  assert.equal(range.start_date, range.end_date, "Yesterday is one day");
+  // Tab leaves the group: the other segments are not tab stops.
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("name")), null);
+  await audit(t, page, "panel/worklog-period");
+});
+
+test("a summarized page's re-summarize icon sits in the Summary card, named and keyboard-operable", async (t) => {
+  for (const colorScheme of ["light", "dark"]) {
+    const page = await browserFixture(t, "panel", "configured", { colorScheme, summary: {
+      summarized_at: "2026-11-02T10:00:00-07:00", document_type: "report", category: "work", importance: "high",
+      summary_path: "summaries/2026-11-02 Work item.md", harness: "codex", overview: "A fixture overview.",
+    } });
+    if (!page) return;
+    await page.locator("#page-summary:visible").waitFor();
+    assert.equal(await page.locator("#page-summary-head #summarize").count(), 1);
+    assert.equal(await page.locator("#page-actions #summarize").count(), 0);
+    await page.getByRole("button", { name: "Summarize again" }).waitFor();
+    // Only the icon shows: the label is clipped to the visually hidden 1px box.
+    const box = await page.locator("#summarize-label").boundingBox();
+    assert.ok(box && box.width <= 1 && box.height <= 1, `label box ${JSON.stringify(box)}`);
+    assert.ok((await page.locator("#summarize .summarize-icon").boundingBox())?.width > 1, "the icon shows");
+    await activate(page, "#summarize");
+    await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_run"));
+    await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
+    await audit(t, page, `panel/summary-card-${colorScheme}`);
+  }
+});
+
 test("Capture Site and Page patterns open by keyboard, escape and return focus", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

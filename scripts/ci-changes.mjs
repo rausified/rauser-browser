@@ -1,16 +1,19 @@
 // CI change classifier (AGENTS.md "Review and merge cadence"): decides whether a
-// pull request or merge group touches only docs and work-queue files, so
+// pull request or merge group touches only docs and beads configuration, so
 // .github/workflows/ci.yml can skip the macOS and Windows builds and run the
-// cheap docs/queue checks instead. Nothing builds, tests or ships from these
+// cheap docs checks instead. Nothing builds, tests or ships from these
 // paths, so skipping the builds for them is safe:
 //
 // - Markdown at the repository root (AGENTS.md, DESIGN.md, TESTING.md,
-//   README.md, BOSUN_FEATURE_BACKLOG.md, CookieFeature.md,
-//   PENDING_AMOS_DOC_UPDATES.md, adapter-templates.md, ...). README.md and
-//   the status lines are checked by scripts/check_current_state.py, which the
-//   docs job still runs.
+//   README.md, CookieFeature.md, PENDING_AMOS_DOC_UPDATES.md,
+//   adapter-templates.md, ...). README.md and the status lines are checked by
+//   scripts/check_current_state.py, which the docs job still runs.
 // - Anything under docs/ (plans, specs, history, starter-adapter notes).
-// - Anything under .beads/ (the work queue).
+// - Anything under .beads/ (bd's configuration; the queue itself lives in
+//   bd's Dolt database, synced through refs/dolt/data, and
+//   BOSUN_FEATURE_BACKLOG.md is rendered, never committed). A change that commits either queue file
+//   to main is still docs-only here, and check_current_state.py, which every
+//   CI path runs, fails it (AGENTS.md "Work queue").
 //
 // Everything else is code, including SUMMARY.md at the root (the native host
 // compiles it in as the page-summary prompt, so its tests must run) and
@@ -19,12 +22,18 @@
 // are read by tests or define the protocol). An empty change list is never
 // docs-only, so a diff that found nothing (or failed) runs the full builds.
 //
+// It also decides, through scripts/ci-macos.mjs, whether a code change needs
+// the macOS build.
+//
 // Usage: node scripts/ci-changes.mjs <base> <head>
-// Prints the changed paths and `docs_only=true|false`, and appends
-// `docs_only=...` to $GITHUB_OUTPUT when it is set. Exits 1 if git fails.
+// Prints the changed paths, `docs_only=true|false` and `macos=true|false`,
+// and appends both to $GITHUB_OUTPUT when it is set. Exits 1 if git fails.
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+import { macosReasons, parseChangedLines } from "./ci-macos.mjs";
 
 const DOCS_DIRS = ["docs/", ".beads/"];
 /** Root Markdown that a build reads, so it is code. */
@@ -48,6 +57,16 @@ export function parseNameList(output) {
   return output.split("\0").filter((path) => path !== "");
 }
 
+/** The commit under test as scripts/ci-macos.mjs reads it: the checkout is `head`. */
+function gitRepo(base) {
+  const git = (...args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+  return {
+    read: (file) => { try { return readFileSync(file, "utf8"); } catch { return null; } },
+    readBase: (file) => { try { return git("show", `${base}:${file}`); } catch { return null; } },
+    hostRust: () => parseNameList(git("ls-files", "-z", "--", "host/*.rs", "host/**/*.rs")),
+  };
+}
+
 function main(argv) {
   const [base, head] = argv;
   if (!base || !head) throw new Error("usage: node scripts/ci-changes.mjs <base> <head>");
@@ -60,11 +79,28 @@ function main(argv) {
   const paths = parseNameList(output);
   for (const path of paths) console.log(`${isDocsOrQueuePath(path) ? "docs " : "code "} ${JSON.stringify(path)}`);
   const docsOnly = classify(paths);
+  let macos = false;
+  if (!docsOnly) {
+    const rustDiff = execFileSync("git", ["diff", "-U0", "--no-renames", "--no-color", base, head, "--", "host/*.rs", "host/**/*.rs"], {
+      encoding: "utf8",
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    const reasons = macosReasons(paths, gitRepo(base), parseChangedLines(rustDiff));
+    for (const [path, why] of reasons) console.log(`macos ${JSON.stringify(path)}: ${why}`);
+    macos = reasons.length > 0;
+  }
   console.log(`docs_only=${docsOnly}`);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `docs_only=${docsOnly}\n`);
+  console.log(`macos=${macos}`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `docs_only=${docsOnly}\nmacos=${macos}\n`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compare real paths: argv[1] may go through a symlink or contain characters
+// a file URL escapes (spaces, Windows drive letters).
+function isEntryPoint() {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? "")).href; } catch { return false; }
+}
+
+if (isEntryPoint()) {
   try {
     main(process.argv.slice(2));
   } catch (error) {

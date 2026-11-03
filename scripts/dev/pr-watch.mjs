@@ -9,9 +9,10 @@
 //                                [--max-minutes N] [--repo owner/name] [--once]
 //
 // Rules it encodes (each one cost a PR hours before it existed):
-//   - BEHIND, pending checks, a merge-hold or a merge-queue entry: keep
-//     waiting. Never merge main into a PR just to be current; every push
-//     cancels the in-flight ~40-minute macOS run (ci.yml cancel-in-progress).
+//   - BEHIND, pending checks or a Mergify queue entry (the `queue` label,
+//     .mergify.yml): keep waiting. Never merge main into a PR just to be
+//     current; the queue tests it on top of main, and every push cancels the
+//     in-flight ~40-minute macOS run (ci.yml cancel-in-progress).
 //   - DIRTY: pr-doctor (every 20 minutes and on every push to main) repairs
 //     bookkeeping and both-sides-appended Markdown conflicts. The watcher
 //     predicts whether the doctor can, from the same pure functions, and waits
@@ -24,27 +25,109 @@
 // Exit codes (also in EXIT below): 0 done (merged, or green with
 // --until green); 1 error; 2 usage; 3 still waiting (--once, or
 // --max-minutes reached); 10 a required check failed; 11 conflicts need you;
-// 12 checks green but auto-merge is off; 13 closed without merging; 14 draft;
-// 15 a required check was cancelled and nothing replaced it.
+// 12 not queued: green with no `queue` label, or GitHub auto-merge armed
+// (which merges around the queue); 13 closed without merging; 14 draft; 15 a
+// required check was cancelled and nothing replaced it; 16 labeled `queue` but
+// Mergify will not admit it (an exclusion label, or no admission within
+// ADMIT_GRACE_MINUTES). A failed Mergify queue run (dequeued) is 10.
 //
 // Read-only on GitHub. Locally it runs only `git merge-tree` and `git cat-file`
 // (GIT_OPTIONAL_LOCKS=0; merge-tree may add objects, never touches the index,
 // refs or working tree), and only when the local clone already has both commits.
 
 import { spawnSync } from "node:child_process";
+import { Buffer } from "node:buffer";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { LABEL as NEEDS_MERGE_LABEL, MARKER as DOCTOR_MARKER, resolveAppendOnly } from "../pr-doctor.mjs";
-import { HOLD_LABEL, STATUS_CONTEXT as HOLD_CONTEXT } from "../merge-hold.mjs";
+import { LABEL as NEEDS_MERGE_LABEL, MARKER as DOCTOR_MARKER, SKIP_LABEL as DOCTOR_SKIP_LABEL, FRAME_PATH, QUEUE_FILES, resolveAppendOnly } from "../pr-doctor.mjs";
 
 export const EXIT = Object.freeze({
   DONE: 0, ERROR: 1, USAGE: 2, WAITING: 3,
-  CHECK_FAILED: 10, CONFLICT: 11, ARM_AUTO_MERGE: 12, CLOSED: 13, DRAFT: 14, CANCELLED: 15,
+  CHECK_FAILED: 10, CONFLICT: 11, ENQUEUE: 12, CLOSED: 13, DRAFT: 14, CANCELLED: 15, QUEUE_BLOCKED: 16,
 });
 
-// pr-doctor resolves these through render_backlog.py --resolve (scripts/pr-doctor.mjs).
-export const DOCTOR_BOOKKEEPING = Object.freeze([".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md"]);
+// .mergify.yml: the label that requests admission, the labels whose presence
+// keeps a PR out (queue_conditions), and the check run Mergify keeps on every
+// PR into main, queued or not. The label is a request; membership is the
+// check's title (and the state Mergify embeds in its summary), never its
+// status: "Merge queue is ready" (not queued), "Waiting for queue conditions
+// to match" (labeled, not admitted), "Queued · estimated merge …" or "Running
+// merge queue checks" (in the queue), "Merged via merge queue". Seen live
+// 2026-11-03 (#265, #268, #276-#289).
+export const QUEUE_LABEL = "queue";
+// worker-contract.json merge.comment: posted after the label, it queues the PR
+// even where label-only auto-queue is off (Mergify's Merge Protections are not
+// activated in the dashboard), which leaves a labeled PR at "Merge queue is ready".
+export const QUEUE_COMMENT = "@Mergifyio queue";
+export const QUEUE_EXCLUSION_LABELS = Object.freeze([NEEDS_MERGE_LABEL, DOCTOR_SKIP_LABEL]);
+export const MERGIFY_QUEUE_CHECK = "Mergify Merge Queue";
+// Green and labeled but not admitted for this long: say so instead of waiting.
+// Mergify re-evaluates within seconds of a check or label event, so a PR still
+// "Waiting for queue conditions" after CONDITIONS_GRACE_MINUTES is stuck; with
+// no Mergify verdict at all, allow ADMIT_GRACE_MINUTES.
+export const ADMIT_GRACE_MINUTES = 10;
+export const CONDITIONS_GRACE_MINUTES = 5;
+
+/** The state Mergify embeds in its check summary (`<span itemprop="mergify.v1.<base64url JSON>">`), or null. */
+export function mergifyMeta(summary) {
+  const encoded = /itemprop="mergify\.v1\.([A-Za-z0-9_-]+=*)"/.exec(summary ?? "")?.[1];
+  if (!encoded) return null;
+  try { return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")); } catch { return null; }
+}
+
+/** The leaf conditions that keep a PR out of the queue, from Mergify's condition
+ * tree. An unmet "any of" group of plain alternatives is reported as "a or b",
+ * unless one of them is already listed (branch protection repeats each check
+ * as success/neutral/skipped). */
+export function unmetConditions(nodes) {
+  const out = [];
+  const walk = (node) => {
+    if (node.match) return;
+    const subs = node.subconditions ?? [];
+    if (subs.length === 0) { out.push(node.description); return; }
+    if (node.description === "any of" && subs.length > 1) {
+      if (subs.every((sub) => (sub.subconditions ?? []).length === 0)) {
+        if (!subs.some((sub) => out.includes(sub.description))) out.push(subs.map((sub) => sub.description).join(" or "));
+        return;
+      }
+      walk(subs.find((sub) => !sub.match) ?? subs[0]);
+      return;
+    }
+    subs.forEach(walk);
+  };
+  (nodes ?? []).forEach(walk);
+  return [...new Set(out)];
+}
+
+/** Fallback when the summary carries no embedded state: its unchecked `- [ ] \`cond\`` lines. */
+function unmetFromMarkdown(summary) {
+  return [...new Set([...(summary ?? "").matchAll(/^\s*- \[ \] `([^`]+)`/gm)].map((m) => m[1]))];
+}
+
+/** Where the "Mergify Merge Queue" check says the PR is: phase is one of none,
+ * ready, waiting, queued, merged, dequeued or unknown; `unmet` lists the queue
+ * conditions Mergify reports unmet while it waits. */
+export function mergifyQueueStatus(check) {
+  if (!check) return { phase: "none", unmet: [], title: "" };
+  const title = check.title ?? "";
+  const meta = mergifyMeta(check.summary);
+  const unmet = meta?.required_conditions ? unmetConditions(meta.required_conditions) : unmetFromMarkdown(check.summary);
+  let phase = "unknown";
+  if (FAILED.has(check.state)) phase = "dequeued";
+  else if (/^Merged\b/i.test(title)) phase = "merged";
+  else if (meta?.queued_at || /^(Queued\b|Running merge queue checks)/i.test(title)) phase = "queued";
+  else if (meta?.state === "waiting" || /^Waiting for queue conditions/i.test(title)) phase = "waiting";
+  else if (/^Merge queue is ready/i.test(title)) phase = "ready";
+  return { phase, unmet: phase === "waiting" ? unmet : [], title };
+}
+
+// The work queue left git for bd's Dolt database; a PR that still edits it
+// conflicts there, and pr-doctor applies the edits through bd (scripts/pr-doctor.mjs).
+// GitHub (and merge-tree) pair the deleted backlog with the new frame as a
+// rename, so such a PR may also show the frame as conflicted; the doctor drops
+// the queue files before it merges, so that conflict never happens there.
+export const DOCTOR_BOOKKEEPING = Object.freeze([...QUEUE_FILES, FRAME_PATH]);
 export const DOCTOR_CYCLE_MINUTES = 20;
 // One doctor cycle plus the run's own few minutes and cron lateness.
 export const DOCTOR_GRACE_MINUTES = 30;
@@ -54,7 +137,7 @@ const PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
 // CI jobs that feed the required "Build and check" gate (ci.yml build-gate):
 // a failure here fails the gate, so it is reported before the gate finishes.
-const GATE_INPUT = /^(Classify changes|Docs and queue checks|macOS|Windows|Detect macOS runner starvation)\b/;
+const GATE_INPUT = /^(Classify changes|Docs and queue checks|Accessibility|macOS|Windows|Detect macOS runner starvation)\b/;
 const MACOS_PRIMARY = /^macOS \/ .*\(macos-15\)$/;
 const STARVATION_CHECK = "Detect macOS runner starvation";
 const MACOS_FALLBACK = /^macOS fallback\b/;
@@ -93,7 +176,7 @@ export function latestChecks(contexts) {
     const check = node.__typename === "StatusContext"
       ? { kind: "status", name: node.context, state: node.state, required: !!node.isRequired,
         description: node.description ?? "", runId: null, order: "" }
-      : { kind: "check", name: node.name, required: !!node.isRequired,
+      : { kind: "check", name: node.name, required: !!node.isRequired, title: node.title ?? "", summary: node.summary ?? "",
         state: node.status === "COMPLETED" ? node.conclusion ?? "NEUTRAL" : node.status ?? "PENDING",
         runId: node.checkSuite?.workflowRun?.databaseId ?? null,
         workflow: node.checkSuite?.workflowRun?.workflow?.name ?? "",
@@ -115,11 +198,10 @@ export function snapshotFromGraphql(data) {
     isDraft: !!pr.isDraft,
     mergeable: pr.mergeable,
     mergeStateStatus: pr.mergeStateStatus,
-    isInMergeQueue: !!pr.isInMergeQueue,
-    queuePosition: pr.mergeQueueEntry?.position ?? null,
-    mergeQueueEnabled: !!repo.mergeQueue,
     autoMerge: pr.autoMergeRequest != null,
     labels: (pr.labels?.nodes ?? []).map((label) => label.name),
+    queueRequested: (pr.labels?.nodes ?? []).some((label) => label.name === QUEUE_LABEL),
+    queueBlockers: (pr.labels?.nodes ?? []).map((label) => label.name).filter((name) => QUEUE_EXCLUSION_LABELS.includes(name)),
     headRefName: pr.headRefName,
     headOid: pr.headRefOid,
     mainOid: repo.main?.target?.oid ?? null,
@@ -130,11 +212,10 @@ export function snapshotFromGraphql(data) {
 const isPending = (check) => !FAILED.has(check.state) && !PASSED.has(check.state) && check.state !== "CANCELLED";
 const short = (names, max = 3) => names.length <= max ? names.join(", ") : `${names.slice(0, max).join(", ")} +${names.length - max}`;
 
-/** What the head commit's checks say: failures, cancellations, waits, the hold. */
+/** What the head commit's checks say: failures, cancellations, waits, the queue. */
 export function analyzeChecks(checks) {
   const blocking = checks.filter((check) => check.required || (check.kind === "check" && GATE_INPUT.test(check.name)));
-  const hold = checks.find((check) => check.kind === "status" && check.name === HOLD_CONTEXT);
-  const holders = hold && hold.state === "PENDING" ? [...hold.description.matchAll(/#(\d+)/g)].map((m) => Number(m[1])) : [];
+  const queue = checks.find((check) => check.name === MERGIFY_QUEUE_CHECK);
 
   const macos = checks.find((check) => MACOS_PRIMARY.test(check.name));
   const starvation = checks.find((check) => check.name === STARVATION_CHECK);
@@ -147,12 +228,12 @@ export function analyzeChecks(checks) {
     !starvation || isPending(starvation)
     || (starvation.state === "SUCCESS" && fallbackLive));
 
-  const failed = blocking.filter((check) => FAILED.has(check.state) && check.name !== HOLD_CONTEXT);
+  const failed = blocking.filter((check) => FAILED.has(check.state));
   // Prefer the job that broke over the gate that reports it.
   failed.sort((a, b) => (a.name === "Build and check") - (b.name === "Build and check"));
   const cancelled = blocking.filter((check) => check.state === "CANCELLED" && !(starved && check === macos));
   cancelled.sort((a, b) => (a.name === "Build and check") - (b.name === "Build and check"));
-  const pending = blocking.filter((check) => isPending(check) && check.name !== HOLD_CONTEXT);
+  const pending = blocking.filter((check) => isPending(check));
   // Green means the aggregate gate itself reported success: before the
   // platform builds report, "Build and check" is absent from the rollup and
   // every check that has reported can be green while Windows already failed.
@@ -161,8 +242,12 @@ export function analyzeChecks(checks) {
     && checks.filter((check) => check.required).every((check) => PASSED.has(check.state))
     && Boolean(gate) && PASSED.has(gate.state)
     && failed.length === 0 && pending.length === 0;
-  const advisoryFailed = checks.filter((check) => !blocking.includes(check) && FAILED.has(check.state)).map((check) => check.name);
-  return { failed, cancelled, pending, holders, held: holders.length > 0 || hold?.state === "PENDING", starved, requiredGreen, advisoryFailed };
+  const advisoryFailed = checks.filter((check) => !blocking.includes(check) && check !== queue && FAILED.has(check.state)).map((check) => check.name);
+  return {
+    failed, cancelled, pending, starved, requiredGreen, advisoryFailed,
+    queue: mergifyQueueStatus(queue),
+    inQueue: mergifyQueueStatus(queue).phase === "queued", dequeued: mergifyQueueStatus(queue).phase === "dequeued",
+  };
 }
 
 /** Sorts conflicted files by whether pr-doctor resolves them.
@@ -190,7 +275,7 @@ export function doctorComment(comments) {
 
 const minutesBetween = (from, to) => (Date.parse(to) - Date.parse(from)) / 60000;
 const mergeMainAdvice = (files) =>
-  `merge main yourself: git fetch origin && git merge origin/main, resolve ${files.length ? short(files, 6) : "the conflicts"} (bookkeeping files: python3 scripts/render_backlog.py --resolve), run the focused checks, push`;
+  `merge main yourself: git fetch origin && git merge origin/main, resolve ${files.length ? short(files, 6) : "the conflicts"} (queue files: AGENTS.md "Work queue", old PRs), run the focused checks, push`;
 
 /** The DIRTY branch of decide(): wait for pr-doctor, or hand the merge to you. */
 export function decideConflict(snap, { now, dirtySince = null, doctorRuns = [], comment = null, conflicts = null } = {}) {
@@ -234,7 +319,7 @@ function act(exitCode, action, message) { return { exitCode, action, message, do
 function wait(action, message) { return { exitCode: EXIT.WAITING, action, message, done: false }; }
 
 /** One snapshot (+ context the shell gathered) → { action, message, exitCode, done }. */
-export function decide(snap, { until = "merged", now = new Date().toISOString(), conflict = {} } = {}) {
+export function decide(snap, { until = "merged", now = new Date().toISOString(), conflict = {}, admitWaitSince = null } = {}) {
   const n = snap.number;
   if (snap.state === "MERGED") return act(EXIT.DONE, "merged", `#${n} merged`);
   if (snap.state === "CLOSED") return act(EXIT.CLOSED, "closed", `#${n} was closed without merging; reopen it or ask the coordinator`);
@@ -242,8 +327,11 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
   const checks = analyzeChecks(snap.checks);
   const dirty = snap.mergeStateStatus === "DIRTY" || snap.mergeable === "CONFLICTING";
 
-  if (until === "green" && checks.requiredGreen && !dirty && !checks.held) {
-    return act(EXIT.DONE, "green", `#${n} required checks are green${snap.autoMerge ? " and auto-merge is armed" : `; auto-merge is off (${armCommand(snap)})`}`);
+  if (until === "green" && checks.requiredGreen && !dirty) {
+    const queue = !snap.queueRequested ? `; it is not queued (${enqueueCommand(snap)})`
+      : snap.queueBlockers.length ? `; labeled ${QUEUE_LABEL} but ${snap.queueBlockers.join(", ")} keeps it out of the queue`
+        : checks.inQueue ? " and it is in the Mergify queue" : ` and labeled ${QUEUE_LABEL}`;
+    return act(EXIT.DONE, "green", `#${n} required checks are green${queue}${snap.autoMerge ? `; GitHub auto-merge is armed (${disarmCommand(snap)})` : ""}`);
   }
   if (snap.isDraft) return act(EXIT.DRAFT, "draft", `#${n} is a draft, which never merges: gh pr ready ${n} when it is done`);
 
@@ -269,30 +357,62 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
 
   if (dirty) return decideConflict(snap, { now, ...conflict });
 
-  if (checks.held) {
-    const by = checks.holders.length ? checks.holders.map((h) => `#${h}`).join(", ") : "a PR";
-    return wait("held", `#${n} merge-hold: ${by} carries ${HOLD_LABEL}; waiting for it to land or drop the label`);
+  if (snap.autoMerge) {
+    return act(EXIT.ENQUEUE, "auto-merge-armed",
+      `#${n} has GitHub auto-merge armed, which merges it around the Mergify queue once checks pass: ${disarmCommand(snap)}`);
   }
-  if (snap.isInMergeQueue) {
-    return wait("queued", `#${n} is in the merge queue${snap.queuePosition ? ` at position ${snap.queuePosition}` : ""}; the queue tests it on top of main`);
+  if (snap.queueRequested && snap.queueBlockers.length) {
+    const label = snap.queueBlockers[0];
+    const why = label === NEEDS_MERGE_LABEL
+      ? `pr-doctor clears ${label} on its next run once the PR merges cleanly; if the conflict is already fixed, remove it now`
+      : `${label} keeps both pr-doctor and the queue away; remove it when the PR should merge`;
+    return act(EXIT.QUEUE_BLOCKED, `queue-blocked:${label}`,
+      `#${n} is labeled ${QUEUE_LABEL} but Mergify will not admit it while it carries ${snap.queueBlockers.join(", ")} (.mergify.yml queue_conditions). ${why}: ${snap.queueBlockers.map((l) => `gh pr edit ${n} --remove-label ${l}`).join(" && ")}`);
   }
-  const behind = snap.mergeStateStatus === "BEHIND" ? " PR is BEHIND main: that is fine, do not merge main in (a push restarts the macOS run)." : "";
+  if (snap.queueRequested && checks.dequeued) {
+    return act(EXIT.CHECK_FAILED, "dequeued",
+      `#${n} failed in the Mergify queue (the ${MERGIFY_QUEUE_CHECK} check and Mergify's comment say why; its draft PR's CI tested it on top of main). Fix and push (a new head requeues it), or comment "@mergifyio requeue" for a flake.`);
+  }
+  const behind = snap.mergeStateStatus === "BEHIND" ? " PR is BEHIND main: that is fine, do not merge main in (the queue tests it on top of main; a push restarts the macOS run)." : "";
   if (checks.pending.length > 0 || !checks.requiredGreen) {
     const starved = checks.starved ? " macos-15 runner starvation: the Intel fallback is expected, keep waiting." : "";
     const names = checks.pending.map((c) => c.name);
     return wait(`pending:${names.join(",")}:${checks.starved}`,
       `#${n} waiting on ${names.length ? short(names) : "checks to start"}.${starved}${behind}`);
   }
-  if (!snap.autoMerge) {
-    return act(EXIT.ARM_AUTO_MERGE, "arm-auto-merge", `#${n} required checks are green but auto-merge is off: ${armCommand(snap)}`);
+  if (snap.queueRequested && checks.inQueue) {
+    return wait(`queued:${snap.mergeStateStatus}`,
+      `#${n} green and in the Mergify queue (${snap.mergeStateStatus}); Mergify tests it on top of main and merges it.${behind}`);
   }
-  if (snap.mergeStateStatus === "UNKNOWN") return wait("unknown", `#${n} green, auto-merge armed; GitHub is computing mergeability`);
-  return wait(`armed:${snap.mergeStateStatus}`,
-    `#${n} green, auto-merge armed (${snap.mergeStateStatus}); GitHub ${snap.mergeQueueEnabled ? "enqueues" : "merges"} it.${behind}`);
+  if (snap.queueRequested) {
+    const { phase, unmet, title } = checks.queue;
+    const waiting = phase === "waiting";
+    const grace = waiting ? CONDITIONS_GRACE_MINUTES : ADMIT_GRACE_MINUTES;
+    const unmetText = unmet.length ? ` Unmet: ${short(unmet.map((c) => `\`${c}\``), 6)}.` : "";
+    if (admitWaitSince && minutesBetween(admitWaitSince, now) >= grace && phase === "ready") {
+      return act(EXIT.QUEUE_BLOCKED, "queue-ready-not-admitted",
+        `#${n} is green and labeled ${QUEUE_LABEL}, and Mergify says "${title}" but has not queued it after ${grace}+ minutes: label-only auto-queue needs Mergify's Merge Protections activated in the dashboard. Queue it with the contract's comment: gh pr comment ${n} --body "${QUEUE_COMMENT}"`);
+    }
+    if (admitWaitSince && minutesBetween(admitWaitSince, now) >= grace) {
+      const verdict = waiting
+        ? `Mergify still says "${title}" after ${grace}+ minutes.${unmetText} The ${MERGIFY_QUEUE_CHECK} check's summary has the full condition list`
+        : `Mergify has not admitted it after ${grace}+ minutes (${phase === "none" ? `no ${MERGIFY_QUEUE_CHECK} check` : `${MERGIFY_QUEUE_CHECK}: "${title}"`}). Read that check's summary (the unmet queue_conditions) or https://dashboard.mergify.com, and check that the Mergify app is installed on the repository`;
+      return act(EXIT.QUEUE_BLOCKED, waiting ? "queue-conditions-unmet" : "queue-not-admitted",
+        `#${n} is green and labeled ${QUEUE_LABEL} but not in the Mergify queue: ${verdict}. A .mergify.yml change also needs Mergify's "Configuration changed" check; if that is the gap, comment "@Mergifyio queue".`);
+    }
+    return wait("awaiting-admission",
+      `#${n} green and labeled ${QUEUE_LABEL}; waiting for Mergify to admit it (${MERGIFY_QUEUE_CHECK}: ${title ? `"${title}"` : "not reported yet"}).${unmetText}${behind}`);
+  }
+  return act(EXIT.ENQUEUE, "enqueue", `#${n} required checks are green but it is not queued: ${enqueueCommand(snap)}`);
 }
 
-export function armCommand(snap) {
-  return snap.mergeQueueEnabled ? `gh pr merge --auto ${snap.number}` : `gh pr merge --auto --merge ${snap.number}`;
+/** The one way into main's queue (AGENTS.md "Review and merge cadence"); never `gh pr merge`. */
+export function enqueueCommand(snap) {
+  return `gh pr edit ${snap.number} --add-label ${QUEUE_LABEL}`;
+}
+
+export function disarmCommand(snap) {
+  return `gh pr merge --disable-auto ${snap.number}${snap.queueRequested ? "" : ` && ${enqueueCommand(snap)}`}`;
 }
 
 /** The one-line state summary; the shell prints it when it changes. */
@@ -308,7 +428,8 @@ export function statusLine(snap, decision) {
     `${snap.state}/${snap.mergeStateStatus}`,
     `head ${String(snap.headOid ?? "").slice(0, 8)}`,
     `checks ${counts.passed} ok, ${counts.pending} pending, ${counts.failed} failed`,
-    `auto-merge ${snap.autoMerge ? "on" : "off"}`,
+    checks.inQueue ? "in queue" : snap.queueRequested ? `labeled ${QUEUE_LABEL}${snap.queueBlockers.length ? `, blocked by ${snap.queueBlockers.join(", ")}` : ""}` : "not queued",
+    ...(snap.autoMerge ? ["auto-merge armed"] : []),
   ];
   if (checks.advisoryFailed.length) bits.push(`non-blocking failures: ${short(checks.advisoryFailed)}`);
   return `${bits.join(" | ")}\n  -> ${decision.message}`;
@@ -317,16 +438,14 @@ export function statusLine(snap, decision) {
 // --- I/O ----------------------------------------------------------------------
 
 const QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
- mergeQueue(branch:"main"){id}
  main: ref(qualifiedName:"refs/heads/main"){target{oid}}
  pullRequest(number:$number){
-  number state isDraft mergeable mergeStateStatus isInMergeQueue headRefName headRefOid
+  number state isDraft mergeable mergeStateStatus headRefName headRefOid
   autoMergeRequest{enabledAt}
-  mergeQueueEntry{position}
   labels(first:30){nodes{name}}
   commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{
    __typename
-   ... on CheckRun{name status conclusion startedAt isRequired(pullRequestNumber:$number) checkSuite{workflowRun{databaseId workflow{name}}}}
+   ... on CheckRun{name status conclusion startedAt title summary isRequired(pullRequestNumber:$number) checkSuite{workflowRun{databaseId workflow{name}}}}
    ... on StatusContext{context state description isRequired(pullRequestNumber:$number)}
   }}}}}}
  }}}`;
@@ -392,7 +511,7 @@ async function main() {
   if (opts.help) { console.log(USAGE); return EXIT.DONE; }
   const repo = resolveRepo(opts.repo);
   const started = Date.now();
-  const state = { dirtySince: null, conflictKey: null, conflicts: null };
+  const state = { dirtySince: null, conflictKey: null, conflicts: null, admitWaitSince: null };
   let lastLine = null, lastHead = null, lastMergeState = null, lastAction = null;
   for (;;) {
     let snap, decision;
@@ -402,7 +521,9 @@ async function main() {
       if (!dirty) state.dirtySince = null;
       else state.dirtySince ??= new Date().toISOString();
       const conflict = dirty && snap.state === "OPEN" ? conflictContext(repo, snap, state) : {};
-      decision = decide(snap, { until: opts.until, conflict });
+      decision = decide(snap, { until: opts.until, conflict, admitWaitSince: state.admitWaitSince });
+      if (decision.action === "awaiting-admission") state.admitWaitSince ??= new Date().toISOString();
+      else if (!["queue-not-admitted", "queue-conditions-unmet"].includes(decision.action)) state.admitWaitSince = null;
     } catch (error) {
       if (opts.once) { console.error(`pr-watch: ${error.message}`); return EXIT.ERROR; }
       console.error(`${stamp()} gh failed (${error.message}); retrying`);
@@ -418,9 +539,11 @@ async function main() {
     }
     lastHead = snap.headOid;
     lastMergeState = snap.mergeStateStatus;
-    // A cancellation can be a moment before a replacement run shows up: act
-    // on it only when two polls in a row agree.
-    const confirmed = !decision.action.startsWith("cancelled:") || opts.once || lastAction === decision.action;
+    // A cancellation can be a moment before a replacement run shows up, and
+    // the enqueue workflow disarms an armed auto-merge within a minute or so:
+    // act on either only when two polls in a row agree.
+    const transient = decision.action.startsWith("cancelled:") || decision.action === "auto-merge-armed";
+    const confirmed = !transient || opts.once || lastAction === decision.action;
     lastAction = decision.action;
     const line = statusLine(snap, decision);
     if (line !== lastLine) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { checkPrOwner, isCookiePr } from "../pr-owner.mjs";
+import { checkPrOwner, isCookiePr, isMergeQueuePr } from "../pr-owner.mjs";
 import { ipcDenied } from "./ipc-guard.mjs";
 
 function pr({ body = "", head = "feat/x", title = "feat: x", author = "rausified" } = {}) {
@@ -64,6 +64,15 @@ test("Cookie driver PRs are exempt by a 'Cookie cycle' title", () => {
 test("a branch that merely contains 'cookie' is not exempt", () => {
   assert.equal(isCookiePr(pr({ head: "feat/cookie-banner", title: "feat: cookie banner" })), false);
   assert.equal(checkPrOwner(pr({ head: "feat/cookie-banner", title: "feat: cookie banner" })).ok, false);
+});
+
+test("Mergify merge queue drafts are exempt by their mergify/merge-queue/ head", () => {
+  const draft = pr({ head: "mergify/merge-queue/a76b1f3d25", title: "merge queue: embarking #270 together", body: "Mergify body" });
+  assert.equal(isMergeQueuePr(draft), true);
+  assert.deepEqual([checkPrOwner(draft).ok, checkPrOwner(draft).exempt], [true, true]);
+  // The title alone, or another mergify/ branch, is not enough.
+  assert.equal(checkPrOwner(pr({ title: "merge queue: embarking #1" })).ok, false);
+  assert.equal(checkPrOwner(pr({ head: "mergify/bp/main/pr-12" })).ok, false);
 });
 
 test("the CLI fails the job for a PR event without an owner and passes one with it", async (t) => {

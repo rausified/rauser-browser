@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Hydrate this checkout's beads database before creating an issue.
+"""Create a bead after pulling the shared queue, then publish it.
 
 Usage: scripts/dev/create-bead <bd create arguments>
 
-Run in the checkout that owns the database. Linked worktrees must instead
-use a scratch database under target/ (see AGENTS.md "Work queue").
+The queue lives in bd's Dolt database, synced through this repository's
+refs/dolt/data (AGENTS.md "Work queue"). This runs `bd dolt pull` first, so
+the new bead's id never collides with one another session already created,
+then `bd create`, then `scripts/dev/queue sync`. There is no file to hydrate
+from or copy into: bd and Dolt own every write.
 """
 
 from __future__ import annotations
@@ -16,46 +19,41 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from render_backlog import BacklogError, load_issues  # noqa: E402
+import work_queue  # noqa: E402
 
 
-def main(argv: list[str] | None = None, *, root: pathlib.Path | None = None) -> int:
+def main(argv: list[str] | None = None, *, root: pathlib.Path | None = None, sync=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args == ["--help"] or args == ["-h"]:
         print(__doc__)
         return 0 if args else 2
 
-    # A create-side routing override would bypass the database we hydrated.
-    # Keep the interface to create arguments; routing is owned here.
+    # A create-side routing override would bypass the database we pulled.
     routing = ("--db", "--database", "--directory", "--global", "--repo")
     # bd accepts boolean short flags clustered before -C (for example -qC).
     if any(arg.split("=", 1)[0] in routing or re.match(r"^-[hqv]*C", arg) for arg in args):
         print("create-bead: database/directory overrides are not supported", file=sys.stderr)
         return 2
 
-    root = (root or pathlib.Path(__file__).resolve().parents[2]).resolve()
-    if not (root / ".git").is_dir() or (root / ".beads" / "redirect").exists():
-        print(
-            "create-bead: use the checkout that owns the database; in a linked "
-            "worktree, import this branch's JSONL into a scratch database under "
-            "target/ before creating (AGENTS.md: Work queue)",
-            file=sys.stderr,
-        )
-        return 2
-
-    source = root / ".beads" / "issues.jsonl"
     try:
-        load_issues(source)
-        # Default import keeps newer local scalar fields. Never pass
-        # --allow-stale or rebuild the database: DB-only work must survive.
-        hydrated = subprocess.run(
-            ["bd", "import", str(source)], cwd=root, check=False, stdout=sys.stderr,
-        )
-        if hydrated.returncode:
-            return hydrated.returncode
-        return subprocess.run(["bd", "create", *args], cwd=root, check=False).returncode
-    except (BacklogError, OSError) as error:
+        root = root or work_queue.repo_root()
+        ws = work_queue.workspace(root)
+        pulled = subprocess.run(["bd", "dolt", "pull"], cwd=ws, check=False, stdout=sys.stderr)
+        if pulled.returncode:
+            return pulled.returncode
+        created = subprocess.run(["bd", "create", *args], cwd=ws, check=False).returncode
+        if created:
+            return created
+    except (work_queue.QueueError, OSError) as error:
         print(f"create-bead: {error}", file=sys.stderr)
+        return 1
+    try:
+        (sync or work_queue.sync)(root)
+        print("create-bead: created and synced", file=sys.stderr)
+        return 0
+    except (work_queue.QueueError, OSError) as error:
+        print(f"create-bead: created in this database but not synced: {error}\n"
+              f"Fix that, then run scripts/dev/queue sync.", file=sys.stderr)
         return 1
 
 

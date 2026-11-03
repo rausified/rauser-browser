@@ -66,6 +66,7 @@ export class FakeElement {
   getAttribute(name) { return this.attributes?.[name] ?? null; }
   focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
+  prepend(...children) { this.children.unshift(...children); }
   add(child) { this.children.push(child); }
   replaceChildren(...children) { this.children = children; }
   contains(node) { return this === node || this.children.some((child) => child.contains?.(node)); }

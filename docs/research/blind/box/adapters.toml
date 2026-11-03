@@ -1,0 +1,157 @@
+# Box blind starter adapters (format 1, adapter-templates.md §3).
+#
+# Derived only from public sources on 2026-11-03: Box developer docs, Box
+# support-center articles, public Box links cited on Wikipedia, logged-out
+# renders of public shared links in a throwaway headless Chrome profile, and
+# Box's public web-app JavaScript bundle (cdn01.boxcdn.net/enduser/*). No Box
+# account was used. See research.md for evidence and confidence.
+#
+# ORIGIN MODEL. Box serves its web app from:
+#   - https://app.box.com            every account without a custom subdomain
+#                                    (personal and business; no tenant in the URL)
+#   - https://<company>.app.box.com  an enterprise's custom subdomain
+#   - https://<company>.ent.box.com  seen serving shared links (weforum.ent.box.com);
+#                                    Box's "Zones" docs list *.ent.box.com twins of
+#                                    *.app.box.com hosts
+# https://<company>.box.com (the form Box's admin docs still describe) answered
+# with a 301 to https://<company>.app.box.com in every probe, so pages settle on
+# the .app.box.com host. The starter family should therefore be offered on
+# app.box.com, *.app.box.com and *.ent.box.com (excluding infrastructure hosts
+# such as fupload-*.app.box.com), like *.atlassian.net: one copy of the three
+# adapters per origin. This file carries two copies, for https://app.box.com and
+# for an illustrative enterprise subdomain https://acme.app.box.com.
+#
+# SCOPE. app.box.com is multi-tenant, but no Box URL names the account or
+# enterprise, so a scope (§6) has nothing to bind. It is not on SHARED_ORIGINS,
+# so `unscoped` is rejected (unscoped_not_shared); like the Miro starter
+# (docs/adapters/miro.board.md) the adapter records items from whichever Box
+# account is signed in to the Chrome profile. A custom subdomain already pins
+# one enterprise.
+#
+# TITLES. Box's web app sets the tab title through one component
+# (enduser.documentTitle in the public bundle): "{title} | Powered by Box" when
+# the page has a title, "{enterprise name} | Powered by Box" when it has none
+# but the user belongs to an enterprise, and "Box | Simple Online
+# Collaboration" otherwise. Logged-out renders of shared files and folders gave
+# "<file name with extension> | Powered by Box" and "<folder name> | Powered by
+# Box". Logged-in titles were not observed (no account).
+
+[adapters]
+format = 1
+
+# ---------------------------------------------------------------- app.box.com
+
+# box.file: one artifact per Box file ID. Box's bundle routes a file item to
+# /notes/<id> when it is a Box Note, /canvas/<id> when it is a Box Canvas, and
+# /file/<id> otherwise, always with the same numeric file ID (typed ID f_<id>),
+# so Notes and Canvas are files here, not separate types: a note reached by
+# /file/<id> and by /notes/<id> stays one artifact.
+#   rule 0  /file/<id>                 file preview (logged in)            high
+#   rule 1  /notes/<id>                Box Note editor                      high (route), title unverified
+#   rule 2  /canvas/<id>               Box Canvas                           high (route), title unverified
+#   rule 3  /s/<token>/file/<id>       file opened inside a shared folder   high (observed)
+#   rule 4  /v/<vanity>/file/<id>      file inside a custom-URL folder      high (observed)
+#   rule 5  /integrations/officeonline/openOfficeOnline?fileId=<id>
+#                                      Office for the web editing           LOW (from memory of
+#                                      community posts; not seen in the bundle). Harmless if wrong:
+#                                      its literals match nothing else.
+# No rest segment: /file/<id>/<anything> and /notes/create_note (non-int) never
+# match. The legacy /files/0/f/<folder>/1/f_<id> form cannot be expressed
+# (the "f_" prefix is not separable by @tail) and the legacy shared
+# /s/<token>/1/<folder>/<file>/1 form now returns 404, so neither is recorded.
+# Query parameters (?s=<token>, sortColumn, ...) never change the ID.
+[[artifacts]]
+type   = "box.file"
+origin = "https://app.box.com"
+match  = [
+  { path = "/file/{id:int}" },
+  { path = "/notes/{id:int}" },
+  { path = "/canvas/{id:int}" },
+  { path = "/s/{_}/file/{id:int}" },
+  { path = "/v/{_}/file/{id:int}" },
+  { path = "/integrations/officeonline/openOfficeOnline", query = { fileId = "{id:int}" }, mode = "edit" },
+]
+id     = "box.file:{host}/{id}"
+title  = "{title} | Powered by Box"
+
+# box.folder: one artifact per Box folder ID (typed ID d_<id>).
+#   rule 0  /folder/<id>               folder view (logged in)              high (route)
+#   rule 1  /s/<token>/folder/<id>     subfolder of a shared folder         high (route form observed)
+#   rule 2  /v/<vanity>/folder/<id>    subfolder of a custom-URL folder     high (observed)
+# int(2,19) on rule 0 leaves out /folder/0, the "All Files" root, which is a
+# list of everything rather than a folder anyone works in; real folder IDs are
+# 9-12+ digits. Every rule uses int(2,19) because a capture keeps one type
+# across an adapter's rules (capture_type_conflict). No rest: /folder/<id>/search (search inside a folder) and other
+# sub-routes are not folder visits.
+[[artifacts]]
+type   = "box.folder"
+origin = "https://app.box.com"
+match  = [
+  { path = "/folder/{id:int(2,19)}" },
+  { path = "/s/{_}/folder/{id:int(2,19)}" },
+  { path = "/v/{_}/folder/{id:int(2,19)}" },
+]
+id     = "box.folder:{host}/{id}"
+title  = "{title} | Powered by Box"
+
+# box.share: the root of a shared link, /s/<shared name>, or of a custom
+# ("vanity") URL, /v/<vanity name>. The URL does not say whether the link names
+# a file or a folder, and the page carries no <meta> with the item ID (checked
+# on four rendered shared pages), so it cannot be keyed by file or folder ID.
+# It gets its own namespace, keyed by link kind and name (the type is
+# box.share, not box.shared_link, because an ID scheme admits no `_`, §8.1):
+#   box.share:<host>/s/<shared name>   or   box.share:<host>/v/<vanity>
+# Both names are case-insensitive on Box (an all-caps /S/... path is a 404, but
+# /s/<NAME IN CAPS> and /v/<NAME IN CAPS> render the same item), so `|lower`.
+# Shared names seen: 10, 19, 20 and 32 lowercase alphanumerics; vanity names
+# are user-chosen ([A-Za-z0-9_-] in every sample). One rule with a captured
+# (s|v) alternation, because two rules binding `kind`/`link` with different
+# types or bounds fail validation (capture_type_conflict); so token(1,100)
+# also admits implausibly short shared names, which Box answers with an error
+# page. A vanity name can be changed
+# or reassigned by the owner, and a shared name dies when its link is
+# disabled, so this ID names the link, not the underlying item.
+# The legacy /shared/<name> form is a server 301 to /s/<name>, so the tab
+# settles on rule 0; /shared/static/<name>.<ext> is a download, not a page.
+[[artifacts]]
+type   = "box.share"
+origin = "https://app.box.com"
+match  = [{ path = "/{kind:(s|v)}/{link:token(1,100)|lower}" }]
+id     = "box.share:{host}/{kind}/{link}"
+title  = "{title} | Powered by Box"
+
+# ------------------------------------------- enterprise subdomain (illustrative)
+# Same three adapters on a custom subdomain. Replace "acme" with the
+# enterprise's subdomain; the same block applies to <company>.ent.box.com.
+
+[[artifacts]]
+type   = "box.file"
+origin = "https://acme.app.box.com"
+match  = [
+  { path = "/file/{id:int}" },
+  { path = "/notes/{id:int}" },
+  { path = "/canvas/{id:int}" },
+  { path = "/s/{_}/file/{id:int}" },
+  { path = "/v/{_}/file/{id:int}" },
+  { path = "/integrations/officeonline/openOfficeOnline", query = { fileId = "{id:int}" }, mode = "edit" },
+]
+id     = "box.file:{host}/{id}"
+title  = "{title} | Powered by Box"
+
+[[artifacts]]
+type   = "box.folder"
+origin = "https://acme.app.box.com"
+match  = [
+  { path = "/folder/{id:int(2,19)}" },
+  { path = "/s/{_}/folder/{id:int(2,19)}" },
+  { path = "/v/{_}/folder/{id:int(2,19)}" },
+]
+id     = "box.folder:{host}/{id}"
+title  = "{title} | Powered by Box"
+
+[[artifacts]]
+type   = "box.share"
+origin = "https://acme.app.box.com"
+match  = [{ path = "/{kind:(s|v)}/{link:token(1,100)|lower}" }]
+id     = "box.share:{host}/{kind}/{link}"
+title  = "{title} | Powered by Box"

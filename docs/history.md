@@ -192,6 +192,15 @@ monospace and sans faces map to system stacks because the CSP sets
 which the task bar sets as it starts. Plan:
 [2026-11-02-sidebar-redesign](superpowers/plans/2026-11-02-sidebar-redesign.md).
 
+**Matching the mock (2026-11-03).** John kept #251's page card (title and URL)
+and asked for the three remaining deviations from the design to close: Run is
+now the round arrow button (its "Run" and "Starting…" text kept as a visually
+hidden label), the worklog period is a Today / Yesterday / Week radio group
+drawn as segments (native radios: one tab stop, arrows move the choice, the
+ring on the segment's label) in place of the select, and the one Summarize &
+log button becomes the Summary card's re-summarize icon once a summary exists,
+still one control with the same id.
+
 ## §6.1 Folder layout — history
 
 **Moving an older layout (2026-10-27).** The rule this record introduced is now stated in DESIGN.md §6.1, “Moving an older layout”.
