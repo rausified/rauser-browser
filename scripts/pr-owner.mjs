@@ -4,7 +4,9 @@
 // overnight driver PRs are exempt: the driver opens them on `cookie/` branches
 // with a "Cookie cycle N:" title, and Cookie itself is their owner. The author
 // login is not used for the exemption, because every session and Cookie push as
-// the same account.
+// the same account. Mergify's merge queue drafts (`mergify/merge-queue/` heads,
+// .mergify.yml) are exempt too: they carry a queued PR whose own body already
+// passed, and `PR owner` is required on the draft before the PR merges.
 //
 // Run by .github/workflows/pr-owner.yml, which reads the pull_request event
 // payload from GITHUB_EVENT_PATH; `checkPrOwner` is the pure part the tests pin.
@@ -14,6 +16,7 @@ import { pathToFileURL } from "node:url";
 
 const COOKIE_BRANCH = /^cookie\//;
 const COOKIE_TITLE = /^cookie cycle\b/i;
+const MERGE_QUEUE_BRANCH = /^mergify\/merge-queue\//;
 // A line that starts with optional list marker and bold, then `Owner:`.
 const OWNER_LINE = /^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?Owner(?:\*\*|__)?[ \t]*:(?:\*\*|__)?[ \t]*(?<owner>.*)$/im;
 
@@ -29,9 +32,15 @@ function visibleText(body) {
     .replace(/^[ \t]*(```|~~~)[\s\S]*?(?:^[ \t]*\1[ \t]*$|(?![\s\S]))/gm, "");
 }
 
+/** True for a draft PR Mergify's merge queue opened to test a queued PR. */
+export function isMergeQueuePr(pr) {
+  return MERGE_QUEUE_BRANCH.test(pr.head?.ref ?? "");
+}
+
 /** Whether a PR names its owner session; `{ ok, owner?, exempt?, reason? }`. */
 export function checkPrOwner(pr) {
-  if (isCookiePr(pr)) return { ok: true, exempt: true };
+  if (isCookiePr(pr)) return { ok: true, exempt: true, by: "Cookie driver PR" };
+  if (isMergeQueuePr(pr)) return { ok: true, exempt: true, by: "Mergify merge queue draft" };
   const match = OWNER_LINE.exec(visibleText(pr.body ?? ""));
   const owner = match?.groups.owner.trim() ?? "";
   if (owner && !/^<[^>]*>$/.test(owner)) return { ok: true, owner };
@@ -49,7 +58,7 @@ function main() {
   const event = JSON.parse(readFileSync(path, "utf8"));
   if (!event.pull_request) throw new Error("not a pull_request event");
   const result = checkPrOwner(event.pull_request);
-  if (result.exempt) console.log("Cookie driver PR: owner check skipped.");
+  if (result.exempt) console.log(`${result.by}: owner check skipped.`);
   else if (result.ok) console.log(`Owner: ${result.owner}`);
   else {
     console.log(`::error title=PR owner missing::${result.reason}`);

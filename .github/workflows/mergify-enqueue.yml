@@ -1,0 +1,36 @@
+name: Mergify enqueue
+
+# `gh pr merge --auto --merge <n>` (how sessions and Cookie's driver have
+# always merged) now means "put it in the Mergify queue" (.mergify.yml,
+# AGENTS.md "Review and merge cadence"). Mergify cannot see GitHub's
+# auto-merge, so this adds the `queue` label it does see, then disarms
+# GitHub's auto-merge: left armed, GitHub would merge the PR itself as soon as
+# its checks pass, around the queue.
+#
+# pull_request_target so fork PRs get a write token too. Safe: nothing from
+# the PR is checked out or run; only its number is used.
+on:
+  pull_request_target:
+    types: [auto_merge_enabled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  enqueue:
+    name: Queue on auto-merge
+    if: github.event.pull_request.base.ref == 'main' && !startsWith(github.event.pull_request.head.ref, 'mergify/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Label the PR queue and disarm GitHub's auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api --silent -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=queue"
+          gh pr merge --disable-auto "$PR" --repo "$REPO"
+          echo "#$PR labeled queue; GitHub auto-merge disarmed, Mergify merges it"
