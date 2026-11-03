@@ -1,0 +1,117 @@
+# Blind starter adapters for the Figma web app (https://www.figma.com).
+#
+# Derived only from public sources on 2026-11-03 (see research.md): Figma's
+# REST, embed and MCP developer docs, Figma's own skills in
+# github.com/figma/mcp-server-guide, Figma's Code Connect CLI source, and the
+# public, logged-out web-app JavaScript that www.figma.com serves to anyone
+# (its URL router and its tab-title function). Not yet checked against a real
+# signed-in account.
+#
+# Origin model: one origin. https://figma.com 301-redirects to
+# https://www.figma.com, and www.figma.com is on the host's shared-origin list
+# (adapter-templates.md §6) with no tenant position: file URLs never name the
+# team, organization or account. Both adapters are therefore
+# `unscoped = "acknowledged"`; they record files from every Figma account
+# signed in to the Chrome profile. embed.figma.com (iframes inside other
+# sites) is a different origin and is deliberately not covered.
+
+[adapters]
+format = 1
+
+# ---------------------------------------------------------------------------
+# figma.file — one artifact per Figma file, whatever editor or viewer opens it.
+#
+# Why one type, not one per product: Figma uses a single file-key space for
+# every product. The same key opens under /file/ (legacy), /design/,
+# /proto/ (prototype viewer) and, for a Slides file, /slides/, /deck/
+# (audience view) and /presenter/. Figma's own desktop URL router
+# normalizes /design/, /board/, /slides/, /site/, /buzz/, /make/, /rev/,
+# /spec/ and /weave/ back to /file/<key>, and old /file/ links can be design
+# files or FigJam boards. Splitting by product would split one file's history
+# (a design file and its prototype; a legacy /file/ link to a board) across two
+# record keys. The tab-title suffix still says which product it is.
+#
+# Rule 1/2: an editor route. Path word, then the key, then optionally one
+#   slug segment (the file name, which Figma omits when its
+#   `opaque_file_slug_in_url` flag is on). No rest segment, so
+#   /design/<key>/image/<hash> (an image asset) and /export/<key> (video
+#   export) are not opens, and /design/<key>/branch/<b>/... goes to
+#   figma.branch below.
+#   Editors: file (legacy), design (Figma Design and Dev Mode, `?m=dev`),
+#   board (FigJam), slides (Figma Slides), site (Figma Sites), buzz (Figma
+#   Buzz), make (Figma Make), rev (older Make route), spec (Figma Specs),
+#   weave (Figma Weave). No fixed mode: the same URL is an edit for an editor
+#   and a view for a viewer-seat user.
+# Rule 3/4: a viewer route, mode = view. proto (prototype player), deck
+#   (Slides audience view), presenter (Slides presenter view).
+#
+# Key: Figma's own client validates file keys as [0-9a-zA-Z]{22,128}
+# (path regex `^/(?:file|design|board|slides|site|buzz|rev|make|spec)/
+# ([0-9a-zA-Z]{22,128})(?:/|$)`). token(22,128) is the closest host type; it
+# also admits `_`, `-` and trailing `=`, which Figma keys never contain. The
+# 22-character minimum is what keeps /design/new, /board/new, /slides/new,
+# /site/new, /make/new and other short route words out. Keys are
+# case-sensitive and recorded as matched.
+#
+# Query parameters never change the ID: node-id, t (share tracking), m
+# (dev/auto), type, mode, page-id, starting-point-node-id, scaling,
+# content-scaling, version-id, show-proto-sidebar, fuid and the like are all
+# ignored.
+#
+# Title (from Figma's tab-title function, English UI):
+#   editor:      "<name> – Figma" | " – FigJam" | " – Figma Slides" |
+#                " – Figma Sites" | " – Figma Buzz" | " – Figma Make" |
+#                " – Figma Specs"   (U+2013 en dash between spaces)
+#   prototype:   "▶ <name>"  or  "▶ <name> - <page name>" (multi-page
+#                prototypes; the page part is kept in the extracted title)
+#   slides deck: "Audience · <name> - Figma Slides" or
+#                "Presenter · <name> - Figma Slides" (U+00B7, hyphen-minus)
+# Entry 1 strips the prototype play mark. Entry 2 skips the localized
+# Audience/Presenter label up to " · ". Entry 3 removes the last " – <product>"
+# suffix with a skip, so all seven editor suffixes need one entry and a name
+# that itself contains " – " keeps it. While a file loads the title is just
+# "Figma"; no entry matches and the whole title is recorded until the worker
+# sees the real title.
+[[artifacts]]
+type     = "figma.file"
+origin   = "https://www.figma.com"
+unscoped = "acknowledged"
+match    = [
+  { path = "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{key:token(22,128)}" },
+  { path = "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{key:token(22,128)}/{_}" },
+  { path = "/(proto|deck|presenter)/{key:token(22,128)}", mode = "view" },
+  { path = "/(proto|deck|presenter)/{key:token(22,128)}/{_}", mode = "view" },
+]
+id       = "figma.file:{host}/{key}"
+title    = ["▶ {title}", "{~} · {title} - Figma Slides", "{title} – {~}"]
+
+# ---------------------------------------------------------------------------
+# figma.branch — a branch of a Figma file (Organization/Enterprise feature).
+#
+# URL: /<route>/<main file key>/branch/<branch key>[/<slug>]. Figma's REST
+# API treats the branch key as a file key in its own right ("The endpoint
+# accepts a branch key as an alternative to file key"), and Figma's desktop
+# router and its MCP/Code Connect guidance both take the branch key as the
+# file key for these URLs. So a branch is its own artifact, keyed by the
+# branch key alone. The main key is matched with {_} and not recorded: using
+# it in the ID would add nothing (branch keys are globally unique), and
+# `within` cannot be used to roll a branch up into its main file without the
+# host naming every figma.file row from its ID (adapter-templates.md §8.3).
+# The slug Figma writes is the main file's name, so it is never used.
+#
+# Branch URLs exist under every route Figma's router builds them for: the
+# editor words and the proto/deck/presenter viewers (mode = view).
+# Title: same tab-title function as figma.file; what <name> is on a branch
+# (branch name or main file name) is not confirmed (low confidence).
+[[artifacts]]
+type     = "figma.branch"
+origin   = "https://www.figma.com"
+unscoped = "acknowledged"
+match    = [
+  { path = "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{_}/branch/{branch:token(22,128)}" },
+  { path = "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{_}/branch/{branch:token(22,128)}/{_}" },
+  { path = "/(proto|deck|presenter)/{_}/branch/{branch:token(22,128)}", mode = "view" },
+  { path = "/(proto|deck|presenter)/{_}/branch/{branch:token(22,128)}/{_}", mode = "view" },
+]
+id       = "figma.branch:{host}/{branch}"
+title    = ["▶ {title}", "{~} · {title} - Figma Slides", "{title} – {~}"]

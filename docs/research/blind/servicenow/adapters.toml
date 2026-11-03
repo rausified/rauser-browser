@@ -1,0 +1,149 @@
+# ServiceNow blind starter adapters (Brauser adapter-templates.md, format 1).
+#
+# Derived only from public sources (ServiceNow Community threads, the public
+# Raycast ServiceNow extension source) and this repository. Not checked
+# against a live instance. See research.md for sources and confidence levels.
+#
+# ORIGIN MODEL. Every ServiceNow customer instance is its own origin,
+# https://<instance>.service-now.com (government cloud:
+# https://<instance>.servicenowservices.com; some customers use custom
+# domains). That is a tenant-subdomain family like *.atlassian.net, not a
+# shared multi-tenant origin, so no `scope` or `unscoped` key is needed: the
+# instance hostname is the tenant. `https://acme.service-now.com` below is a
+# placeholder; a starter offer substitutes the enabled instance origin, the
+# same way the Jira and Confluence starters substitute the Atlassian site.
+#
+# ID MODEL. A record's stable identity in a URL is its 32-hex sys_id, unique
+# within the instance. The human number (INC0010001) almost never appears in
+# record URLs (only in list queries such as sysparm_query=number=...), so
+# record IDs are servicenow.<thing>:{host}/{sys_id}. Knowledge articles are the
+# exception: the KB number (KB0010001) is stable across article versions,
+# while each version has its own sys_id (sys_kb_id), so the article ID uses
+# the number and sys_kb_id links are not recorded.
+#
+# GRAMMAR LIMIT (most important). The two wrapper forms that a Next
+# Experience or UI16 user very often sees in the address bar cannot be
+# expressed in format 1:
+#   /now/nav/ui/classic/params/target/incident.do%3Fsys_id%3D<sys_id>
+#   /nav_to.do?uri=incident.do%3Fsys_id%3D<sys_id>   (or uri=/incident.do?sys_id=...)
+# The record lives inside one decoded path segment or one query value
+# ("incident.do?sys_id=<hex>"), which contains "?" and "="; no capture type
+# admits those, @tail splits only on "-", and the language has no nested-URI
+# matching. These URLs are therefore NOT recorded (listed as negatives in
+# vectors.json so the gap stays visible). Direct /<table>.do?sys_id= forms,
+# workspace record routes and portal pages are expressible and covered.
+#
+# TITLES. Platform record forms title the tab
+#   "<display value> | <table label> | <glide.product.name>"
+# e.g. "SIR0010002 | Security Incident | ServiceNow" (community, medium-high).
+# The display value of task tables is the number by default, so the extracted
+# title is the record number (INC0010001), not the short description. The
+# product-name suffix is instance-configurable, hence {~}. Workspace and
+# portal tab titles are not reliably known (see research.md); no title entry
+# is guessed for them, so Brauser records the whole tab title there.
+
+[adapters]
+format = 1
+
+# ---------------------------------------------------------------------------
+# Incident (table: incident, label "Incident", number prefix INC).
+# Rule 1: classic form opened directly, /incident.do?sys_id=<32 hex>. The
+#   `absent` keys exclude the platform export processors that reuse the same
+#   URL (?XML, ?PDF, ?CSV, ?EXCEL, ?XLSX, ?JSON, ?JSONv2, ?UNL). sys_id=-1
+#   (new-record form) fails hex(32) and is not recorded.
+# Rule 2: workspace record route with one workspace segment, e.g. Service
+#   Operations Workspace /now/sow/record/incident/<sys_id> (also other
+#   configurable workspaces such as /now/cmdb/record/...). {*} admits the
+#   workspace's trailing /params/... or sub-tab segments.
+# Rule 3: workspace record route with two segments: legacy Agent Workspace
+#   /now/workspace/agent/record/incident/<sys_id> and CSM/FSM configurable
+#   workspace /now/cwf/agent/record/incident/<sys_id>.
+# Rules 4-6: Service Portal (/sp) and Employee Center (/esc) ticket pages,
+#   ?id=ticket | standard_ticket | form &table=incident&sys_id=<sys_id>.
+#   The `table` literal keeps RITMs and cases out of this adapter. Other
+#   portal suffixes (custom portals) are not covered.
+[[artifacts]]
+type   = "servicenow.incident"
+origin = "https://acme.service-now.com"
+match  = [
+  { path = "/incident.do", query = { sys_id = "{id:hex(32)}" }, absent = ["XML", "PDF", "CSV", "EXCEL", "XLSX", "JSON", "JSONv2", "UNL"] },
+  { path = "/now/{_}/record/incident/{id:hex(32)}/{*}" },
+  { path = "/now/{_}/{_}/record/incident/{id:hex(32)}/{*}" },
+  { path = "/(sp|esc)", query = { id = "ticket", table = "incident", sys_id = "{id:hex(32)}" } },
+  { path = "/(sp|esc)", query = { id = "standard_ticket", table = "incident", sys_id = "{id:hex(32)}" } },
+  { path = "/(sp|esc)", query = { id = "form", table = "incident", sys_id = "{id:hex(32)}" } },
+]
+id     = "servicenow.incident:{host}/{id}"
+title  = "{title} | Incident | {~}"
+
+# ---------------------------------------------------------------------------
+# Requested item (table: sc_req_item, label "Requested Item", prefix RITM).
+# Same rule shapes as the incident adapter, with the table name swapped.
+# Employee Center opens a user's requested items as
+# /esc?id=ticket&table=sc_req_item&sys_id=... (community thread, high), and
+# many instances switch that to id=standard_ticket.
+# Named servicenow.ritm, not servicenow.request_item: the type doubles as the
+# ID scheme, and the §8.1 scheme grammar allows only [a-z0-9.] (an underscore
+# fails validation with id_syntax; both engines confirmed).
+[[artifacts]]
+type   = "servicenow.ritm"
+origin = "https://acme.service-now.com"
+match  = [
+  { path = "/sc_req_item.do", query = { sys_id = "{id:hex(32)}" }, absent = ["XML", "PDF", "CSV", "EXCEL", "XLSX", "JSON", "JSONv2", "UNL"] },
+  { path = "/now/{_}/record/sc_req_item/{id:hex(32)}/{*}" },
+  { path = "/now/{_}/{_}/record/sc_req_item/{id:hex(32)}/{*}" },
+  { path = "/(sp|esc)", query = { id = "ticket", table = "sc_req_item", sys_id = "{id:hex(32)}" } },
+  { path = "/(sp|esc)", query = { id = "standard_ticket", table = "sc_req_item", sys_id = "{id:hex(32)}" } },
+  { path = "/(sp|esc)", query = { id = "form", table = "sc_req_item", sys_id = "{id:hex(32)}" } },
+]
+id     = "servicenow.ritm:{host}/{id}"
+title  = "{title} | Requested Item | {~}"
+
+# ---------------------------------------------------------------------------
+# Change request (table: change_request, label "Change Request", prefix CHG).
+# Change requests are worked in the platform UI and in SOW; end users rarely
+# see them on a portal, but the ticket/form pages are kept for symmetry since
+# the `table` literal makes them unambiguous.
+[[artifacts]]
+type   = "servicenow.change"
+origin = "https://acme.service-now.com"
+match  = [
+  { path = "/change_request.do", query = { sys_id = "{id:hex(32)}" }, absent = ["XML", "PDF", "CSV", "EXCEL", "XLSX", "JSON", "JSONv2", "UNL"] },
+  { path = "/now/{_}/record/change_request/{id:hex(32)}/{*}" },
+  { path = "/now/{_}/{_}/record/change_request/{id:hex(32)}/{*}" },
+  { path = "/(sp|esc)", query = { id = "ticket", table = "change_request", sys_id = "{id:hex(32)}" } },
+  { path = "/(sp|esc)", query = { id = "form", table = "change_request", sys_id = "{id:hex(32)}" } },
+]
+id     = "servicenow.change:{host}/{id}"
+title  = "{title} | Change Request | {~}"
+
+# ---------------------------------------------------------------------------
+# Knowledge article, identified by its article number (KB0010035), which
+# stays the same across versions and always opens the latest version the
+# user may read (community: "sp?id=kb_article_view&sysparm_article=KBXXX ...
+# will show latest accessible article version").
+# Rule 1: platform view, /kb_view.do?sysparm_article=KB0010035.
+# Rules 2-3: portal article pages on Service Portal (/sp), Employee Center
+#   (/esc) and the Knowledge portal (/kb), page id kb_article or
+#   kb_article_view, with sysparm_article.
+# Not recorded: sys_kb_id / sys_id forms (kb_view.do?sys_kb_id=...,
+#   ?id=kb_article_view&sys_kb_id=..., ?id=kb_article&sys_id=...,
+#   /now/sow/kb_view/kb_knowledge/<sys_id>, kb_knowledge.do?sys_id=...).
+#   They name one version's sys_id, not the article, and one adapter cannot
+#   build the same ID from both. See research.md for a possible second
+#   adapter.
+# The capture is token(3,40)|upper: KB numbers are a configurable letter
+#   prefix plus digits; |upper folds kb0010035 into KB0010035 (the lookup is
+#   believed case-insensitive; low confidence). token cannot require the
+#   "KB" prefix, so any sysparm_article value on these routes is accepted.
+# No title template: the kb_view.do and portal article tab titles are not
+#   documented in any source found; the whole tab title is recorded.
+[[artifacts]]
+type   = "servicenow.kb"
+origin = "https://acme.service-now.com"
+match  = [
+  { path = "/kb_view.do", query = { sysparm_article = "{number:token(3,40)|upper}" } },
+  { path = "/(sp|esc|kb)", query = { id = "kb_article", sysparm_article = "{number:token(3,40)|upper}" } },
+  { path = "/(sp|esc|kb)", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" } },
+]
+id     = "servicenow.kb:{host}/{number}"
