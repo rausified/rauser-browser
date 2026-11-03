@@ -856,7 +856,12 @@ retired. What is tested:
   fields of one bead and both survive `bd sync`; a queue that fails the
   check is not pushed; `backlog` renders the beads into the frame; and adopt
   applies an old branch's edits (a status, a removed label, a title, a new
-  bead) on top of a priority changed since in the database.
+  bead) on top of a priority changed since in the database. The worker
+  interface: `export` prints the whole queue on stdout (and writes a given
+  path), an empty queue fails with one stderr line, and the contract's
+  `bootstrap`, `sync` and `export` run as the shared driver runs them (new
+  session with no TTY, stdin closed, `GH_TOKEN`, a credential helper in
+  `GIT_CONFIG_*`, `BOSUN_WORKSPACE`); a failing sync reports one line.
 - `scripts/tests/test_queue_merge.py`: the bead-by-bead merge adopt uses
   (`render_backlog.merge_jsonl`, the 2026-11-01 shapes, `bd export`'s byte
   format and line order).

@@ -174,7 +174,7 @@ class DoltIntegrationTests(unittest.TestCase):
         return repo
 
     def exported(self, repo):
-        return rows(pathlib.Path(self.ok(repo, "export").strip()).read_text(encoding="utf-8"))
+        return rows(self.ok(repo, "export"))
 
     def dolt_head(self):
         return self.git(self.remote, "for-each-ref", "--format=%(objectname)", work_queue.DOLT_REF)
@@ -224,6 +224,52 @@ class DoltIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("unknown-backlog-section", result.stderr)
         self.assertEqual(self.dolt_head(), before)
+
+    def test_export_prints_the_whole_queue_on_stdout_and_can_also_write_a_file(self) -> None:
+        self.seed(bead("brwr-a1"), bead("brwr-b2"))
+        a = self.bootstrap(self.a)
+        printed = self.ok(a, "export")
+        self.assertEqual(rows(printed), rows(self.bd(a, "export")))
+        self.assertEqual(sorted(rows(printed)), ["brwr-a1", "brwr-b2", "brwr-gate"])
+        path = self.tmp / "out" / "q.jsonl"
+        self.assertEqual(self.ok(a, "export", str(path)), printed)
+        self.assertEqual(path.read_text(encoding="utf-8"), printed)
+
+    def test_an_empty_queue_fails_with_a_one_line_reason(self) -> None:
+        self.bd(self.a, "init", "--prefix", "brwr", "--non-interactive", "--skip-hooks", "--skip-agents")
+        result = self.queue(self.a, "export")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+        self.assertIn("empty", result.stderr)
+
+    def test_the_contract_commands_run_with_no_tty_and_driver_credentials(self) -> None:
+        # The shared driver: workspace cwd, no TTY (new session, stdin closed),
+        # GH_TOKEN, a credential helper in GIT_CONFIG_*, BOSUN_WORKSPACE.
+        self.seed(bead("brwr-a1"))
+        b = self.clone("b")
+        env = {
+            **os.environ, "GH_TOKEN": "not-a-real-token", "BOSUN_WORKSPACE": str(b),
+            "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f",
+        }
+        contract = json.loads((SCRIPTS.parent / "worker-contract.json").read_text(encoding="utf-8"))
+
+        def run(command: str) -> subprocess.CompletedProcess[str]:
+            if command.startswith("scripts/dev/queue"):
+                command = f"{sys.executable} {SCRIPTS / 'dev' / 'queue'}{command[len('scripts/dev/queue'):]}"
+            return subprocess.run(["sh", "-c", command], cwd=b, env=env, stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, start_new_session=True, timeout=180)
+
+        for key in ("bootstrap", "sync", "export"):
+            result = run(contract["queue"][key])
+            self.assertEqual(result.returncode, 0, f"{key}: {result.stdout}{result.stderr}")
+        self.assertIn("brwr-a1", rows(result.stdout))
+        self.bd(b, "update", "brwr-a1", "--set-metadata", "backlog_section=nowhere")
+        failed = run(contract["queue"]["sync"])
+        self.assertEqual(failed.returncode, 1)
+        self.assertEqual(len(failed.stderr.strip().splitlines()), 1, failed.stderr)
+        self.assertIn("unknown-backlog-section", failed.stderr)
 
     def test_backlog_renders_the_beads_into_the_frame(self) -> None:
         self.seed(bead("brwr-a1", metadata={"backlog_section": "plan"}))

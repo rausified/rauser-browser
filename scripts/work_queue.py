@@ -14,8 +14,9 @@ Commands (scripts/dev/queue is the entry point):
   sync              check this database's queue, pull, check the merged queue,
                     then `bd sync` (pull, conflict check, push). Any failed
                     check, or a remote that was never seeded, pushes nothing.
-  export [PATH]     write the queue as JSONL (`bd export`) to PATH, default
-                    target/queue/issues.jsonl (git-ignored), and print the path
+  export [PATH]     print the whole queue as JSONL (`bd export`) on stdout;
+                    with PATH, also write it there. An empty queue is a
+                    failure: a real queue never exports nothing.
   backlog [--print | --out PATH]
                     render BOSUN_FEATURE_BACKLOG.md, default
                     target/queue/BOSUN_FEATURE_BACKLOG.md (git-ignored)
@@ -56,7 +57,9 @@ EXPORT_PATH = "target/queue/issues.jsonl"
 WORKSPACE_ENV = "BRAUSER_QUEUE_WORKSPACE"  # run bd here instead of the checkout
 DOLT_REF = "refs/dolt/data"
 PREFIX = "brwr"
-BD_ENV = {"BD_NON_INTERACTIVE": "1"}
+# Never prompt: the shared driver runs these with no TTY, a credential helper
+# in GIT_CONFIG_* and GH_TOKEN in the environment, which pass through as is.
+BD_ENV = {"BD_NON_INTERACTIVE": "1", "GIT_TERMINAL_PROMPT": "0"}
 # bd sync's documented exit codes.
 SYNC_EXITS = {
     1: "error (transport, auth or storage)",
@@ -79,7 +82,8 @@ def _modules():
 
 
 def git(*args: str, cwd: pathlib.Path, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                            stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     if check and result.returncode != 0:
         raise QueueError(f"git {' '.join(args)} failed: {(result.stderr or result.stdout).strip()}")
     return result
@@ -88,7 +92,7 @@ def git(*args: str, cwd: pathlib.Path, check: bool = True) -> subprocess.Complet
 def bd(*args: str, cwd: pathlib.Path, check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(["bd", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
-                                env={**os.environ, **BD_ENV})
+                                stdin=subprocess.DEVNULL, env={**os.environ, **BD_ENV})
     except FileNotFoundError as error:
         raise QueueError("bd is not installed (https://github.com/gastownhall/beads)") from error
     if check and result.returncode != 0:
@@ -97,8 +101,12 @@ def bd(*args: str, cwd: pathlib.Path, check: bool = True) -> subprocess.Complete
 
 
 def repo_root(start: Optional[pathlib.Path] = None) -> pathlib.Path:
-    """The checkout to act for: START, else this script's checkout, else cwd."""
-    for candidate in ([start] if start else []) + [SCRIPTS, pathlib.Path.cwd()]:
+    """The checkout to act for: START, else the one containing cwd, else this script's.
+
+    The shared driver runs the contract's commands in the workspace cwd, so
+    cwd wins over wherever the script happens to live.
+    """
+    for candidate in ([start] if start else []) + [pathlib.Path.cwd(), SCRIPTS]:
         result = git("rev-parse", "--show-toplevel", cwd=candidate, check=False)
         if result.returncode == 0:
             return pathlib.Path(result.stdout.strip()).resolve()
@@ -125,6 +133,10 @@ def export(repo: pathlib.Path, path: Optional[pathlib.Path] = None) -> pathlib.P
     os.close(handle)
     try:
         bd("export", "-o", scratch, cwd=workspace(repo))
+        if not any(line.strip() for line in pathlib.Path(scratch).read_text(encoding="utf-8").splitlines()):
+            raise QueueError(
+                f"bd export in {workspace(repo)} is empty: no queue here (run `BD_NON_INTERACTIVE=1 bd bootstrap`)"
+            )
         os.replace(scratch, target)
     finally:
         if os.path.exists(scratch):
@@ -497,7 +509,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--repo", type=pathlib.Path, help="act for this checkout (default: this one)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("sync", help="check, pull, check, bd sync")
-    export_parser = sub.add_parser("export", help="write the queue JSONL to an ignored file")
+    export_parser = sub.add_parser("export", help="print the queue JSONL on stdout (and write PATH)")
     export_parser.add_argument("path", nargs="?", type=pathlib.Path)
     backlog_parser = sub.add_parser("backlog", help="render BOSUN_FEATURE_BACKLOG.md")
     where = backlog_parser.add_mutually_exclusive_group()
@@ -522,7 +534,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             sync(repo)
             print("queue: synced")
         elif args.command == "export":
-            print(export(repo, args.path))
+            path = export(repo, args.path.resolve() if args.path else None)
+            sys.stdout.write(path.read_text(encoding="utf-8"))
         elif args.command == "backlog":
             rb, _ = _modules()
             out = None if args.print else (args.out or repo / rb.RENDER_PATH)
@@ -540,8 +553,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         elif args.command == "seed":
             seed(repo, args.remote, args.source.resolve(), [p.resolve() for p in args.extra], yes=args.yes)
         return 0
-    except QueueError as error:
-        print(f"queue: {error}", file=sys.stderr)
+    except (QueueError, OSError, subprocess.SubprocessError) as error:
+        # One line: the driver reads the first stderr line as the reason.
+        reason = "; ".join(line.strip() for line in str(error).splitlines() if line.strip())
+        print(f"queue {args.command}: {reason or type(error).__name__}", file=sys.stderr)
         return 1
 
 

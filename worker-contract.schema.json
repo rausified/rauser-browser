@@ -54,7 +54,7 @@
           "minLength": 1
         },
         "export": {
-          "description": "Prints the path of a fresh JSONL export of the queue (git-ignored).",
+          "description": "Prints the whole queue as JSONL on stdout; empty output is a failure.",
           "type": "string",
           "minLength": 1
         }
