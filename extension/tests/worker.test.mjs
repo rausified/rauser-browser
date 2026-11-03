@@ -3101,7 +3101,17 @@ test("alreadySummarizedIsAskedAgainNextLocalDayInTheSameBrowserSession", async (
 });
 
 test("yesterdaysAlreadySummarizedReplyDoesNotSuppressToday", async (t) => {
-  t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 2, 23, 59, 59).getTime() });
+  // Midnight from the real tomorrow into the day after: a fixed date leaked
+  // its day into the next test on that real date (2026-11-03 failed all day
+  // in UTC CI). Leases are issued under the fake clock, so any day works.
+  const real = new Date();
+  const at = (days, hours, minutes, seconds) =>
+    new Date(real.getFullYear(), real.getMonth(), real.getDate() + days, hours, minutes, seconds);
+  const dayOf = (date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const before = at(1, 23, 59, 59);
+  const after = at(2, 0, 0, 1);
+  t.mock.timers.enable({ apis: ["Date"], now: before.getTime() });
   t.after(() => {
     resetAuto();
     values.set(storageKey("policy_v1"), autoLease({ enabled: false, dwell_secs: 0 }));
@@ -3109,11 +3119,11 @@ test("yesterdaysAlreadySummarizedReplyDoesNotSuppressToday", async (t) => {
   resetAuto();
   sessionValues.delete(storageKey("activity_session_v1"));
   values.set(storageKey("policy_v1"), autoLease());
-  const before = ports.length;
+  const opened = ports.length;
   await openArtifact(220, "midnight-reply");
-  const first = await autoRequest(before);
-  assert.equal(first.request.requested_at.slice(0, 10), "2026-11-02");
-  t.mock.timers.setTime(new Date(2026, 10, 3, 0, 0, 1).getTime());
+  const first = await autoRequest(opened);
+  assert.equal(first.request.requested_at.slice(0, 10), dayOf(before));
+  t.mock.timers.setTime(after.getTime());
   values.set(storageKey("policy_v1"), autoLease());
   first.port.reply({
     type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
@@ -3125,7 +3135,7 @@ test("yesterdaysAlreadySummarizedReplyDoesNotSuppressToday", async (t) => {
   const again = ports.length;
   await openArtifact(221, "midnight-reply");
   const second = await autoRequest(again);
-  assert.equal(second.request.requested_at.slice(0, 10), "2026-11-03");
+  assert.equal(second.request.requested_at.slice(0, 10), dayOf(after));
   second.port.reply({
     type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION,
     request_id: second.request.request_id, reason: "already_summarized",

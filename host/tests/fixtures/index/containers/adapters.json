@@ -1,0 +1,73 @@
+{
+  "artifacts": [
+    {
+      "id": "github.pr:{host}/{owner}/{repo}/{number}",
+      "match": [
+        {
+          "path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}"
+        }
+      ],
+      "modes": {
+        "checks": "view",
+        "commits": "view",
+        "files": "review"
+      },
+      "origin": "https://github.com",
+      "scope": {
+        "owner": [
+          "acme-corp"
+        ]
+      },
+      "type": "github.pr",
+      "within": {
+        "id": "github.repo:{host}/{owner}/{repo}",
+        "type": "github.repo"
+      }
+    },
+    {
+      "id": "github.issue:{host}/{owner}/{repo}/{number}",
+      "match": [
+        {
+          "path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"
+        }
+      ],
+      "origin": "https://github.com",
+      "scope": {
+        "owner": [
+          "acme-corp"
+        ]
+      },
+      "type": "github.issue",
+      "within": {
+        "id": "github.repo:{host}/{owner}/{repo}",
+        "type": "github.repo"
+      }
+    },
+    {
+      "id": "github.repo:{host}/{owner}/{repo}",
+      "match": [
+        {
+          "path": "/{owner:name|lower}/{repo:name|lower}/{*}"
+        }
+      ],
+      "origin": "https://github.com",
+      "scope": {
+        "owner": [
+          "acme-corp"
+        ]
+      },
+      "type": "github.repo"
+    },
+    {
+      "id": "jira:{host}/{key}",
+      "match": [
+        {
+          "path": "/browse/{key:jira_key}"
+        }
+      ],
+      "origin": "https://acme.atlassian.net",
+      "type": "jira.issue"
+    }
+  ],
+  "format": 1
+}

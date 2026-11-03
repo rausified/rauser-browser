@@ -1,0 +1,654 @@
+{
+  "reads": {
+    "artifacts": {
+      "work:example.com/LINE": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/LINE",
+              "artifact_type": "work.item",
+              "background_seconds": 122,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-15",
+              "focused_seconds": 250,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-15",
+              "linked_count": 0,
+              "opens": 2,
+              "title": "Line two",
+              "url": "https://example.com/items/LINE",
+              "why": null,
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/LINE"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/LINE"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/LINE"
+          ]
+        }
+      },
+      "work:example.com/TIE": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/TIE",
+              "artifact_type": "work.item",
+              "background_seconds": 244,
+              "contained": [],
+              "days_opened": 2,
+              "first_seen": "2026-10-15",
+              "focused_seconds": 500,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-16",
+              "linked_count": 0,
+              "opens": 4,
+              "title": "In 2026-10-15.md",
+              "url": "https://example.com/items/TIE",
+              "why": "Why in the dashed log",
+              "within": null
+            },
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": "Why in the dashed log"
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/TIE"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/TIE"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/TIE"
+          ]
+        }
+      },
+      "work:example.com/never-recorded": {
+        "card": {
+          "ok": {
+            "artifact": null,
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": []
+        },
+        "urls": {
+          "ok": []
+        }
+      }
+    },
+    "recent": {
+      "type=None query=None limit=0": {
+        "ok": {
+          "items": [],
+          "truncated": true,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=1": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/TIE",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "In 2026-10-15.md",
+              "url": "https://example.com/items/TIE",
+              "why": "Why in the dashed log"
+            }
+          ],
+          "truncated": true,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/TIE",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "In 2026-10-15.md",
+              "url": "https://example.com/items/TIE",
+              "why": "Why in the dashed log"
+            },
+            {
+              "artifact_id": "work:example.com/TIE",
+              "artifact_type": "work.item",
+              "background_seconds": 183,
+              "focused_seconds": 375,
+              "local_date": "2026-10-15",
+              "opens": 3,
+              "summary": null,
+              "title": "In 2026-10-15.md",
+              "url": "https://example.com/items/TIE",
+              "why": "Why in the dashed log"
+            },
+            {
+              "artifact_id": "work:example.com/LINE",
+              "artifact_type": "work.item",
+              "background_seconds": 122,
+              "focused_seconds": 250,
+              "local_date": "2026-10-15",
+              "opens": 2,
+              "summary": null,
+              "title": "Line two",
+              "url": "https://example.com/items/LINE",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"no.such.type\") query=None limit=50": {
+        "ok": {
+          "items": [],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"work.item\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/TIE",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-16",
+              "opens": 1,
+              "summary": null,
+              "title": "In 2026-10-15.md",
+              "url": "https://example.com/items/TIE",
+              "why": "Why in the dashed log"
+            },
+            {
+              "artifact_id": "work:example.com/TIE",
+              "artifact_type": "work.item",
+              "background_seconds": 183,
+              "focused_seconds": 375,
+              "local_date": "2026-10-15",
+              "opens": 3,
+              "summary": null,
+              "title": "In 2026-10-15.md",
+              "url": "https://example.com/items/TIE",
+              "why": "Why in the dashed log"
+            },
+            {
+              "artifact_id": "work:example.com/LINE",
+              "artifact_type": "work.item",
+              "background_seconds": 122,
+              "focused_seconds": 250,
+              "local_date": "2026-10-15",
+              "opens": 2,
+              "summary": null,
+              "title": "Line two",
+              "url": "https://example.com/items/LINE",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "work.item"
+          ]
+        }
+      }
+    },
+    "worklog": {
+      "2026-10-15..2026-10-16": {
+        "ok": {
+          "count": 2,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 2 artifacts, and focused on 0 left open from an earlier day.\nwork.item work:example.com/TIE: In 2026-10-15.md — focused 8 min · 4 min in background · opened 4×. Why: Why in the dashed log\nwork.item work:example.com/LINE: Line two — focused 4 min · 2 min in background · opened 2×"
+        }
+      },
+      "2026-10-16..2026-10-16": {
+        "ok": {
+          "count": 1,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 1 artifact, and focused on 0 left open from an earlier day.\nwork.item work:example.com/TIE: In 2026-10-15.md — focused 2 min · 1 min in background · opened 1×. Why: Why in the dashed log"
+        }
+      }
+    }
+  },
+  "relearn": {
+    "ok": {
+      "evidence": [
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/LINE"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/LINE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/LINE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/LINE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/LINE"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/LINE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/LINE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/LINE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/TIE"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/TIE"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/TIE"
+          }
+        }
+      ],
+      "revision": "394a386e0f998c67b737f6d035070a86fcee7e89dcb9528891d6731c42a04f7c"
+    }
+  },
+  "tables": {
+    "artifacts": [
+      [
+        "work:example.com/LINE",
+        "work.item",
+        "example.com",
+        "Line two",
+        "https://example.com/items/LINE",
+        "2026-10-15",
+        "2026-10-15",
+        250,
+        122,
+        2,
+        1,
+        "view",
+        null
+      ],
+      [
+        "work:example.com/TIE",
+        "work.item",
+        "example.com",
+        "In 2026-10-15.md",
+        "https://example.com/items/TIE",
+        "2026-10-15",
+        "2026-10-16",
+        500,
+        244,
+        4,
+        2,
+        "view",
+        "Why in the dashed log"
+      ]
+    ],
+    "dirty_artifacts": [
+      [
+        "work:example.com/LINE"
+      ],
+      [
+        "work:example.com/TIE"
+      ]
+    ],
+    "edges": [],
+    "url_provenance": [
+      [
+        "00000000-0000-4000-8008-000000000001",
+        "work:example.com/TIE",
+        "mode:0",
+        "https://example.com/items/TIE",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000001",
+        "work:example.com/TIE",
+        "url",
+        "https://example.com/items/TIE",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000002",
+        "work:example.com/TIE",
+        "mode:0",
+        "https://example.com/items/TIE",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000002",
+        "work:example.com/TIE",
+        "url",
+        "https://example.com/items/TIE",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000003",
+        "work:example.com/TIE",
+        "mode:0",
+        "https://example.com/items/TIE",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000003",
+        "work:example.com/TIE",
+        "url",
+        "https://example.com/items/TIE",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000004",
+        "work:example.com/TIE",
+        "mode:0",
+        "https://example.com/items/TIE",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000004",
+        "work:example.com/TIE",
+        "url",
+        "https://example.com/items/TIE",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000005",
+        "work:example.com/LINE",
+        "mode:0",
+        "https://example.com/items/LINE",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000005",
+        "work:example.com/LINE",
+        "url",
+        "https://example.com/items/LINE",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000006",
+        "work:example.com/LINE",
+        "mode:0",
+        "https://example.com/items/LINE",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000006",
+        "work:example.com/LINE",
+        "url",
+        "https://example.com/items/LINE",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000007",
+        "work:example.com/TIE",
+        "url",
+        "https://example.com/items/TIE",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000008",
+        "work:example.com/TIE",
+        "url",
+        "https://example.com/items/TIE",
+        "[]"
+      ]
+    ],
+    "visits": [
+      [
+        "00000000-0000-4000-8008-000000000001",
+        "work:example.com/TIE",
+        "2026-10-15T23:00:00-07:00",
+        "2026-10-15",
+        125,
+        61,
+        1,
+        "view",
+        "In 2026/10/15.md",
+        "https://example.com/items/TIE"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000002",
+        "work:example.com/TIE",
+        "2026-10-15T23:00:00-07:00",
+        "2026-10-15",
+        125,
+        61,
+        1,
+        "view",
+        "In 2026/10-b.md",
+        "https://example.com/items/TIE"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000003",
+        "work:example.com/TIE",
+        "2026-10-15T23:00:00-07:00",
+        "2026-10-15",
+        125,
+        61,
+        1,
+        "view",
+        "In 2026-10-15.md",
+        "https://example.com/items/TIE"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000004",
+        "work:example.com/TIE",
+        "2026-10-16T06:00:00Z",
+        "2026-10-16",
+        125,
+        61,
+        1,
+        "view",
+        "Same instant in UTC",
+        "https://example.com/items/TIE"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000005",
+        "work:example.com/LINE",
+        "2026-10-15T09:00:00Z",
+        "2026-10-15",
+        125,
+        61,
+        1,
+        "view",
+        "Line one",
+        "https://example.com/items/LINE"
+      ],
+      [
+        "00000000-0000-4000-8008-000000000006",
+        "work:example.com/LINE",
+        "2026-10-15T09:00:00Z",
+        "2026-10-15",
+        125,
+        61,
+        1,
+        "view",
+        "Line two",
+        "https://example.com/items/LINE"
+      ]
+    ]
+  }
+}

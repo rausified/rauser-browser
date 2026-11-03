@@ -2015,8 +2015,16 @@ fn regenerate_artifacts(config: &mut ConfigStore, interactive: bool) {
         return;
     }
     let started = Instant::now();
-    match index.regenerate_dirty() {
-        Ok(report) => {
+    // Another host process's regenerator is already writing these files
+    // (7vf); a mark it leaves behind waits for the next pass.
+    match index.regenerate_dirty_unless_busy() {
+        Ok(None) => {
+            tracing::debug!(
+                interactive,
+                "artifact pass skipped: another process is regenerating"
+            );
+        }
+        Ok(Some(report)) => {
             tracing::info!(
                 interactive,
                 written = report.written,
@@ -3203,6 +3211,13 @@ fn refresh_artifacts(
             conflicts: u32::try_from(report.conflicts).unwrap_or(u32::MAX),
             conflict_paths: report.conflict_paths,
         }),
+        // Another process held the index past the busy timeout: say so in
+        // the history-unavailable family, never in SQLite's words.
+        Err(cause) if crate::index::busy(&cause) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            crate::index::BUSY_MESSAGE,
+        ),
         Err(_) => error(
             &value.request_id,
             ErrorCode::Internal,
@@ -3244,6 +3259,7 @@ pub(crate) fn error(request_id: &str, code: ErrorCode, message: &str) -> Respons
 mod tests {
     use super::*;
     use crate::frame::{MAX_INBOUND_BYTES, MAX_OUTBOUND_BYTES};
+    use crate::index::tests::sql::{Value as SqlValue, sql_rows};
     use brauser_protocol::{
         ActivityEvent, ActivityMode, ActivityTrail, CaptureBatchItem, ConfigSnapshot,
         GetConfigRequest, HelloRequest, RecordActivityRequest, RecordBatchRequest,
@@ -7779,16 +7795,13 @@ scope = { owner = ["acme"] }
             }
             other => panic!("expected a recognized visit result, got {other:?}"),
         }
-        let output = std::process::Command::new("python3")
-            .args([
-                "-c",
-                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])",
-            ])
-            .arg(config.cache_dir().unwrap().join("index.db"))
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "1");
+        assert_eq!(
+            sql_rows(
+                &config.cache_dir().unwrap().join("index.db"),
+                "select count(*) from visits"
+            ),
+            [[SqlValue::Integer(1)]]
+        );
     }
 
     #[test]
@@ -8194,10 +8207,13 @@ id = "work:{host}/{id}"
             let second_bytes = std::fs::read(&second_path).unwrap();
             let cache = config.cache_dir().unwrap();
             let fault = if publication_failure {
-                std::fs::remove_file(cache.join("index-state.json")).unwrap();
+                // A directory planted at index.db while no host has it
+                // open; the next host's first open meets it.
+                drop(config);
                 let fault = cache.join("index.db");
                 std::fs::remove_file(&fault).unwrap();
                 std::fs::create_dir(&fault).unwrap();
+                config = loaded(&path);
                 fault
             } else {
                 let fault = root.join("logs/oversized.md");
@@ -8239,7 +8255,25 @@ id = "work:{host}/{id}"
             );
             assert_eq!(std::fs::read(first_path).unwrap(), first_bytes);
             assert_eq!(std::fs::read(second_path).unwrap(), second_bytes);
+            // The fault is real: history reads unavailable.
+            let Response::Error(unavailable) = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recent-unavailable".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            ) else {
+                panic!("history must read unavailable")
+            };
+            assert!(
+                unavailable.message.contains("history is unavailable"),
+                "{unavailable:?}"
+            );
             if publication_failure {
+                assert_eq!(std::fs::read_dir(&fault).unwrap().count(), 0);
                 std::fs::remove_dir(fault).unwrap();
             } else {
                 std::fs::remove_file(fault).unwrap();
@@ -8251,6 +8285,21 @@ id = "work:{host}/{id}"
             assert!(
                 matches!(note_save(&mut config, canonical, "Keep copy-out", &first_saved.revision, first.key),
                 Response::NoteConflict(NoteConflict { reason, .. }) if reason == "key_changed")
+            );
+            // With the fault gone, history reads again.
+            let recovered = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recent-recovered".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            );
+            assert!(
+                matches!(recovered, Response::ArtifactListResult(_)),
+                "{recovered:?}"
             );
         }
     }
@@ -8319,15 +8368,54 @@ id = "work:{host}/{id}"
                 };
                 deliver(&mut config, 1);
                 let cache = config.cache_dir().unwrap();
-                let state_path = cache.join("index-state.json");
-                let old_state = std::fs::read(&state_path).unwrap();
-                let old_db = std::fs::read(cache.join("index.db")).unwrap();
+                let db = cache.join("index.db");
+                let old_watermark = sql_rows(&db, "select * from brauser_logs");
                 deliver(&mut config, 2);
-                // The append is durable, but both published caches are from
-                // before it (interruption between append and index update).
-                std::fs::write(&state_path, &old_state).unwrap();
-                std::fs::write(cache.join("index.db"), &old_db).unwrap();
                 drop(config);
+                // The append is durable, but its index update never
+                // committed (an interruption between append and index
+                // update): take delivery 2's rows back out of index.db and
+                // put the log watermark back where delivery 1 left it.
+                {
+                    let conn = rusqlite::Connection::open(&db).unwrap();
+                    let lost = "work:work.example/2";
+                    conn.execute(
+                        "delete from brauser_events where event_id = ?1",
+                        ["00000000-0000-4000-8000-000000000002"],
+                    )
+                    .unwrap();
+                    for table in [
+                        "artifacts",
+                        "visits",
+                        "url_provenance",
+                        "dirty_artifacts",
+                        "brauser_artifact_days",
+                        "brauser_group_state",
+                    ] {
+                        conn.execute(
+                            &format!("delete from {table} where artifact_id = ?1"),
+                            [lost],
+                        )
+                        .unwrap();
+                    }
+                    conn.execute(
+                        "delete from edges where ?1 in (source_artifact_id, target_artifact_id)",
+                        [lost],
+                    )
+                    .unwrap();
+                    conn.execute("delete from brauser_logs", []).unwrap();
+                    for row in &old_watermark {
+                        conn.execute(
+                            "insert into brauser_logs values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                            rusqlite::params_from_iter(row),
+                        )
+                        .unwrap();
+                    }
+                }
+                assert_eq!(
+                    sql_rows(&db, "select count(*) from brauser_events"),
+                    [[SqlValue::Integer(1)]]
+                );
                 let mut config = loaded(&path);
                 if !query_first {
                     deliver(&mut config, 3);
@@ -8377,16 +8465,16 @@ id = "work:{host}/{id}"
                 };
                 assert_eq!(log.artifact_count as usize, expected);
                 assert!(log.text.contains("Issue 2"));
-                // Catch-up must persist its checkpoint and repair the public
-                // SQLite snapshot too, without waiting for another delivery.
-                let output = std::process::Command::new("python3")
-                    .args(["-c", "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from visits').fetchone()[0])"])
-                    .arg(cache.join("index.db")).output().unwrap();
-                assert!(output.status.success());
-                assert_eq!(
-                    String::from_utf8(output.stdout).unwrap().trim(),
-                    expected.to_string()
-                );
+                // Catch-up must persist its checkpoint and repair index.db
+                // too, without waiting for another delivery or a replay.
+                for table in ["brauser_events", "visits", "artifacts"] {
+                    assert_eq!(
+                        sql_rows(&db, &format!("select count(*) from {table}")),
+                        [[SqlValue::Integer(expected as i64)]],
+                        "{table}, query_first={query_first}, batched={batched}"
+                    );
+                }
+                assert_ne!(sql_rows(&db, "select * from brauser_logs"), old_watermark);
             }
         }
     }
@@ -8428,7 +8516,6 @@ id = "work:{host}/{id}"
                 VisitOutcome::Persisted
             );
             let cache = config.cache_dir().unwrap();
-            let old_state = std::fs::read(cache.join("index-state.json")).unwrap();
             let fault = if oversized_log {
                 let fault = root.join("logs/oversized.md");
                 let file = std::fs::File::create(&fault).unwrap();
@@ -8440,6 +8527,15 @@ id = "work:{host}/{id}"
                 std::fs::create_dir(&fault).unwrap();
                 fault
             };
+            let listing = |cache: &std::path::Path| {
+                let mut names = std::fs::read_dir(cache)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect::<Vec<_>>();
+                names.sort();
+                names
+            };
+            let cache_before = listing(&cache);
             event.event_id = uuid::Uuid::new_v4().to_string();
             event.artifact_id = "work:work.example/2".into();
             event.url = "https://work.example/issues/2".into();
@@ -8448,10 +8544,8 @@ id = "work:{host}/{id}"
             assert_eq!(captured.outcome, VisitOutcome::Persisted);
             let log_path = root.join(captured.relative_path.unwrap());
             let durable_bytes = std::fs::read(&log_path).unwrap();
-            assert_eq!(
-                std::fs::read(cache.join("index-state.json")).unwrap(),
-                old_state
-            );
+            // No JSON cache stands in for the unavailable index.
+            assert!(!cache.join("index-state.json").exists());
             let replies = [
                 list_artifacts(
                     brauser_protocol::ListArtifactsRequest {
@@ -8489,6 +8583,16 @@ id = "work:{host}/{id}"
                 assert_eq!(reply.code, ErrorCode::Internal);
                 assert!(reply.message.contains("history is unavailable"));
             }
+            // No side effect: the directory is untouched, and nothing (no
+            // SQLite sidecar, no published cache) appeared beside it.
+            assert_eq!(listing(&cache), cache_before);
+            if !oversized_log {
+                assert!(fault.is_dir());
+                assert_eq!(std::fs::read_dir(&fault).unwrap().count(), 0);
+                for sidecar in ["index.db-wal", "index.db-shm", "index.db-journal"] {
+                    assert!(!cache.join(sidecar).exists(), "{sidecar}");
+                }
+            }
             if oversized_log {
                 std::fs::remove_file(fault).unwrap();
             } else {
@@ -8519,6 +8623,276 @@ id = "work:{host}/{id}"
             assert_eq!(duplicate.outcome, VisitOutcome::Suppressed);
             assert_eq!(duplicate.reason.as_deref(), Some("duplicate_event"));
             assert_eq!(std::fs::read(log_path).unwrap(), durable_bytes);
+        }
+    }
+
+    /// A configured work-item home with one delivered activity, so
+    /// `index.db` exists. Returns the folder, the home and the config.
+    fn indexed_work_item() -> (tempfile::TempDir, std::path::PathBuf, ConfigStore) {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        write_adapter_config(
+            &path,
+            &root,
+            r#"[[artifacts]]
+ type = "work.item"
+ origin = "https://work.example"
+ match = [{ path = "/issues/{id:int}" }]
+ id = "work:{host}/{id}"
+ "#,
+        );
+        let mut config = loaded(&path);
+        assert_eq!(
+            deliver_activity(&mut config, activity_for_invalid_policy()),
+            VisitOutcome::Persisted
+        );
+        assert!(config.cache_dir().unwrap().join("index.db").is_file());
+        (folder, root, config)
+    }
+
+    fn files_under(dir: &std::path::Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                if path.is_dir() { files_under(&path) } else { 1 }
+            })
+            .sum()
+    }
+
+    /// 7vf: another host process's regenerator holds `index-regen.lock`.
+    /// The panel's connection-close pass and the daily pass skip at once
+    /// and keep every mark; the settings refresh waits for the holder.
+    #[test]
+    fn a_held_regen_lock_skips_the_close_pass() {
+        let (_folder, root, mut config) = indexed_work_item();
+        let cache = config.cache_dir().unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(cache.join("index-regen.lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        let dirty = || {
+            sql_rows(
+                &cache.join("index.db"),
+                "select count(*) from dirty_artifacts",
+            )
+        };
+        for interactive in [true, false] {
+            let started = Instant::now();
+            regenerate_artifacts(&mut config, interactive);
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+            assert_eq!(files_under(&root.join("artifacts")), 0, "{interactive}");
+            assert!(!cache.join("regenerated.json").exists());
+            assert_eq!(dirty(), [[SqlValue::Integer(1)]]);
+        }
+        let hold = std::time::Duration::from_millis(300);
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(hold);
+            drop(lock);
+        });
+        let started = Instant::now();
+        let refreshed = refresh_artifacts(
+            brauser_protocol::RefreshArtifactsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "refresh".into(),
+            },
+            &mut config,
+        );
+        assert!(started.elapsed() >= hold);
+        let Response::ArtifactsRefreshed(refreshed) = refreshed else {
+            panic!("expected a refresh, got {refreshed:?}")
+        };
+        assert_eq!(refreshed.written, 1);
+        release.join().unwrap();
+        assert_eq!(files_under(&root.join("artifacts")), 1);
+        assert_eq!(dirty(), [[SqlValue::Integer(0)]]);
+    }
+
+    /// 7vf: while another connection holds the SQLite write lock past the
+    /// busy timeout, capture stays durable and no response carries SQLite's
+    /// busy or locked wording; an error is the "history is unavailable"
+    /// family.
+    #[test]
+    fn busy_text_never_reaches_a_response() {
+        let (_folder, _root, mut config) = indexed_work_item();
+        let cache = config.cache_dir().unwrap();
+        let _short = crate::index::BusyTimeout::set(std::time::Duration::from_millis(50));
+        let holder = rusqlite::Connection::open(cache.join("index.db")).unwrap();
+        holder.execute("BEGIN IMMEDIATE", []).unwrap();
+        let surfaced = || crate::index::BUSY_SURFACED.with(std::cell::Cell::get);
+        let before = surfaced();
+        let mut later = activity_for_invalid_policy();
+        later.artifact_id = "work:work.example/2".into();
+        later.url = "https://work.example/issues/2".into();
+        assert_eq!(
+            deliver_activity(&mut config, later.clone()),
+            VisitOutcome::Persisted
+        );
+        let replies = [
+            list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recent".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            ),
+            get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "artifact".into(),
+                    url: later.url.clone(),
+                    title: None,
+                },
+                &mut config,
+            ),
+            worklog(
+                brauser_protocol::WorklogRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "worklog".into(),
+                    start_date: invalid_policy_day(),
+                    end_date: invalid_policy_day(),
+                },
+                &mut config,
+            ),
+            refresh_artifacts(
+                brauser_protocol::RefreshArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "refresh".into(),
+                },
+                &mut config,
+            ),
+        ];
+        regenerate_artifacts(&mut config, true);
+        for reply in &replies {
+            let text = serde_json::to_string(reply).unwrap().to_lowercase();
+            for word in ["busy", "locked", "sqlite"] {
+                assert!(!text.contains(word), "{word} in {text}");
+            }
+        }
+        // The explicit refresh could not take the write lock: it says the
+        // history is unavailable, not that files failed to update.
+        let Response::Error(refresh) = &replies[3] else {
+            panic!("expected the refresh to fail, got {:?}", replies[3])
+        };
+        assert_eq!(refresh.code, ErrorCode::Internal);
+        assert!(
+            refresh
+                .message
+                .starts_with("artifact history is unavailable"),
+            "{}",
+            refresh.message
+        );
+        assert!(surfaced() > before);
+        holder.execute("ROLLBACK", []).unwrap();
+        drop(holder);
+        let Response::ArtifactsRefreshed(refreshed) = refresh_artifacts(
+            brauser_protocol::RefreshArtifactsRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "refresh".into(),
+            },
+            &mut config,
+        ) else {
+            panic!("expected a refresh once the lock is free")
+        };
+        assert_eq!(refreshed.written, 2);
+    }
+
+    /// `index.db` is created only by a commit of ingested data: reads, the
+    /// connection-boundary pass, an explicit refresh and log reconciliation
+    /// over a history with nothing to index leave the cache without it.
+    #[test]
+    fn reads_and_passes_over_an_empty_history_never_create_index_db() {
+        for logs_exist in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            std::fs::create_dir(&root).unwrap();
+            if logs_exist {
+                std::fs::create_dir(root.join("logs")).unwrap();
+            }
+            let path = folder.path().join("config.toml");
+            write_adapter_config(
+                &path,
+                &root,
+                r#"[[artifacts]]
+ type = "work.item"
+ origin = "https://work.example"
+ match = [{ path = "/issues/{id:int}" }]
+ id = "work:{host}/{id}"
+ "#,
+            );
+            let mut config = loaded(&path);
+            let cache = config.cache_dir().unwrap();
+            let Response::ArtifactListResult(recent) = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "recent".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    limit: 32,
+                },
+                &mut config,
+            ) else {
+                panic!("expected an empty history")
+            };
+            assert!(recent.items.is_empty());
+            assert!(matches!(
+                get_artifact(
+                    brauser_protocol::GetArtifactRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "artifact".into(),
+                        url: "https://work.example/issues/1".into(),
+                        title: None,
+                    },
+                    &mut config,
+                ),
+                Response::ArtifactResult(_)
+            ));
+            assert!(matches!(
+                worklog(
+                    brauser_protocol::WorklogRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "worklog".into(),
+                        start_date: invalid_policy_day(),
+                        end_date: invalid_policy_day(),
+                    },
+                    &mut config,
+                ),
+                Response::WorklogResult(_)
+            ));
+            assert!(matches!(
+                refresh_artifacts(
+                    brauser_protocol::RefreshArtifactsRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "refresh".into(),
+                    },
+                    &mut config,
+                ),
+                Response::ArtifactsRefreshed(_)
+            ));
+            regenerate_artifacts(&mut config, true);
+            reconcile_index_from_logs(&config);
+            for name in [
+                "index.db",
+                "index.db-wal",
+                "index.db-shm",
+                "index.db-journal",
+            ] {
+                assert!(
+                    !cache.join(name).exists(),
+                    "{name} exists, logs_exist={logs_exist}"
+                );
+            }
         }
     }
 
@@ -9022,18 +9396,12 @@ id = "work:{host}/{id}"
             }
             other => panic!("expected duplicate activity suppression, got {other:?}"),
         }
-        let output = std::process::Command::new("python3")
-            .args([
-                "-c",
-                "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select title from artifacts').fetchone()[0])",
-            ])
-            .arg(config.cache_dir().unwrap().join("index.db"))
-            .output()
-            .unwrap();
-        assert!(output.status.success());
         assert_eq!(
-            String::from_utf8(output.stdout).unwrap().trim(),
-            "Work item"
+            sql_rows(
+                &config.cache_dir().unwrap().join("index.db"),
+                "select title from artifacts"
+            )[0],
+            [SqlValue::Text("Work item".into())]
         );
         assert!(!root.join("artifacts").exists());
         regenerate_artifacts(&mut config, true);

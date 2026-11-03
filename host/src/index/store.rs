@@ -1,0 +1,1320 @@
+//! The SQL store (plan T8): `brauser_events` is the cache of every indexed
+//! event body, and every derived row is produced by the shared [`Fold`].
+//!
+//! - [`ingest`] adds one event under the conflict rules: the first-indexed
+//!   body wins, the same body at an earlier log position moves there, and a
+//!   different body for an indexed ID is a conflict that changes nothing.
+//! - [`rederive_groups`] re-derives each affected group (one artifact's own
+//!   events plus, for a container, its children's) and replaces only the
+//!   rows that group owns, so no delivery runs a full derive.
+//! - [`apply`] takes the append fast path for a group whose new events all
+//!   sort after everything it holds: the same [`Fold`], seeded with the
+//!   group's stored rows, folds only those events. Any other group takes
+//!   the exact re-derive.
+//! - [`mark_dirty`] gives each mark a fresh generation, so a later
+//!   generation-conditional clear never loses a newer mark.
+//!
+//! Row ownership partitions every derived table by group: an artifact's
+//! row, own visits, URL provenance, days and state belong to its group; a
+//! `within` edge belongs to its target (the container, derived from the
+//! children); a `mentions` edge to its source; every trail edge to its
+//! target. Each is complete in its owner's fold.
+//!
+//! Under `cfg(test)` every [`write`] transaction ends with the oracle:
+//! the derived tables must equal the same writer's rows for a full derive of
+//! `brauser_events`.
+
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+
+use super::*;
+
+/// The append fast path (plan T14): a group whose new events all sort
+/// after everything it holds folds only those events, from its stored rows.
+/// `false` sends every affected group through the exact per-group
+/// re-derive, with no schema change.
+pub(super) const FAST_PATH: bool = true;
+
+/// Opens the store for a write, creating it (or replacing a legacy file)
+/// as needed.
+pub(super) fn open(cache_dir: &Path) -> Result<Connection> {
+    db::open(cache_dir, db::Mode::ReadWrite)?
+        .context("artifact history is unavailable: index.db could not be opened")
+}
+
+/// Runs `f` in one `write_txn`. In tests the derived tables are then
+/// checked against a full derive of `brauser_events` before the commit.
+pub(super) fn write<T>(
+    conn: &mut Connection,
+    adapters: Option<&Document>,
+    f: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    db::write_txn(conn, |tx| {
+        let value = f(tx)?;
+        #[cfg(test)]
+        oracle::check(tx, adapters)?;
+        #[cfg(not(test))]
+        let _ = adapters;
+        Ok(value)
+    })
+}
+
+/// What [`ingest`] did with one event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Ingest {
+    /// A new event ID; its body is stored.
+    Inserted,
+    /// The indexed body (same data) seen again where it already sorts.
+    Same,
+    /// The indexed body seen at an earlier log position, which it now takes.
+    Moved,
+    /// A different body for an indexed ID; the first-indexed one is kept.
+    Conflict,
+}
+
+/// What one write transaction's ingests leave to derive: the events each
+/// group gained (candidates for the fast path) and the groups that must be
+/// re-derived exactly.
+#[derive(Debug, Default)]
+pub(super) struct Changes {
+    appended: BTreeMap<String, BTreeSet<String>>,
+    rederive: BTreeSet<String>,
+}
+
+impl Changes {
+    /// Note what [`ingest`] did with `event_id`, which touched `groups`. A
+    /// new event may extend its groups; a moved one reorders their history,
+    /// so they re-derive. The same body or a conflict changes no row.
+    pub(super) fn record(&mut self, outcome: Ingest, event_id: &str, groups: BTreeSet<String>) {
+        match outcome {
+            Ingest::Inserted if FAST_PATH => {
+                for group in groups {
+                    self.appended
+                        .entry(group)
+                        .or_default()
+                        .insert(event_id.to_owned());
+                }
+            }
+            Ingest::Inserted | Ingest::Moved => self.rederive.extend(groups),
+            Ingest::Same | Ingest::Conflict => {}
+        }
+    }
+}
+
+/// Derive every group `changes` names: by the fast path where it is exact,
+/// else by [`rederive_group`].
+pub(super) fn apply(
+    tx: &Transaction<'_>,
+    adapters: Option<&Document>,
+    changes: &Changes,
+) -> Result<()> {
+    let mut rederive = changes.rederive.clone();
+    for (group, ids) in &changes.appended {
+        if !rederive.contains(group) && !append(tx, adapters, group, ids)? {
+            rederive.insert(group.clone());
+        }
+    }
+    rederive_groups(tx, adapters, &rederive)
+}
+
+/// One stored event, as the fold and the row writers need it.
+pub(super) struct StoredEvent {
+    pub(super) artifact_id: String,
+    pub(super) container_id: Option<String>,
+    pub(super) order_key: Vec<u8>,
+    pub(super) event: CachedEvent,
+}
+
+pub(super) fn event_kind(event: &CachedEvent) -> &'static str {
+    match event.data {
+        EventData::Activity(_) => "activity",
+        EventData::Why(_) => "why",
+        EventData::Legacy(_) => "legacy",
+        EventData::Summary(_) => "summary",
+    }
+}
+
+/// The container a visit rolls up into under the current adapters. Only
+/// activity and M1 visits roll up.
+pub(super) fn container_of(containers: &mut Containers<'_>, event: &CachedEvent) -> Option<String> {
+    let (url, artifact_id) = match &event.data {
+        EventData::Activity(event) => (&event.url, &event.artifact_id),
+        EventData::Legacy(event) => (&event.url, &event.artifact_id),
+        EventData::Why(_) | EventData::Summary(_) => return None,
+    };
+    containers
+        .of(url, artifact_id)
+        .map(|(_, container, _)| container)
+}
+
+pub(super) fn has_refs(event: &CachedEvent) -> bool {
+    matches!(&event.data, EventData::Activity(event) if !event.refs.is_empty())
+}
+
+/// A log-dir-relative position as stored: `/`-separated components.
+fn log_path_text(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn key_of(
+    event: &CachedEvent,
+    id: &str,
+    position: Option<&(PathBuf, u64)>,
+    sequence: Option<u64>,
+) -> Vec<u8> {
+    ord::order_key(
+        event_time(event),
+        position.map(|(path, line)| (path.as_path(), *line)),
+        sequence,
+        id,
+    )
+}
+
+pub(super) fn sql_int(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+pub(super) fn sha256(bytes: &[u8]) -> Vec<u8> {
+    Sha256::digest(bytes).to_vec()
+}
+
+pub(super) fn body_of(event: &CachedEvent) -> Result<String> {
+    serde_json::to_string(event).context("serializing an indexed event")
+}
+
+pub(super) fn parse_body(body: &str) -> Result<CachedEvent> {
+    serde_json::from_str(body).context("artifact history is unavailable: unreadable indexed event")
+}
+
+pub(super) fn meta(tx: &Transaction<'_>, key: &str) -> Result<Option<String>> {
+    Ok(tx
+        .query_row(
+            "SELECT value FROM brauser_meta WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Sets a meta key, writing nothing when it already has `value`.
+pub(super) fn set_meta(tx: &Transaction<'_>, key: &str, value: &str) -> Result<()> {
+    tx.prepare_cached(
+        "INSERT INTO brauser_meta(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE value != excluded.value",
+    )?
+    .execute([key, value])?;
+    Ok(())
+}
+
+pub(super) fn meta_u64(tx: &Transaction<'_>, key: &str) -> Result<u64> {
+    match meta(tx, key)? {
+        Some(value) => value
+            .parse()
+            .with_context(|| format!("artifact history is unavailable: bad {key} in index.db")),
+        None => Ok(0),
+    }
+}
+
+/// Takes the next value of a meta counter.
+fn next_counter(tx: &Transaction<'_>, key: &str) -> Result<u64> {
+    let value = meta_u64(tx, key)?;
+    set_meta(tx, key, &(value + 1).to_string())?;
+    Ok(value)
+}
+
+fn insert_event(
+    tx: &Transaction<'_>,
+    containers: &mut Containers<'_>,
+    event: &CachedEvent,
+    position: Option<&(PathBuf, u64)>,
+    sequence: Option<u64>,
+) -> Result<StoredEvent> {
+    let (id, artifact_id) = event_identity(event);
+    let body = body_of(event)?;
+    let container_id = container_of(containers, event);
+    let order_key = key_of(event, &id, position, sequence);
+    tx.prepare_cached(
+        "INSERT INTO brauser_events(event_id, artifact_id, kind, order_key, local_date,
+           log_path, log_line, sequence, container_id, has_refs, body, body_sha256)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         ON CONFLICT(event_id) DO UPDATE SET artifact_id = excluded.artifact_id,
+           kind = excluded.kind, order_key = excluded.order_key,
+           local_date = excluded.local_date, log_path = excluded.log_path,
+           log_line = excluded.log_line, sequence = excluded.sequence,
+           container_id = excluded.container_id, has_refs = excluded.has_refs,
+           body = excluded.body, body_sha256 = excluded.body_sha256",
+    )?
+    .execute(params![
+        id,
+        artifact_id,
+        event_kind(event),
+        order_key,
+        event_time(event).date().to_string(),
+        position.map(|(path, _)| log_path_text(path)),
+        position.map(|(_, line)| sql_int(*line)),
+        sequence.map(sql_int),
+        container_id,
+        has_refs(event),
+        body,
+        sha256(body.as_bytes()),
+    ])?;
+    Ok(StoredEvent {
+        artifact_id,
+        container_id,
+        order_key,
+        event: event.clone(),
+    })
+}
+
+/// The groups an event belongs to: its artifact and its container.
+fn groups_of(artifact_id: &str, container_id: Option<&str>) -> BTreeSet<String> {
+    std::iter::once(artifact_id)
+        .chain(container_id)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Add one event to `brauser_events`, assigning the next arrival sequence
+/// to a new ID. Bodies with the same data are the same event; a different
+/// body for an indexed ID is a conflict, and the first-indexed body (never
+/// an untrusted later delivery) stays. Returns what happened and the groups
+/// to re-derive (none for a conflict).
+pub(super) fn ingest(
+    tx: &Transaction<'_>,
+    containers: &mut Containers<'_>,
+    event: &CachedEvent,
+    position: Option<&(PathBuf, u64)>,
+) -> Result<(Ingest, BTreeSet<String>)> {
+    let (id, _) = event_identity(event);
+    let stored = tx
+        .prepare_cached(
+            "SELECT body, artifact_id, container_id, order_key, sequence
+             FROM brauser_events WHERE event_id = ?1",
+        )?
+        .query_row([&id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+            ))
+        })
+        .optional()?;
+    let Some((body, artifact_id, container_id, order_key, sequence)) = stored else {
+        let sequence = next_counter(tx, "next_sequence")?;
+        let stored = insert_event(tx, containers, event, position, Some(sequence))?;
+        let groups = groups_of(&stored.artifact_id, stored.container_id.as_deref());
+        return Ok((Ingest::Inserted, groups));
+    };
+    if parse_body(&body)?.data != event.data {
+        return Ok((Ingest::Conflict, BTreeSet::new()));
+    }
+    let groups = groups_of(&artifact_id, container_id.as_deref());
+    // The same body at an earlier position (a log discovered later) takes
+    // it, as a fresh rebuild would. Same instant, sequence and ID, so the
+    // keys order exactly as the positions do.
+    if let Some((path, line)) = position {
+        let sequence = sequence.and_then(|value| u64::try_from(value).ok());
+        let moved = key_of(event, &id, position, sequence);
+        if moved < order_key {
+            tx.prepare_cached(
+                "UPDATE brauser_events SET order_key = ?2, log_path = ?3, log_line = ?4
+                 WHERE event_id = ?1",
+            )?
+            .execute(params![id, moved, log_path_text(path), sql_int(*line)])?;
+            return Ok((Ingest::Moved, groups));
+        }
+    }
+    Ok((Ingest::Same, groups))
+}
+
+fn stored_event(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, Option<String>, Vec<u8>, String)> {
+    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+}
+
+/// A group's events in `order_key` order: the artifact's own, and the
+/// children that roll up into it.
+pub(super) fn group_events(tx: &Transaction<'_>, group: &str) -> Result<Vec<StoredEvent>> {
+    let mut statement = tx.prepare_cached(
+        "SELECT artifact_id, container_id, order_key, body FROM brauser_events
+           WHERE artifact_id = ?1
+         UNION ALL
+         SELECT artifact_id, container_id, order_key, body FROM brauser_events
+           WHERE container_id = ?1 AND artifact_id != ?1
+         ORDER BY 3",
+    )?;
+    let rows = statement
+        .query_map([group], stored_event)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    #[cfg(test)]
+    EVENTS_LOADED.with(|count| count.set(count.get() + rows.len() as u64));
+    rows.into_iter()
+        .map(|(artifact_id, container_id, order_key, body)| {
+            Ok(StoredEvent {
+                artifact_id,
+                container_id,
+                order_key,
+                event: parse_body(&body)?,
+            })
+        })
+        .collect()
+}
+
+/// Every stored event in `order_key` order.
+#[cfg(test)]
+pub(super) fn all_events(tx: &Transaction<'_>) -> Result<Vec<StoredEvent>> {
+    let mut statement = tx.prepare_cached(
+        "SELECT artifact_id, container_id, order_key, body FROM brauser_events ORDER BY order_key",
+    )?;
+    let rows = statement
+        .query_map([], stored_event)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(artifact_id, container_id, order_key, body)| {
+            Ok(StoredEvent {
+                artifact_id,
+                container_id,
+                order_key,
+                event: parse_body(&body)?,
+            })
+        })
+        .collect()
+}
+
+pub(super) fn fold_events(adapters: Option<&Document>, events: &[StoredEvent]) -> Derived {
+    let mut fold = Fold::new(adapters);
+    for stored in events {
+        fold.apply(&stored.event);
+    }
+    fold.finish()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Events read back from `brauser_events` by group re-derives.
+    pub(super) static EVENTS_LOADED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Groups re-derived.
+    pub(super) static GROUP_DERIVES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Groups extended by the append fast path.
+    pub(super) static FAST_PATHS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The rows of the derived tables, typed so a dump compares exactly.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Rows {
+    artifacts: Vec<ArtifactSql>,
+    visits: Vec<VisitSql>,
+    edges: Vec<EdgeSql>,
+    provenance: Vec<ProvenanceSql>,
+    days: Vec<DaySql>,
+    groups: Vec<GroupSql>,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ArtifactSql {
+    artifact_id: String,
+    artifact_type: String,
+    site: String,
+    title: String,
+    url: String,
+    first_seen: String,
+    last_seen: String,
+    focused_secs: i64,
+    background_secs: i64,
+    opens: i64,
+    days_opened: i64,
+    last_mode: Option<String>,
+    why: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct VisitSql {
+    event_id: String,
+    artifact_id: String,
+    occurred_at: String,
+    local_date: String,
+    focused_secs: i64,
+    background_secs: i64,
+    opens: i64,
+    mode: Option<String>,
+    title: String,
+    url: String,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct EdgeSql {
+    source: String,
+    target: String,
+    kind: String,
+    weight: i64,
+    last_seen: String,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ProvenanceSql {
+    event_id: String,
+    artifact_id: String,
+    role: String,
+    url: String,
+    stripped_params: Option<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct DaySql {
+    artifact_id: String,
+    local_date: String,
+    focused_secs: i64,
+    background_secs: i64,
+    opens: i64,
+    own_focused_secs: i64,
+    own_background_secs: i64,
+    own_opens: i64,
+    summaries: i64,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct GroupSql {
+    artifact_id: String,
+    latest_key: Vec<u8>,
+    latest_at: String,
+    why_at: Option<String>,
+    rolled_up: bool,
+}
+
+/// The group that owns an edge (see the module documentation).
+fn edge_owner(edge: &EdgeRow) -> &str {
+    match edge.kind.as_str() {
+        "mentions" => &edge.source,
+        _ => &edge.target,
+    }
+}
+
+fn rfc3339(at: OffsetDateTime) -> String {
+    at.format(&Rfc3339).unwrap_or_default()
+}
+
+/// The rows `derived` (a fold over `events`) gives for the groups `owns`
+/// accepts. A group re-derive accepts only its own group; the oracle
+/// accepts every group of a full derive. Either way each row comes from
+/// the fold of its owner's complete history, which is why the two agree.
+fn rows_of(derived: &Derived, events: &[StoredEvent], owns: impl Fn(&str) -> bool) -> Rows {
+    let mut rows = Rows::default();
+    for row in derived.artifacts.values() {
+        if !owns(&row.artifact_id) {
+            continue;
+        }
+        rows.artifacts.push(ArtifactSql {
+            artifact_id: row.artifact_id.clone(),
+            artifact_type: row.artifact_type.clone(),
+            site: row.site.clone(),
+            title: row.title.clone(),
+            url: row.url.clone(),
+            first_seen: row.first_seen.clone(),
+            last_seen: row.last_seen.clone(),
+            focused_secs: sql_int(row.focused_secs),
+            background_secs: sql_int(row.background_secs),
+            opens: sql_int(row.opens),
+            days_opened: sql_int(row.days.len() as u64),
+            last_mode: row.last_mode.clone(),
+            why: row.why.clone(),
+        });
+        let latest_key = events
+            .iter()
+            .filter(|event| {
+                event.artifact_id == row.artifact_id
+                    || event.container_id.as_deref() == Some(row.artifact_id.as_str())
+            })
+            .map(|event| &event.order_key)
+            .max()
+            .cloned()
+            .unwrap_or_default();
+        rows.groups.push(GroupSql {
+            artifact_id: row.artifact_id.clone(),
+            latest_key,
+            latest_at: rfc3339(row.latest_at),
+            why_at: derived.why_at.get(&row.artifact_id).copied().map(rfc3339),
+            rolled_up: row.rolled_up,
+        });
+    }
+    let mut days = BTreeMap::<(String, String), DaySql>::new();
+    for visit in &derived.visits {
+        if !owns(&visit.artifact_id) {
+            continue;
+        }
+        let (focused, background, opens) = (
+            sql_int(visit.focused_secs),
+            sql_int(visit.background_secs),
+            sql_int(visit.opens),
+        );
+        let day = days
+            .entry((visit.artifact_id.clone(), visit.local_date.clone()))
+            .or_insert_with(|| DaySql {
+                artifact_id: visit.artifact_id.clone(),
+                local_date: visit.local_date.clone(),
+                ..DaySql::default()
+            });
+        day.focused_secs = day.focused_secs.saturating_add(focused);
+        day.background_secs = day.background_secs.saturating_add(background);
+        day.opens = day.opens.saturating_add(opens);
+        if visit.summary.is_some() {
+            day.summaries += 1;
+        }
+        if visit.contained {
+            continue;
+        }
+        day.own_focused_secs = day.own_focused_secs.saturating_add(focused);
+        day.own_background_secs = day.own_background_secs.saturating_add(background);
+        day.own_opens = day.own_opens.saturating_add(opens);
+        // One row per logged visit: a container's copy would count it
+        // twice in any per-day total a reader takes.
+        rows.visits.push(VisitSql {
+            event_id: visit.event_id.clone(),
+            artifact_id: visit.artifact_id.clone(),
+            occurred_at: visit.occurred_at.clone(),
+            local_date: visit.local_date.clone(),
+            focused_secs: focused,
+            background_secs: background,
+            opens,
+            mode: visit.mode.clone(),
+            title: visit.title.clone(),
+            url: visit.url.clone(),
+        });
+    }
+    rows.days = days.into_values().collect();
+    for edge in &derived.edges {
+        if !owns(edge_owner(edge)) {
+            continue;
+        }
+        rows.edges.push(EdgeSql {
+            source: edge.source.clone(),
+            target: edge.target.clone(),
+            kind: edge.kind.clone(),
+            weight: sql_int(edge.weight),
+            last_seen: edge.last_seen.clone(),
+        });
+    }
+    for stored in events {
+        if !owns(&stored.artifact_id) {
+            continue;
+        }
+        let (event_id, _) = event_identity(&stored.event);
+        for (role, url) in stored.event.url_records() {
+            rows.provenance.push(ProvenanceSql {
+                event_id: event_id.clone(),
+                artifact_id: stored.artifact_id.clone(),
+                role,
+                url: url.url,
+                stripped_params: url
+                    .stripped_params
+                    .map(|names| serde_json::to_string(&names).expect("query names")),
+            });
+        }
+    }
+    rows
+}
+
+/// Replace every row `group` owns, keeping the regeneration columns of its
+/// state row (`file_path`, `render_sha256`).
+fn write_group(tx: &Transaction<'_>, group: &str, rows: &Rows) -> Result<()> {
+    for sql in [
+        "DELETE FROM artifacts WHERE artifact_id = ?1",
+        "DELETE FROM visits WHERE artifact_id = ?1",
+        "DELETE FROM url_provenance WHERE artifact_id = ?1",
+        "DELETE FROM brauser_artifact_days WHERE artifact_id = ?1",
+        "DELETE FROM edges WHERE kind = 'mentions' AND source_artifact_id = ?1",
+        "DELETE FROM edges WHERE kind != 'mentions' AND target_artifact_id = ?1",
+    ] {
+        tx.prepare_cached(sql)?.execute([group])?;
+    }
+    write_artifacts(tx, &rows.artifacts)?;
+    write_visits(tx, &rows.visits)?;
+    for row in &rows.edges {
+        tx.prepare_cached(
+            "INSERT INTO edges(source_artifact_id, target_artifact_id, kind, weight, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?
+        .execute(params![
+            row.source,
+            row.target,
+            row.kind,
+            row.weight,
+            row.last_seen
+        ])?;
+    }
+    write_provenance(tx, &rows.provenance)?;
+    for row in &rows.days {
+        tx.prepare_cached(
+            "INSERT INTO brauser_artifact_days(artifact_id, local_date, focused_secs,
+               background_secs, opens, own_focused_secs, own_background_secs, own_opens,
+               summaries)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )?
+        .execute(params![
+            row.artifact_id,
+            row.local_date,
+            row.focused_secs,
+            row.background_secs,
+            row.opens,
+            row.own_focused_secs,
+            row.own_background_secs,
+            row.own_opens,
+            row.summaries,
+        ])?;
+    }
+    match rows.groups.as_slice() {
+        [] => {
+            // A group with no row keeps a state row only while regeneration
+            // still has a file of it to remove.
+            tx.prepare_cached(
+                "DELETE FROM brauser_group_state WHERE artifact_id = ?1 AND file_path IS NULL",
+            )?
+            .execute([group])?;
+        }
+        [row] => write_group_state(tx, row)?,
+        _ => bail!("a group derived more than one row for itself"),
+    }
+    Ok(())
+}
+
+/// Insert or replace artifact rows in place (an update keeps the rowid).
+fn write_artifacts(tx: &Transaction<'_>, rows: &[ArtifactSql]) -> Result<()> {
+    for row in rows {
+        tx.prepare_cached(
+            "INSERT INTO artifacts(artifact_id, artifact_type, site, title, url, first_seen,
+               last_seen, focused_secs, background_secs, opens, days_opened, last_mode, why)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             ON CONFLICT(artifact_id) DO UPDATE SET artifact_type = excluded.artifact_type,
+               site = excluded.site, title = excluded.title, url = excluded.url,
+               first_seen = excluded.first_seen, last_seen = excluded.last_seen,
+               focused_secs = excluded.focused_secs, background_secs = excluded.background_secs,
+               opens = excluded.opens, days_opened = excluded.days_opened,
+               last_mode = excluded.last_mode, why = excluded.why",
+        )?
+        .execute(params![
+            row.artifact_id,
+            row.artifact_type,
+            row.site,
+            row.title,
+            row.url,
+            row.first_seen,
+            row.last_seen,
+            row.focused_secs,
+            row.background_secs,
+            row.opens,
+            row.days_opened,
+            row.last_mode,
+            row.why,
+        ])?;
+    }
+    Ok(())
+}
+
+fn write_visits(tx: &Transaction<'_>, rows: &[VisitSql]) -> Result<()> {
+    for row in rows {
+        tx.prepare_cached(
+            "INSERT INTO visits(event_id, artifact_id, occurred_at, local_date, focused_secs,
+               background_secs, opens, mode, title, url)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )?
+        .execute(params![
+            row.event_id,
+            row.artifact_id,
+            row.occurred_at,
+            row.local_date,
+            row.focused_secs,
+            row.background_secs,
+            row.opens,
+            row.mode,
+            row.title,
+            row.url,
+        ])?;
+    }
+    Ok(())
+}
+
+fn write_provenance(tx: &Transaction<'_>, rows: &[ProvenanceSql]) -> Result<()> {
+    for row in rows {
+        tx.prepare_cached(
+            "INSERT INTO url_provenance(event_id, artifact_id, role, url, stripped_params)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?
+        .execute(params![
+            row.event_id,
+            row.artifact_id,
+            row.role,
+            row.url,
+            row.stripped_params
+        ])?;
+    }
+    Ok(())
+}
+
+/// Write a group's state row, keeping its regeneration columns.
+fn write_group_state(tx: &Transaction<'_>, row: &GroupSql) -> Result<()> {
+    tx.prepare_cached(
+        "INSERT INTO brauser_group_state(artifact_id, latest_key, latest_at, why_at, rolled_up)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(artifact_id) DO UPDATE SET latest_key = excluded.latest_key,
+           latest_at = excluded.latest_at, why_at = excluded.why_at,
+           rolled_up = excluded.rolled_up",
+    )?
+    .execute(params![
+        row.artifact_id,
+        row.latest_key,
+        row.latest_at,
+        row.why_at,
+        row.rolled_up
+    ])?;
+    Ok(())
+}
+
+/// A group's stored aggregate, as the fast path seeds a fold with it.
+struct Seed {
+    row: ArtifactRow,
+    latest_key: Vec<u8>,
+    /// Dates with at least one open (the row's `days`).
+    days: BTreeSet<String>,
+    why: Option<(OffsetDateTime, String)>,
+}
+
+fn to_u64(value: i64) -> Option<u64> {
+    u64::try_from(value).ok()
+}
+
+/// `group`'s stored aggregate, or `None` when it has no row to seed (a new
+/// artifact, or a state row kept only for a file to remove) or a value the
+/// fold would not have written. `None` sends the group to the re-derive.
+fn load_seed(tx: &Transaction<'_>, group: &str) -> Result<Option<Seed>> {
+    type Stored = (
+        (String, String, String, String),
+        (Option<String>, Option<String>),
+        (i64, i64, i64),
+        (Option<String>, Option<String>),
+        (Vec<u8>, String, Option<String>, bool),
+    );
+    let stored: Option<Stored> = tx
+        .prepare_cached(
+            "SELECT a.artifact_type, a.site, a.title, a.url, a.first_seen, a.last_seen,
+               a.focused_secs, a.background_secs, a.opens, a.last_mode, a.why,
+               g.latest_key, g.latest_at, g.why_at, g.rolled_up
+             FROM brauser_group_state AS g JOIN artifacts AS a USING (artifact_id)
+             WHERE g.artifact_id = ?1",
+        )?
+        .query_row([group], |row| {
+            Ok((
+                (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?),
+                (row.get(4)?, row.get(5)?),
+                (row.get(6)?, row.get(7)?, row.get(8)?),
+                (row.get(9)?, row.get(10)?),
+                (row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?),
+            ))
+        })
+        .optional()?;
+    let Some((
+        (artifact_type, site, title, url),
+        (Some(first_seen), Some(last_seen)),
+        (focused, background, opens),
+        (last_mode, why),
+        (latest_key, latest_at_text, why_at, rolled_up),
+    )) = stored
+    else {
+        return Ok(None);
+    };
+    // Instants are compared by the fold and written back as text: a stored
+    // value that does not round-trip is not one the fold wrote.
+    let instant = |text: &str| parsed_timestamp(text).filter(|at| rfc3339(*at) == text);
+    let (Some(focused_secs), Some(background_secs), Some(opens), Some(latest_at)) = (
+        to_u64(focused),
+        to_u64(background),
+        to_u64(opens),
+        instant(&latest_at_text),
+    ) else {
+        return Ok(None);
+    };
+    let why = match (why, why_at) {
+        (Some(text), Some(at)) => match instant(&at) {
+            Some(at) => Some((at, text)),
+            None => return Ok(None),
+        },
+        (None, None) => None,
+        _ => return Ok(None),
+    };
+    let days = tx
+        .prepare_cached(
+            "SELECT local_date FROM brauser_artifact_days WHERE artifact_id = ?1 AND opens > 0",
+        )?
+        .query_map([group], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<BTreeSet<_>>>()?;
+    Ok(Some(Seed {
+        row: ArtifactRow {
+            artifact_id: group.to_owned(),
+            artifact_type,
+            site,
+            title,
+            url,
+            first_seen,
+            last_seen,
+            focused_secs,
+            background_secs,
+            opens,
+            days: BTreeSet::new(),
+            last_mode,
+            why: None,
+            activities: Vec::new(),
+            summaries: Vec::new(),
+            legacy_visits: Vec::new(),
+            latest_at,
+            rolled_up,
+        },
+        latest_key,
+        days,
+        why,
+    }))
+}
+
+/// The append fast path for `group`, which gained the events `ids` in this
+/// transaction. It is taken only when the group has a stored row and every
+/// new event sorts strictly after the group's `latest_key`: replaying the
+/// whole history in order and folding just this suffix from the stored
+/// aggregate are then the same computation, through the same
+/// [`Fold::apply`]. Returns `false`, having written nothing, otherwise.
+fn append(
+    tx: &Transaction<'_>,
+    adapters: Option<&Document>,
+    group: &str,
+    ids: &BTreeSet<String>,
+) -> Result<bool> {
+    let Some(seed) = load_seed(tx, group)? else {
+        return Ok(false);
+    };
+    let mut events = Vec::with_capacity(ids.len());
+    for id in ids {
+        let (artifact_id, container_id, order_key, body) = tx
+            .prepare_cached(
+                "SELECT artifact_id, container_id, order_key, body FROM brauser_events
+                 WHERE event_id = ?1",
+            )?
+            .query_row([id], stored_event)?;
+        if order_key <= seed.latest_key {
+            return Ok(false);
+        }
+        events.push(StoredEvent {
+            artifact_id,
+            container_id,
+            order_key,
+            event: parse_body(&body)?,
+        });
+    }
+    events.sort_by(|left, right| left.order_key.cmp(&right.order_key));
+    #[cfg(test)]
+    FAST_PATHS.with(|count| count.set(count.get() + 1));
+    let Seed { row, days, why, .. } = seed;
+    // No edges are seeded: the fold returns each touched edge's new weight
+    // and latest day alone, and `merge_edges` adds the stored ones.
+    let mut fold = Fold::seeded(
+        adapters,
+        [row],
+        BTreeMap::from([(group.to_owned(), days)]),
+        why.map(|why| (group.to_owned(), why)).into_iter().collect(),
+        [],
+    );
+    for stored in &events {
+        fold.apply(&stored.event);
+    }
+    let delta = rows_of(&fold.finish(), &events, |owner| owner == group);
+    let [state] = delta.groups.as_slice() else {
+        bail!("a seeded group derived no single row for itself");
+    };
+    write_artifacts(tx, &delta.artifacts)?;
+    write_visits(tx, &delta.visits)?;
+    write_provenance(tx, &delta.provenance)?;
+    merge_edges(tx, &delta.edges)?;
+    merge_days(tx, &delta.days)?;
+    write_group_state(tx, state)?;
+    Ok(true)
+}
+
+/// Add the new events' edge weights to the stored edges; an edge's
+/// `last_seen` is its latest day either way.
+fn merge_edges(tx: &Transaction<'_>, edges: &[EdgeSql]) -> Result<()> {
+    for edge in edges {
+        let stored = tx
+            .prepare_cached(
+                "SELECT weight, last_seen FROM edges
+                 WHERE source_artifact_id = ?1 AND target_artifact_id = ?2 AND kind = ?3",
+            )?
+            .query_row(params![edge.source, edge.target, edge.kind], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .optional()?;
+        let (weight, last_seen) = match stored {
+            Some((weight, last_seen)) => (
+                weight.saturating_add(edge.weight),
+                last_seen.max(edge.last_seen.clone()),
+            ),
+            None => (edge.weight, edge.last_seen.clone()),
+        };
+        tx.prepare_cached(
+            "INSERT INTO edges(source_artifact_id, target_artifact_id, kind, weight, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(source_artifact_id, target_artifact_id, kind) DO UPDATE SET
+               weight = excluded.weight, last_seen = excluded.last_seen",
+        )?
+        .execute(params![
+            edge.source,
+            edge.target,
+            edge.kind,
+            weight,
+            last_seen
+        ])?;
+    }
+    Ok(())
+}
+
+/// Add the new visits' per-day sums to the stored days.
+fn merge_days(tx: &Transaction<'_>, days: &[DaySql]) -> Result<()> {
+    for day in days {
+        let stored = tx
+            .prepare_cached(
+                "SELECT focused_secs, background_secs, opens, own_focused_secs,
+                   own_background_secs, own_opens, summaries
+                 FROM brauser_artifact_days WHERE artifact_id = ?1 AND local_date = ?2",
+            )?
+            .query_row(params![day.artifact_id, day.local_date], |row| {
+                Ok([
+                    row.get::<_, i64>(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ])
+            })
+            .optional()?
+            .unwrap_or_default();
+        let added = [
+            day.focused_secs,
+            day.background_secs,
+            day.opens,
+            day.own_focused_secs,
+            day.own_background_secs,
+            day.own_opens,
+            day.summaries,
+        ];
+        let sums: [i64; 7] = std::array::from_fn(|n| stored[n].saturating_add(added[n]));
+        tx.prepare_cached(
+            "INSERT INTO brauser_artifact_days(artifact_id, local_date, focused_secs,
+               background_secs, opens, own_focused_secs, own_background_secs, own_opens,
+               summaries)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(artifact_id, local_date) DO UPDATE SET
+               focused_secs = excluded.focused_secs, background_secs = excluded.background_secs,
+               opens = excluded.opens, own_focused_secs = excluded.own_focused_secs,
+               own_background_secs = excluded.own_background_secs,
+               own_opens = excluded.own_opens, summaries = excluded.summaries",
+        )?
+        .execute(params![
+            day.artifact_id,
+            day.local_date,
+            sums[0],
+            sums[1],
+            sums[2],
+            sums[3],
+            sums[4],
+            sums[5],
+            sums[6],
+        ])?;
+    }
+    Ok(())
+}
+
+/// Re-derive each group from its stored events and replace the rows it
+/// owns. This is the exact path for every case; the fast path ([`append`])
+/// is only ever a shortcut to the same rows.
+pub(super) fn rederive_groups(
+    tx: &Transaction<'_>,
+    adapters: Option<&Document>,
+    groups: &BTreeSet<String>,
+) -> Result<()> {
+    for group in groups {
+        rederive_group(tx, adapters, group)?;
+    }
+    Ok(())
+}
+
+/// Re-derive one group and replace the rows it owns. Returns the group's
+/// own derived record, if it has one, for a caller that renders it.
+pub(super) fn rederive_group(
+    tx: &Transaction<'_>,
+    adapters: Option<&Document>,
+    group: &str,
+) -> Result<Option<ArtifactRow>> {
+    #[cfg(test)]
+    GROUP_DERIVES.with(|count| count.set(count.get() + 1));
+    let events = group_events(tx, group)?;
+    let mut derived = fold_events(adapters, &events);
+    write_group(
+        tx,
+        group,
+        &rows_of(&derived, &events, |owner| owner == group),
+    )?;
+    Ok(derived.artifacts.remove(group))
+}
+
+/// The full derived record of `group` (its own events and, for a
+/// container, its children's), as regeneration renders it, or `None` when
+/// the group derives no row.
+pub(super) fn derived_row(
+    tx: &Transaction<'_>,
+    adapters: Option<&Document>,
+    group: &str,
+) -> Result<Option<ArtifactRow>> {
+    let events = group_events(tx, group)?;
+    Ok(fold_events(adapters, &events).artifacts.remove(group))
+}
+
+/// Mark each artifact dirty with a fresh generation, replacing an older
+/// mark, so a clear conditional on the older generation keeps this one.
+pub(super) fn mark_dirty<'a>(
+    tx: &Transaction<'_>,
+    ids: impl IntoIterator<Item = &'a String>,
+) -> Result<()> {
+    for id in ids {
+        let generation = next_counter(tx, "next_generation")?;
+        tx.prepare_cached(
+            "INSERT INTO dirty_artifacts(artifact_id, generation) VALUES (?1, ?2)
+             ON CONFLICT(artifact_id) DO UPDATE SET generation = excluded.generation",
+        )?
+        .execute(params![id, sql_int(generation)])?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) mod oracle {
+    //! The permanent full-derive oracle (plan graft 2).
+
+    use super::*;
+
+    thread_local! {
+        static OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Keeps the oracle off on this thread while it lives.
+    pub(in crate::index) struct Off(());
+
+    impl Drop for Off {
+        fn drop(&mut self) {
+            OFF.with(|off| off.set(false));
+        }
+    }
+
+    /// Turn the oracle off on this thread until the guard drops: only for
+    /// the year-scale bounds test, whose deliveries a full derive after
+    /// every write would dominate, and for a write by a host whose adapter
+    /// document another host has just replaced in the store.
+    pub(in crate::index) fn off() -> Off {
+        OFF.with(|off| off.set(true));
+        Off(())
+    }
+
+    /// Every derived table, sorted, as stored.
+    pub(in crate::index) fn dump(tx: &Transaction<'_>) -> Result<Rows> {
+        let mut rows = Rows {
+            artifacts: tx
+                .prepare(
+                    "SELECT artifact_id, artifact_type, site, title, url, first_seen, last_seen,
+                       focused_secs, background_secs, opens, days_opened, last_mode, why
+                     FROM artifacts",
+                )?
+                .query_map([], |row| {
+                    Ok(ArtifactSql {
+                        artifact_id: row.get(0)?,
+                        artifact_type: row.get(1)?,
+                        site: row.get(2)?,
+                        title: row.get(3)?,
+                        url: row.get(4)?,
+                        first_seen: row.get(5)?,
+                        last_seen: row.get(6)?,
+                        focused_secs: row.get(7)?,
+                        background_secs: row.get(8)?,
+                        opens: row.get(9)?,
+                        days_opened: row.get(10)?,
+                        last_mode: row.get(11)?,
+                        why: row.get(12)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<_>>()?,
+            visits: tx
+                .prepare(
+                    "SELECT event_id, artifact_id, occurred_at, local_date, focused_secs,
+                       background_secs, opens, mode, title, url FROM visits",
+                )?
+                .query_map([], |row| {
+                    Ok(VisitSql {
+                        event_id: row.get(0)?,
+                        artifact_id: row.get(1)?,
+                        occurred_at: row.get(2)?,
+                        local_date: row.get(3)?,
+                        focused_secs: row.get(4)?,
+                        background_secs: row.get(5)?,
+                        opens: row.get(6)?,
+                        mode: row.get(7)?,
+                        title: row.get(8)?,
+                        url: row.get(9)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<_>>()?,
+            edges: tx
+                .prepare(
+                    "SELECT source_artifact_id, target_artifact_id, kind, weight, last_seen
+                     FROM edges",
+                )?
+                .query_map([], |row| {
+                    Ok(EdgeSql {
+                        source: row.get(0)?,
+                        target: row.get(1)?,
+                        kind: row.get(2)?,
+                        weight: row.get(3)?,
+                        last_seen: row.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<_>>()?,
+            provenance: tx
+                .prepare(
+                    "SELECT event_id, artifact_id, role, url, stripped_params FROM url_provenance",
+                )?
+                .query_map([], |row| {
+                    Ok(ProvenanceSql {
+                        event_id: row.get(0)?,
+                        artifact_id: row.get(1)?,
+                        role: row.get(2)?,
+                        url: row.get(3)?,
+                        stripped_params: row.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<_>>()?,
+            days: tx
+                .prepare(
+                    "SELECT artifact_id, local_date, focused_secs, background_secs, opens,
+                       own_focused_secs, own_background_secs, own_opens, summaries
+                     FROM brauser_artifact_days",
+                )?
+                .query_map([], |row| {
+                    Ok(DaySql {
+                        artifact_id: row.get(0)?,
+                        local_date: row.get(1)?,
+                        focused_secs: row.get(2)?,
+                        background_secs: row.get(3)?,
+                        opens: row.get(4)?,
+                        own_focused_secs: row.get(5)?,
+                        own_background_secs: row.get(6)?,
+                        own_opens: row.get(7)?,
+                        summaries: row.get(8)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<_>>()?,
+            // A state row a group keeps only for a file regeneration has yet
+            // to remove derives nothing, so it is not compared.
+            groups: tx
+                .prepare(
+                    "SELECT artifact_id, latest_key, latest_at, why_at, rolled_up
+                     FROM brauser_group_state
+                     WHERE file_path IS NULL
+                        OR artifact_id IN (SELECT artifact_id FROM artifacts)",
+                )?
+                .query_map([], |row| {
+                    Ok(GroupSql {
+                        artifact_id: row.get(0)?,
+                        latest_key: row.get(1)?,
+                        latest_at: row.get(2)?,
+                        why_at: row.get(3)?,
+                        rolled_up: row.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<_>>()?,
+        };
+        rows.sort();
+        Ok(rows)
+    }
+
+    /// What the same writer gives for a full derive of `brauser_events`.
+    pub(in crate::index) fn expected(
+        tx: &Transaction<'_>,
+        adapters: Option<&Document>,
+    ) -> Result<Rows> {
+        let events = all_events(tx)?;
+        let mut rows = rows_of(&fold_events(adapters, &events), &events, |_| true);
+        rows.sort();
+        Ok(rows)
+    }
+
+    /// One event of a test's in-memory model of the store: its body, log
+    /// position and arrival sequence, by event ID.
+    pub(in crate::index) type ModelEvent = (CachedEvent, Option<(PathBuf, u64)>, Option<u64>);
+
+    /// What the same writer gives for a full derive of a test's model,
+    /// replayed in the replay tuple order (instant, positioned first, log
+    /// position, arrival sequence, ID) rather than by `order_key`, so the
+    /// key's encoding is checked too.
+    pub(in crate::index) fn model_rows(
+        events: &BTreeMap<String, ModelEvent>,
+        adapters: Option<&Document>,
+    ) -> Rows {
+        let mut ordered = events.iter().collect::<Vec<_>>();
+        ordered.sort_by(|(left_id, left), (right_id, right)| {
+            let tuple = |id, (event, position, sequence): &'_ ModelEvent| {
+                (
+                    event_time(event),
+                    position.is_none(),
+                    position.clone(),
+                    sequence.unwrap_or(u64::MAX),
+                    id,
+                )
+            };
+            tuple(*left_id, left).cmp(&tuple(*right_id, right))
+        });
+        let mut containers = Containers::new(adapters);
+        let stored = ordered
+            .into_iter()
+            .map(|(id, (event, position, sequence))| StoredEvent {
+                artifact_id: event.artifact_id().to_owned(),
+                container_id: container_of(&mut containers, event),
+                order_key: key_of(event, id, position.as_ref(), *sequence),
+                event: event.clone(),
+            })
+            .collect::<Vec<_>>();
+        let mut rows = rows_of(&fold_events(adapters, &stored), &stored, |_| true);
+        rows.sort();
+        rows
+    }
+
+    pub(in crate::index) fn check(tx: &Transaction<'_>, adapters: Option<&Document>) -> Result<()> {
+        if OFF.with(std::cell::Cell::get) {
+            return Ok(());
+        }
+        let (actual, expected) = (dump(tx)?, expected(tx, adapters)?);
+        assert_eq!(
+            actual, expected,
+            "the derived tables differ from a full derive of brauser_events"
+        );
+        Ok(())
+    }
+
+    impl Rows {
+        fn sort(&mut self) {
+            self.artifacts.sort();
+            self.visits.sort();
+            self.edges.sort();
+            self.provenance.sort();
+            self.days.sort();
+            self.groups.sort();
+        }
+    }
+}

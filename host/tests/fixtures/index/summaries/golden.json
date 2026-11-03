@@ -1,0 +1,844 @@
+{
+  "reads": {
+    "artifacts": {
+      "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-20",
+              "focused_seconds": 0,
+              "incoming_trails": [],
+              "last_mode": null,
+              "last_seen": "2026-10-22",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null,
+              "within": null
+            },
+            "summary": {
+              "category": "reading",
+              "document_type": "discussion",
+              "harness": "codex",
+              "importance": "low",
+              "summarized_at": "2026-10-22T09:00:00Z",
+              "summary_path": "summaries/s2.summary.md"
+            }
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": {
+            "category": "reading",
+            "document_type": "discussion",
+            "harness": "codex",
+            "importance": "low",
+            "summarized_at": "2026-10-22T09:00:00Z",
+            "summary_path": "summaries/s2.summary.md"
+          }
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": null,
+              "url": "https://news.example.org/item?id=42"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://news.example.org/item?id=42"
+          ]
+        }
+      },
+      "work:example.com/ONLY": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/ONLY",
+              "artifact_type": "work.item",
+              "background_seconds": 0,
+              "contained": [],
+              "days_opened": 0,
+              "first_seen": "2026-10-22",
+              "focused_seconds": 0,
+              "incoming_trails": [],
+              "last_mode": null,
+              "last_seen": "2026-10-22",
+              "linked_count": 0,
+              "opens": 0,
+              "title": "Summary without activity",
+              "url": "https://example.com/items/ONLY",
+              "why": null,
+              "within": null
+            },
+            "summary": {
+              "category": "reading",
+              "document_type": "discussion",
+              "harness": "claude",
+              "importance": "high",
+              "summarized_at": "2026-10-22T08:00:00Z",
+              "summary_path": "summaries/s6.summary.md"
+            }
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": {
+            "category": "reading",
+            "document_type": "discussion",
+            "harness": "claude",
+            "importance": "high",
+            "summarized_at": "2026-10-22T08:00:00Z",
+            "summary_path": "summaries/s6.summary.md"
+          }
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": null,
+              "url": "https://example.com/items/ONLY"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/ONLY"
+          ]
+        }
+      },
+      "work:example.com/SUM": {
+        "card": {
+          "ok": {
+            "artifact": {
+              "artifact_id": "work:example.com/SUM",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "contained": [],
+              "days_opened": 1,
+              "first_seen": "2026-10-21",
+              "focused_seconds": 125,
+              "incoming_trails": [],
+              "last_mode": "view",
+              "last_seen": "2026-10-21",
+              "linked_count": 0,
+              "opens": 1,
+              "title": "Second at noon",
+              "url": "https://example.com/items/SUM",
+              "why": null,
+              "within": null
+            },
+            "summary": {
+              "category": "reading",
+              "document_type": "discussion",
+              "harness": "claude",
+              "importance": "high",
+              "summarized_at": "2026-10-21T12:00:00Z",
+              "summary_path": "summaries/s5.summary.md"
+            }
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": {
+            "category": "reading",
+            "document_type": "discussion",
+            "harness": "claude",
+            "importance": "high",
+            "summarized_at": "2026-10-21T12:00:00Z",
+            "summary_path": "summaries/s5.summary.md"
+          }
+        },
+        "url_evidence": {
+          "ok": [
+            {
+              "stripped_params": null,
+              "url": "https://example.com/items/SUM"
+            },
+            {
+              "stripped_params": [],
+              "url": "https://example.com/items/SUM"
+            },
+            {
+              "stripped_params": [
+                "utm_source"
+              ],
+              "url": "https://example.com/items/SUM"
+            }
+          ]
+        },
+        "urls": {
+          "ok": [
+            "https://example.com/items/SUM"
+          ]
+        }
+      },
+      "work:example.com/never-recorded": {
+        "card": {
+          "ok": {
+            "artifact": null,
+            "summary": null
+          }
+        },
+        "latest_why": {
+          "ok": null
+        },
+        "summary_for": {
+          "ok": null
+        },
+        "url_evidence": {
+          "ok": []
+        },
+        "urls": {
+          "ok": []
+        }
+      }
+    },
+    "recent": {
+      "type=None query=None limit=0": {
+        "ok": {
+          "items": [],
+          "truncated": true,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=1": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-22",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "codex",
+                "importance": "low",
+                "summarized_at": "2026-10-22T09:00:00Z",
+                "summary_path": "summaries/s2.summary.md"
+              },
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            }
+          ],
+          "truncated": true,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-22",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "codex",
+                "importance": "low",
+                "summarized_at": "2026-10-22T09:00:00Z",
+                "summary_path": "summaries/s2.summary.md"
+              },
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/ONLY",
+              "artifact_type": "work.item",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-22",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "claude",
+                "importance": "high",
+                "summarized_at": "2026-10-22T08:00:00Z",
+                "summary_path": "summaries/s6.summary.md"
+              },
+              "title": "Summary without activity",
+              "url": "https://example.com/items/ONLY",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/SUM",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "claude",
+                "importance": "high",
+                "summarized_at": "2026-10-21T12:00:00Z",
+                "summary_path": "summaries/s5.summary.md"
+              },
+              "title": "Second at noon",
+              "url": "https://example.com/items/SUM",
+              "why": null
+            },
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-21",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "claude",
+                "importance": "high",
+                "summarized_at": "2026-10-21T18:00:00Z",
+                "summary_path": "summaries/s1.summary.md"
+              },
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            },
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=None query=Some(\"discussion\") limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-22",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "codex",
+                "importance": "low",
+                "summarized_at": "2026-10-22T09:00:00Z",
+                "summary_path": "summaries/s2.summary.md"
+              },
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            },
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-21",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "claude",
+                "importance": "high",
+                "summarized_at": "2026-10-21T18:00:00Z",
+                "summary_path": "summaries/s1.summary.md"
+              },
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            },
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"no.such.type\") query=None limit=50": {
+        "ok": {
+          "items": [],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"web.page\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-22",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "codex",
+                "importance": "low",
+                "summarized_at": "2026-10-22T09:00:00Z",
+                "summary_path": "summaries/s2.summary.md"
+              },
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            },
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-21",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "claude",
+                "importance": "high",
+                "summarized_at": "2026-10-21T18:00:00Z",
+                "summary_path": "summaries/s1.summary.md"
+              },
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            },
+            {
+              "artifact_id": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+              "artifact_type": "web.page",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-20",
+              "opens": 1,
+              "summary": null,
+              "title": "A better discussion",
+              "url": "https://news.example.org/item?id=42",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      },
+      "type=Some(\"work.item\") query=None limit=50": {
+        "ok": {
+          "items": [
+            {
+              "artifact_id": "work:example.com/ONLY",
+              "artifact_type": "work.item",
+              "background_seconds": 0,
+              "focused_seconds": 0,
+              "local_date": "2026-10-22",
+              "opens": 0,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "claude",
+                "importance": "high",
+                "summarized_at": "2026-10-22T08:00:00Z",
+                "summary_path": "summaries/s6.summary.md"
+              },
+              "title": "Summary without activity",
+              "url": "https://example.com/items/ONLY",
+              "why": null
+            },
+            {
+              "artifact_id": "work:example.com/SUM",
+              "artifact_type": "work.item",
+              "background_seconds": 61,
+              "focused_seconds": 125,
+              "local_date": "2026-10-21",
+              "opens": 1,
+              "summary": {
+                "category": "reading",
+                "document_type": "discussion",
+                "harness": "claude",
+                "importance": "high",
+                "summarized_at": "2026-10-21T12:00:00Z",
+                "summary_path": "summaries/s5.summary.md"
+              },
+              "title": "Second at noon",
+              "url": "https://example.com/items/SUM",
+              "why": null
+            }
+          ],
+          "truncated": false,
+          "types": [
+            "web.page",
+            "work.item"
+          ]
+        }
+      }
+    },
+    "worklog": {
+      "2026-10-20..2026-10-22": {
+        "ok": {
+          "count": 3,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 2 artifacts, focused on 0 left open from an earlier day, and summarized 3 pages.\nSummarized: Second at noon — discussion, high importance — focused 2 min · 1 min in background · opened 1×\nSummarized: A better discussion — discussion, low importance — opened 1×\nSummarized: Summary without activity — discussion, high importance"
+        }
+      },
+      "2026-10-22..2026-10-22": {
+        "ok": {
+          "count": 2,
+          "gaps": [],
+          "gaps_truncated": false,
+          "text": "Opened 0 artifacts, focused on 0 left open from an earlier day, and summarized 2 pages.\nSummarized: A better discussion — discussion, low importance\nSummarized: Summary without activity — discussion, high importance"
+        }
+      }
+    }
+  },
+  "relearn": {
+    "ok": {
+      "evidence": [
+        {
+          "record_key": {
+            "kind": "url",
+            "value": "eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://news.example.org/item?id=42"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "url",
+            "value": "eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://news.example.org/item?id=42"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/SUM"
+          },
+          "url": {
+            "stripped_params": [
+              "utm_source"
+            ],
+            "url": "https://example.com/items/SUM"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/SUM"
+          },
+          "url": {
+            "stripped_params": [],
+            "url": "https://example.com/items/SUM"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/SUM"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://example.com/items/SUM"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/SUM"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://example.com/items/SUM"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "work:example.com/ONLY"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://example.com/items/ONLY"
+          }
+        },
+        {
+          "record_key": {
+            "kind": "artifact",
+            "value": "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b"
+          },
+          "url": {
+            "stripped_params": null,
+            "url": "https://news.example.org/item?id=42"
+          }
+        }
+      ],
+      "revision": "e28a52922d9b61e5add19a3a512f6f99663fd39dc49f7c08374686ff44adfc6e"
+    }
+  },
+  "tables": {
+    "artifacts": [
+      [
+        "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+        "web.page",
+        "news.example.org",
+        "A better discussion",
+        "https://news.example.org/item?id=42",
+        "2026-10-20",
+        "2026-10-22",
+        0,
+        0,
+        1,
+        1,
+        null,
+        null
+      ],
+      [
+        "work:example.com/ONLY",
+        "work.item",
+        "example.com",
+        "Summary without activity",
+        "https://example.com/items/ONLY",
+        "2026-10-22",
+        "2026-10-22",
+        0,
+        0,
+        0,
+        0,
+        null,
+        null
+      ],
+      [
+        "work:example.com/SUM",
+        "work.item",
+        "example.com",
+        "Second at noon",
+        "https://example.com/items/SUM",
+        "2026-10-21",
+        "2026-10-21",
+        125,
+        61,
+        1,
+        1,
+        "view",
+        null
+      ]
+    ],
+    "dirty_artifacts": [
+      [
+        "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b"
+      ],
+      [
+        "work:example.com/ONLY"
+      ],
+      [
+        "work:example.com/SUM"
+      ]
+    ],
+    "edges": [],
+    "url_provenance": [
+      [
+        "00000000-0000-4000-8005-000000000001",
+        "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+        "url",
+        "https://news.example.org/item?id=42",
+        null
+      ],
+      [
+        "00000000-0000-4000-8005-000000000002",
+        "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+        "url",
+        "https://news.example.org/item?id=42",
+        null
+      ],
+      [
+        "00000000-0000-4000-8005-000000000003",
+        "work:example.com/SUM",
+        "mode:0",
+        "https://example.com/items/SUM",
+        "[]"
+      ],
+      [
+        "00000000-0000-4000-8005-000000000003",
+        "work:example.com/SUM",
+        "url",
+        "https://example.com/items/SUM",
+        "[\"utm_source\"]"
+      ],
+      [
+        "00000000-0000-4000-8005-000000000004",
+        "work:example.com/SUM",
+        "url",
+        "https://example.com/items/SUM",
+        null
+      ],
+      [
+        "00000000-0000-4000-8005-000000000005",
+        "work:example.com/SUM",
+        "url",
+        "https://example.com/items/SUM",
+        null
+      ],
+      [
+        "00000000-0000-4000-8005-000000000006",
+        "work:example.com/ONLY",
+        "url",
+        "https://example.com/items/ONLY",
+        null
+      ],
+      [
+        "7446783c207819c88f4358a528c02b9dbb7154a31cd89f4795a763ed8f829b5c",
+        "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+        "url",
+        "https://news.example.org/item?id=42",
+        null
+      ]
+    ],
+    "visits": [
+      [
+        "00000000-0000-4000-8005-000000000001",
+        "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+        "2026-10-21T18:00:00Z",
+        "2026-10-21",
+        0,
+        0,
+        0,
+        null,
+        "A good discussion",
+        "https://news.example.org/item?id=42"
+      ],
+      [
+        "00000000-0000-4000-8005-000000000002",
+        "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+        "2026-10-22T09:00:00Z",
+        "2026-10-22",
+        0,
+        0,
+        0,
+        null,
+        "A better discussion",
+        "https://news.example.org/item?id=42"
+      ],
+      [
+        "00000000-0000-4000-8005-000000000003",
+        "work:example.com/SUM",
+        "2026-10-21T10:00:00Z",
+        "2026-10-21",
+        125,
+        61,
+        1,
+        "view",
+        "Summarized work",
+        "https://example.com/items/SUM"
+      ],
+      [
+        "00000000-0000-4000-8005-000000000004",
+        "work:example.com/SUM",
+        "2026-10-21T12:00:00Z",
+        "2026-10-21",
+        0,
+        0,
+        0,
+        null,
+        "First at noon",
+        "https://example.com/items/SUM"
+      ],
+      [
+        "00000000-0000-4000-8005-000000000005",
+        "work:example.com/SUM",
+        "2026-10-21T12:00:00Z",
+        "2026-10-21",
+        0,
+        0,
+        0,
+        null,
+        "Second at noon",
+        "https://example.com/items/SUM"
+      ],
+      [
+        "00000000-0000-4000-8005-000000000006",
+        "work:example.com/ONLY",
+        "2026-10-22T08:00:00Z",
+        "2026-10-22",
+        0,
+        0,
+        0,
+        null,
+        "Summary without activity",
+        "https://example.com/items/ONLY"
+      ],
+      [
+        "7446783c207819c88f4358a528c02b9dbb7154a31cd89f4795a763ed8f829b5c",
+        "web:news.example.org/eabc49f68ad9b679062ff3f9204be0786c57b3d6d69b3585d3890fbe15444e0b",
+        "2026-10-20T10:00:00Z",
+        "2026-10-20",
+        0,
+        0,
+        1,
+        null,
+        "A good discussion",
+        "https://news.example.org/item?id=42"
+      ]
+    ]
+  }
+}

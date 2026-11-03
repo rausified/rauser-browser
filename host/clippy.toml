@@ -1,0 +1,13 @@
+# Index transactions start only in host/src/index/db.rs (brwr-b2e, brwr-7vf):
+# every write is `write_txn` (BEGIN IMMEDIATE) and every read `read_txn`, so
+# no deferred transaction is ever upgraded into a writer, the one WAL path
+# that returns SQLITE_BUSY without waiting. db.rs allows these locally.
+disallowed-methods = [
+  { path = "rusqlite::Connection::transaction", reason = "use index::db::write_txn or read_txn" },
+  { path = "rusqlite::Connection::transaction_with_behavior", reason = "use index::db::write_txn or read_txn" },
+  { path = "rusqlite::Connection::unchecked_transaction", reason = "use index::db::write_txn or read_txn" },
+  { path = "rusqlite::Connection::savepoint", reason = "use index::db::write_txn or read_txn" },
+  { path = "rusqlite::Connection::execute_batch", reason = "a batch can begin a transaction; keep batches in index::db" },
+  { path = "rusqlite::Transaction::new", reason = "use index::db::write_txn or read_txn" },
+  { path = "rusqlite::Transaction::new_unchecked", reason = "use index::db::write_txn or read_txn" },
+]
