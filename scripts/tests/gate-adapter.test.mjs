@@ -186,7 +186,7 @@ test("runs as the entry point from a checkout path with a space (PR #264, Codex 
   const root = mkdtempSync(join(tmpdir(), "gate adapter "));
   try {
     mkdirSync(join(root, "scripts"));
-    for (const f of ["gate-adapter.mjs", "ci-changes.mjs"]) copyFileSync(join(here, "..", f), join(root, "scripts", f));
+    for (const f of ["gate-adapter.mjs", "ci-changes.mjs", "ci-macos.mjs"]) copyFileSync(join(here, "..", f), join(root, "scripts", f));
     const r = spawnSync(process.execPath, [join(root, "scripts", "gate-adapter.mjs"), "--dry-run", "--path", "host/src/main.rs"], { cwd: root, encoding: "utf8" });
     assert.equal(r.status, 2, `expected a scope refusal, got ${r.status}: ${r.stdout}${r.stderr}`);
   } finally {

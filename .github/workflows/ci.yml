@@ -106,8 +106,9 @@ jobs:
           echo "::warning::The queue views already disagree on the base commit; this change adds no new disagreement."
 
   # Every platform runs the same steps from build-os.yml. macOS runs only for
-  # a change that can behave differently there (scripts/ci-changes.mjs
-  # MACOS_PATHS and Unix-only host Rust); Windows runs for every code change,
+  # a change that can behave differently there (scripts/ci-macos.mjs: macOS
+  # paths, Unix-only host Rust and what it reads); Windows runs for every code
+  # change,
   # and every push to main runs both, so main's own run catches anything a
   # PR's skipped macOS build would have.
   build-macos:
