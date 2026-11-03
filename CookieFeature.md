@@ -1091,6 +1091,27 @@ passes with 1,314 Rust-reported outcomes (92 explicit IPC skips), 40 extension
 test files and both Clippy builds. Browser execution still skips 36 cases in
 this sandbox. Durable apply (`brwr-dbp`) and panel Re-learn remain unfinished.
 
+### 2026-11-02 — Preview corrected capture history before applying Re-learn
+
+The new developer command `brauser adapters relearn-preview` shows what an
+unambiguous replacement policy would do to existing artifact totals, Recent
+and the worklog. It accepts the same revision-bound request as `relearn-plan`,
+derives the mapping itself from owned evidence, and uses the index's real
+renderers. Corrected IDs carry their measured history, incoming navigation,
+references and repository roll-ups; container copies do not inflate worklog
+open counts. The same replay engine now powers the older alias rehearsal and
+this projection, including chains, moving back and pairwise unalias.
+
+Original log payloads and summary ownership keys stay intact, and summaries
+still point to their original files even when both identities have one. The
+command publishes no cache or content and refuses ambiguous mappings, changed
+config, changed log snapshots and edits detected by its final plan check.
+Thirteen new offline regressions include real binary runs and checks that exact
+note, summary, config and log bytes survive. The full required/README gate
+passes with 1,327 workspace Rust-reported outcomes, 40 extension test files,
+both Clippy configurations and explicit sandbox IPC/browser guards. This
+completes prerequisite brwr-ruwj. Durable application, alias-aware note saves,
+old-path stubs and panel Re-learn remain assigned work on brwr-dbp/brwr-6x2.
 
 ### 2026-11-02 — Keep recorded incoming navigation with a summary
 
@@ -1209,6 +1230,33 @@ accessibility command passes its two fixtures and explicitly skips 36 real
 browser checks in this sandbox; external driver/CI evidence is still needed.
 
 
+## 2026-11-02 — Pause automatic summaries at host admission (brwr-q0i4)
+
+Pausing capture now stops an automatic-summary request that arrives after the
+page was already being read. The native host refreshes settings under its
+existing configuration lock and answers disabled before contacting the
+service if capture is paused, even if its in-memory settings still said on.
+Explicit Summarize & log remains available, so someone can still deliberately
+summarize a page while automatic capture is paused. This check governs
+admission: it does not cancel summaries already queued or running. The
+regression demonstrated the unwanted service attempt before the fix and
+covers both a freshly loaded pause and a pause superseding cached settings.
+
+## 2026-11-02 — Show what the summary agent actually read (brwr-rr93)
+
+Summary run cards and the Tasks page's summary detail now put a short reading
+label directly after the overview: Agent read: whole artifact, part of the
+artifact, or browser page only. This makes a polished overview of a viewer
+page distinguishable from an answer based on the actual document. The label
+reports the agent's validated scope; it does not independently certify that
+the document was complete. Older answers without scope retain their current
+text, and sign-in/no-access/not-found answers still lead with why nothing was
+saved. One shared text-only formatter serves both views. The service projects
+information already in the saved answer through an optional protocol enum,
+so no stored summary, note, or retrieval permission changes. Rebuild host and
+extension together because older extensions reject the extra answer field.
+Tests cover all three scopes, legacy absence, invalid wire values, wall
+precedence, and hostile-looking overview text remaining inert.
 ## 2026-11-02 — Tell agents when browser capture is only an excerpt
 
 Brauser now preserves the browser extractor's signal that page text or a
@@ -1303,3 +1351,26 @@ Rust total is 1,382 reported outcomes (94 explicit IPC sandbox skips); all 44
 extension files pass. Real Chromium cannot launch here: two fixture checks pass
 and 40 browser cases explicitly skip, so the driver and platform CI still need
 to establish that acceptance before publication. No live service or API changed.
+
+## 2026-11-02 — Repair capture rules while keeping the original
+
+A damaged capture-rule document no longer leaves removing every rule as the
+only settings-page recovery. **Repair adapter document…** opens the preserved
+adapter values, including settings from a future format, in a copyable TOML
+view. Beside it is an explicitly authored complete format-1 JSON replacement
+with immediate validation and a match preview across all its sites. Nothing
+converts a future format automatically, and the original reset-all action stays
+available. This lets someone repair one broken rule while retaining the useful
+ones instead of rebuilding their entire capture setup.
+
+Saving sends only the reviewed configuration revision and replacement rules.
+The native host keeps the capture pause, chosen folders and agent settings,
+checks recorded identities and the complete replacement, and backs up the exact
+original file and comments beside config.toml before its atomic write. Another
+settings change makes the open draft stale, preserving both texts for copying
+and requiring a fresh review. The extension verifies the new host policy before
+publishing it to capture. Focused Rust, wire and offline settings tests cover
+future formats, malformed entries, exact backups, conflicts, identity refusal,
+preview and cancellation; the real-browser journey also checks keyboard focus
+return after saving. The driver's external gate remains the source of real
+Chrome and platform acceptance.

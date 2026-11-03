@@ -12,8 +12,9 @@ answer.
 What the answer is for: a summary file in the user's knowledge base
 (host/src/summary.rs renders it) and, later, the panel. Some fields are
 load-bearing for the UI and must stay required: overview (the one-line
-card text), document_type, category and importance. Others are free to
-evolve with this file and host/src/answer.rs together.
+card text), document_type, category, importance, read_scope and access.
+The latter two describe reading coverage and access walls in summary cards.
+Others are free to evolve with this file and host/src/answer.rs together.
 
 Editing rules (host/src/service/prompt.rs tests enforce them):
 - Placeholders, each used exactly once: {{page}} (absolute path of the run's

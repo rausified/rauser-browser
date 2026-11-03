@@ -55,6 +55,11 @@ See the [impact-plan interface](docs/superpowers/plans/2026-10-28-capture-relear
 rejection, and `adapters relearn-journal` inspects and recovers those decisions.
 Both accept the same optional `--config` path. See the
 [decision journal interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#durable-decision-journal).
+`adapters relearn-preview` takes the same request as `relearn-plan` and shows
+corrected artifact totals, Recent/worklog rows, links and original summary
+locations for an unambiguous proposal. It reads authoritative history without
+publishing a cache or changing content or config. See the
+[projected-history interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#projected-history-preview).
 Re-learn in the panel and applying migrations remain under development.
 
 ### Try the M1 development build
@@ -110,6 +115,14 @@ For routine checks that put nothing on screen, build the test host with `cargo b
 To check the Chrome behavior M1.5a artifact logging relies on (new-tab events, transition types, worker stops, idle, and discarded or restored tabs; DESIGN.md §12.2 step 6.1), run `npm run probe:m15a`. It needs no build, runs headless Chrome on a temporary profile with nothing on screen, and exits 1 if Chrome disagrees with the design; `--only <probe>` runs one group and `--json <file>` saves the report.
 
 The development registration in step 3 changes only the current user's Chrome native-host entry. It is for development; the self-registering Brauser app planned for M5 will own registration and removal. A folder path previously entered directly in an M0 config must be selected again through the native picker before M1 can use it. The host backs up malformed or incompatible config files during a revision-checked repair.
+
+If settings reports an adapter document issue, **Repair adapter document…**
+opens preserved values you can copy and a separate complete format-1 JSON
+replacement with match preview. Include every rule you want to keep; no newer
+format is converted automatically. **Back up and replace all adapter rules**
+keeps your other settings and capture on/off choice, and saves the exact original
+config as `config-invalid-<uuid>.toml` beside config.toml before replacement.
+A stale review cannot save. **Remove all adapter rules** remains available.
 
 The host binds the chosen folder to its filesystem identity. If that folder is moved or replaced, choose it again before capture resumes. M1 keeps a synced visit-ID intent file in the OS config directory for each saved visit so retries can recover across log dates and interrupted appends. These files remain indefinitely in the development build; compacting the index is part of the public-release work.
 
@@ -202,7 +215,10 @@ Where your instruction is kept: in the agent's prompt; in the run's `status.json
 
 New summaries show their one-sentence overview and document type in the
 page's Summary line and Recent; the run card leads its result with that
-overview. Older summaries keep their existing labels. Update host and
+overview. Summary run cards and Tasks detail also say how much the agent
+reports reading: the whole artifact, part of it, or only the browser page.
+Older answers without that information omit the reading label. Older summaries
+keep their existing labels. Update host and
 extension together for this additive protocol v8 field. After recording new
 summaries, host downgrade is unsupported because older builds cannot replay
 the new overview field.

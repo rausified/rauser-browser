@@ -3134,6 +3134,35 @@ test("yesterdaysAlreadySummarizedReplyDoesNotSuppressToday", async (t) => {
     "today's judgment to be remembered");
 });
 
+test("aWallClockJumpDoesNotDelayTheNextDrain", async (t) => {
+  // A drain scheduled while the wall clock read an earlier time (here a
+  // mocked year-2000 clock; in Chrome, a clock correction) must not make a
+  // later, sooner drain wait behind it.
+  resetAuto();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(2000, 0, 1, 12).getTime() });
+  values.set(storageKey("policy_v1"), autoLease());
+  // An unloaded tab's first drain finds it unsettled and schedules the
+  // route-settle drain, AUTO_ROUTE_SETTLE_MS out.
+  await openArtifact(222, "clock-route", { load: false });
+  await new Promise((resolve) => setTimeout(resolve, AUTO_SETTLE_WAIT_MS));
+  await flush();
+  t.mock.timers.reset();
+  onTabRemoved(222, { windowId: 1, isWindowClosing: false });
+  tabs.delete(222);
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  const before = ports.length;
+  const started = performance.now();
+  await openArtifact(223, "clock-now");
+  const { port, request } = await autoRequest(before);
+  assert.ok(performance.now() - started < 2_000, "the drain did not wait for the earlier clock's timer");
+  port.reply({
+    type: "auto_summary_skipped", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    reason: "already_summarized",
+  });
+  await until(() => port.closed, "the port to close");
+});
+
 test("notSetUpLeavesTheArtifactEligible", async () => {
   resetAuto();
   values.set(storageKey("policy_v1"), autoLease());

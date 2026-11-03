@@ -276,8 +276,8 @@ and `finished_at`, `error` and `error_kind` (`harness_failed`, `timed_out`,
 `can_retry_save`, and `answer`. Once the agent's answer has passed
 validation, `answer` is a `RunAnswer` (`document_type`, `category`,
 `importance` as an `ImportanceLevel` of `high`, `medium`, or `low`, and
-`importance_reason`, plus optional `overview`); before that, or when
-validation failed, it is null.
+`importance_reason`, plus optional `overview`, `read_scope` and `access`);
+before that, or when validation failed, it is null.
 `summary_path` is the home-relative path of the summary file a save
 wrote (`summaries/<note stem>.summary.md`): set when a save succeeds, and
 also when a `save_failed` save wrote the file before failing (the daily log
@@ -625,8 +625,8 @@ service queue as Summarize & log. All of it is additive.
 - `start_auto_summary` carries `url`, `title`, `content` (the same bounds as
   `start_run`) and `requested_at`. It has no `selection`, `harness`, `kind`,
   `record_key` or `instruction`. The host answers `auto_summary_skipped` with a
-  `reason`, before contacting the service, when auto-summary is off
-  (`disabled`), no harness is set up (`not_set_up`), the page's record key is
+  `reason`, before contacting the service, when capture is paused or
+  auto-summary is off (`disabled`), no harness is set up (`not_set_up`), the page's record key is
   URL-keyed (`not_an_artifact`), or the artifact already has a summary
   (`already_summarized`). Otherwise it forwards a summary `start_run` with the
   record key it resolved, answered with the existing `run_started` (which joins
@@ -679,3 +679,14 @@ older extensions reject the new reply field. Downgrading the host after
 recording new summaries is unsupported: older hosts reject summary events
 with the new field and can omit them on rebuild. Re-upgrade and run
 `brauser reindex` to recover those summaries from the unchanged logs.
+
+### Summary reading scope (additive within version 8)
+
+`RunAnswer.read_scope` projects the retained validated answer's scope as
+`whole`, `partial` or `page_only`. Legacy results omit it. Cards and Tasks
+detail label it as what the agent read, with an access-wall message taking
+precedence. It is never emitted as null. The schema and extension reject
+null and unknown scopes; the Rust optional field follows the existing Serde
+convention of reading null as absent. Rebuild host and extension together:
+an older extension rejects the extra reply field. Stored answers and summary
+files already hold this information, so this adds no disk-format change.

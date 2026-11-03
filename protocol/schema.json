@@ -14,6 +14,8 @@
   "$defs": {
     "Request": {
       "oneOf": [
+        { "$ref": "#/$defs/GetAdapterRepairRequest" },
+        { "$ref": "#/$defs/ReplaceAdaptersRequest" },
         {
           "$ref": "#/$defs/HelloRequest"
         },
@@ -92,6 +94,7 @@
     },
     "Response": {
       "oneOf": [
+        { "$ref": "#/$defs/AdapterRepairLoaded" },
         { "$ref": "#/$defs/PreservedNotesListed" },
         {
           "$ref": "#/$defs/HelloResult"
@@ -305,6 +308,102 @@
               "type": "null"
             }
           ]
+        }
+      }
+    },
+    "GetAdapterRepairRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision"
+      ],
+      "properties": {
+        "type": {
+          "const": "get_adapter_repair"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "ReplaceAdaptersRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "document"
+      ],
+      "properties": {
+        "type": {
+          "const": "replace_adapters"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "document": {
+          "$ref": "#/$defs/AdapterDocument"
+        }
+      }
+    },
+    "AdapterRepairLoaded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "revision",
+        "original_toml"
+      ],
+      "properties": {
+        "type": {
+          "const": "adapter_repair_loaded"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "original_toml": {
+          "type": "string",
+          "maxLength": 262144
         }
       }
     },
@@ -1997,12 +2096,18 @@
       "required": ["document_type", "category", "importance", "importance_reason"],
       "properties": {
         "overview": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "read_scope": { "description": "How much of the artifact the summary agent reports reading. Absent for legacy results whose scope is unknown.", "$ref": "#/$defs/AnswerReadScope" },
         "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
         "category": { "type": "string", "minLength": 1, "maxLength": 64 },
         "importance": { "$ref": "#/$defs/ImportanceLevel" },
         "importance_reason": { "type": "string", "minLength": 1, "maxLength": 300 },
         "access": { "description": "Optional; missing means ok (an older service's answer). Anything but ok means the agent met a wall and the run saved no summary.", "$ref": "#/$defs/AnswerAccess" }
       }
+    },
+    "AnswerReadScope": {
+      "type": "string",
+      "description": "How much of the artifact the summary agent read, as recorded in its validated answer.",
+      "enum": ["whole", "partial", "page_only"]
     },
     "AnswerAccess": {
       "type": "string",
@@ -2336,7 +2441,7 @@
     "StartAutoSummaryRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Start the automatic summary of a recognized artifact. The host refuses it with auto_summary_skipped, before contacting the service, when auto_summary is off, no harness is set up, the page is not an artifact, or the artifact already has a summary (one recording read_scope page_only from an earlier local day does not count); otherwise it forwards a summary start_run with the record key it resolves. Answers run_started or auto_summary_skipped.",
+      "description": "Start the automatic summary of a recognized artifact. The host refuses it with auto_summary_skipped, before contacting the service, when capture is paused or auto_summary is off, no harness is set up, the page is not an artifact, or the artifact already has a summary (one recording read_scope page_only from an earlier local day does not count); otherwise it forwards a summary start_run with the record key it resolves. Answers run_started or auto_summary_skipped.",
       "required": ["type", "protocol_version", "request_id", "url", "title", "content", "requested_at"],
       "properties": {
         "type": { "const": "start_auto_summary" },

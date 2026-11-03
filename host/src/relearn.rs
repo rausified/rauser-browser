@@ -15,6 +15,7 @@ use crate::{config::ConfigStore, index::ArtifactIndex, url_provenance::StoredUrl
 const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_EVIDENCE: usize = 32_768;
 
+pub(crate) mod aliases;
 pub mod journal;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,6 +64,66 @@ pub struct Plan {
     pub plan_revision: String,
     pub identities: Vec<Impact>,
     pub unowned_files: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct Preview {
+    pub review_only: bool,
+    pub plan: Plan,
+    projection: crate::index::RekeyProjection,
+}
+
+/// Show the reviewed policy's projected history without publishing an index
+/// or touching generated files. Callers cannot supply aliases or history.
+pub fn preview(config: &ConfigStore, request: &PlanRequest) -> Result<Preview> {
+    preview_with(config, request, &|| Ok(()))
+}
+
+fn preview_with(
+    config: &ConfigStore,
+    request: &PlanRequest,
+    after_projection: &dyn Fn() -> Result<()>,
+) -> Result<Preview> {
+    let _config_lock = config.lock_current()?;
+    let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
+    let (plan, log_revision) = plan_snapshot_locked(config, request)?;
+    let resolution = aliases::Resolution::from_plan(&plan)?;
+    let current = config.reopen();
+    ensure!(
+        current.revision() == plan.config_revision,
+        "configuration changed during projection"
+    );
+    let mut artifacts: Vec<_> = current
+        .snapshot()
+        .adapters
+        .artifacts
+        .iter()
+        .filter(|a| a["origin"].as_str() != Some(request.origin.as_str()))
+        .cloned()
+        .collect();
+    artifacts.extend(request.proposed.artifacts.clone());
+    let document = compile(&artifacts)?;
+    let storage = current
+        .snapshot()
+        .storage
+        .as_ref()
+        .context("choose a home folder")?;
+    let projection =
+        ArtifactIndex::open_in(storage, current.root_identity(), &current.cache_dir()?)?
+            .with_adapters(Some(&document))
+            .relearn_projection(&resolution, &log_revision)?;
+    after_projection()?;
+    // External editors do not take Brauser's locks. Refuse an observation
+    // made across changed config, owned files, contracts or log evidence.
+    ensure!(
+        plan_locked(config, request)?.plan_revision == plan.plan_revision,
+        "review evidence changed during projection; review a fresh plan"
+    );
+    Ok(Preview {
+        review_only: true,
+        plan,
+        projection,
+    })
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -132,6 +193,10 @@ pub fn plan(config: &ConfigStore, request: &PlanRequest) -> Result<Plan> {
 
 /// Caller holds the config and capture locks through publication of a decision.
 pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result<Plan> {
+    plan_snapshot_locked(config, request).map(|(plan, _)| plan)
+}
+
+fn plan_snapshot_locked(config: &ConfigStore, request: &PlanRequest) -> Result<(Plan, String)> {
     let origin_url = Url::parse(&request.origin).context("invalid origin")?;
     ensure!(
         stored_origin(&StoredUrl {
@@ -278,7 +343,7 @@ pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result
         "too much recorded evidence for one re-learning review"
     );
     let evidence_revision = hash(&serde_json::to_vec(&(
-        log_revision,
+        &log_revision,
         hex::encode(inventory_hash.finalize()),
     ))?);
     // Record keys are global, even when rules on HTTP/HTTPS or unrelated
@@ -506,13 +571,30 @@ pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result
         unowned_files,
     };
     plan.plan_revision = hash(&serde_json::to_vec(&plan)?);
-    Ok(plan)
+    Ok((plan, log_revision))
 }
 
 pub(crate) fn run(
     config_path: Option<std::path::PathBuf>,
     input: impl Read,
     mut output: impl Write,
+) -> Result<()> {
+    run_review(config_path, input, &mut output, false)
+}
+
+pub(crate) fn run_preview(
+    config_path: Option<std::path::PathBuf>,
+    input: impl Read,
+    output: impl Write,
+) -> Result<()> {
+    run_review(config_path, input, output, true)
+}
+
+fn run_review(
+    config_path: Option<std::path::PathBuf>,
+    input: impl Read,
+    mut output: impl Write,
+    project: bool,
 ) -> Result<()> {
     let mut bytes = Vec::new();
     input.take(MAX_REQUEST_BYTES + 1).read_to_end(&mut bytes)?;
@@ -526,8 +608,11 @@ pub(crate) fn run(
         Some(path) => path,
         None => ConfigStore::default_path()?,
     });
-    let plan = plan(&config, &request)?;
-    serde_json::to_writer(&mut output, &plan)?;
+    if project {
+        serde_json::to_writer(&mut output, &preview(&config, &request)?)?;
+    } else {
+        serde_json::to_writer(&mut output, &plan(&config, &request)?)?;
+    }
     output.write_all(b"\n")?;
     Ok(())
 }
@@ -746,6 +831,82 @@ mod tests {
             .is_err()
         );
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn projected_review_refuses_split_merge_swap_and_url_note_decisions() {
+        let f = fixture(vec![adapter("/items/{id:int}/{_}", "work:{host}/{id}")]);
+        f.log("work:work.example/1", "/items/1/10");
+        f.log("work:work.example/1", "/items/1/20");
+        assert!(
+            preview(
+                &f.config,
+                &f.request(vec![adapter("/items/{_}/{part:int}", "new:{host}/{part}")])
+            )
+            .is_err()
+        );
+        let f = fixture(vec![standard()]);
+        f.log("work:work.example/1", "/items/1");
+        f.log("work:work.example/2", "/items/2");
+        assert!(
+            preview(
+                &f.config,
+                &f.request(vec![adapter("/items/{id:int}", "one:{host}/all")])
+            )
+            .is_err()
+        );
+        let f = fixture(vec![
+            adapter("/a/{id:int}", "work:{host}/a/{id}"),
+            adapter("/b/{id:int}", "work:{host}/b/{id}"),
+        ]);
+        f.note("work:work.example/a/1", "/a/1", None);
+        f.note("work:work.example/b/1", "/b/1", None);
+        assert!(
+            preview(
+                &f.config,
+                &f.request(vec![
+                    adapter("/a/{id:int}", "work:{host}/b/{id}"),
+                    adapter("/b/{id:int}", "work:{host}/a/{id}")
+                ])
+            )
+            .is_err()
+        );
+        let f = fixture(vec![standard()]);
+        crate::note::save_note(
+            &f.vault(),
+            &format!("{ORIGIN}/items/1"),
+            "URL note",
+            "Separate copy",
+            "missing",
+        )
+        .unwrap();
+        assert!(preview(&f.config, &f.request(vec![standard()])).is_err());
+        assert!(!f.config.cache_dir().unwrap().exists());
+    }
+
+    #[test]
+    fn projection_rechecks_owned_content_after_deriving_history() {
+        let f = fixture(vec![standard()]);
+        f.note("work:work.example/1", "/items/1", None);
+        let path = f.root.join(
+            f.vault()
+                .note_relative_path(
+                    &artifact_key("work:work.example/1"),
+                    "https://work.example/items/1",
+                )
+                .unwrap(),
+        );
+        let before = fs::read_to_string(&path).unwrap();
+        let request = f.request(vec![adapter("/items/{id:int}", "new:{host}/{id}")]);
+        let error = preview_with(&f.config, &request, &|| {
+            fs::write(&path, format!("{before}\nExternal edit"))?;
+            Ok(())
+        })
+        .err()
+        .unwrap();
+        assert!(format!("{error:#}").contains("evidence changed during projection"));
+        assert!(fs::read_to_string(path).unwrap().ends_with("External edit"));
+        assert!(!f.config.cache_dir().unwrap().exists());
     }
 
     #[test]
