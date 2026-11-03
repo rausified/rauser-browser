@@ -7,6 +7,10 @@ user's Chrome history over the last year. The key is not in the repository. Grad
 `adapters.toml` through Brauser's TypeScript engine (`extension/adapter-templates.ts`) and
 judged every URL shape by hand: should it be recorded, and as what?
 
+Each site folder keeps `adapters.toml`, `vectors.json` and `research.md`. The throwaway
+validation helpers the researchers wrote (`validate.sh`, small Rust crates and Node runners)
+are in commit `f0f9f85` only; the research notes still name them.
+
 ## Summary
 
 | Site | Should match | Matched correctly | Missed | Wrongly matched | ID stable across URL forms | Title template right |
