@@ -220,8 +220,6 @@ queue".
   commit, then close. This Linux cycle cannot access those runners or live
   APIs. Keep interactive Windows acceptance `brwr-i1g` open for a human.
 - [ ] `brwr-dbp` **Apply reviewed re-key decisions through vault and index rebuild.** The shared resolver/preview is integrated; brwr-c1bq adds the physical note ownership/revision contract. Remaining: authoritative applied home history, exact config preparation and universal recovery/refusal, replay-aware readers and summary/run identity, preserved alias-note viewing, old-path stubs and crash/reindex acceptance. Ordinary config saves keep the ID freeze.
-- [ ] `brwr-7vf` **Make index.db safe across concurrent host processes.** The panel, the settings page and each worker sync start their own host process (DESIGN §3.2), so index.db will be opened by several processes at once. Use WAL mode, a busy timeout, and one writer at a time for index updates and lazy dirty-set regeneration, so two hosts never… _(P2; assignee: john-index-lane)_
-- [ ] `brwr-b2e` **Replace the hand-written SQLite snapshot with an incremental real-SQLite index.** Step 6.6 (host/src/index.rs) emits index.db with a custom SQLite file-format writer (build_sqlite) and keeps the real cache in index-state.json. Every publish re-derives all artifacts from the full event history, serializes the whole-history JSON state (64 MiB cap, after which… _(P2; assignee: john-index-lane)_
 <!-- END GENERATED section=in-progress -->
 
 
