@@ -2,8 +2,10 @@ name: PR doctor
 
 # A PR that conflicts with main runs no CI, so auto-merge waits on it forever
 # with nothing failing. This finds those PRs, merges main into the ones whose
-# conflicts are only bookkeeping or both-sides-appended Markdown, and labels
-# and comments on the rest (AGENTS.md "PR doctor", scripts/pr-doctor.mjs).
+# conflicts are only old work-queue files (their bead edits are applied
+# through bd and synced to refs/dolt/data, AGENTS.md "Work queue") or
+# both-sides-appended Markdown, and labels and comments on the rest
+# (AGENTS.md "PR doctor", scripts/pr-doctor.mjs).
 #
 # Repairs are pushed only with the PR_DOCTOR_TOKEN secret (a fine-grained
 # token with Contents and Pull requests write on this repository): a push
@@ -52,14 +54,38 @@ jobs:
         # The repair checks out PR branches; only main's copies ever run.
         run: |
           mkdir -p "$RUNNER_TEMP/pr-doctor"
-          cp scripts/pr-doctor.mjs scripts/render_backlog.py "$RUNNER_TEMP/pr-doctor/"
+          cp scripts/pr-doctor.mjs scripts/work_queue.py scripts/render_backlog.py \
+            scripts/check_queue_consistency.py "$RUNNER_TEMP/pr-doctor/"
           git config user.name "PR doctor"
           git config user.email "pr-doctor@users.noreply.github.com"
+      # A separate clone holds the bd database, so checking out PR branches
+      # never touches it. Without it (bd missing, queue not seeded, or a
+      # transport failure) the doctor cannot apply queue edits and labels
+      # such PRs needs-merge with instructions instead.
+      - name: Bootstrap the work queue
+        id: queue
+        continue-on-error: true
+        env:
+          BD_NON_INTERACTIVE: "1"
+        run: |
+          sh scripts/install-bd.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          git ls-remote --exit-code origin refs/dolt/data > /dev/null
+          header=$(git config --get "http.https://github.com/.extraheader")
+          ws="$RUNNER_TEMP/queue-ws"
+          git -c "http.https://github.com/.extraheader=$header" clone -q --depth 1 \
+            "https://github.com/$GITHUB_REPOSITORY.git" "$ws"
+          git -C "$ws" config "http.https://github.com/.extraheader" "$header"
+          git -C "$ws" config user.name "PR doctor"
+          git -C "$ws" config user.email "pr-doctor@users.noreply.github.com"
+          (cd "$ws" && "$RUNNER_TEMP/bin/bd" bootstrap)
+          echo "workspace=$ws" >> "$GITHUB_OUTPUT"
       - name: Run the PR doctor
         env:
           GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
           PR_DOCTOR_PUSH: ${{ secrets.PR_DOCTOR_TOKEN != '' && '1' || '0' }}
           PR_DOCTOR_PYTHON: python
+          BRAUSER_QUEUE_WORKSPACE: ${{ steps.queue.outputs.workspace }}
         run: >-
           node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor"
           ${{ inputs.dry_run && '--dry-run' || '' }}

@@ -1,7 +1,8 @@
 ---
 title: Side panel redesign (dark glass)
 date: 2026-11-02
-status: in progress
+status: done
+shipped: "PR #251"
 ---
 
 # Side panel redesign

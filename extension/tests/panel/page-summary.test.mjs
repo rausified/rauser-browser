@@ -57,7 +57,12 @@ test("page and Recent show the overview and type as literal text", async () => {
     assert.deepEqual(page.el("page-summary-chips").children.map((chip) => chip.textContent),
       ["specification", "technical specification", "High importance"]);
     assert.equal(page.el("page-summary-chips").children[2].dataset.tone, "high");
-    assert.equal(page.el("summarize").textContent, "Summarize again");
+    // Summarize again is the card's re-summarize icon button: the same
+    // #summarize control, moved into the card head, with its label kept
+    // for assistive technology.
+    assert.equal(page.el("summarize-label").textContent, "Summarize again");
+    assert.equal(page.el("summarize").dataset.place, "card");
+    assert.ok(page.el("page-summary-head").children.includes(page.el("summarize")));
     page.el("tab-recent").click();
     await until(() => page.el("recent-list").textContent.includes("Summarized"), "the Recent overview");
     assert.ok(page.el("recent-list").textContent.includes(`Summarized · ${overview} · specification`));

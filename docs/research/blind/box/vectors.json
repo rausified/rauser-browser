@@ -1,0 +1,529 @@
+{
+ "spec": "adapter-templates.md format 1; synthetic IDs only",
+ "doc": "adapters.toml",
+ "note": "Positive cases with a title give the expected recorded title; when no title entry matches, Brauser records the whole tab title.",
+ "cases": [
+  {
+   "id": "file.preview",
+   "why": "logged-in preview",
+   "url": "https://app.box.com/file/111122223333",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/111122223333",
+    "mode": null,
+    "title": "Q3 Plan.pptx"
+   },
+   "title": "Q3 Plan.pptx | Powered by Box"
+  },
+  {
+   "id": "file.preview.slash_query_fragment",
+   "why": "trailing slash, ?s= share token and fragment ignored",
+   "url": "https://app.box.com/file/111122223333/?s=abcdefghij0123456789#page=2",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/111122223333",
+    "mode": null
+   }
+  },
+  {
+   "id": "file.enterprise",
+   "why": "custom subdomain; host in ID",
+   "url": "https://acme.app.box.com/file/444455556666?sb=/details",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:acme.app.box.com/444455556666",
+    "mode": null,
+    "title": "Budget FY27.xlsx"
+   },
+   "title": "Budget FY27.xlsx | Powered by Box"
+  },
+  {
+   "id": "file.note",
+   "why": "Box Note: same file-ID namespace (title form unverified)",
+   "url": "https://app.box.com/notes/222233334444",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/222233334444",
+    "mode": null,
+    "title": "Weekly sync.boxnote"
+   },
+   "title": "Weekly sync.boxnote | Powered by Box"
+  },
+  {
+   "id": "file.note.query",
+   "why": "note opened with share query",
+   "url": "https://app.box.com/notes/222233334444?s=zzzzyyyyxxxxwwwwvvvv",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/222233334444",
+    "mode": null
+   }
+  },
+  {
+   "id": "file.canvas",
+   "why": "Box Canvas route (title unverified)",
+   "url": "https://app.box.com/canvas/333344445555",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/333344445555",
+    "mode": null,
+    "title": "Roadmap board.boxcanvas"
+   },
+   "title": "Roadmap board.boxcanvas | Powered by Box"
+  },
+  {
+   "id": "file.in_shared_folder",
+   "why": "file inside a shared-link folder, observed form",
+   "url": "https://app.box.com/s/abcd1234efgh5678ijkl9012mnop3456/file/555566667777",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/555566667777",
+    "mode": null,
+    "title": "Press kit.pdf"
+   },
+   "title": "Press kit.pdf | Powered by Box"
+  },
+  {
+   "id": "file.in_vanity_folder",
+   "why": "file inside a custom-URL folder",
+   "url": "https://acme.app.box.com/v/press-kit/file/666677778888?sortColumn=name&sortDirection=ASC",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:acme.app.box.com/666677778888",
+    "mode": null,
+    "title": "Logo.png"
+   },
+   "title": "Logo.png | Powered by Box"
+  },
+  {
+   "id": "file.title_with_pipe",
+   "why": "title containing ' | ' kept whole",
+   "url": "https://app.box.com/file/777788889999",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/777788889999",
+    "mode": null,
+    "title": "A | B notes.docx"
+   },
+   "title": "A | B notes.docx | Powered by Box"
+  },
+  {
+   "id": "file.officeonline",
+   "why": "LOW confidence route: Office for the web editing",
+   "url": "https://app.box.com/integrations/officeonline/openOfficeOnline?fileId=888899990000&sharedAccessCode=",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/888899990000",
+    "mode": "edit"
+   }
+  },
+  {
+   "id": "file.default_title",
+   "why": "default title matches no entry: Brauser keeps the whole tab title (title_entry null)",
+   "url": "https://app.box.com/file/999900001111",
+   "expect": {
+    "match": true,
+    "type": "box.file",
+    "artifact_id": "box.file:app.box.com/999900001111",
+    "mode": null,
+    "title": "Box | Simple Online Collaboration"
+   },
+   "title": "Box | Simple Online Collaboration"
+  },
+  {
+   "id": "folder.view",
+   "why": "logged-in folder view",
+   "url": "https://app.box.com/folder/123412341234",
+   "expect": {
+    "match": true,
+    "type": "box.folder",
+    "artifact_id": "box.folder:app.box.com/123412341234",
+    "mode": null,
+    "title": "Customer Contracts"
+   },
+   "title": "Customer Contracts | Powered by Box"
+  },
+  {
+   "id": "folder.view.query",
+   "why": "query noise",
+   "url": "https://app.box.com/folder/123412341234?tc=collab-folder-invite-treatment",
+   "expect": {
+    "match": true,
+    "type": "box.folder",
+    "artifact_id": "box.folder:app.box.com/123412341234",
+    "mode": null
+   }
+  },
+  {
+   "id": "folder.view.slash_fragment",
+   "why": "trailing slash and fragment",
+   "url": "https://acme.app.box.com/folder/234523452345/#section",
+   "expect": {
+    "match": true,
+    "type": "box.folder",
+    "artifact_id": "box.folder:acme.app.box.com/234523452345",
+    "mode": null
+   }
+  },
+  {
+   "id": "folder.two_digit",
+   "why": "int(2,19) lower bound",
+   "url": "https://app.box.com/folder/12",
+   "expect": {
+    "match": true,
+    "type": "box.folder",
+    "artifact_id": "box.folder:app.box.com/12",
+    "mode": null
+   }
+  },
+  {
+   "id": "folder.in_shared",
+   "why": "subfolder of a shared folder (title may be the share root's name)",
+   "url": "https://app.box.com/s/abcdefghij0123456789/folder/345634563456",
+   "expect": {
+    "match": true,
+    "type": "box.folder",
+    "artifact_id": "box.folder:app.box.com/345634563456",
+    "mode": null,
+    "title": "Team Docs"
+   },
+   "title": "Team Docs | Powered by Box"
+  },
+  {
+   "id": "folder.in_shared.sort",
+   "why": "sort query",
+   "url": "https://app.box.com/s/abcdefghij0123456789/folder/345634563456?sortColumn=date&sortDirection=ASC",
+   "expect": {
+    "match": true,
+    "type": "box.folder",
+    "artifact_id": "box.folder:app.box.com/345634563456",
+    "mode": null
+   }
+  },
+  {
+   "id": "folder.in_vanity",
+   "why": "subfolder of a custom-URL folder, observed form",
+   "url": "https://acme.app.box.com/v/media/folder/456745674567",
+   "expect": {
+    "match": true,
+    "type": "box.folder",
+    "artifact_id": "box.folder:acme.app.box.com/456745674567",
+    "mode": null,
+    "title": "Media"
+   },
+   "title": "Media | Powered by Box"
+  },
+  {
+   "id": "folder.enterprise_title_fallback",
+   "why": "KNOWN LIMIT: while untitled Box shows the enterprise name; recorded as the title",
+   "url": "https://acme.app.box.com/folder/567856785678",
+   "expect": {
+    "match": true,
+    "type": "box.folder",
+    "artifact_id": "box.folder:acme.app.box.com/567856785678",
+    "mode": null,
+    "title": "Acme Corp"
+   },
+   "title": "Acme Corp | Powered by Box"
+  },
+  {
+   "id": "shared.s32",
+   "why": "current 32-char shared name",
+   "url": "https://app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+    "mode": null,
+    "title": "Deck.pdf"
+   },
+   "title": "Deck.pdf | Powered by Box"
+  },
+  {
+   "id": "shared.s20.slash",
+   "why": "older 20-char name, trailing slash",
+   "url": "https://app.box.com/s/abcdefghij0123456789/",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:app.box.com/s/abcdefghij0123456789",
+    "mode": null
+   }
+  },
+  {
+   "id": "shared.s10",
+   "why": "10-char legacy name (seen after /shared/ redirect)",
+   "url": "https://app.box.com/s/abcde12345",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:app.box.com/s/abcde12345",
+    "mode": null
+   }
+  },
+  {
+   "id": "shared.upper",
+   "why": "names are case-insensitive: lowered",
+   "url": "https://app.box.com/s/ABCDEFGHIJ0123456789",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:app.box.com/s/abcdefghij0123456789",
+    "mode": null
+   }
+  },
+  {
+   "id": "shared.query",
+   "why": "query and fragment ignored",
+   "url": "https://app.box.com/s/abcdefghij0123456789?page=2&sortColumn=name#x",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:app.box.com/s/abcdefghij0123456789",
+    "mode": null
+   }
+  },
+  {
+   "id": "shared.enterprise",
+   "why": "shared folder root on custom subdomain",
+   "url": "https://acme.app.box.com/s/zyxwvutsrq9876543210zyxwvutsrq98",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:acme.app.box.com/s/zyxwvutsrq9876543210zyxwvutsrq98",
+    "mode": null,
+    "title": "Team Docs"
+   },
+   "title": "Team Docs | Powered by Box"
+  },
+  {
+   "id": "shared.vanity",
+   "why": "custom URL, lowered",
+   "url": "https://acme.app.box.com/v/Press-Kit_2026",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:acme.app.box.com/v/press-kit_2026",
+    "mode": null,
+    "title": "Press Kit"
+   },
+   "title": "Press Kit | Powered by Box"
+  },
+  {
+   "id": "shared.vanity.slash",
+   "why": "vanity trailing slash",
+   "url": "https://acme.app.box.com/v/press-kit_2026/",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:acme.app.box.com/v/press-kit_2026",
+    "mode": null
+   }
+  },
+  {
+   "id": "shared.vanity.short",
+   "why": "short vanity name",
+   "url": "https://app.box.com/v/UNL",
+   "expect": {
+    "match": true,
+    "type": "box.share",
+    "artifact_id": "box.share:app.box.com/v/unl",
+    "mode": null
+   }
+  },
+  {
+   "id": "neg.root",
+   "why": "app root",
+   "url": "https://app.box.com/",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.all_files",
+   "why": "All Files root excluded by int(2,19)",
+   "url": "https://app.box.com/folder/0",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.folder_search",
+   "why": "search",
+   "url": "https://app.box.com/folder/0/search?query=budget",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.folder_sub_search",
+   "why": "search inside folder (no rest)",
+   "url": "https://app.box.com/folder/123412341234/search?query=x",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.recents",
+   "why": "recents list",
+   "url": "https://app.box.com/recents",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.trash",
+   "why": "trash",
+   "url": "https://app.box.com/trash",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.favorites",
+   "why": "favorites list",
+   "url": "https://app.box.com/files/favorites",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.notes_create",
+   "why": "create-note action, not an ID",
+   "url": "https://app.box.com/notes/create_note",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.file_subroute",
+   "why": "sub-route under a file (no rest)",
+   "url": "https://app.box.com/file/111122223333/versions",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.legacy_files",
+   "why": "legacy hash-era file URL not expressible",
+   "url": "https://app.box.com/files/0/f/2177659772/1/f_18817194544",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.legacy_shared_tree",
+   "why": "legacy shared tree (404 today)",
+   "url": "https://app.box.com/s/abcdefghij0123456789/1/1111111111/2222222222/1",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.shared_static",
+   "why": "direct download",
+   "url": "https://app.box.com/shared/static/abcdefghij0123456789.pdf",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.shared_extra",
+   "why": "unknown sub-route under a shared link (no rest)",
+   "url": "https://app.box.com/s/abcdefghij0123456789/preview",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.vanity_dot",
+   "why": "'.' is outside token: not matched (vanity alphabet assumption)",
+   "url": "https://app.box.com/v/press.kit",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.embed",
+   "why": "embed iframe",
+   "url": "https://app.box.com/embed/s/abcdefghij0123456789",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.web_link",
+   "why": "Box bookmark that opens another site",
+   "url": "https://app.box.com/web_link/123412341234",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.hubs",
+   "why": "Box Hubs not in this starter",
+   "url": "https://app.box.com/hubs/123412341234",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.upper_route",
+   "why": "uppercase route is 404 on Box; paths are case-sensitive",
+   "url": "https://app.box.com/S/abcdefghij0123456789",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.master",
+   "why": "admin console",
+   "url": "https://app.box.com/master/settings/accountBilling",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.login",
+   "why": "login host",
+   "url": "https://account.box.com/login?redirect_url=%2Ffile%2F111122223333",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.www",
+   "why": "marketing host, not an adapter origin",
+   "url": "https://www.box.com/s/abcdefghij0123456789",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.file_noint",
+   "why": "non-numeric file ID",
+   "url": "https://app.box.com/file/abc",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.officeonline_noid",
+   "why": "no fileId",
+   "url": "https://app.box.com/integrations/officeonline/openOfficeOnline?sharedAccessCode=",
+   "expect": {
+    "match": false
+   }
+  }
+ ]
+}

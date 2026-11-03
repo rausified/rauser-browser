@@ -1,0 +1,10 @@
+{
+  "jira.issue": "jira:{host}/{key}",
+  "confluence.page": "confluence.page:{host}/{id}",
+  "sharepoint.doc": "sharepoint:{host}/{doc}",
+  "github.pr": "github.pr:{host}/{owner}/{repo}/{number}",
+  "github.issue": "github.issue:{host}/{owner}/{repo}/{number}",
+  "github.repo": "github.repo:{host}/{owner}/{repo}",
+  "miro.board": "miro.board:{host}/{board}",
+  "github.repo#within": "github.repo:{host}/{owner}/{repo}"
+}

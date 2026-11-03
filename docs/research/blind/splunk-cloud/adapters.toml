@@ -1,0 +1,116 @@
+# Splunk Cloud Platform (Splunk Web) blind starter adapters.
+#
+# Derived only from public sources (help.splunk.com, public @splunk npm
+# packages, public github.com/splunk repositories) on 2026-11-03. Nothing here
+# was checked against a live Splunk Cloud stack. See research.md for evidence
+# and confidence, and vectors.json for the synthetic test cases.
+#
+# Origin model: a tenant subdomain family. Every Splunk Cloud stack has its own
+# host, https://<stack>.splunkcloud.com, and premium or additional search heads
+# have their own prefixed host (for example https://es-<stack>.splunkcloud.com
+# or https://<sh-prefix>.<stack>.splunkcloud.com). Each host is one customer's
+# search head (or search head cluster), so the origin is not shared between
+# tenants and needs no `scope` (adapter-templates.md section 6). The adapter is
+# offered per exact origin, like *.atlassian.net. `https://acme.splunkcloud.com`
+# below is a synthetic placeholder for "<stack>.splunkcloud.com".
+#
+# Splunk Web URLs are /<locale>/app/<app>/<view>, for example
+# /en-US/app/search/search. A Classic (Simple XML) dashboard and a Dashboard
+# Studio dashboard are both "views" at that position, and so are the app's
+# built-in pages (Search, the Dashboards / Reports / Alerts listing pages,
+# report and alert detail pages, the job manager, add-on configuration pages).
+# The URL does not say which views are dashboards, and the template language
+# has no "not this word" segment. The two adapters therefore work as a pair:
+#
+#   1. splunk.app claims the app root and a fixed list of built-in view names
+#      first, so they are recorded as time spent in that app, not as dashboards.
+#   2. splunk.dashboard records every other view, and rolls up into its app
+#      with `within`.
+#
+# The host's overlap report flags (splunk.app rule 1, splunk.dashboard rule 0)
+# as "may overlap". That is intended: the built-in list must win. It is the
+# "reverse order" case of section 10.3, so it is reported, not exempted.
+#
+# Not covered (see research.md "Excluded"): reports and alerts (their URLs
+# carry the saved search as a REST path with "/" and spaces in the `s` query
+# value, which no capture type accepts), search jobs (a new sid is put in the
+# URL on every search run, and jobs expire after 10 minutes by default),
+# Settings (/<locale>/manager/...), login (/<locale>/account/...), Splunk Web's
+# splunkd proxy (/<locale>/splunkd/...), static files, and URLs without the
+# locale segment (Splunk Web redirects them to a locale-prefixed URL).
+
+[adapters]
+format = 1
+
+# ---------------------------------------------------------------------------
+# splunk.app: an app as a container, plus the app's own built-in pages.
+#
+# Rule 0  /<locale>/app/<app>
+#         The app root. Splunk Web opens the app's default view from here.
+# Rule 1  /<locale>/app/<app>/<built-in view>
+#         Built-in Search & Reporting and launcher views, and the two pages
+#         every UCC-generated add-on has (configuration, inputs). They are
+#         listed here only so that splunk.dashboard does not record them as
+#         dashboards. `search` covers the search page with or without q=, s=
+#         and sid= query parameters, so ad-hoc searches and opened jobs count
+#         as time in the app, never as separate artifacts. `report` and
+#         `alert` are the report and alert detail pages (?s=<REST path>).
+#         `home` is Splunk Home in the launcher app and an app's home page.
+#         Query parameters never change the ID. No rest segment: deeper paths
+#         under a built-in view are not recorded.
+#
+# `{_}` is the locale (en-US, en-GB, ja-JP, ...). It is not part of the ID,
+# so one app opened in two locales is one artifact. The literal `app` is the
+# anchor. App names are directory names: letters, digits, `_`, `-`, `.`, so
+# `name`; case is preserved because Splunk app directory names are
+# case-sensitive.
+#
+# ID: splunk.app:<host>/app/<app>. The literal `app` part is deliberate: the
+# host names a container from its ID and links it as <origin>/<title>
+# (section 8.3), so the title is "app/<app>" and the link
+# https://<stack>.splunkcloud.com/app/<app>, which Splunk Web redirects to the
+# locale-prefixed app root. No title template: a container's title comes from
+# its ID, never from one page's tab title.
+[[artifacts]]
+type   = "splunk.app"
+origin = "https://acme.splunkcloud.com"
+match  = [
+  { path = "/{_}/app/{app:name}" },
+  { path = "/{_}/app/{app:name}/(search|dashboards|reports|alerts|datasets|report|alert|dataset|job_manager|analytics_workspace|pivot|field_extractor|home|configuration|inputs)" },
+]
+id     = "splunk.app:{host}/app/{app}"
+
+# ---------------------------------------------------------------------------
+# splunk.dashboard: a Classic (Simple XML) or Dashboard Studio dashboard, or
+# any other app view that is not in splunk.app's built-in list.
+#
+# Rule 0  /<locale>/app/<app>/<dashboard id>
+#         View mode. Drilldown and token parameters (?form.<token>=...,
+#         earliest=, latest=), Dashboard Studio tab or display parameters,
+#         and fragments never change the ID.
+#         /<locale>/app/<app>/<dashboard id>/edit
+#         Edit mode (mode = edit). The `/edit` segment is low confidence for
+#         Dashboard Studio (see research.md); if Studio's editor uses another
+#         URL, the view-mode rule still records the dashboard, without a mode.
+#
+# ID: splunk.dashboard:<host>/<app>/<dashboard id>. Splunk documents that a
+# dashboard's ID cannot be changed after creation, while its title can, and
+# that dashboards in different apps can share an ID, so the app is part of
+# the ID. Dashboard IDs use letters, digits, `_` and `-` (`name`). A view name
+# containing `@`, `:` or a space is not a `name` and is not recorded.
+#
+# Title: Splunk Web tab titles are believed to be "<page title> | Splunk
+# <version>" (low confidence, not seen live). The first entry skips whatever
+# follows " | Splunk " (the version, such as 9.3.2411.104); the second covers
+# a title with no version. A dashboard title that itself contains " | Splunk "
+# keeps everything before the last occurrence.
+[[artifacts]]
+type   = "splunk.dashboard"
+origin = "https://acme.splunkcloud.com"
+match  = [
+  { path = "/{_}/app/{app:name}/{view:name}/{mode?:(edit)}" },
+]
+modes  = { edit = "edit" }
+id     = "splunk.dashboard:{host}/{app}/{view}"
+title  = ["{title} | Splunk {~}", "{title} | Splunk"]
+within = { type = "splunk.app", id = "splunk.app:{host}/app/{app}" }

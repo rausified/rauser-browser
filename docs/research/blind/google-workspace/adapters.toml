@@ -1,0 +1,241 @@
+# Blind starter adapters for Google Workspace web apps.
+#
+# Derived only from public sources (Google developer docs, Google help
+# articles, public StackOverflow posts) and logged-out fetches of Google's own
+# public API sample files (2026-11-03). See research.md for the evidence and
+# confidence of every rule, and vectors.json for the synthetic test cases.
+#
+# Origins:
+#   https://docs.google.com     Docs, Sheets, Slides, Forms. On the host's
+#                               SHARED_ORIGINS list and the URL never names the
+#                               Google account, so every adapter there must be
+#                               `unscoped = "acknowledged"` (spec §6).
+#   https://drive.google.com    Drive files and folders. NOT on SHARED_ORIGINS,
+#                               so `unscoped` is a validation error there
+#                               (unscoped_not_shared) and no scope is needed,
+#                               even though it is just as multi-account as docs.
+#   https://calendar.google.com Calendar events. Same situation as Drive.
+#
+# Gmail is left out: its threads are hash-routed (mail.google.com/mail/u/0/
+# #inbox/<thread>), and format 1 ignores fragments (spec §2, §13).
+#
+# Shared conventions:
+#   - IDs are Google's own file IDs ("letters, numbers, and some special
+#     characters"; Google's documented extraction regex is [a-zA-Z0-9-_]+),
+#     which is exactly the `token` alphabet. They are case-sensitive, so no
+#     |lower (spec §7.1). Google documents them as stable across renames.
+#   - token(20,128): real IDs seen are 44 characters (Docs/Sheets/Slides/Forms)
+#     and 33 or 28 (Drive uploads, legacy "0B..."). The 20-character floor
+#     keeps the one-letter "e" of published/responder URLs (/d/e/<id>/...)
+#     and short route words out of the ID position.
+#   - /u/<n>/ is the account index Google inserts for multi-login. It is
+#     matched with {_} and never captured: it depends on sign-in order, so it
+#     is neither identity nor a valid scope (spec §6).
+#   - /a/<domain>/ is the legacy Google Apps domain prefix. Google still
+#     serves it (verified logged out), and old links carry it. Matched with
+#     {_}; it cannot be a scope because most URLs omit it.
+#   - No rule ends in {*}: /copy, /export, /pub, /template/... are actions or
+#     other artifacts, not opens of the document.
+
+[adapters]
+format = 1
+
+# ---------------------------------------------------------------------------
+# Google Docs document.
+#   /document/d/<id>                 (server redirects to /edit)
+#   /document/d/<id>/edit            edit; ?usp=sharing, ?tab=t.0, ?resourcekey
+#                                    and similar query noise is ignored
+#   /document/d/<id>/view | /preview view-only renderings
+#   /document/d/<id>/mobilebasic     lightweight HTML view (tab title has no
+#                                    " - Google Docs" suffix; whole title kept)
+#   /document/u/<n>/d/<id>/...       multi-account index form
+#   /a/<domain>/document/d/<id>/...  legacy Google Apps form
+# Not matched: /document/u/0/ (home list), /document/create, /document/d/<id>/copy,
+#   /export, /pub, /document/d/e/<published-id>/pub (published-to-web copy
+#   with a different ID).
+# Title: "<name> - Google Docs" (observed on Google's public quickstart doc).
+[[artifacts]]
+type     = "google.doc"
+origin   = "https://docs.google.com"
+unscoped = "acknowledged"
+match    = [
+  { path = "/document/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}" },
+  { path = "/document/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}" },
+  { path = "/a/{_}/document/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}" },
+]
+modes    = { edit = "edit", view = "view", preview = "view", mobilebasic = "view" }
+id       = "google.doc:{host}/{id}"
+title    = "{title} - Google Docs"
+refs     = [{ type = "jira.issue", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# Google Sheets spreadsheet.
+#   /spreadsheets/d/<id>/edit[?gid=N][#gid=N]   the sheet tab (gid) is a part
+#                                               of the spreadsheet, not its ID
+#   /spreadsheets/d/<id>/view | /preview | /htmlview
+#   /spreadsheets/u/<n>/d/<id>/... and /a/<domain>/spreadsheets/d/<id>/...
+# Legacy /spreadsheet/ccc?key=<id> is a server redirect to /spreadsheets/d/<id>/edit
+#   (verified logged out), so it is not matched here; the redirect target is.
+# Title: "<name> - Google Sheets" on edit and view; /preview and /htmlview
+#   render with "<name> - Google Drive" (both observed), hence the second entry.
+[[artifacts]]
+type     = "google.sheet"
+origin   = "https://docs.google.com"
+unscoped = "acknowledged"
+match    = [
+  { path = "/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}" },
+  { path = "/spreadsheets/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}" },
+  { path = "/a/{_}/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}" },
+]
+modes    = { edit = "edit", view = "view", preview = "view", htmlview = "view" }
+id       = "google.sheet:{host}/{id}"
+title    = ["{title} - Google Sheets", "{title} - Google Drive"]
+refs     = [{ type = "jira.issue", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# Google Slides presentation.
+#   /presentation/d/<id>/edit[#slide=id.<obj>]  slide is a fragment or ?slide=
+#                                               query; never part of the ID
+#   /presentation/d/<id>/view | /preview | /present (slideshow) | /embed
+#   /presentation/u/<n>/d/<id>/... and /a/<domain>/presentation/d/<id>/...
+# Title: "<name> - Google Slides" on edit, view, preview, present and embed
+#   (all observed on Google's public quickstart deck).
+[[artifacts]]
+type     = "google.slides"
+origin   = "https://docs.google.com"
+unscoped = "acknowledged"
+match    = [
+  { path = "/presentation/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}" },
+  { path = "/presentation/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}" },
+  { path = "/a/{_}/presentation/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}" },
+]
+modes    = { edit = "edit", view = "view", preview = "view", present = "view", embed = "view" }
+id       = "google.slides:{host}/{id}"
+title    = "{title} - Google Slides"
+refs     = [{ type = "jira.issue", find = "jira_key" }]
+
+# ---------------------------------------------------------------------------
+# Google Forms, editor side (the form's own formId, as in the Forms API).
+#   /forms/d/<formId>/edit[#responses|#settings]
+#   /forms/d/<formId>/viewform       legacy respondent link built on formId
+#   /forms/u/<n>/d/<formId>/... and /a/<domain>/forms/d/<formId>/...
+# The "e" segment of /forms/d/e/<publishedId>/... is one character, so the
+#   token(20,128) floor keeps responder links out of this adapter.
+# Title: "<name> - Google Forms" is inferred from the sibling editors (LOW-
+#   MEDIUM confidence; no public editable form was available to observe).
+[[artifacts]]
+type     = "google.form"
+origin   = "https://docs.google.com"
+unscoped = "acknowledged"
+match    = [
+  { path = "/forms/d/{id:token(20,128)}/{mode?:(edit|viewform)}" },
+  { path = "/forms/u/{_}/d/{id:token(20,128)}/{mode?:(edit|viewform)}" },
+  { path = "/a/{_}/forms/d/{id:token(20,128)}/{mode?:(edit|viewform)}" },
+]
+modes    = { edit = "edit", viewform = "view" }
+id       = "google.form:{host}/{id}"
+title    = "{title} - Google Forms"
+
+# ---------------------------------------------------------------------------
+# Google Forms, respondent side. The published link carries a DIFFERENT ID
+# (the Forms API's responderUri, "1FAIpQLS..." ~56 chars) than the formId, and
+# nothing in the URL maps one to the other, so it is its own artifact type
+# rather than a second, inconsistent ID for google.form.
+#   /forms/d/e/<publishedId>/viewform[?usp=sf_link|?embedded=true]
+#   /forms/d/e/<publishedId>/formResponse   (after submitting)
+#   /forms/d/e/<publishedId>/closedform     (form no longer accepting)
+# Not matched: /forms/d/e/<id>/prefill and other sub-routes; forms.gle short
+#   links (another origin; they redirect here).
+# No title template: the respondent tab title is the bare form title with no
+#   product suffix (observed on the Forms API's public example form), and
+#   Brauser records the whole tab title when no entry is given.
+[[artifacts]]
+type     = "google.form.responder"
+origin   = "https://docs.google.com"
+unscoped = "acknowledged"
+match    = [
+  { path = "/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)", mode = "view" },
+  { path = "/forms/u/{_}/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)", mode = "view" },
+  { path = "/a/{_}/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)", mode = "view" },
+]
+id       = "google.form.responder:{host}/{id}"
+
+# ---------------------------------------------------------------------------
+# Google Drive file preview (uploads such as PDF, Office files, images,
+# video; also any native Google file opened in Drive's previewer).
+#   /file/d/<id>/view[?usp=sharing|?usp=drive_link|?resourcekey=...]
+#   /file/d/<id>/preview | /edit     (both observed to render the previewer)
+#   /file/d/<id>                     (bare form; low confidence it is served)
+#   /file/u/<n>/d/<id>/view          (observed logged out)
+# Not matched: /open?id=<id> (a redirector: it forwards to the real editor or
+#   previewer, verified logged out, and its target type is unknown), /uc?id=
+#   and drive.usercontent.google.com (downloads), /drive/my-drive, /drive/home,
+#   /drive/recent, /drive/shared-with-me, /drive/search?q=..., /drive/trash.
+# Title: "<file name> - Google Drive" (observed). The file name usually keeps
+#   its extension, e.g. "Q3 plan.pdf".
+# Limit: the same native Doc seen at /file/d/<id>/view is recorded as a
+#   google.drive.file on drive.google.com, not as the google.doc, because
+#   {host} differs (spec §8.1). The ID part is the same string.
+[[artifacts]]
+type   = "google.drive.file"
+origin = "https://drive.google.com"
+match  = [
+  { path = "/file/d/{id:token(20,128)}/{mode?:(view|preview|edit)}" },
+  { path = "/file/u/{_}/d/{id:token(20,128)}/{mode?:(view|preview|edit)}" },
+]
+modes  = { view = "view", preview = "view", edit = "view" }
+id     = "google.drive.file:{host}/{id}"
+title  = "{title} - Google Drive"
+
+# ---------------------------------------------------------------------------
+# Google Drive folder (including a shared drive's root, whose ID is the
+# shorter "0A..." form, 19 characters).
+#   /drive/folders/<id>[?usp=sharing|?resourcekey=...]
+#   /drive/u/<n>/folders/<id>         (logged out it redirects to the form above)
+#   /drive/mobile/folders/<id>        (mobile web; LOW confidence)
+# token(16,128): shared drive IDs are shorter than file IDs. "root" (Drive
+#   API alias) and short route words fall below the floor.
+# Title: "<folder name> - Google Drive" (MEDIUM: consistent with the observed
+#   file title; no public folder was fetched).
+[[artifacts]]
+type   = "google.drive.folder"
+origin = "https://drive.google.com"
+match  = [
+  { path = "/drive/folders/{id:token(16,128)}" },
+  { path = "/drive/u/{_}/folders/{id:token(16,128)}" },
+  { path = "/drive/mobile/folders/{id:token(16,128)}" },
+]
+id     = "google.drive.folder:{host}/{id}"
+title  = "{title} - Google Drive"
+
+# ---------------------------------------------------------------------------
+# Google Calendar event. LOW confidence overall; offer only after a live check.
+# The event's URL key is `eid`: unpadded base64 of "<eventId> <calendarId>",
+# with the calendar part abbreviated (e.g. "@m" for gmail.com). Recurring
+# instances carry an "_<YYYYMMDDTHHMMSSZ>" suffix inside the encoded eventId,
+# so each instance is its own artifact.
+#   /calendar/r?eid=<eid>             where www.google.com/calendar/event?eid=
+#                                     (the API's htmlLink) redirects (observed)
+#   /calendar/u/<n>/r?eid=<eid>
+#   /calendar/event?eid=<eid>         htmlLink form on this origin
+#   /calendar/r/eventedit/<eid>       event details/edit page
+#   /calendar/u/<n>/r/eventedit/<eid>
+# Not matched: /calendar/r, /calendar/r/week/..., /calendar/r/day/... (views),
+#   /calendar/r/eventedit?text=...&dates=... (a create-event link: no eid),
+#   /calendar/r/eventedit/copy/<eid> (copy), /calendar/r/settings/...
+# Limits: the eid embeds the calendar ID, so the same meeting opened from the
+#   organizer's calendar and from an attendee's calendar has different IDs. An
+#   eid whose base64 contains "+" or "/" (possible for some inputs) does not
+#   match and is dropped, never mis-recorded. No title template: the event
+#   page's tab title format is unknown from public sources.
+[[artifacts]]
+type   = "google.calendar.event"
+origin = "https://calendar.google.com"
+match  = [
+  { path = "/calendar/r", query = { eid = "{eid:token(20,128)}" }, mode = "view" },
+  { path = "/calendar/u/{_}/r", query = { eid = "{eid:token(20,128)}" }, mode = "view" },
+  { path = "/calendar/event", query = { eid = "{eid:token(20,128)}" }, mode = "view" },
+  { path = "/calendar/r/eventedit/{eid:token(20,128)}", mode = "edit" },
+  { path = "/calendar/u/{_}/r/eventedit/{eid:token(20,128)}", mode = "edit" },
+]
+id     = "google.calendar.event:{host}/{eid}"

@@ -28,9 +28,9 @@ const CONFLUENCE = [
   "README.md",
   "docs/adapters/confluence.page.md",
 ];
+// Its queue edits (.beads/issues.jsonl, BOSUN_FEATURE_BACKLOG.md) now go
+// through bd and Dolt, not into the change.
 const MIRO = [
-  ".beads/issues.jsonl",
-  "BOSUN_FEATURE_BACKLOG.md",
   "DESIGN.md",
   "README.md",
   "adapter-templates.md",
@@ -46,17 +46,23 @@ const MIRO = [
   "protocol/capture-site/shapes.json",
 ];
 
+test("a family-file change is in scope and runs gen:starters --check first", () => {
+  assert.deepEqual(outOfScope(["protocol/starters/atlassian.json"]), []);
+  assert.equal(names(["protocol/starters/atlassian.json"])[0], "starter sources");
+  assert.equal(names(["extension/starter-families.generated.ts"])[0], "starter sources");
+});
+
 test("the Confluence and Miro starter changes are in scope", () => {
   assert.deepEqual(outOfScope(CONFLUENCE), []);
   assert.deepEqual(outOfScope(MIRO), []);
 });
 
-test("docs, queue files and site-draft fixtures are in scope", () => {
+test("docs, beads config and site-draft fixtures are in scope", () => {
   for (const file of [
     "AGENTS.md",
     "TESTING.md",
     "docs/adapters/github.pr.md",
-    ".beads/issues.jsonl",
+    ".beads/config.yaml",
     "extension/capture-site-handoff.ts",
     "extension/site-coverage.ts",
     "extension/tests/a11y/pages.test.mjs",
@@ -112,16 +118,16 @@ test("the Confluence change runs every extension, engine and host check plus a11
   ]);
 });
 
-test("the Miro change checks the queue and skips a11y (no page markup changed)", () => {
+test("the Miro change skips a11y (no page markup changed)", () => {
   const steps = names(MIRO);
-  assert.ok(steps.includes("queue consistency"));
   assert.ok(!steps.includes("test:a11y"));
   assert.ok(steps.includes("host capture_site tests"));
 });
 
 test("a docs-only change runs only the cheap docs checks", () => {
   assert.deepEqual(names(["docs/adapters/miro.board.md", "README.md"]), ["status docs"]);
-  assert.deepEqual(names([".beads/issues.jsonl"]), ["status docs", "queue consistency"]);
+  // status docs also refuses a committed queue file (check_current_state.py).
+  assert.deepEqual(names([".beads/issues.jsonl"]), ["status docs"]);
 });
 
 test("a vectors-only change skips the host and Rust lints", () => {
@@ -186,7 +192,7 @@ test("runs as the entry point from a checkout path with a space (PR #264, Codex 
   const root = mkdtempSync(join(tmpdir(), "gate adapter "));
   try {
     mkdirSync(join(root, "scripts"));
-    for (const f of ["gate-adapter.mjs", "ci-changes.mjs"]) copyFileSync(join(here, "..", f), join(root, "scripts", f));
+    for (const f of ["gate-adapter.mjs", "ci-changes.mjs", "ci-macos.mjs"]) copyFileSync(join(here, "..", f), join(root, "scripts", f));
     const r = spawnSync(process.execPath, [join(root, "scripts", "gate-adapter.mjs"), "--dry-run", "--path", "host/src/main.rs"], { cwd: root, encoding: "utf8" });
     assert.equal(r.status, 2, `expected a scope refusal, got ${r.status}: ${r.stdout}${r.stderr}`);
   } finally {

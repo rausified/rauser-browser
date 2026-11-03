@@ -44,7 +44,7 @@ const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const NODE_MAJOR = 24;
 
 /**
- * Paths an adapter or starter change may touch. Docs and queue files
+ * Paths an adapter or starter change may touch. Docs and beads config
  * (root Markdown, docs/**, .beads/**) are allowed too, through
  * scripts/ci-changes.mjs's isDocsOrQueuePath, so the two classifiers agree
  * on what counts as docs. Anything else needs the full README gate.
@@ -76,6 +76,10 @@ export const ALLOWLIST = [
   // Host fixtures the capture_site tests include_str!.
   { exact: "host/tests/fixtures/capture-site-structural-response.json" },
   { prefix: "host/tests/fixtures/site-draft-answers/" },
+  // Starter family sources and their generated TypeScript module
+  // (scripts/generate-starters.mjs, protocol/starters/README.md).
+  { prefix: "protocol/starters/" },
+  { exact: "extension/starter-families.generated.ts" },
 ];
 
 function matches(entry, file) {
@@ -84,7 +88,7 @@ function matches(entry, file) {
   return entry.pattern.test(file);
 }
 
-/** True when `file` is a docs/queue file or on ALLOWLIST. */
+/** True when `file` is a docs/beads-config file or on ALLOWLIST. */
 export function isInScope(file) {
   if (typeof file !== "string" || file === "") return false;
   return isDocsOrQueuePath(file) || ALLOWLIST.some((entry) => matches(entry, file));
@@ -108,20 +112,23 @@ const ENGINE_TEST_INPUTS = anyOf(
   "host/tests/fixtures/site-draft-answers/",
 );
 const HOST_TEST_INPUTS = anyOf("protocol/capture-site/catalog.json", "host/tests/fixtures/");
+// A family source or its generated TypeScript twin; checked before anything
+// else reads either, so a stale generated file is reported first.
+const STARTER_INPUTS = anyOf("protocol/starters/", "extension/starter-families.generated.ts");
 
 /**
  * Every step, in run order. `when(files)` says whether a change triggers it;
  * the comment on each says which changed files it covers.
  */
 export const STEPS = [
+  // The family JSON sources must regenerate extension/starter-families.generated.ts
+  // and the catalog's starter_types line (scripts/generate-starters.mjs); run
+  // first so a stale generated file is reported before anything else runs.
+  { name: "starter sources", cmd: ["npm", "run", "-s", "gen:starters", "--", "--check"], when: STARTER_INPUTS },
   // README/status consistency; cheap, and README.md changes with most starters.
+  // It also fails a change that commits the work queue, which lives in bd's
+  // Dolt database (bd edits, scripts/dev/queue sync publishes them).
   { name: "status docs", cmd: ["python3", "scripts/check_current_state.py"], when: () => true },
-  // The two queue views agree; only when the queue or its rendered view moved.
-  {
-    name: "queue consistency",
-    cmd: ["python3", "scripts/check_queue_consistency.py"],
-    when: anyOf(".beads/", "BOSUN_FEATURE_BACKLOG.md"),
-  },
   // The extension tests read vectors, catalog, shapes and host fixtures, so
   // any of those (or extension code) runs the whole extension group. The full
   // test:extension takes about a minute, so it is not subset.

@@ -1,0 +1,593 @@
+{
+ "site": "vidcast",
+ "doc": "adapters.toml",
+ "note": "All IDs are synthetic. expect.title is the extracted title (the whole tab title when no title entry matches).",
+ "cases": [
+  {
+   "id": "video.share",
+   "why": "share link as handed out by the Share dialog",
+   "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view",
+    "title": "Q3 roadmap walkthrough"
+   },
+   "title": "Vidcast - Q3 roadmap walkthrough"
+  },
+  {
+   "id": "video.share.trailing_slash",
+   "why": "trailing slash dropped (\u00a75.1)",
+   "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de/",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "video.share.query_t",
+   "why": "timestamp query; title containing ' - '",
+   "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de?t=95",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view",
+    "title": "Demo - part 2"
+   },
+   "title": "Vidcast - Demo - part 2"
+  },
+  {
+   "id": "video.share.in_playlist",
+   "why": "video watched inside a playlist is the video, not the playlist",
+   "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de?playlistShareId=5e7e1157-1111-4222-8333-444444444444&autoplay=1",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view",
+    "title": "How to stitch"
+   },
+   "title": "Vidcast - How to stitch"
+  },
+  {
+   "id": "video.share.player_mode",
+   "why": "player mode / highlight query noise",
+   "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de?playerMode=vidcast&highlightId=abc123",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "video.share.fragment",
+   "why": "fragment ignored",
+   "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de#comments",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "video.share.uppercase",
+   "why": "uuid canonicalized lowercase; server resolves upper-case share UUIDs to the same video",
+   "url": "https://app.vidcast.io/share/0A1B2C3D-0000-4000-8000-00000000C0DE",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "video.share.braced",
+   "why": "uuid type accepts braces after decoding; canonical form drops them (engine behaviour, not a Vidcast form)",
+   "url": "https://app.vidcast.io/share/%7B0a1b2c3d-0000-4000-8000-00000000c0de%7D",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "video.share.access_request",
+   "why": "known limit: no-access page title is recorded as 'Request Access'",
+   "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de?accessRequestId=42",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view",
+    "title": "Request Access"
+   },
+   "title": "Vidcast - Request Access"
+  },
+  {
+   "id": "video.embed",
+   "why": "embed link opened top-level; bare 'Vidcast' title matches no entry and is recorded whole",
+   "url": "https://app.vidcast.io/share/embed/0a1b2c3d-0000-4000-8000-00000000c0de?autoplay=1&mute=1&cc=1",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "view",
+    "title": "Vidcast"
+   },
+   "title": "Vidcast"
+  },
+  {
+   "id": "video.embed.theme",
+   "why": "",
+   "url": "https://app.vidcast.io/share/embed/f0e1d2c3-b4a5-4697-8899-aabbccddeeff?theme=DARK&disableAMA=1&t=10",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/f0e1d2c3-b4a5-4697-8899-aabbccddeeff",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "video.edit",
+   "why": "editor; known limit: fixed editor title",
+   "url": "https://app.vidcast.io/share/edit/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "edit",
+    "title": "Video Edit"
+   },
+   "title": "Vidcast - Video Edit"
+  },
+  {
+   "id": "video.edit.tab",
+   "why": "",
+   "url": "https://app.vidcast.io/share/edit/0a1b2c3d-0000-4000-8000-00000000c0de?tab=transcript",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+    "mode": "edit"
+   }
+  },
+  {
+   "id": "video.share.title_prefix_in_name",
+   "why": "prefix matched once from the left",
+   "url": "https://app.vidcast.io/share/f0e1d2c3-b4a5-4697-8899-aabbccddeeff",
+   "expect": {
+    "match": true,
+    "type": "vidcast.video",
+    "artifact_id": "vidcast.video:app.vidcast.io/f0e1d2c3-b4a5-4697-8899-aabbccddeeff",
+    "mode": "view",
+    "title": "Vidcast - weekly update"
+   },
+   "title": "Vidcast - Vidcast - weekly update"
+  },
+  {
+   "id": "playlist.page",
+   "why": "playlist page",
+   "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view",
+    "title": "Training/Demos"
+   },
+   "title": "Vidcast - Playlist - Training/Demos"
+  },
+  {
+   "id": "playlist.page.trailing_slash",
+   "why": "",
+   "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444/",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "playlist.page.query",
+   "why": "",
+   "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444?pageShareId=9a9e9a9e-0000-4abc-9def-123456789abc&hideWatermark=1",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view",
+    "title": "Onboarding - EMEA"
+   },
+   "title": "Vidcast - Playlist - Onboarding - EMEA"
+  },
+  {
+   "id": "playlist.page.fragment",
+   "why": "",
+   "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444#top",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "playlist.page.uppercase",
+   "why": "",
+   "url": "https://app.vidcast.io/playlists/5E7E1157-1111-4222-8333-444444444444",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "playlist.embed",
+   "why": "help-article embed query form; bare title recorded whole",
+   "url": "https://app.vidcast.io/playlists/embed/5e7e1157-1111-4222-8333-444444444444?index=3&t=60&cc=1",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view",
+    "title": "Vidcast"
+   },
+   "title": "Vidcast"
+  },
+  {
+   "id": "playlist.embed.expand",
+   "why": "videoShareId names the starting video but the artifact is the playlist",
+   "url": "https://app.vidcast.io/playlists/embed/5e7e1157-1111-4222-8333-444444444444?expand=1&videoShareId=0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "playlist.legacy_collection",
+   "why": "legacy collections share link, redirected to /playlists/<same id>",
+   "url": "https://app.vidcast.io/collections/share/5e7e1157-1111-4222-8333-444444444444",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "playlist.legacy_collection.query",
+   "why": "",
+   "url": "https://app.vidcast.io/collections/share/5e7e1157-1111-4222-8333-444444444444?accessRequestId=7",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "playlist.title.request_access",
+   "why": "non-playlist title matches no entry and is recorded whole",
+   "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444",
+   "expect": {
+    "match": true,
+    "type": "vidcast.playlist",
+    "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+    "mode": "view",
+    "title": "Vidcast - Request Access"
+   },
+   "title": "Vidcast - Request Access"
+  },
+  {
+   "id": "page.view",
+   "why": "published page (ID shape assumed uuid; low confidence)",
+   "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc",
+   "expect": {
+    "match": true,
+    "type": "vidcast.page",
+    "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+    "mode": "view",
+    "title": "Sales enablement hub"
+   },
+   "title": "Vidcast - Sales enablement hub"
+  },
+  {
+   "id": "page.view.trailing_slash",
+   "why": "",
+   "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/",
+   "expect": {
+    "match": true,
+    "type": "vidcast.page",
+    "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "page.view.query",
+   "why": "",
+   "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc?playerMaxWidth=900",
+   "expect": {
+    "match": true,
+    "type": "vidcast.page",
+    "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "page.view.fragment",
+   "why": "",
+   "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc#section-2",
+   "expect": {
+    "match": true,
+    "type": "vidcast.page",
+    "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "page.edit",
+   "why": "page editor; fixed title",
+   "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit",
+   "expect": {
+    "match": true,
+    "type": "vidcast.page",
+    "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+    "mode": "edit",
+    "title": "Page Edit"
+   },
+   "title": "Vidcast - Page Edit"
+  },
+  {
+   "id": "page.edit.trailing",
+   "why": "",
+   "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/",
+   "expect": {
+    "match": true,
+    "type": "vidcast.page",
+    "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+    "mode": "edit"
+   }
+  },
+  {
+   "id": "page.embed",
+   "why": "",
+   "url": "https://app.vidcast.io/pages/embed/9a9e9a9e-0000-4abc-9def-123456789abc?theme=LIGHT&ccLang=en",
+   "expect": {
+    "match": true,
+    "type": "vidcast.page",
+    "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "page.view.uppercase",
+   "why": "",
+   "url": "https://app.vidcast.io/pages/9A9E9A9E-0000-4ABC-9DEF-123456789ABC",
+   "expect": {
+    "match": true,
+    "type": "vidcast.page",
+    "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+    "mode": "view"
+   }
+  },
+  {
+   "id": "neg.root",
+   "why": "app root / home feed",
+   "url": "https://app.vidcast.io/",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.library",
+   "why": "library list",
+   "url": "https://app.vidcast.io/library?type=mine",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.playlists_list",
+   "why": "playlists list",
+   "url": "https://app.vidcast.io/playlists?type=shared",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.pages_list",
+   "why": "pages list",
+   "url": "https://app.vidcast.io/pages?tab=mine",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.collections_list",
+   "why": "legacy list redirect",
+   "url": "https://app.vidcast.io/collections",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.search",
+   "why": "search",
+   "url": "https://app.vidcast.io/search?term=roadmap",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.settings",
+   "why": "settings",
+   "url": "https://app.vidcast.io/settings?type=profile",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.sign_in",
+   "why": "sign in",
+   "url": "https://app.vidcast.io/sign-in",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.video_redirect",
+   "why": "internal video id redirect; differs from share id, deliberately excluded",
+   "url": "https://app.vidcast.io/video/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.share_not_uuid",
+   "why": "share ID not a uuid",
+   "url": "https://app.vidcast.io/share/abc123",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.share_extra_segment",
+   "why": "no rest segment",
+   "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de/comments",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.edit_script",
+   "why": "AI script editor, excluded",
+   "url": "https://app.vidcast.io/share/edit-script/0a1b2c3d-0000-4000-8000-00000000c0de/f0e1d2c3-b4a5-4697-8899-aabbccddeeff",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.share_bare",
+   "why": "no id",
+   "url": "https://app.vidcast.io/share",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.embed_bare",
+   "why": "no id",
+   "url": "https://app.vidcast.io/share/embed/",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.playlist_placeholder",
+   "why": "help article placeholder, not a uuid",
+   "url": "https://app.vidcast.io/playlists/embed/playlist_link?index=3",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.webex_stream",
+   "why": "Webex recording streamed in Vidcast; a Webex artifact, excluded",
+   "url": "https://app.vidcast.io/webex-stream?recordingUUID=0a1b2c3d-0000-4000-8000-00000000c0de&siteUrl=acme.webex.com",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.author",
+   "why": "author profile",
+   "url": "https://app.vidcast.io/author/12345",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.analytics",
+   "why": "analytics view with video id in query, not an open",
+   "url": "https://app.vidcast.io/analytics?videoShareId=0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.event",
+   "why": "events, excluded",
+   "url": "https://app.vidcast.io/event/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.marketing",
+   "why": "other origin",
+   "url": "https://www.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.alpha",
+   "why": "internal environment origin",
+   "url": "https://alpha.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.http",
+   "why": "scheme must match",
+   "url": "http://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.double_slash",
+   "why": "empty segment (\u00a75.1)",
+   "url": "https://app.vidcast.io//share/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.encoded_slash",
+   "why": "%2F in segment (\u00a75.1)",
+   "url": "https://app.vidcast.io/share%2F0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.case_route",
+   "why": "path_case sensitive; app router routes are lowercase",
+   "url": "https://app.vidcast.io/Share/0a1b2c3d-0000-4000-8000-00000000c0de",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.page_edit_extra",
+   "why": "no rest",
+   "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/more",
+   "expect": {
+    "match": false
+   }
+  }
+ ]
+}

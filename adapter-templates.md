@@ -371,7 +371,7 @@ The instruction to the agent includes this specification's grammar, and the host
 
 ## 11. Starter adapters
 
-These examples show the language on each shape it has to handle. URL and title formats must be checked against each live tool on the date each starter adapter records (DESIGN.md §7.2); treat the ones below as illustrative until then.
+These examples show the language on each shape it has to handle. URL and title formats must be checked against each live tool on the date each starter adapter records (DESIGN.md §7.2); treat the ones below as illustrative until then. The shipped starters' source of truth is `protocol/starters/<family>.json` (`protocol/starters/README.md`), generated into `extension/starter-families.generated.ts` by `scripts/generate-starters.mjs`; the examples below show the adapter shape each family's JSON carries, not a file to edit directly.
 
 ```toml
 [adapters]
