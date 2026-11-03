@@ -121,6 +121,20 @@ test("--until green finishes as soon as required checks pass", () => {
   assert.match(d.message, /gh pr merge --auto --merge 243/);
 });
 
+test("--until green waits while the aggregate gate has not reported (PR #264, Codex P2)", () => {
+  const contexts = rollup([
+    done("PR owner", "SUCCESS", { required: true }),
+    done("Classify changes", "SUCCESS"),
+    done("Windows / Build and check (windows-latest)", "FAILURE"),
+    run("macOS / Build and check (macos-15)", "IN_PROGRESS", null),
+  ]);
+  const d = decide(snap({ contexts }), { until: "green" });
+  assert.notEqual(d.action, "green");
+  assert.equal(d.exitCode, EXIT.CHECK_FAILED);
+  const pendingOnly = rollup([done("PR owner", "SUCCESS", { required: true }), run("macOS / Build and check (macos-15)", "IN_PROGRESS", null)]);
+  assert.equal(decide(snap({ contexts: pendingOnly }), { until: "green" }).done, false);
+});
+
 test("a draft says how to mark it ready", () => {
   const d = decide(snap({ pr: { isDraft: true, mergeStateStatus: "DRAFT" } }));
   assert.equal(d.exitCode, EXIT.DRAFT);

@@ -23,10 +23,10 @@
 // failed, 2 refused (out-of-scope path, wrong Node, or a bad environment).
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { isDocsOrQueuePath, parseNameList } from "./ci-changes.mjs";
@@ -289,7 +289,13 @@ function main(argv) {
   return failed === 0 ? 0 : 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compare real paths: argv[1] may go through a symlink (macOS /var -> /private/var)
+// or contain characters a file URL escapes (spaces, Windows drive letters).
+function isEntryPoint() {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? "")).href; } catch { return false; }
+}
+
+if (isEntryPoint()) {
   try {
     process.exit(main(process.argv.slice(2)));
   } catch (error) {

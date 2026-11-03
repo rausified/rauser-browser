@@ -32,6 +32,7 @@
 // refs or working tree), and only when the local clone already has both commits.
 
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { LABEL as NEEDS_MERGE_LABEL, MARKER as DOCTOR_MARKER, resolveAppendOnly } from "../pr-doctor.mjs";
@@ -152,8 +153,14 @@ export function analyzeChecks(checks) {
   const cancelled = blocking.filter((check) => check.state === "CANCELLED" && !(starved && check === macos));
   cancelled.sort((a, b) => (a.name === "Build and check") - (b.name === "Build and check"));
   const pending = blocking.filter((check) => isPending(check) && check.name !== HOLD_CONTEXT);
+  // Green means the aggregate gate itself reported success: before the
+  // platform builds report, "Build and check" is absent from the rollup and
+  // every check that has reported can be green while Windows already failed.
+  const gate = checks.find((check) => check.name === "Build and check");
   const requiredGreen = checks.some((check) => check.required)
-    && checks.filter((check) => check.required).every((check) => PASSED.has(check.state));
+    && checks.filter((check) => check.required).every((check) => PASSED.has(check.state))
+    && Boolean(gate) && PASSED.has(gate.state)
+    && failed.length === 0 && pending.length === 0;
   const advisoryFailed = checks.filter((check) => !blocking.includes(check) && FAILED.has(check.state)).map((check) => check.name);
   return { failed, cancelled, pending, holders, held: holders.length > 0 || hold?.state === "PENDING", starved, requiredGreen, advisoryFailed };
 }
@@ -399,6 +406,10 @@ async function main() {
     } catch (error) {
       if (opts.once) { console.error(`pr-watch: ${error.message}`); return EXIT.ERROR; }
       console.error(`${stamp()} gh failed (${error.message}); retrying`);
+      if (opts.maxMinutes && Date.now() - started >= opts.maxMinutes * 60000) {
+        console.log(`${stamp()} stopped after ${opts.maxMinutes} minutes; the last poll failed: ${error.message}`);
+        return EXIT.ERROR;
+      }
       await sleep(opts.interval * 1000);
       continue;
     }
@@ -426,6 +437,12 @@ async function main() {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+// Compare real paths: argv[1] may go through a symlink (macOS /var -> /private/var)
+// or contain characters a file URL escapes (spaces, Windows drive letters).
+function isEntryPoint() {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? "")).href; } catch { return false; }
+}
+
+if (isEntryPoint()) {
   main().then((code) => process.exit(code), (error) => { console.error(`pr-watch: ${error.message}`); process.exit(EXIT.ERROR); });
 }

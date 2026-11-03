@@ -175,3 +175,21 @@ test("durations print as seconds under a minute and minutes after", () => {
   assert.equal(formatSeconds(59_960), "1m0s");
   assert.equal(formatSeconds(119_700), "2m0s");
 });
+
+test("runs as the entry point from a checkout path with a space (PR #264, Codex P2)", async () => {
+  const { mkdtempSync, copyFileSync, mkdirSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const root = mkdtempSync(join(tmpdir(), "gate adapter "));
+  try {
+    mkdirSync(join(root, "scripts"));
+    for (const f of ["gate-adapter.mjs", "ci-changes.mjs"]) copyFileSync(join(here, "..", f), join(root, "scripts", f));
+    const r = spawnSync(process.execPath, [join(root, "scripts", "gate-adapter.mjs"), "--dry-run", "--path", "host/src/main.rs"], { cwd: root, encoding: "utf8" });
+    assert.equal(r.status, 2, `expected a scope refusal, got ${r.status}: ${r.stdout}${r.stderr}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
