@@ -767,11 +767,17 @@ fn begin_immediate(conn: &Connection) -> Result<Transaction<'_>> {
     let started = std::time::Instant::now();
     let mut attempt = 0;
     loop {
+        let tried = std::time::Instant::now();
         match Transaction::new_unchecked(conn, TransactionBehavior::Immediate) {
             Ok(tx) => return Ok(tx),
+            // Only an answer that came back without waiting is retried. One
+            // that already spent most of the busy timeout in SQLite's
+            // handler is a held lock: retrying it would wait the timeout
+            // again (the handler can give up just short of it).
             Err(error)
                 if is_busy(&error)
                     && attempt < BEGIN_RETRIES
+                    && tried.elapsed() < busy_timeout() / 2
                     && started.elapsed() < busy_timeout() =>
             {
                 attempt += 1;
@@ -1399,9 +1405,9 @@ mod tests {
         // Retries never multiply the busy timeout: a read's catch-up must
         // give up well inside the extension's 30 s request timeout.
         assert!(waited >= timeout, "{waited:?}");
-        // Below a tripled timeout with room for a slow CI runner (2.5x: a
-        // retry that multiplied the timeout would take at least 3x).
-        assert!(waited < timeout * 5 / 2, "{waited:?}");
+        // About one timeout: a retry that waited the timeout again would
+        // take at least 2x (begin_immediate retries only instant answers).
+        assert!(waited < timeout * 2, "{waited:?}");
         tx.rollback().unwrap();
     }
 

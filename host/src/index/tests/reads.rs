@@ -214,9 +214,9 @@ fn a_read_behind_a_held_write_lock_serves_the_snapshot_within_one_timeout() {
             .collect::<Vec<_>>(),
         ["Über Straße"]
     );
-    // Below a tripled timeout with room for a slow CI runner (2.5x: a
-    // retry that multiplied the timeout would take at least 3x).
-    assert!(waited < timeout * 5 / 2, "{waited:?}");
+    // About one timeout: a retry that waited the timeout again would
+    // take at least 2x (begin_immediate retries only instant answers).
+    assert!(waited < timeout * 2, "{waited:?}");
     holder.execute("ROLLBACK", []).unwrap();
     drop(holder);
     assert_eq!(index.recent(None, None, 10).unwrap().0.len(), 2);
