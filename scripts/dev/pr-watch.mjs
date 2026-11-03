@@ -56,6 +56,10 @@ export const EXIT = Object.freeze({
 // merge queue checks" (in the queue), "Merged via merge queue". Seen live
 // 2026-11-03 (#265, #268, #276-#289).
 export const QUEUE_LABEL = "queue";
+// worker-contract.json merge.comment: posted after the label, it queues the PR
+// even where label-only auto-queue is off (Mergify's Merge Protections are not
+// activated in the dashboard), which leaves a labeled PR at "Merge queue is ready".
+export const QUEUE_COMMENT = "@Mergifyio queue";
 export const QUEUE_EXCLUSION_LABELS = Object.freeze([NEEDS_MERGE_LABEL, DOCTOR_SKIP_LABEL]);
 export const MERGIFY_QUEUE_CHECK = "Mergify Merge Queue";
 // Green and labeled but not admitted for this long: say so instead of waiting.
@@ -385,6 +389,10 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
     const waiting = phase === "waiting";
     const grace = waiting ? CONDITIONS_GRACE_MINUTES : ADMIT_GRACE_MINUTES;
     const unmetText = unmet.length ? ` Unmet: ${short(unmet.map((c) => `\`${c}\``), 6)}.` : "";
+    if (admitWaitSince && minutesBetween(admitWaitSince, now) >= grace && phase === "ready") {
+      return act(EXIT.QUEUE_BLOCKED, "queue-ready-not-admitted",
+        `#${n} is green and labeled ${QUEUE_LABEL}, and Mergify says "${title}" but has not queued it after ${grace}+ minutes: label-only auto-queue needs Mergify's Merge Protections activated in the dashboard. Queue it with the contract's comment: gh pr comment ${n} --body "${QUEUE_COMMENT}"`);
+    }
     if (admitWaitSince && minutesBetween(admitWaitSince, now) >= grace) {
       const verdict = waiting
         ? `Mergify still says "${title}" after ${grace}+ minutes.${unmetText} The ${MERGIFY_QUEUE_CHECK} check's summary has the full condition list`
