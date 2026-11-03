@@ -766,6 +766,13 @@ pub(crate) fn write_txn<T>(
     Ok(value)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// `BEGIN IMMEDIATE` attempts on this thread that spent half the busy
+    /// timeout or more in SQLite's busy handler (tests of single waits).
+    pub(crate) static BEGIN_WAITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `BEGIN IMMEDIATE`, retried for a busy answer only while the busy timeout
 /// has not yet run out overall. The retries cover a busy answer SQLite gives
 /// without waiting (a snapshot that moved, WAL recovery); they never wait
@@ -776,7 +783,12 @@ fn begin_immediate(conn: &Connection) -> Result<Transaction<'_>> {
     let mut attempt = 0;
     loop {
         let tried = std::time::Instant::now();
-        match Transaction::new_unchecked(conn, TransactionBehavior::Immediate) {
+        let result = Transaction::new_unchecked(conn, TransactionBehavior::Immediate);
+        #[cfg(test)]
+        if tried.elapsed() >= busy_timeout() / 2 {
+            BEGIN_WAITS.with(|waits| waits.set(waits.get() + 1));
+        }
+        match result {
             Ok(tx) => return Ok(tx),
             // Only an answer that came back without waiting is retried. One
             // that already spent most of the busy timeout in SQLite's
@@ -1407,15 +1419,18 @@ mod tests {
         let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
         let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
         let started = std::time::Instant::now();
+        let waits_before = BEGIN_WAITS.with(std::cell::Cell::get);
         let error = write_txn(&mut waiter, |_| Ok(())).unwrap_err();
         let waited = started.elapsed();
         assert!(matches!(db_error(&error), DbError::Busy), "{error:#}");
+        // The held lock is waited out exactly once.
+        assert_eq!(BEGIN_WAITS.with(std::cell::Cell::get) - waits_before, 1);
         // Retries never multiply the busy timeout: a read's catch-up must
         // give up well inside the extension's 30 s request timeout.
         assert!(waited >= timeout, "{waited:?}");
-        // About one timeout: a retry that waited the timeout again would
-        // take at least 2x (begin_immediate retries only instant answers).
-        assert!(waited < timeout * 2, "{waited:?}");
+        // The count above is the exact check; this wall-clock bound only
+        // catches a multiplied timeout, with room for a slow CI runner.
+        assert!(waited < timeout * 4, "{waited:?}");
         tx.rollback().unwrap();
     }
 
