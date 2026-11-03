@@ -1,0 +1,12 @@
+# Throwaway: runs doc.json and vectors.json through the host's Rust engine.
+[package]
+name = "gw-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adapter-templates = { path = "../../../../adapter-templates" }
+serde_json = "1"

@@ -1,0 +1,213 @@
+{
+ "format": 1,
+ "artifacts": [
+  {
+   "type": "google.doc",
+   "origin": "https://docs.google.com",
+   "unscoped": "acknowledged",
+   "match": [
+    {
+     "path": "/document/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+    },
+    {
+     "path": "/document/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+    },
+    {
+     "path": "/a/{_}/document/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+    }
+   ],
+   "modes": {
+    "edit": "edit",
+    "view": "view",
+    "preview": "view",
+    "mobilebasic": "view"
+   },
+   "id": "google.doc:{host}/{id}",
+   "title": "{title} - Google Docs",
+   "refs": [
+    {
+     "type": "jira.issue",
+     "find": "jira_key"
+    }
+   ]
+  },
+  {
+   "type": "google.sheet",
+   "origin": "https://docs.google.com",
+   "unscoped": "acknowledged",
+   "match": [
+    {
+     "path": "/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+    },
+    {
+     "path": "/spreadsheets/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+    },
+    {
+     "path": "/a/{_}/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+    }
+   ],
+   "modes": {
+    "edit": "edit",
+    "view": "view",
+    "preview": "view",
+    "htmlview": "view"
+   },
+   "id": "google.sheet:{host}/{id}",
+   "title": [
+    "{title} - Google Sheets",
+    "{title} - Google Drive"
+   ],
+   "refs": [
+    {
+     "type": "jira.issue",
+     "find": "jira_key"
+    }
+   ]
+  },
+  {
+   "type": "google.slides",
+   "origin": "https://docs.google.com",
+   "unscoped": "acknowledged",
+   "match": [
+    {
+     "path": "/presentation/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+    },
+    {
+     "path": "/presentation/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+    },
+    {
+     "path": "/a/{_}/presentation/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+    }
+   ],
+   "modes": {
+    "edit": "edit",
+    "view": "view",
+    "preview": "view",
+    "present": "view",
+    "embed": "view"
+   },
+   "id": "google.slides:{host}/{id}",
+   "title": "{title} - Google Slides",
+   "refs": [
+    {
+     "type": "jira.issue",
+     "find": "jira_key"
+    }
+   ]
+  },
+  {
+   "type": "google.form",
+   "origin": "https://docs.google.com",
+   "unscoped": "acknowledged",
+   "match": [
+    {
+     "path": "/forms/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+    },
+    {
+     "path": "/forms/u/{_}/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+    },
+    {
+     "path": "/a/{_}/forms/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+    }
+   ],
+   "modes": {
+    "edit": "edit",
+    "viewform": "view"
+   },
+   "id": "google.form:{host}/{id}",
+   "title": "{title} - Google Forms"
+  },
+  {
+   "type": "google.form.responder",
+   "origin": "https://docs.google.com",
+   "unscoped": "acknowledged",
+   "match": [
+    {
+     "path": "/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+     "mode": "view"
+    },
+    {
+     "path": "/forms/u/{_}/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+     "mode": "view"
+    },
+    {
+     "path": "/a/{_}/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+     "mode": "view"
+    }
+   ],
+   "id": "google.form.responder:{host}/{id}"
+  },
+  {
+   "type": "google.drive.file",
+   "origin": "https://drive.google.com",
+   "match": [
+    {
+     "path": "/file/d/{id:token(20,128)}/{mode?:(view|preview|edit)}"
+    },
+    {
+     "path": "/file/u/{_}/d/{id:token(20,128)}/{mode?:(view|preview|edit)}"
+    }
+   ],
+   "modes": {
+    "view": "view",
+    "preview": "view",
+    "edit": "view"
+   },
+   "id": "google.drive.file:{host}/{id}",
+   "title": "{title} - Google Drive"
+  },
+  {
+   "type": "google.drive.folder",
+   "origin": "https://drive.google.com",
+   "match": [
+    {
+     "path": "/drive/folders/{id:token(16,128)}"
+    },
+    {
+     "path": "/drive/u/{_}/folders/{id:token(16,128)}"
+    },
+    {
+     "path": "/drive/mobile/folders/{id:token(16,128)}"
+    }
+   ],
+   "id": "google.drive.folder:{host}/{id}",
+   "title": "{title} - Google Drive"
+  },
+  {
+   "type": "google.calendar.event",
+   "origin": "https://calendar.google.com",
+   "match": [
+    {
+     "path": "/calendar/r",
+     "query": {
+      "eid": "{eid:token(20,128)}"
+     },
+     "mode": "view"
+    },
+    {
+     "path": "/calendar/u/{_}/r",
+     "query": {
+      "eid": "{eid:token(20,128)}"
+     },
+     "mode": "view"
+    },
+    {
+     "path": "/calendar/event",
+     "query": {
+      "eid": "{eid:token(20,128)}"
+     },
+     "mode": "view"
+    },
+    {
+     "path": "/calendar/r/eventedit/{eid:token(20,128)}",
+     "mode": "edit"
+    },
+    {
+     "path": "/calendar/u/{_}/r/eventedit/{eid:token(20,128)}",
+     "mode": "edit"
+    }
+   ],
+   "id": "google.calendar.event:{host}/{eid}"
+  }
+ ]
+}

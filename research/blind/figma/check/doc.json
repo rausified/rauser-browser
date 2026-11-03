@@ -1,0 +1,59 @@
+{
+ "format": 1,
+ "artifacts": [
+  {
+   "type": "figma.file",
+   "origin": "https://www.figma.com",
+   "unscoped": "acknowledged",
+   "match": [
+    {
+     "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{key:token(22,128)}"
+    },
+    {
+     "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{key:token(22,128)}/{_}"
+    },
+    {
+     "path": "/(proto|deck|presenter)/{key:token(22,128)}",
+     "mode": "view"
+    },
+    {
+     "path": "/(proto|deck|presenter)/{key:token(22,128)}/{_}",
+     "mode": "view"
+    }
+   ],
+   "id": "figma.file:{host}/{key}",
+   "title": [
+    "▶ {title}",
+    "{~} · {title} - Figma Slides",
+    "{title} – {~}"
+   ]
+  },
+  {
+   "type": "figma.branch",
+   "origin": "https://www.figma.com",
+   "unscoped": "acknowledged",
+   "match": [
+    {
+     "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{_}/branch/{branch:token(22,128)}"
+    },
+    {
+     "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{_}/branch/{branch:token(22,128)}/{_}"
+    },
+    {
+     "path": "/(proto|deck|presenter)/{_}/branch/{branch:token(22,128)}",
+     "mode": "view"
+    },
+    {
+     "path": "/(proto|deck|presenter)/{_}/branch/{branch:token(22,128)}/{_}",
+     "mode": "view"
+    }
+   ],
+   "id": "figma.branch:{host}/{branch}",
+   "title": [
+    "▶ {title}",
+    "{~} · {title} - Figma Slides",
+    "{title} – {~}"
+   ]
+  }
+ ]
+}

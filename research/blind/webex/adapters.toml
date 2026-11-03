@@ -1,0 +1,115 @@
+# Blind starter adapters for Cisco Webex (Meetings sites, <site>.webex.com).
+#
+# Derived only from public sources (Webex developer API reference examples,
+# yt-dlp's Cisco Webex extractor, public recording links in open-source docs,
+# and the Webex site web app's own JavaScript bundle as served to a logged-out
+# browser). Nothing here was checked against a signed-in account. See
+# research.md in this folder for sources, confidence and open questions.
+#
+# Origin model: a tenant subdomain family. Every Webex Meetings site has its
+# own host, https://<site>.webex.com, like *.atlassian.net. The origin below
+# is the placeholder used by the Webex API docs; a starter offer substitutes
+# the user's site host. The origin is not shared between tenants, so neither
+# `scope` nor `unscoped` is needed (adapter-templates.md §6).
+#
+# The site web app is one single-page app (Vue router, history mode) mounted
+# under a "context" segment and the site name:
+#   /webappng/sites/<site>/...          (current web app)
+#   /recordingservice/sites/<site>/...  (recording links; same app bundle)
+# The site name in the path is usually, but not always, the host's first
+# label (the API docs show site4-example.webex.com/site4/...), so it is
+# matched with {_} and never used in an ID.
+
+[adapters]
+format = 1
+
+# ---------------------------------------------------------------------------
+# webex.recording: one cloud (network-based) meeting recording.
+#
+# ID: the recording's 32-hex-digit ID, the same value the Recordings API and
+# the web app's own stream API (/webappng/api/v1/recordings/<id>/stream) use.
+# hex(32) is fixed-shape and is lowercased canonically, so case variants and
+# the two contexts (recordingservice, webappng) give one ID.
+#
+# Rules, all taken from the web app's router table (base = context + site):
+#   0 /recording/<id>/playback     "mixInPlayer", the player itself
+#                                  (also yt-dlp test URL, public links)
+#   1 /recording/playback/<id>     "share": the share link the Recordings API
+#                                  returns as webShareLink; shows a password
+#                                  gate first when the recording has one
+#   2 /recording/play/<id>         "newPlayer", client redirect to rule 0
+#   3 /recording/recording/<id>    "detail", client redirect to rule 0
+#   4 /playback/<id>               client redirect to rule 1
+#   5 /<id>/playback               client redirect to rule 0
+# No rule has a rest segment: /recording/download/<id> (download page),
+# /recording/error/<id>, /recording/home (list) and the webinar-recording
+# registration pages (/recording/<id>/registration/...) are not opens.
+#
+# Deliberately not matched:
+#   - /<site>/ldr.php?RCID=<hex> and /<site>/lsr.php?RCID=<hex>, the legacy
+#     playbackUrl/downloadUrl the Recordings API returns. RCID is a different
+#     value from the recording ID (the API examples show three different
+#     values for one recording), and the page forwards to the
+#     recordingservice player (yt-dlp follows it), which rule 0/1 records.
+#     Matching RCID would split one recording across two IDs.
+#   - /convergedRecording/<id>/playback (Webex Calling recordings): its ID
+#     shape is undocumented and its title has no suffix.
+#
+# Title: the player sets document.title = "<recordName> - <windowTitle>",
+# where windowTitle is the site's configured brand and defaults to "Webex"
+# (recording chunk, helper 31364). The skip drops whatever brand the site
+# uses after the last " - ". Before the recording loads, the router title is
+# the localized route name, e.g. "Replay Recorded Meeting - Webex" or, on the
+# share link's password gate, "Recorded Meeting Password - Webex"; those
+# record as "Replay Recorded Meeting" / "Recorded Meeting Password" until the
+# worker sees the later title (see research.md, known limits).
+[[artifacts]]
+type   = "webex.recording"
+origin = "https://example.webex.com"
+match  = [
+  { path = "/(recordingservice|webappng)/sites/{_}/recording/{id:hex(32)}/playback" },
+  { path = "/(recordingservice|webappng)/sites/{_}/recording/playback/{id:hex(32)}" },
+  { path = "/(recordingservice|webappng)/sites/{_}/recording/play/{id:hex(32)}" },
+  { path = "/(recordingservice|webappng)/sites/{_}/recording/recording/{id:hex(32)}" },
+  { path = "/(recordingservice|webappng)/sites/{_}/playback/{id:hex(32)}" },
+  { path = "/(recordingservice|webappng)/sites/{_}/{id:hex(32)}/playback" },
+]
+id     = "webex.recording:{host}/{id}"
+title  = "{title} - {~}"
+
+# ---------------------------------------------------------------------------
+# webex.meeting: the "Post Meeting Detail" page of one past meeting
+# occurrence, where the site web app shows that meeting's transcripts,
+# recordings and AI Assistant output.
+#
+# ID: the meeting instance ID. The web app's meeting list builds this link
+# as <sitePath>/meeting/postinfo/<meetingInstanceID>. The Meetings API shows
+# instance IDs as <32 hex>_I_<digits> (for example
+# 870f51ff287b41be84648412901e0402_I_167427437874906709, 53 characters), so
+# the capture is a token of 32 to 128 characters; `token` keeps case, and the
+# value is recorded as matched. Confidence in the exact shape is medium-low:
+# no public postinfo URL was found.
+#
+# Rules (router table):
+#   0 /meeting/postinfo/<id>   "postMeetingDetail"
+#   1 /postinfo/<id>           client redirect to rule 0
+# Only the webappng context: no public evidence shows meeting pages under
+# /recordingservice.
+#
+# Deliberately not matched: /meeting/info/<uuid> (upcoming-meeting detail,
+# keyed by a different meeting UUID, so one meeting would get two IDs),
+# j.php?MTID= and /meet/<name> join links, /meeting/scheduler,
+# /meeting/register/<uuid>, /meeting/surveyPage/<id>, /dashboard/*.
+#
+# No title template: the router sets "Post Meeting Detail - Webex" and the
+# page's code never replaces it with the meeting topic, so every meeting has
+# the same tab title. Brauser records the whole tab title; a Tier 1 field
+# selector for the topic is the follow-up (research.md).
+[[artifacts]]
+type   = "webex.meeting"
+origin = "https://example.webex.com"
+match  = [
+  { path = "/webappng/sites/{_}/meeting/postinfo/{id:token(32,128)}" },
+  { path = "/webappng/sites/{_}/postinfo/{id:token(32,128)}" },
+]
+id     = "webex.meeting:{host}/{id}"

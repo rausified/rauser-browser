@@ -1,0 +1,11 @@
+[package]
+name = "vidcast-rust-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adapter-templates = { path = "../../../../adapter-templates" }
+serde_json = "1"

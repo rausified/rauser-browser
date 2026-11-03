@@ -1,0 +1,374 @@
+{
+ "about": "Synthetic vectors for research/blind/webex/adapters.toml. No real IDs: hex IDs are made-up patterns and the host is the Webex API docs' placeholder site. expect.title is the title Brauser records; when no title entry matches, that is the whole tab title (title_entry null). origin_override re-runs a case with the adapters' origin set to another site host.",
+ "cases": [
+  {
+   "id": "rec.player.recordingservice",
+   "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+   "title": "Quarterly Planning-20261014 1702-1 - Webex",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 0,
+    "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+    "title": "Quarterly Planning-20261014 1702-1"
+   }
+  },
+  {
+   "id": "rec.player.webappng.trailing_slash",
+   "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/playback/",
+   "title": "Design Review - Sprint 12-20261020 1500-1 - Webex",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 0,
+    "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+    "title": "Design Review - Sprint 12-20261020 1500-1"
+   }
+  },
+  {
+   "id": "rec.player.uppercase_id_folds",
+   "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789ABCDEF0123456789ABCDEF/playback",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 0,
+    "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef"
+   }
+  },
+  {
+   "id": "rec.player.query_and_fragment_noise",
+   "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback?siteurl=example&from=email&t=120#transcript",
+   "title": "Weekly Sync - Acme Webex",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 0,
+    "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+    "title": "Weekly Sync"
+   }
+  },
+  {
+   "id": "rec.player.site_path_differs_from_host.clean",
+   "origin_override": "https://site4-example.webex.com",
+   "url": "https://site4-example.webex.com/recordingservice/sites/site4/recording/fedcba9876543210fedcba9876543210/playback",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 0,
+    "artifact_id": "webex.recording:site4-example.webex.com/fedcba9876543210fedcba9876543210"
+   }
+  },
+  {
+   "id": "rec.player.loading_title",
+   "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+   "title": "Replay Recorded Meeting - Webex",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 0,
+    "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+    "title": "Replay Recorded Meeting"
+   }
+  },
+  {
+   "id": "rec.share.recordingservice",
+   "url": "https://example.webex.com/recordingservice/sites/example/recording/playback/0123456789abcdef0123456789abcdef",
+   "title": "Recorded Meeting Password - Webex",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 1,
+    "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+    "title": "Recorded Meeting Password"
+   }
+  },
+  {
+   "id": "rec.share.webappng.query",
+   "url": "https://example.webex.com/webappng/sites/example/recording/playback/aaaabbbbccccddddeeeeffff00001111?siteurl=example",
+   "title": "Customer Onboarding-20261101 0900-1 - Webex",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 1,
+    "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+    "title": "Customer Onboarding-20261101 0900-1"
+   }
+  },
+  {
+   "id": "rec.play.redirect_form",
+   "url": "https://example.webex.com/recordingservice/sites/example/recording/play/aaaabbbbccccddddeeeeffff00001111",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 2,
+    "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111"
+   }
+  },
+  {
+   "id": "rec.detail.redirect_form",
+   "url": "https://example.webex.com/webappng/sites/example/recording/recording/aaaabbbbccccddddeeeeffff00001111",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 3,
+    "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111"
+   }
+  },
+  {
+   "id": "rec.short_share.redirect_form",
+   "url": "https://example.webex.com/webappng/sites/example/playback/aaaabbbbccccddddeeeeffff00001111",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 4,
+    "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111"
+   }
+  },
+  {
+   "id": "rec.short_player.redirect_form",
+   "url": "https://example.webex.com/webappng/sites/example/aaaabbbbccccddddeeeeffff00001111/playback",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 5,
+    "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111"
+   }
+  },
+  {
+   "id": "rec.title.no_suffix_kept_whole",
+   "url": "https://example.webex.com/webappng/sites/example/recording/aaaabbbbccccddddeeeeffff00001111/playback",
+   "title": "Cisco Webex Meetings",
+   "expect": {
+    "match": true,
+    "type": "webex.recording",
+    "rule": 0,
+    "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+    "title": "Cisco Webex Meetings",
+    "title_entry": null
+   }
+  },
+  {
+   "id": "mtg.postinfo.instance_id",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+   "title": "Post Meeting Detail - Webex",
+   "expect": {
+    "match": true,
+    "type": "webex.meeting",
+    "rule": 0,
+    "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+    "title": "Post Meeting Detail - Webex",
+    "title_entry": null
+   }
+  },
+  {
+   "id": "mtg.postinfo.bare_hex",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef",
+   "expect": {
+    "match": true,
+    "type": "webex.meeting",
+    "rule": 0,
+    "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef"
+   }
+  },
+  {
+   "id": "mtg.postinfo.trailing_slash",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678/",
+   "expect": {
+    "match": true,
+    "type": "webex.meeting",
+    "rule": 0,
+    "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678"
+   }
+  },
+  {
+   "id": "mtg.postinfo.query_noise",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678?siteurl=example&tab=transcript&from=email",
+   "expect": {
+    "match": true,
+    "type": "webex.meeting",
+    "rule": 0,
+    "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678"
+   }
+  },
+  {
+   "id": "mtg.postinfo.fragment",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678#summary",
+   "expect": {
+    "match": true,
+    "type": "webex.meeting",
+    "rule": 0,
+    "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678"
+   }
+  },
+  {
+   "id": "mtg.postinfo.short_redirect_form",
+   "url": "https://example.webex.com/webappng/sites/example/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+   "expect": {
+    "match": true,
+    "type": "webex.meeting",
+    "rule": 1,
+    "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678"
+   }
+  },
+  {
+   "id": "mtg.postinfo.other_instance_distinct",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_987654321098765432",
+   "expect": {
+    "match": true,
+    "type": "webex.meeting",
+    "rule": 0,
+    "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_987654321098765432"
+   }
+  },
+  {
+   "id": "mtg.postinfo.case_kept",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789ABCDEF0123456789abcdef_I_123456789012345678",
+   "expect": {
+    "match": true,
+    "type": "webex.meeting",
+    "rule": 0,
+    "artifact_id": "webex.meeting:example.webex.com/0123456789ABCDEF0123456789abcdef_I_123456789012345678"
+   }
+  },
+  {
+   "id": "neg.legacy_ldr_rcid",
+   "url": "https://example.webex.com/example/ldr.php?RCID=0123456789abcdef0123456789abcdef",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.legacy_lsr_rcid_download",
+   "url": "https://example.webex.com/example/lsr.php?RCID=0123456789abcdef0123456789abcdef",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.recording_list",
+   "url": "https://example.webex.com/webappng/sites/example/recording/home",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.recording_download_page",
+   "url": "https://example.webex.com/recordingservice/sites/example/recording/download/0123456789abcdef0123456789abcdef",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.recording_error_page",
+   "url": "https://example.webex.com/webappng/sites/example/recording/error/0123456789abcdef0123456789abcdef",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.recording_registration",
+   "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/registration/0123456789abcdef0123456789abcdef/register",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.recording_bare_id",
+   "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.recording_short_id",
+   "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef/playback",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.converged_calling_recording",
+   "url": "https://example.webex.com/webappng/sites/example/convergedRecording/0123456789abcdef0123456789abcdef/playback",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.join_link_mtid",
+   "url": "https://example.webex.com/example/j.php?MTID=m0123456789abcdef0123456789abcdef",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.personal_room",
+   "url": "https://example.webex.com/meet/alex.example",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.meeting_info_upcoming",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/info/0123456789abcdef0123456789abcdef?siteurl=example",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.meeting_scheduler",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/scheduler",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.dashboard",
+   "url": "https://example.webex.com/webappng/sites/example/dashboard?siteurl=example",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.postinfo_under_recordingservice",
+   "url": "https://example.webex.com/recordingservice/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.postinfo_too_short",
+   "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/abc123",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.encoded_slash",
+   "url": "https://example.webex.com/recordingservice/sites/example%2Fother/recording/0123456789abcdef0123456789abcdef/playback",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.other_origin_web_app",
+   "url": "https://web.webex.com/spaces/01234567-89ab-cdef-0123-456789abcdef",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.locale_prefix_help_center",
+   "url": "https://help.webex.com/en-us/article/n0000aa/Play-back-a-recording",
+   "expect": {
+    "match": false
+   }
+  },
+  {
+   "id": "neg.http_scheme",
+   "url": "http://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+   "expect": {
+    "match": false
+   }
+  }
+ ]
+}

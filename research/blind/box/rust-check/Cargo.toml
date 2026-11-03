@@ -1,0 +1,12 @@
+# Throwaway checker for the Box blind starter; not part of the Brauser workspace.
+[package]
+name = "box-blind-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adapter-templates = { path = "../../../../adapter-templates" }
+serde_json = "1"

@@ -1,0 +1,137 @@
+# Vidcast by Webex: blind starter adapters (research draft, 2026-11-03).
+#
+# Derived only from public sources: Vidcast's public help center
+# (help.webex.com, Vidcast landing page ld-nwdhbaq), the public logged-out web
+# app at https://app.vidcast.io (its route table and page-title component in
+# the shipped JavaScript bundle), and logged-out renders of publicly shared
+# sample videos/playlists that Vidcast's own help articles link to. See
+# research.md for sources, confidence and open questions.
+#
+# Origin model. Every Vidcast account (work orgs, free personal accounts) is
+# served from the single origin https://app.vidcast.io, and no URL names the
+# account or organization. app.vidcast.io is NOT on the host's shared-origin
+# list (adapter-templates/src/document.rs SHARED_ORIGINS), so these adapters
+# need neither `scope` nor `unscoped` (and `unscoped` would be rejected on a
+# non-shared origin). Like miro.com, the adapters record videos from every
+# Vidcast account signed in to the Chrome profile; who can see a video is
+# governed by that video's own share settings. alpha.vidcast.io and
+# integration.vidcast.io appear in the bundle as Vidcast's internal
+# environments and are deliberately not covered. The marketing site
+# (www.vidcast.io / vidcast.io) has no per-artifact pages.
+#
+# Title model. The app sets document.title through one component:
+# `Vidcast - <value>` (or plain `Vidcast` when the value is empty). The tab
+# title is a PREFIX form, not the usual `<title> - Tool` suffix form. The
+# server-rendered HTML title is always `Vidcast`; React replaces it once the
+# video/playlist metadata loads.
+
+[adapters]
+format = 1
+
+# ---------------------------------------------------------------------------
+# vidcast.video: one recorded or uploaded video ("a Vidcast").
+#
+# Rule 0  /share/<shareId>              the watch/share page; this is the link
+#         Vidcast's Share dialog and every help article hands out
+#         (https://app.vidcast.io/share/<uuid>). Query parameters seen in the
+#         route table (t, accessRequestId, playlistShareId, pageShareId,
+#         autoplay, highlightId, playerMode, clip, playerMaxWidth,
+#         hideWatermark) never change the ID: a video watched inside a playlist
+#         (?playlistShareId=<uuid>) is still that video.
+# Rule 1  /share/embed/<shareId>        the embed link, opened top-level. Same
+#         share ID: the server's og:url for this route points back to
+#         /share/<same id>. Recorded in view mode.
+# Rule 2  /share/edit/<shareId>         the editor (Edit button on the playback
+#         page; route query `tab`). Recorded in edit mode.
+#
+# ID: the share ID, a UUID. `uuid` canonicalizes to lowercase; the server
+# resolves an upper-cased share UUID to the same video, so folding is safe.
+# The ID template is the video's public share ID, not the internal video ID
+# used by the /video/<id> route (that route looks the video up and then
+# client-side navigates to /share/<share_id>, so the two IDs differ; it is
+# excluded rather than given a different ID for the same video).
+#
+# No rest segment: /share/<id>/anything is not an open. The route
+# /share/edit-script/<shareId>/<uploadId> (AI script editing of an upload)
+# is not covered: `edit-script` is not the literal `edit`, and no rule has a
+# rest segment, so the four-segment edit-script path matches nothing.
+#
+# Title: `Vidcast - <video name>` on the share page (observed). Known bad
+# titles: the editor's tab title is the fixed `Vidcast - Video Edit` (from the
+# bundle), so an edit visit records `Video Edit`; a viewer without access sees
+# `Vidcast - Request Access`, a logged-out viewer of a restricted video
+# `Vidcast - Sign In`, a dead link `Vidcast - Not Found`; the embed page and
+# the pre-hydration HTML have the bare title `Vidcast`, which matches no entry
+# and is recorded whole.
+[[artifacts]]
+type  = "vidcast.video"
+origin = "https://app.vidcast.io"
+match = [
+  { path = "/share/{video:uuid}", mode = "view" },
+  { path = "/share/embed/{video:uuid}", mode = "view" },
+  { path = "/share/edit/{video:uuid}", mode = "edit" },
+]
+id    = "vidcast.video:{host}/{video}"
+title = "Vidcast - {title}"
+
+# ---------------------------------------------------------------------------
+# vidcast.playlist: a playlist (called "collections" in older versions).
+#
+# Rule 0  /playlists/<playlistShareId>         the playlist page; the help
+#         article says to share it by the Share button or by copying the
+#         browser URL. Route query keys (accessRequestId, pageShareId,
+#         playerMaxWidth, hideWatermark) never change the ID.
+# Rule 1  /playlists/embed/<playlistShareId>   playlist embed link opened
+#         top-level (help article shows /playlists/embed/<link>?index=3&t=60&cc=1).
+#         The server's og:url points back to /playlists/<same id>.
+# Rule 2  /collections/share/<shareId>         legacy "collections" share link;
+#         the web app client-side redirects it to /playlists/<same id>, and the
+#         server's og:url for it is /playlists/<same id>. Recording both URLs
+#         under one ID is intentional.
+#
+# The /playlists list page (no ID) and /collections (legacy list, redirects to
+# /playlists) are not artifacts and cannot match: every rule needs a UUID.
+#
+# Title: `Vidcast - Playlist - <playlist name>` (observed). Only that form is
+# listed, so `Vidcast - Request Access` / `Vidcast - Not Found` / bare
+# `Vidcast` are recorded whole rather than mistaken for a playlist name.
+[[artifacts]]
+type  = "vidcast.playlist"
+origin = "https://app.vidcast.io"
+match = [
+  { path = "/playlists/{playlist:uuid}", mode = "view" },
+  { path = "/playlists/embed/{playlist:uuid}", mode = "view" },
+  { path = "/collections/share/{playlist:uuid}", mode = "view" },
+]
+id    = "vidcast.playlist:{host}/{playlist}"
+title = "Vidcast - Playlist - {title}"
+
+# ---------------------------------------------------------------------------
+# vidcast.page: a Vidcast "Page" (a published showcase of videos, playlists
+# and text blocks; Library -> Pages).
+#
+# LOW CONFIDENCE on the ID shape: no public page link was found. Video and
+# playlist share IDs are UUIDs and pages use the same `share_id` model in the
+# bundle (/pages/:pageShareId, pageShareId query keys), so `uuid` is assumed.
+# If page share IDs are not UUIDs these rules simply never match (fail closed;
+# nothing is mis-recorded).
+#
+# Rule 0  /pages/<pageShareId>          the published page.
+# Rule 1  /pages/<pageShareId>/edit     the page editor (title fixed
+#         `Vidcast - Page Edit`, recorded as `Page Edit`).
+# Rule 2  /pages/embed/<pageShareId>    page embed link opened top-level.
+#
+# /pages (the list, query tab/type/sort) is not an artifact; "embed" is not a
+# UUID, so rule 0 cannot swallow rule 2's path.
+#
+# Title: `Vidcast - <page name>` (from the bundle; not observed live).
+[[artifacts]]
+type  = "vidcast.page"
+origin = "https://app.vidcast.io"
+match = [
+  { path = "/pages/{page:uuid}", mode = "view" },
+  { path = "/pages/{page:uuid}/edit", mode = "edit" },
+  { path = "/pages/embed/{page:uuid}", mode = "view" },
+]
+id    = "vidcast.page:{host}/{page}"
+title = "Vidcast - {title}"
