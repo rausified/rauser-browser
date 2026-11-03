@@ -14,6 +14,8 @@
   "$defs": {
     "Request": {
       "oneOf": [
+        { "$ref": "#/$defs/GetAdapterRepairRequest" },
+        { "$ref": "#/$defs/ReplaceAdaptersRequest" },
         {
           "$ref": "#/$defs/HelloRequest"
         },
@@ -93,6 +95,7 @@
     },
     "Response": {
       "oneOf": [
+        { "$ref": "#/$defs/AdapterRepairLoaded" },
         { "$ref": "#/$defs/PreservedNotesListed" },
         {
           "$ref": "#/$defs/HelloResult"
@@ -307,6 +310,102 @@
               "type": "null"
             }
           ]
+        }
+      }
+    },
+    "GetAdapterRepairRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision"
+      ],
+      "properties": {
+        "type": {
+          "const": "get_adapter_repair"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "ReplaceAdaptersRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "document"
+      ],
+      "properties": {
+        "type": {
+          "const": "replace_adapters"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "document": {
+          "$ref": "#/$defs/AdapterDocument"
+        }
+      }
+    },
+    "AdapterRepairLoaded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "revision",
+        "original_toml"
+      ],
+      "properties": {
+        "type": {
+          "const": "adapter_repair_loaded"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "original_toml": {
+          "type": "string",
+          "maxLength": 262144
         }
       }
     },

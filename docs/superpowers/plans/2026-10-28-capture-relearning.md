@@ -30,8 +30,29 @@ bind every contract used for occupancy into the report revision. Do not parse
 removed parameter values or choose a file winner. Damaged/missing ownership
 headers remain outside owned log ingestion, as in ordinary indexing.
 
-The earlier alias/journal stages remain as built below. Durable apply still
-needs its own migration design challenge before implementation.
+The earlier alias/journal stages remain as built below.
+
+Durable apply design challenge (2026-11-02, reviewer
+`/root/migration_design_challenge`): adopt original-file preservation from
+§6.2 instead of rewriting every note and summary. A shared resolver must
+project raw history before config replacement is allowed. A logical artifact
+key and a physical note ownership key are distinct; ordinary note saves must
+never substitute one for the other. Use the existing pairwise replay, not a
+new directed-chain algorithm. Durable apply must bind exact before/after
+config bytes and an authoritative home-history append, and recover or refuse
+ordinary access after prepare; command-only recovery without that gate is
+unsafe. Unexpected external edits refuse. Cache deletion must reproduce the
+projection from home history. brwr-ruwj implements the read-only shared
+resolver/index projection first; brwr-dbp retains the remaining transaction,
+physical-note selection, file-stub and durable-history integration.
+
+Open apply decisions remain: universal automatic recovery versus refusal
+until explicit recovery; physical-note selection/revision contract; durable
+unalias support; authoritative history location and downgrade contract. These
+are outside the read-only projection stage; no application is enabled while
+they remain open. Cookie resolves the current stage as a developer-only,
+read-only preview with a fresh host-derived plan, no worker-supplied mappings,
+and no cache, content or config publication.
 
 ## Ordered delivery
 
@@ -305,3 +326,48 @@ approval; exact journal retries only acknowledge historical decisions. The
 parent stays in progress and ordinary config saves retain the ID freeze.
 Plain-language conflict evidence is proposed as brwr-pgxz; it is unassigned
 and must not displace the remaining assigned work.
+
+
+## Projected history preview
+
+`brauser adapters relearn-preview [--config /absolute/path/to/config.toml]`
+accepts exactly the same single JSON request as `relearn-plan`. It returns
+`{"review_only":true,"plan":{...},"projection":{...}}`. The full host-derived
+plan retains original ownership/file revisions. Projection contains:
+
+- `artifacts`: the proposed policy's artifact views and corrected measures.
+- `summaries`: original `SummaryView` entries grouped by projected artifact ID,
+  oldest first, retaining checked physical summary paths.
+- `edges`: resolved source/target keys, kind, weight and last-seen date.
+- `recent`: up to 64 projected daily rows, with `recent_truncated`.
+- `worklog`: the observed visit date range, text, artifact count and capture-gap
+  notices; null when no indexed visit exists. Notes alone remain in the plan.
+
+The same index derivation and Recent/worklog renderers serve ordinary reads
+with an empty resolution and this preview with the reviewed resolution.
+Historical capture/summary payloads, summary ownership keys and paths, event
+positions and names-only provenance stay raw. Container recognition compares
+resolved identities and counts each visit once in worklog totals. Ref targets
+and trail sources resolve through the same table; collapsed self-links are
+omitted. Existing `aliases-preview` uses the same extracted replay semantics,
+including chains, latest-target move-back and pairwise unalias. A raw key
+cannot name two artifact types. A simultaneous plan refuses split, merge,
+key reuse, foreign occupancy and unresolved URL-copy choices before replay;
+it is never flattened into a sequential chain.
+
+The host takes config then capture locks. It computes a fresh impact plan,
+reads strict owned log evidence for projection and compares a shared hash of event payloads,
+durable ordering positions and capture gaps with the reviewed snapshot, then recomputes the plan to refuse changes by
+external editors. The reopened config must also retain the bound revision.
+Each scan retains the existing one-pass 64 MiB bound and inventory limits. No caller supplies aliases or history.
+No cache/checkpoint is read, resumed or published; no notes, summaries,
+artifacts, journal, adopted state or configuration is changed. Coordination
+lock files may be created. Malformed requests and `--apply` refuse. This
+stage deliberately adds no persistent applied-history format or write path.
+
+brwr-ruwj is the shared resolver/index projection prerequisite of assigned
+brwr-dbp. The latter remains in progress: next define the physical-note
+selection/revision and universal prepare-recovery contracts above, then add
+host-owned durable history/config application, alias-aware note access,
+ownership-checked old-path stubs and cache/reindex replay. Panel review stays
+on brwr-6x2; do not close either assigned item based on preview tests.

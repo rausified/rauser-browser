@@ -1499,6 +1499,24 @@ These tests use no browser or harness and do not establish panel Re-learn or
 migration acceptance. POSIX symlink fixtures state their Windows exclusion;
 all other planning tests are portable.
 
+`cargo test --locked -p brauser --lib rekey_projection` exercises the shared
+index projection against owned log fixtures: joined measures/days, original
+summary ownership and both-side paths, chains, move-back, pairwise unalias,
+old refs, incoming trails and collapsed self-links, repository roll-ups with
+one-count worklog totals, separate URL summaries and cache deletion/corruption.
+The tests compare raw event bytes before/after and assert no generated file or
+cache publication. `cargo test --locked -p brauser --lib relearn` also verifies
+simultaneous mapping refusal, cross-type key conflicts and an external note
+edit between derivation and the final plan check. The projection refuses a
+log snapshot whose hash differs from the reviewed one, including payload-
+preserving append-order changes and gap-only edits.
+`cargo test --locked -p brauser --test relearn_preview` runs the real binary
+against an isolated config with owned note/summary/log fixtures. It checks
+deterministic corrected totals and unchanged file bytes, plus refusal of stale
+revisions, supplied aliases, foreign proposals, apply flags and damaged logs.
+This proves read-only preview only: durable apply, note storage selection,
+artifact stubs, replay from applied home history and panel review remain
+separate acceptance work on brwr-dbp/brwr-6x2.
 
 ## Recorded incoming navigation in summaries
 
@@ -1560,3 +1578,19 @@ keyboard journey `task page scope can be changed by keyboard` checks the new
 checkbox with Space, draft preservation, exact submitted shape and axe; sandbox
 browser skips are not browser acceptance. No smoke steps or native dialog counts
 change; macOS Chrome command/menu checks remain separate.
+
+### Adapter document repair
+
+After `npm run build:extension`, run `node --test extension/tests/options.test.mjs`
+for the settings repair workspace. `cargo test --locked -p brauser explicit_adapter_repair`
+checks full replacement, exact-byte backups, invalid/stale refusals, and recorded
+identity protection; `cargo test --locked -p brauser adapter_repair_native` checks
+the native request boundary, and protocol `wire_config` pins its narrow shape.
+`cargo test --locked -p brauser adapter_repair_original` checks that copy-out
+retains TOML-only values in unknown fields (including NaN and dates), excludes
+unrelated settings, leaves the file unchanged, and refuses a changed revision.
+The settings suite also checks retrying a repair read after another settings
+save leaves the document invalid and produces no live worker lease.
+The accessibility pages suite includes an offline real-Chrome journey through
+future-format repair, match preview, Escape/focus return and save. Browser
+execution still requires the normal unsandboxed driver/CI gate.

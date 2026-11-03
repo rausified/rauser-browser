@@ -52,6 +52,7 @@ export function installChrome({ state, runs, pageUrl, pageName }) {
   const configured = state !== "setup";
   const fixture = window.fixture = {
     state, runs, requests: [], actions: [], ports: [], revision: "1",
+    adapterIssue: state === "adapter-repair" ? "unsupported adapter format 2" : null,
     listError: state === "error", getRunReads: 0,
     config: {
       storage: configured ? {
@@ -62,7 +63,7 @@ export function installChrome({ state, runs, pageUrl, pageName }) {
       agent: configured ? { harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: "2026-11-01T12:00:00Z" } : null,
       summary_vocabulary: { document_types: ["report"], categories: ["work"] },
       auto_summary: { enabled: true, dwell_secs: 0 },
-      adapters: { format: 1, artifacts: [] },
+      adapters: { format: state === "adapter-repair" ? 2 : 1, artifacts: [] },
     },
   };
   const status = {
@@ -77,8 +78,18 @@ export function installChrome({ state, runs, pageUrl, pageName }) {
       case "get_config": return {
         type: "config_result", revision: fixture.revision, config: fixture.config, config_issue: null,
         agent_status: { state: configured ? "ready" : "not_set_up", harness_version: configured ? "1.0" : null, message: null },
-        adapter_issue: null, adapter_warnings: [], adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
+        adapter_issue: fixture.adapterIssue, adapter_warnings: [], adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       };
+      case "get_adapter_repair": return {
+        type: "adapter_repair_loaded", revision: fixture.revision,
+        original_toml: '[adapters]\nformat = 2\nfuture_mode = "semantic"\n',
+      };
+      case "replace_adapters":
+        if (request.expected_revision !== fixture.revision) return { type: "error", code: "conflict", message: "Settings changed." };
+        fixture.config.adapters = request.document;
+        fixture.adapterIssue = null;
+        fixture.revision = String(Number(fixture.revision) + 1);
+        return { type: "config_updated", config: fixture.config, revision: fixture.revision };
       case "get_artifact": return { type: "artifact_result", recognized: false, artifact: null, summary: null };
       case "load_note": return {
         type: "note_loaded", exists: false, revision: "", title: "", body: "",

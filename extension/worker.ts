@@ -249,11 +249,13 @@ async function syncAutoSummary(activity: ActivityState, now: number): Promise<vo
 }
 
 let autoTimer: ReturnType<typeof setTimeout> | undefined;
+/** When the pending drain fires, on the monotonic clock: a wall-clock change
+ * must not make a sooner drain wait behind a timer it misjudged as earlier. */
 let autoTimerAt = Infinity;
 
 /** Drain in `delayMs` while this worker lives, unless a drain is due sooner. */
 function scheduleAutoDrain(delayMs: number): void {
-  const at = Date.now() + delayMs;
+  const at = performance.now() + delayMs;
   if (autoTimer !== undefined && autoTimerAt <= at) return;
   clearTimeout(autoTimer);
   autoTimerAt = at;
