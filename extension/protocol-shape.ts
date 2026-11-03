@@ -471,6 +471,9 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         isAdoptedState(value.adopted_state);
     case "config_updated":
       return typeof value.revision === "string" && isConfig(value.config);
+    case "adapter_repair_loaded":
+      return isMessage(value, ["revision", "original_toml"]) &&
+        isBoundedString(value.revision, 128, 1) && isBoundedString(value.original_toml, 262144);
     case "folder_chosen":
       return typeof value.path === "string" && typeof value.picker_token === "string";
     case "visit_recorded":

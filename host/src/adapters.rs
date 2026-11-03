@@ -47,7 +47,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
             }
             aliases::preview_lines(io::stdin().lock(), io::stdout().lock())
         }
-        Some(command @ ("relearn-plan" | "relearn-record" | "relearn-journal")) => {
+        Some(
+            command @ ("relearn-plan" | "relearn-preview" | "relearn-record" | "relearn-journal"),
+        ) => {
             let config_path = match args.next().as_deref() {
                 None => None,
                 Some("--config") => {
@@ -62,6 +64,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
             anyhow::ensure!(args.next().is_none(), "unexpected {command} arguments");
             if command == "relearn-plan" {
                 crate::relearn::run(config_path, io::stdin().lock(), io::stdout().lock())
+            } else if command == "relearn-preview" {
+                crate::relearn::run_preview(config_path, io::stdin().lock(), io::stdout().lock())
             } else {
                 crate::relearn::run_journal(
                     config_path,
@@ -73,7 +77,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
         }
         Some(other) => bail!("unknown adapters command: {other}"),
         None => bail!(
-            "usage: adapters <eval|aliases-preview|relearn-plan|relearn-record|relearn-journal>"
+            "usage: adapters <eval|aliases-preview|relearn-plan|relearn-preview|relearn-record|relearn-journal>"
         ),
     }
 }
