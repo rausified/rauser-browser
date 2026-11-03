@@ -1,0 +1,50 @@
+{
+  "family": "atlassian",
+  "origin": { "kind": "subdomain", "suffix": ".atlassian.net" },
+  "scope": null,
+  "types": [
+    {
+      "type": "jira.issue",
+      "key": "jira:{origin}",
+      "label": "Jira issues",
+      "label_variants": [],
+      "description": "Issue pages and board modals become one artifact per Jira key.",
+      "adapter": {
+        "type": "jira.issue",
+        "match": [
+          { "path": "/browse/{key:jira_key}" },
+          { "path": "/jira/{*}", "query": { "selectedIssue": "{key:jira_key}" } }
+        ],
+        "id": "jira:{host}/{key}",
+        "title": "[{key:jira_key}] {title} - Jira",
+        "alias": { "from": "tab_title", "capture": "key" },
+        "refs": [{ "type": "jira.issue", "find": "jira_key" }]
+      },
+      "history": [],
+      "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
+      "docs": "docs/adapters/jira.issue.md"
+    },
+    {
+      "type": "confluence.page",
+      "key": "confluence.page:{origin}",
+      "label": "Confluence pages",
+      "label_variants": [],
+      "description": "Each page becomes one artifact by its page ID, whether you view it, edit it, or open its version history.",
+      "adapter": {
+        "type": "confluence.page",
+        "match": [
+          { "path": "/wiki/spaces/{_}/pages/{id:int}/{*}" },
+          { "path": "/wiki/spaces/{_}/pages/edit-v2/{id:int}", "mode": "edit" },
+          { "path": "/wiki/spaces/{_}/history/{id:int}/{*}", "mode": "view" },
+          { "path": "/wiki/pages/viewpage.action", "query": { "pageId": "{id:int}" } }
+        ],
+        "id": "confluence.page:{host}/{id}",
+        "title": ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"],
+        "refs": [{ "type": "jira.issue", "find": "jira_key" }]
+      },
+      "history": [],
+      "status": { "state": "development", "method": null, "checked_on": null, "checked_by": null },
+      "docs": "docs/adapters/confluence.page.md"
+    }
+  ]
+}
