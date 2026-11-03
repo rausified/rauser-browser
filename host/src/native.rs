@@ -24,6 +24,9 @@ use crate::note;
 use crate::service::client::{ServiceError, ServiceLink};
 use crate::vault::Vault;
 
+#[cfg(unix)]
+mod task_note;
+
 const MAX_REQUEST_ID_CHARS: usize = 128;
 
 pub fn serve(config: ConfigStore) -> Result<()> {
@@ -358,6 +361,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::DraftSite(_) => "draft_site",
         Request::StartSiteDraft(_) => "start_site_draft",
         Request::StartTask(_) => "start_task",
+        Request::SaveTaskNote(_) => "save_task_note",
         Request::CheckSiteDraft(_) => "check_site_draft",
         Request::WorklogReport(_) => "worklog_report",
         Request::WorklogChoices(_) => "worklog_choices",
@@ -410,6 +414,7 @@ fn request_run_fields(request: &Request) -> RunFields<'_> {
         Request::StartTask(value) => (None, value.harness),
         Request::SetUpHarness(value) => (None, Some(value.harness)),
         Request::GetRun(value) => (Some(&value.run_id), None),
+        Request::SaveTaskNote(value) => (Some(&value.run_id), None),
         Request::CancelRun(value) => (Some(&value.run_id), None),
         Request::RetrySave(value) => (Some(&value.run_id), None),
         _ => (None, None),
@@ -887,6 +892,8 @@ fn dispatch(
         #[cfg(unix)]
         Request::StartTask(value) => start_task(value, config, context.service),
         #[cfg(unix)]
+        Request::SaveTaskNote(value) => task_note::save(value, config, context.service),
+        #[cfg(unix)]
         Request::StartAutoSummary(value) => start_auto_summary(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup
         // detects and probes on the service's PATH and environment, and
@@ -914,6 +921,7 @@ fn dispatch(
         Request::StartRun(_)
         | Request::StartSiteDraft(_)
         | Request::StartTask(_)
+        | Request::SaveTaskNote(_)
         | Request::GetRun(_)
         | Request::ListRuns(_)
         | Request::CancelRun(_)

@@ -1290,7 +1290,7 @@ test("dismissing two summaries together keeps both ids", async () => {
 const { TaskDetail } = await import("../dist/run-card.js");
 
 // A TaskDetail with a scripted host; `reply` answers get_run.
-function detailSetup(initial, { reply = () => null, storage = storageArea() } = {}) {
+function detailSetup(initial, { reply = () => null, storage = storageArea(), saveToNote } = {}) {
   const body = new FakeElement("body");
   globalThis.document = { body, activeElement: body, createElement: (tag) => new FakeElement(tag) };
   const requests = [];
@@ -1315,6 +1315,7 @@ function detailSetup(initial, { reply = () => null, storage = storageArea() } = 
     copy: async (text) => { copied.push(text); },
     visible: () => true,
     storage,
+    ...(saveToNote ? { saveToNote } : {}),
     reuse: (instruction) => reused.push(instruction),
     openPage: (url) => opened.push(url),
     dismissed: (runId) => dismissed.push(runId),
@@ -1326,6 +1327,32 @@ function detailSetup(initial, { reply = () => null, storage = storageArea() } = 
 function output(detail) {
   return byClass(detail.element, "task-detail-output");
 }
+
+test("TaskDetail Save to note retains keyboard focus and announces an explicit save", async () => {
+  const done = taskView({ state: "succeeded", finished_at: "2026-10-27T16:00:10Z", task_report: "A full report" });
+  let finish;
+  const saved = [];
+  const page = detailSetup(done, {
+    reply: () => ({ type: "run_fetched", run: done, stream_text: "", next_offset: 0, more: false }),
+    saveToNote: (run) => {
+      saved.push(run.run_id);
+      return new Promise((resolve) => { finish = resolve; });
+    },
+  });
+  page.detail.start();
+  await settle();
+  assert.deepEqual(saved, []);
+  button(page.detail.element, "Save to note").focus();
+  button(page.detail.element, "Save to note").click();
+  assert.equal(button(page.detail.element, "Save to note").disabled, true);
+  assert.deepEqual(saved, [done.run_id]);
+  finish(false);
+  await settle();
+  assert.equal(document.activeElement, button(page.detail.element, "Save to note"));
+  const status = byClass(page.detail.element, "task-detail-note");
+  assert.equal(status.textContent, "Report saved to the source page's note.");
+  page.detail.dispose();
+});
 
 test("TaskDetail polls retain the focused action without stealing focus from elsewhere", async () => {
   const run = taskView();

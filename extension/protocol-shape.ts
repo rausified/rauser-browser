@@ -504,6 +504,9 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         .includes(String(value.outcome)) &&
         typeof value.revision === "string" && typeof value.relative_path === "string" &&
         isRecordKey(value.key);
+    case "task_note_saved":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "run_id", "already_saved"]) &&
+        typeof value.run_id === "string" && typeof value.already_saved === "boolean";
     case "note_conflict":
       return typeof value.exists === "boolean" && typeof value.revision === "string" &&
         typeof value.title === "string" && typeof value.body === "string" &&
