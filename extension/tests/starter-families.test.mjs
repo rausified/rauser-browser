@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { starterKind, starterStatus } = await import("../dist/starter-adapters.js");
+const { starterKind, starterStatus, starterOffers } = await import("../dist/starter-adapters.js");
 
 // [origin, expected StarterKind | null], computed from today's rules
 // (secureHostname: canonical https origin only; a subdomain suffix match
@@ -65,6 +65,18 @@ test("starterKind agrees with the legacy rules on 40 origins", () => {
   for (const [origin, expected] of ORIGIN_CASES) {
     assert.equal(starterKind(origin), expected, origin);
   }
+});
+
+test("an origin containing a $ replacement pattern does not corrupt the offer key", () => {
+  // String.replace treats "$'" in a replacement string as "everything after
+  // the match"; a function replacer (extension/starter-adapters.ts
+  // starterOffers) must not fall into that trap just because the URL parser
+  // accepts "$" in a hostname.
+  const origin = "https://a$'.atlassian.net";
+  const offers = starterOffers(origin, []);
+  const jiraOffer = offers.find((offer) => offer.artifact_type === "jira.issue");
+  assert.ok(jiraOffer, "expected a jira.issue offer for an atlassian origin");
+  assert.equal(jiraOffer.key, `jira:${origin}`);
 });
 
 test("every family type exposes its status", () => {

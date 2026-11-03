@@ -129,6 +129,9 @@ function validateAdapter(problems, file, adapter, where) {
   }
   checkKeys(problems, file, adapter, ADAPTER_KEYS, where);
   requireKeys(problems, file, adapter, ADAPTER_REQUIRED, where);
+  if ("match" in adapter && (!Array.isArray(adapter.match) || adapter.match.length === 0)) {
+    fail(problems, file, `${at(where, "match")} must be a non-empty array`);
+  }
 }
 
 function validateLabelVariants(problems, file, variants, where) {
@@ -144,6 +147,12 @@ function validateLabelVariants(problems, file, variants, where) {
     }
     checkKeys(problems, file, variant, LABEL_VARIANT_KEYS, entryWhere);
     requireKeys(problems, file, variant, LABEL_VARIANT_KEYS, entryWhere);
+    if ("host_suffix" in variant && typeof variant.host_suffix !== "string") {
+      fail(problems, file, `${at(entryWhere, "host_suffix")} must be a string`);
+    }
+    if ("label" in variant && typeof variant.label !== "string") {
+      fail(problems, file, `${at(entryWhere, "label")} must be a string`);
+    }
   });
 }
 
@@ -179,9 +188,15 @@ function validateStatus(problems, file, status, where) {
   if ("method" in status && !STATUS_METHODS.includes(status.method)) {
     fail(problems, file, `${at(where, "method")} must be "live", "history", or null`);
   }
+  if ("checked_on" in status && status.checked_on !== null && typeof status.checked_on !== "string") {
+    fail(problems, file, `${at(where, "checked_on")} must be a string or null`);
+  }
+  if ("checked_by" in status && status.checked_by !== null && typeof status.checked_by !== "string") {
+    fail(problems, file, `${at(where, "checked_by")} must be a string or null`);
+  }
 }
 
-function validateType(problems, file, type, where) {
+function validateType(problems, file, type, where, originKind) {
   if (!isPlainObject(type)) {
     fail(problems, file, `${where} must be an object`);
     return;
@@ -194,6 +209,14 @@ function validateType(problems, file, type, where) {
   if ("status" in type) validateStatus(problems, file, type.status, at(where, "status"));
   if ("type" in type && typeof type.type !== "string") fail(problems, file, `${at(where, "type")} must be a string`);
   if ("docs" in type && typeof type.docs !== "string") fail(problems, file, `${at(where, "docs")} must be a string`);
+  if ("key" in type) {
+    if (typeof type.key !== "string") fail(problems, file, `${at(where, "key")} must be a string`);
+    else if (originKind === "subdomain" && !type.key.includes("{origin}")) {
+      fail(problems, file, `${at(where, "key")} must contain "{origin}"`);
+    }
+  }
+  if ("label" in type && typeof type.label !== "string") fail(problems, file, `${at(where, "label")} must be a string`);
+  if ("description" in type && typeof type.description !== "string") fail(problems, file, `${at(where, "description")} must be a string`);
 }
 
 function validateFamily(problems, file, family) {
@@ -209,9 +232,22 @@ function validateFamily(problems, file, family) {
     if (!Array.isArray(family.types)) {
       fail(problems, file, "types must be an array");
     } else {
-      family.types.forEach((type, index) => validateType(problems, file, type, `types[${index}]`));
+      const originKind = isPlainObject(family.origin) ? family.origin.kind : null;
+      family.types.forEach((type, index) => validateType(problems, file, type, `types[${index}]`, originKind));
     }
   }
+}
+
+/** Records `value` (a type's `type` or `key`) as declared in `file`, failing
+ * if some earlier file already declared the same value: `STARTER_HISTORY`'s
+ * `Object.fromEntries` in `extension/starter-adapters.ts` would silently
+ * drop the earlier entry, the catalog's `starter_types` line would list a
+ * duplicate `type` twice, and the second offer could never be matched via
+ * its `key`. */
+function checkDuplicate(problems, seen, kind, file, value) {
+  const earlier = seen.get(value);
+  if (earlier) fail(problems, file, `duplicate ${kind} "${value}" (also in ${earlier})`);
+  else seen.set(value, file);
 }
 
 /** The validated `StarterFamilyData` objects under `<root>/protocol/starters`,
@@ -224,12 +260,28 @@ export function loadFamilies(root) {
     .filter((name) => name.endsWith(".json") && name !== "ids.lock.json")
     .sort();
   const problems = [];
-  const families = files.map((name) => {
+  const families = [];
+  const seenTypes = new Map();
+  const seenKeys = new Map();
+  for (const name of files) {
     const file = path.posix.join(STARTERS_DIR, name);
-    const data = JSON.parse(readFileSync(path.join(dir, name), "utf8"));
+    let data;
+    try {
+      data = JSON.parse(readFileSync(path.join(dir, name), "utf8"));
+    } catch (error) {
+      fail(problems, file, `invalid JSON: ${error.message}`);
+      continue;
+    }
     validateFamily(problems, file, data);
-    return data;
-  });
+    if (isPlainObject(data) && Array.isArray(data.types)) {
+      for (const type of data.types) {
+        if (!isPlainObject(type)) continue;
+        if (typeof type.type === "string") checkDuplicate(problems, seenTypes, "type", file, type.type);
+        if (typeof type.key === "string") checkDuplicate(problems, seenKeys, "key", file, type.key);
+      }
+    }
+    families.push(data);
+  }
   if (problems.length) throw new FamilyValidationError(problems);
   return families;
 }
@@ -311,9 +363,17 @@ function main(argv) {
 
   if (values.check) {
     const problems = [...lockProblems];
+    // Windows can still check this out as CRLF (.gitattributes `text eol=lf`
+    // keeps the committed blob LF, but a worktree written by a test fixture,
+    // or a checkout on a misconfigured client, may not match). renderTs
+    // always writes LF, so normalise before comparing: --check should only
+    // flag real drift, not line endings. (catalog.json's comparison already
+    // tolerates CRLF: CATALOG_LINE_RE's `$` matches before `\r`, so the
+    // matched region excludes the line ending and an unchanged line survives
+    // the replace byte-for-byte.)
     const currentTs = (() => {
       try {
-        return readFileSync(tsPath, "utf8");
+        return readFileSync(tsPath, "utf8").replace(/\r\n/g, "\n");
       } catch {
         return null;
       }

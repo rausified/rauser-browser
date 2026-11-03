@@ -23,3 +23,8 @@ CookieFeature.md merge=union
 # SUMMARY.md is compiled into the host as the summary prompt; its template
 # delimiters are LF-only, so never let a checkout convert it to CRLF.
 SUMMARY.md text eol=lf
+
+# generate-starters.mjs writes LF and compares raw bytes in --check; keep
+# these checked out as LF so Windows CI doesn't see a false "out of date".
+extension/starter-families.generated.ts text eol=lf
+protocol/starters/*.json text eol=lf

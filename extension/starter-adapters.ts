@@ -190,7 +190,11 @@ export function starterOffers(origin: string, githubOrganizations: string[]): St
   if (!family) return [];
   const needsScope = family.scope !== null;
   return family.types.map((type) => ({
-    key: type.key.replace("{origin}", origin),
+    // A function replacer, not a replacement string: String.replace treats
+    // `$'`, `$&`, `$1`, etc. in a replacement string as special patterns, and
+    // the URL parser accepts `$` in a hostname, so a crafted origin could
+    // otherwise splice part of itself or the match into the key.
+    key: type.key.replace("{origin}", () => origin),
     kind: family.family,
     artifact_type: type.type,
     label: starterLabel(type, origin),
