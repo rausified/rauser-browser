@@ -29,7 +29,7 @@ import {
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
 import { TaskRecall } from "./task-recall.js";
-import { recentSummaryText, summaryLine } from "./summary-text.js";
+import { readScopeText, recentSummaryText, summaryLine } from "./summary-text.js";
 import {
   artifactLook, capturePill, compactDuration, importanceLabel, importanceTone, pageLook, summaryTimeLabel,
 } from "./panel-look.js";
@@ -434,6 +434,13 @@ function renderPageSummary(summary: SummaryView | null, pageUrl: string | null):
       chip.textContent = text;
       pageSummaryChips.append(chip);
     }
+  }
+  const scope = readScopeText(shown?.read_scope);
+  if (scope !== null) {
+    const chip = document.createElement("span");
+    chip.className = "tag";
+    chip.textContent = scope;
+    pageSummaryChips.append(chip);
   }
   renderSummarizeLabel();
 }

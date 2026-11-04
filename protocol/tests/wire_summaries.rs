@@ -7,6 +7,35 @@ const SUMMARY_VIEW: &str = r#"{"summarized_at":"2026-10-26T14:05:00-07:00","docu
 const LIST_ITEM: &str = r#"{"local_date":"2026-10-26","artifact_id":"web:a.example/x","artifact_type":"web.page","title":"T","url":"https://a.example/x","focused_seconds":0,"background_seconds":0,"opens":0,"why":null,"summary":null}"#;
 
 #[test]
+fn saved_summary_scope_is_optional_typed_and_round_trips() {
+    use serde_json::json;
+    let old: serde_json::Value = serde_json::from_str(SUMMARY_VIEW).unwrap();
+    for scope in [None, Some("whole"), Some("partial"), Some("page_only")] {
+        let mut summary = old.clone();
+        if let Some(scope) = scope {
+            summary["read_scope"] = scope.into();
+        }
+        for overview in [None, Some("Release tradeoffs.")] {
+            let mut summary = summary.clone();
+            if let Some(overview) = overview {
+                summary["overview"] = overview.into();
+            }
+            let response = json!({"type":"artifact_result", "protocol_version":8,
+                "request_id":"r", "recognized":false, "artifact":null, "summary":summary});
+            common::assert_response_round_trips("ArtifactResult", &response);
+        }
+    }
+    for bad in [json!("most"), json!("Whole"), json!(null), json!(7)] {
+        let mut summary = old.clone();
+        summary["read_scope"] = bad;
+        assert!(!common::schema_subset::valid("SummaryView", &summary));
+    }
+    let mut invalid = old;
+    invalid["read_scope"] = "most".into();
+    assert!(serde_json::from_value::<brauser_protocol::SummaryView>(invalid).is_err());
+}
+
+#[test]
 fn summary_overview_is_optional_bounded_and_round_trips() {
     use common::schema_subset;
     use serde_json::json;

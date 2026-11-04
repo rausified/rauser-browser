@@ -19,10 +19,10 @@ use brauser_protocol::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::answer::{Access, ReadScope, SummaryAnswer};
+use crate::answer::{Access, SummaryAnswer};
 use crate::presentation::plain_line;
 use crate::service::section::PageSection;
-use brauser_protocol::{AnswerAccess, AnswerReadScope};
+use brauser_protocol::AnswerAccess;
 
 /// The largest `stream.txt`; text past it is dropped.
 pub const STREAM_CAP: usize = 4 * 1024 * 1024;
@@ -301,11 +301,7 @@ impl RunStatusFile {
                     .and_then(|value| SummaryAnswer::deserialize(value).ok())
                     .map(|answer| RunAnswer {
                         overview: (!answer.overview.is_empty()).then_some(answer.overview),
-                        read_scope: answer.read_scope.map(|scope| match scope {
-                            ReadScope::Whole => AnswerReadScope::Whole,
-                            ReadScope::Partial => AnswerReadScope::Partial,
-                            ReadScope::PageOnly => AnswerReadScope::PageOnly,
-                        }),
+                        read_scope: answer.read_scope.map(Into::into),
                         // Ordinary answers omit access; only a wall needs a
                         // not-saved message in the run card.
                         access: match answer.access {

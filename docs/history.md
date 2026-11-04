@@ -1438,3 +1438,32 @@ protocol/frontend checks green. Supplemental script, queue/current-state and
 10,696-rendering Markdown checks pass. Accessibility passes its two offline
 fixtures and explicitly skips 47 sandbox-blocked browser cases; the driver and
 CI must supply real browser/platform validation.
+
+
+## 2026-11-04 — Show recorded reading coverage in saved-summary choices (brwr-30xv)
+
+`SummaryFinisher` now copies the validated answer's optional reading scope
+into `PageSummary` and the typed `SummaryEvent`. `SummaryView` projects it
+through the existing cached event body and the shared history projector,
+without reading summary-file frontmatter or migrating the SQLite schema.
+Legacy absence preserves old serialization. `ReadScope` shares one conversion
+to the protocol enum with run cards. This page adds the existing reading
+label as a chip regardless of overview presence; Recent appends it as text.
+Capture truncation never substitutes for the answer's claim.
+
+Prepared-append compatibility now removes scope before trying the existing
+pre-overview payload; all attempts retain frozen byte equality and return the
+actual restored event. Tests cover both historical formats at three tail
+positions and refuse changed new scope, overview and paths. Coordinated
+deployment and older-host cache/rebuild limitations are recorded in DESIGN.md,
+protocol/README.md and the staged saved-summary plan. Re-learn apply remains
+blocked on its existing policy decisions; no identity migration is enabled.
+
+
+Validation: full local gate passes with 1,609 workspace Rust-reported passes
+(+5, 2 ignored; sandbox IPC guards apply), 47 extension test files (+2 cases),
+both Clippy configurations and README extras. The 10,696 Markdown renderings
+remain inert. Accessibility reports two offline passes and 47 explicit
+sandbox browser skips. Fresh complete diff review and one independent
+in-session Codex pass found no actionable issues; the driver owns external
+review, real browser/platform validation and publication.

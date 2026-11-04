@@ -631,6 +631,7 @@ fn replay_event(n: u64, variant: u64) -> CachedEvent {
         }),
         2 => EventData::Summary(SummaryEvent {
             overview: None,
+            read_scope: None,
             event_id: id,
             artifact_id: artifact_id.clone(),
             artifact_type,

@@ -23,6 +23,7 @@ pub(super) fn summary_view(event: &SummaryEvent) -> Option<SummaryView> {
             .filter(|value| value.len() <= 32)?
     };
     Some(SummaryView {
+        read_scope: event.read_scope.map(Into::into),
         summarized_at,
         overview: event.overview.clone(),
         document_type: event.document_type.clone(),

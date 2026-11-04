@@ -245,6 +245,7 @@ impl RunFinisher for SummaryFinisher {
             .ok_or_else(|| SaveFailure::retry_after_write(INDEX_UNAVAILABLE, &written))?;
         let summary = PageSummary {
             overview: (!answer.overview.is_empty()).then(|| answer.overview.clone()),
+            read_scope: answer.read_scope,
             event_id: run.run_id.clone(),
             url: run.url.clone(),
             title,
@@ -1098,6 +1099,37 @@ mod tests {
         assert_eq!(summary.importance, ImportanceLevel::High);
         assert_eq!(summary.overview, event.overview);
         assert_eq!(summary.summary_path, slash(&relative));
+    }
+
+    #[test]
+    fn saved_scope_comes_from_the_validated_answer_not_the_capture_limit() {
+        use crate::answer::ReadScope;
+        for scope in [
+            None,
+            Some(ReadScope::Whole),
+            Some(ReadScope::Partial),
+            Some(ReadScope::PageOnly),
+        ] {
+            let world = World::new();
+            let mut run = run(&world, PAGE, HarnessId::Codex);
+            run.capture_truncated = true;
+            let mut result = answer();
+            if let Some(scope) = scope {
+                result["read_scope"] = scope.as_str().into();
+            } else {
+                result.as_object_mut().unwrap().remove("read_scope");
+            }
+            world.finisher().save(&run, &result).unwrap();
+            let events = world.summary_events();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].read_scope, scope);
+            let view = world
+                .index()
+                .summary_for(&events[0].artifact_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(view.read_scope, scope.map(Into::into));
+        }
     }
 
     /// A sign-in, no-access or not-found wall is never saved: no summary
