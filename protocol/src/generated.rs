@@ -654,6 +654,8 @@ pub struct ContainedArtifactView {
 #[serde(deny_unknown_fields)]
 pub struct SummaryView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_scope: Option<AnswerReadScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
     pub summarized_at: String,
     pub document_type: String,

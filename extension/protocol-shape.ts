@@ -268,7 +268,7 @@ function isArtifact(value: unknown): boolean {
     artifact.incoming_trails.every(isIncomingTrail);
 }
 
-/** The required summary keys; older events carry no overview. */
+/** The required summary keys; older events carry no overview or scope. */
 const SUMMARY_VIEW_KEYS: readonly string[] = [
   "summarized_at", "document_type", "category", "importance", "summary_path", "harness",
 ];
@@ -277,8 +277,11 @@ export function isSummaryView(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const summary = value as Record<string, unknown>;
   const hasOverview = Object.hasOwn(summary, "overview");
-  return hasExactKeys(summary, hasOverview ? [...SUMMARY_VIEW_KEYS, "overview"] : SUMMARY_VIEW_KEYS) &&
+  const hasScope = Object.hasOwn(summary, "read_scope");
+  return hasExactKeys(summary, [...SUMMARY_VIEW_KEYS,
+    ...(hasOverview ? ["overview"] : []), ...(hasScope ? ["read_scope"] : [])]) &&
     (!hasOverview || isOverview(summary.overview)) &&
+    (!hasScope || (typeof summary.read_scope === "string" && ANSWER_READ_SCOPES.has(summary.read_scope))) &&
     typeof summary.summarized_at === "string" && typeof summary.document_type === "string" &&
     typeof summary.category === "string" &&
     typeof summary.importance === "string" && IMPORTANCE_LEVELS.has(summary.importance) &&

@@ -1582,3 +1582,17 @@ host replies invalidate the old preview immediately. This uses existing local
 history, with no agent call or new capture; deploy the host and extension
 together for the new read-only query. Validation and driver handoff details are
 recorded in the implementation plan and overnight cycle log.
+
+
+## 2026-11-04 — Show how much a saved summary's agent read
+
+Recent and This page now show whether the agent read the whole artifact,
+part of it, or only its browser page. The label sits beside the saved summary,
+so a polished overview no longer hides limited reading after the run card is
+gone. It uses the same wording as Tasks and appears even when there is no
+overview. The service records the validated answer's scope in the summary log
+event; history reads that event, so cache rebuilding preserves the claim and
+never guesses coverage from text or capture length. Older summaries keep
+unknown scope and no label. Recovery restores interrupted older appends
+byte-for-byte. This needs the host and extension deployed together; older
+hosts cannot provide a complete history view after scoped events are written.
