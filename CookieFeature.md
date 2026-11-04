@@ -1596,3 +1596,25 @@ never guesses coverage from text or capture length. Older summaries keep
 unknown scope and no label. Recovery restores interrupted older appends
 byte-for-byte. This needs the host and extension deployed together; older
 hosts cannot provide a complete history view after scoped events are written.
+
+## 2026-11-04 — Run reusable task commands from the task bar
+
+Brauser can now keep repeatable workflows as named instructions in
+`[[commands]]` in its local configuration. Open **Saved commands** in the task
+bar to review their names and descriptions. Choosing one and clicking **Insert command** adds its slash
+name before your current draft; pressing Enter or Run is still the action that
+starts the agent. For example, `/actions Focus on this week's decisions` uses
+your saved action-extraction instruction with that extra request. The normal
+page checkbox, task runner, progress, report and explicit Save to note flow
+continue to apply, including tasks with no attached page.
+
+The native host resolves the instruction and page identity under the same
+configuration lock, checks the command revision and keeps page text solely as
+untrusted context. A changed command leaves the draft intact and requires a
+fresh Run. History keeps the effective instruction, so Reuse and recall do
+not silently switch to a newer recipe; literal leading slashes are escaped.
+Only literal prompts and sidebar reports are supported in this first slice.
+Unsupported templates, selective context and output destinations produce a
+separate repair message without blocking ordinary tasks or erasing the raw
+command table on unrelated settings saves. Built-in slash actions and a
+Settings command editor remain follow-up work.

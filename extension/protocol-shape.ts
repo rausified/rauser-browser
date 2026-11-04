@@ -559,6 +559,18 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "harnesses_discovered":
       return Array.isArray(value.harnesses) && value.harnesses.length <= 2 &&
         value.harnesses.every(isHarnessFound);
+    case "task_commands_listed":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "revision", "commands", "issue"]) &&
+        isBoundedString(value.revision, 128, 1) &&
+        (value.issue === null || isBoundedString(value.issue, 1024)) &&
+        Array.isArray(value.commands) && value.commands.length <= 32 &&
+        value.commands.every((command: unknown) => {
+          if (typeof command !== "object" || command === null || Array.isArray(command)) return false;
+          const entry = command as Record<string, unknown>;
+          return hasExactKeys(entry, ["name", "description"]) &&
+            typeof entry.name === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(entry.name) &&
+            isBoundedString(entry.description, 256, 1);
+        }) && new Set(value.commands.map((command: { name: string }) => command.name)).size === value.commands.length;
     case "run_started":
       return isRunView(value.run) && typeof value.existing === "boolean";
     case "auto_summary_skipped":

@@ -29,6 +29,7 @@ import {
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
 import { TaskRecall } from "./task-recall.js";
+import { literalTaskInstruction } from "./task-commands.js";
 import { readScopeText, recentSummaryText, summaryLine } from "./summary-text.js";
 import {
   artifactLook, capturePill, compactDuration, importanceLabel, importanceTone, pageLook, summaryTimeLabel,
@@ -242,6 +243,15 @@ const pageSummaryHead = element<HTMLDivElement>("page-summary-head");
 const taskBar = element<HTMLElement>("task-bar");
 const taskForm = element<HTMLFormElement>("task-form");
 const taskInput = element<HTMLTextAreaElement>("task-input");
+const taskCommands = element<HTMLDetailsElement>("task-commands");
+const taskCommand = element<HTMLSelectElement>("task-command");
+const taskCommandInsert = element<HTMLButtonElement>("task-command-insert");
+const taskCommandRefresh = element<HTMLButtonElement>("task-command-refresh");
+const taskCommandStatus = element<HTMLElement>("task-command-status");
+let commandRevision: string | null = null;
+let commandIssue: string | null = null;
+let commandLoading: Promise<void> | null = null;
+
 const taskRunButton = element<HTMLButtonElement>("task-run");
 const taskRunLabel = element<HTMLSpanElement>("task-run-label");
 const taskUsePage = element<HTMLInputElement>("task-use-page");
@@ -1418,6 +1428,47 @@ function taskBlocked(): { text: string; settings: boolean } | null {
   return null;
 }
 
+async function loadTaskCommands(): Promise<void> {
+  if (commandLoading) return commandLoading;
+  taskCommand.disabled = true;
+  taskCommandInsert.disabled = true;
+  taskCommandRefresh.disabled = true;
+  commandLoading = (async () => {
+    try {
+      const response = await session.host.call({
+        type: "list_task_commands", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      }, "task_commands_listed");
+      if (closed) return;
+      commandRevision = response.revision;
+      commandIssue = response.issue;
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose a command…";
+      taskCommand.replaceChildren(placeholder);
+      for (const command of response.commands) {
+        const option = document.createElement("option");
+        option.value = command.name;
+        option.textContent = `/${command.name} · ${command.description}`;
+        taskCommand.append(option);
+      }
+      taskCommand.value = "";
+      taskCommandStatus.textContent = response.issue ?? (response.commands.length === 0
+        ? "No saved commands. Add [[commands]] in config.toml; see the README."
+        : "Choose a command, insert it before your draft, then press Run. Use // for a literal leading slash.");
+      taskCommand.disabled = taskStarting || response.commands.length === 0;
+    } catch (error) {
+      commandRevision = null;
+      commandIssue = error instanceof HostError && error.code === "invalid_request"
+        ? `Rebuild the ${APP_NAME} host to use saved commands.` : `Could not load saved commands: ${describe(error)}`;
+      if (!closed) taskCommandStatus.textContent = commandIssue;
+    } finally {
+      commandLoading = null;
+      if (!closed) taskCommandRefresh.disabled = taskStarting;
+    }
+  })();
+  return commandLoading;
+}
+
 function renderTaskBar(): void {
   const blocked = taskBlocked();
   taskBar.hidden = followedTabId === null;
@@ -1425,6 +1476,10 @@ function renderTaskBar(): void {
   const label = taskStarting ? "Starting…" : "Run";
   if (taskRunLabel.textContent !== label) taskRunLabel.textContent = label;
   taskInput.readOnly = taskStarting;
+  taskCommand.disabled = taskStarting || commandLoading !== null || commandRevision === null ||
+    commandIssue !== null || taskCommand.children.length <= 1;
+  taskCommandInsert.disabled = taskCommand.disabled || !taskCommand.value;
+  taskCommandRefresh.disabled = taskStarting || commandLoading !== null;
   taskUsePage.disabled = taskStarting || (currentPage === null && pageState !== "site-access");
   taskHint.hidden = blocked === null;
   if (taskHintText.textContent !== (blocked?.text ?? "")) taskHintText.textContent = blocked?.text ?? "";
@@ -1493,6 +1548,7 @@ async function probeSelection(): Promise<void> {
 async function runTask(): Promise<void> {
   const page = currentPage;
   const instruction = taskInput.value;
+  const commandInvocation = cleanInstruction(instruction).startsWith("/") && !cleanInstruction(instruction).startsWith("//");
   if (taskStarting || taskBlocked() !== null || followedTabId === null) return;
   if (cleanInstruction(instruction) === "") return;
   const tabId = followedTabId;
@@ -1505,10 +1561,13 @@ async function runTask(): Promise<void> {
   showRunLine(taskRunArea, tabId, tab === null ? "Starting task…" : "Reading this page…");
   try {
     await showSetupWarningOnce(taskRunArea);
+    if (commandInvocation && commandRevision === null) await loadTaskCommands();
+    if (commandInvocation && commandIssue !== null) throw new HostError("invalid_request", commandIssue);
     const run = await startTask(
       tab,
       instruction,
       { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
+      commandRevision ?? undefined,
     );
     if (runLines.get(taskRunArea)?.tabId === tabId) clearRunLine(taskRunArea);
     if (run !== null) {
@@ -1527,6 +1586,9 @@ async function runTask(): Promise<void> {
     // A lost answer may hide a queued task; listing the tasks counts it on
     // the Tasks button, so Run is not pressed again for a duplicate.
     if (failure.uncertain) void refreshTasks();
+    if (error instanceof HostError && error.code === "conflict" && commandInvocation) {
+      await loadTaskCommands();
+    }
   } finally {
     taskStarting = false;
     updateControls();
@@ -1612,7 +1674,7 @@ async function checkReuse(): Promise<void> {
   const reused = await takeReuse(chrome.storage.session, windowId).catch(() => null);
   if (!closed && reused !== null && !taskStarting) {
     taskRecall.reset();
-    taskInput.value = reused.instruction;
+    taskInput.value = literalTaskInstruction(reused.instruction);
     taskUsePage.checked = !reused.no_page;
     renderTaskBar();
     taskInput.focus();
@@ -2373,6 +2435,27 @@ taskInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
   event.preventDefault?.();
   void runTask();
+});
+taskCommands.addEventListener("toggle", () => {
+  if (taskCommands.open && commandRevision === null && !taskStarting) void loadTaskCommands();
+});
+taskCommandRefresh.addEventListener("click", () => { if (!taskStarting) void loadTaskCommands(); });
+taskCommand.addEventListener("change", () => {
+  taskCommandInsert.disabled = taskStarting || taskCommand.disabled || !taskCommand.value;
+});
+taskCommandInsert.addEventListener("click", () => {
+  if (taskStarting || taskCommand.disabled || !taskCommand.value) return;
+  const inserted = `/${taskCommand.value} ${taskInput.value}`;
+  if (inserted.length > 4000) {
+    taskCommandStatus.textContent = "Shorten the draft before inserting a command.";
+    taskCommand.value = "";
+    return;
+  }
+  taskRecall.reset();
+  taskInput.value = inserted;
+  taskCommand.value = "";
+  taskCommandInsert.disabled = true;
+  taskInput.focus();
 });
 taskUsePage.addEventListener("change", () => { renderTaskBar(); void probeSelection(); });
 taskInput.addEventListener("input", () => taskRecall.edited());

@@ -1899,3 +1899,26 @@ their exact bytes, and refuse changed scope, overview or path. Built panel
 and wire tests cover every scope with and without an overview, literal text,
 legacy absence and clearing on navigation. These fixtures do not certify the
 agent's actual reading or a live browser deployment.
+
+## Reusable sidebar task commands
+
+`host/src/task_commands.rs` tests registry limits, duplicate/reserved names,
+unsupported fields/outputs/templates, literal slash parsing and literal
+composition. Config tests prove both valid and invalid raw command tables
+survive unrelated settings saves. Native tests exercise the actual catalogue
+message, host-derived command requests with page/no-page context, unchanged
+untrusted page text, stale/unknown/oversized refusal before service access,
+literal repetition, and a held config lock changed before resolution for both
+page scopes. These tests require no socket, harness or external API.
+`protocol/tests/wire_tasks.rs` pins the descriptor-only catalogue and optional
+command revision, including forged prompt fields and malformed revisions.
+
+Built-panel regressions in `panel/task-bar.test.mjs` cover lazy review,
+literal descriptor rendering, draft-preserving selection, explicit execution,
+stale refresh without retry, older-host and invalid-registry refusal while
+ordinary tasks continue, and literal Reuse. Task and recall unit tests pin
+revision forwarding and stored-instruction escaping. The a11y fixture checks
+catalogue replies even inside the sandbox; the keyboard journey opens Saved
+commands, chooses and inserts by keyboard, verifies preserved draft/focus, runs axe and
+requires Enter to submit. A sandbox skip does not prove Chromium acceptance;
+the driver and platform CI must run the journey in a real browser.

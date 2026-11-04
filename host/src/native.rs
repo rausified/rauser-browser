@@ -362,6 +362,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::DraftSite(_) => "draft_site",
         Request::StartSiteDraft(_) => "start_site_draft",
         Request::StartTask(_) => "start_task",
+        Request::ListTaskCommands(_) => "list_task_commands",
         Request::SaveTaskNote(_) => "save_task_note",
         Request::CheckSiteDraft(_) => "check_site_draft",
         Request::WorklogReport(_) => "worklog_report",
@@ -804,6 +805,39 @@ fn dispatch(
                 },
             }
         }
+        Request::ListTaskCommands(value) => {
+            let Ok(_lock) = config.lock_current() else {
+                return error(
+                    &value.request_id,
+                    ErrorCode::Internal,
+                    "configuration is unavailable",
+                );
+            };
+            if config.refresh().is_err() || config.config_issue().is_some() {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    "Repair configuration before loading saved commands.",
+                );
+            }
+            let (commands, issue) = match config.task_commands() {
+                Ok(commands) => (
+                    commands
+                        .iter()
+                        .map(crate::task_commands::Command::descriptor)
+                        .collect(),
+                    None,
+                ),
+                Err(issue) => (Vec::new(), Some(issue.to_owned())),
+            };
+            Response::TaskCommandsListed(brauser_protocol::TaskCommandsListed {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                revision: config.revision().to_owned(),
+                commands,
+                issue,
+            })
+        }
         Request::ChooseFolder(value) => {
             if config.refresh().is_err() {
                 return error(
@@ -1181,6 +1215,15 @@ fn task_request(
     value: brauser_protocol::StartTaskRequest,
     config: &mut ConfigStore,
 ) -> Result<brauser_protocol::StartRunRequest, Refusal> {
+    let _lock = config
+        .lock_current()
+        .map_err(|_| (ErrorCode::Internal, "configuration is unavailable".into()))?;
+    config.refresh().map_err(|_| {
+        (
+            ErrorCode::InvalidConfig,
+            "configuration file is unavailable".into(),
+        )
+    })?;
     let no_page = value.no_page.unwrap_or(false);
     let (url, title, content, selection, key) = if no_page {
         if value.url.is_some()
@@ -1214,18 +1257,42 @@ fn task_request(
                 "a page task needs url, title and content".into(),
             ));
         };
-        let key = page_record_key(
-            RunPage {
-                url: &url,
-                title: &title,
-                content: &content,
-                selection: value.selection.as_deref(),
-                requested_at: &value.requested_at,
-            },
-            config,
-        )?;
+        check_run_page(&RunPage {
+            url: &url,
+            title: &title,
+            content: &content,
+            selection: value.selection.as_deref(),
+            requested_at: &value.requested_at,
+        })?;
+        let key = resolve_record_key(config, &url)?;
         (url, title, content, value.selection, key)
     };
+    let instruction = match crate::task_commands::input(value.instruction.trim()) {
+        crate::task_commands::Input::Literal(text) => {
+            if value.command_revision.is_some() {
+                return Err((
+                    ErrorCode::InvalidRequest,
+                    "command_revision requires a slash command".into(),
+                ));
+            }
+            text.to_owned()
+        }
+        crate::task_commands::Input::Command { name, extra } => {
+            if value.command_revision.as_deref() != Some(config.revision()) {
+                return Err((
+                    ErrorCode::Conflict,
+                    crate::task_commands::STALE_COMMAND.into(),
+                ));
+            }
+            let commands = config
+                .task_commands()
+                .map_err(|issue| (ErrorCode::InvalidRequest, issue.into()))?;
+            crate::task_commands::resolve(&commands, name, extra)
+                .map_err(|issue| (ErrorCode::InvalidRequest, issue.into()))?
+        }
+    };
+    crate::service::record::check_task_instruction(&instruction)
+        .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
     Ok(brauser_protocol::StartRunRequest {
         no_page: no_page.then_some(true),
         protocol_version: value.protocol_version,
@@ -1239,7 +1306,7 @@ fn task_request(
         record_key: Some(key),
         requested_at: value.requested_at,
         kind: Some(brauser_protocol::RunKind::Task),
-        instruction: Some(value.instruction),
+        instruction: Some(instruction),
     })
 }
 
@@ -10347,6 +10414,50 @@ title = "{title} - Jira"
         );
     }
 
+    #[test]
+    fn task_command_catalogue_is_host_built_and_registry_errors_are_separate() {
+        let home = tempfile::tempdir().unwrap();
+        let _config = configured_store(home.path());
+        let path = home.path().join("config.toml");
+        for prompt in ["Literal prompt", "Unsupported {selection}"] {
+            let mut raw: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            raw.insert(
+                "commands".into(),
+                toml::Value::try_from(serde_json::json!([{
+                    "name":"actions", "description":"<img> Extract actions", "prompt":prompt
+                }]))
+                .unwrap(),
+            );
+            std::fs::write(&path, toml::to_string(&raw).unwrap()).unwrap();
+            let responses = served(
+                &[serde_json::to_string(&Request::ListTaskCommands(
+                    brauser_protocol::ListTaskCommandsRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "catalogue".into(),
+                    },
+                ))
+                .unwrap()],
+                ConfigStore::for_test(path.clone()),
+            );
+            let Response::TaskCommandsListed(catalogue) = &responses[0] else {
+                panic!("{responses:?}")
+            };
+            assert_eq!(catalogue.issue.is_none(), prompt == "Literal prompt");
+            if catalogue.issue.is_none() {
+                assert_eq!(catalogue.commands[0].description, "<img> Extract actions");
+                assert!(
+                    !serde_json::to_string(&responses[0])
+                        .unwrap()
+                        .contains("Literal prompt")
+                );
+            } else {
+                assert!(catalogue.commands.is_empty());
+            }
+            assert_eq!(catalogue.revision, loaded(&path).revision());
+        }
+    }
+
     /// The run proxy against a fake service on a short `/tmp` socket. No
     /// launchd, no real service, and no harness is ever involved.
     #[cfg(unix)]
@@ -10943,6 +11054,159 @@ title = "{title} - Jira"
             assert_eq!(refused(&response).0, ErrorCode::NotConfigured);
         }
 
+        fn install_commands(root: &std::path::Path, prompt: &str) {
+            let path = root.join("config.toml");
+            let mut raw: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            raw.insert("commands".into(), toml::Value::try_from(serde_json::json!([{
+                "name":"actions", "description":"Extract actions", "prompt":prompt, "output":"sidebar"
+            }])).unwrap());
+            std::fs::write(path, toml::to_string(&raw).unwrap()).unwrap();
+        }
+
+        #[test]
+        fn task_commands_resolve_literal_instructions_and_preserve_untrusted_page_context() {
+            let home = tempfile::tempdir().unwrap();
+            let mut config = configured_store(home.path());
+            install_commands(home.path(), "Extract action items.");
+            config.refresh().unwrap();
+            let mut request =
+                start_task_request("https://example.com/a", "/actions Focus on today", &now());
+            request.command_revision = Some(config.revision().into());
+            request.content = Some("/actions PAGE INSTRUCTIONS".into());
+            request.selection = Some("untrusted selection".into());
+            let expected_key = note_load(&mut config, "https://example.com/a").key;
+            let forwarded = task_request(request, &mut config).unwrap();
+            assert_eq!(forwarded.kind, Some(brauser_protocol::RunKind::Task));
+            assert_eq!(
+                forwarded.instruction.as_deref(),
+                Some(
+                    "Saved command /actions:\n\nExtract action items.\n\nAdditional request from the user:\nFocus on today"
+                )
+            );
+            assert_eq!(forwarded.content, "/actions PAGE INSTRUCTIONS");
+            assert_eq!(forwarded.selection.as_deref(), Some("untrusted selection"));
+            assert_eq!(forwarded.record_key.unwrap(), expected_key);
+            let mut request = no_page_request();
+            request.instruction = "/actions".into();
+            request.command_revision = Some(config.revision().into());
+            let forwarded = task_request(request, &mut config).unwrap();
+            assert_eq!(forwarded.no_page, Some(true));
+            assert!(forwarded.content.is_empty());
+            assert_eq!(
+                forwarded.instruction.as_deref(),
+                Some("Saved command /actions:\n\nExtract action items.")
+            );
+        }
+
+        #[test]
+        fn task_commands_refuse_stale_unknown_invalid_and_oversized_requests_before_service_access()
+        {
+            let home = tempfile::tempdir().unwrap();
+            let mut config = configured_store(home.path());
+            install_commands(home.path(), "Extract action items.");
+            config.refresh().unwrap();
+            for (instruction, revision, code) in [
+                ("/actions", None, ErrorCode::Conflict),
+                ("/actions", Some("stale".to_owned()), ErrorCode::Conflict),
+                (
+                    "/missing",
+                    Some(config.revision().into()),
+                    ErrorCode::InvalidRequest,
+                ),
+                (
+                    "ordinary task",
+                    Some(config.revision().into()),
+                    ErrorCode::InvalidRequest,
+                ),
+            ] {
+                let mut request = no_page_request();
+                request.instruction = instruction.into();
+                request.command_revision = revision;
+                let response = super::super::start_task(request, &mut config, None);
+                assert_eq!(refused(&response).0, code, "{response:?}");
+            }
+            install_commands(home.path(), &"p".repeat(4096));
+            config.refresh().unwrap();
+            let mut request = no_page_request();
+            request.instruction = "/actions extra".into();
+            request.command_revision = Some(config.revision().into());
+            assert_eq!(
+                refused(&super::super::start_task(request, &mut config, None)).0,
+                ErrorCode::InvalidRequest
+            );
+            install_commands(home.path(), "Unsupported {page.content}");
+            config.refresh().unwrap();
+            let mut request = no_page_request();
+            request.instruction = "/actions".into();
+            request.command_revision = Some(config.revision().into());
+            assert_eq!(
+                refused(&super::super::start_task(request, &mut config, None)).0,
+                ErrorCode::InvalidRequest
+            );
+            let ordinary = task_request(no_page_request(), &mut config).unwrap();
+            assert_eq!(ordinary.instruction.as_deref(), Some(TASK_INSTRUCTION));
+        }
+
+        #[test]
+        fn task_commands_resolve_revision_and_prompt_only_after_the_common_lock_for_both_contexts()
+        {
+            for no_page in [false, true] {
+                let home = tempfile::tempdir().unwrap();
+                let mut config = configured_store(home.path());
+                install_commands(home.path(), "Old instruction.");
+                config.refresh().unwrap();
+                let mut request = if no_page {
+                    no_page_request()
+                } else {
+                    start_task_request("https://example.com/a", "/actions", &now())
+                };
+                request.instruction = "/actions".into();
+                request.command_revision = Some(config.revision().into());
+                let lock = config.lock_current().unwrap();
+                let mut other = ConfigStore::for_test(home.path().join("config.toml"));
+                let barrier = Arc::new(std::sync::Barrier::new(2));
+                let started = Arc::clone(&barrier);
+                let worker = std::thread::spawn(move || {
+                    started.wait();
+                    task_request(request, &mut other)
+                });
+                barrier.wait();
+                std::thread::sleep(Duration::from_millis(25));
+                assert!(!worker.is_finished(), "command escaped the config lock");
+                install_commands(home.path(), "New instruction.");
+                drop(lock);
+                assert_eq!(worker.join().unwrap().unwrap_err().0, ErrorCode::Conflict);
+            }
+        }
+
+        #[test]
+        fn literal_slashes_bypass_the_registry_and_round_trip_the_stored_instruction() {
+            let home = tempfile::tempdir().unwrap();
+            let mut config = configured_store(home.path());
+            install_commands(home.path(), "Different instruction.");
+            for typed in ["//actions", "///tmp/path", "Do /actions literally"] {
+                let mut request = no_page_request();
+                request.instruction = typed.into();
+                let forwarded = task_request(request, &mut config).unwrap();
+                let effective = forwarded.instruction.unwrap();
+                let recalled = if effective.starts_with('/') {
+                    format!("/{effective}")
+                } else {
+                    effective.clone()
+                };
+                let mut repeat = no_page_request();
+                repeat.instruction = recalled;
+                assert_eq!(
+                    task_request(repeat, &mut config)
+                        .unwrap()
+                        .instruction
+                        .unwrap(),
+                    effective
+                );
+            }
+        }
+
         const TASK_INSTRUCTION: &str = "List the open questions on this page.";
 
         fn start_task_request(
@@ -10951,6 +11215,7 @@ title = "{title} - Jira"
             requested_at: &str,
         ) -> StartTaskRequest {
             StartTaskRequest {
+                command_revision: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "task-1".into(),
@@ -10971,6 +11236,7 @@ title = "{title} - Jira"
 
         fn no_page_request() -> StartTaskRequest {
             StartTaskRequest {
+                command_revision: None,
                 no_page: Some(true),
                 url: None,
                 title: None,

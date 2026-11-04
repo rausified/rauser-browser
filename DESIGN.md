@@ -874,7 +874,7 @@ Input is either a slash command or free text.
 | `/log` | Log the current page now as a `web.page` artifact, on any HTTP(S) page, even if no adapter recognizes it (§5.1) |
 | free text | Built as the task bar (§5.7): sent to the agent with the page as context; the report shows in the panel; Brauser writes nothing |
 
-**Custom commands** are defined in config:
+**Reusable sidebar task commands** are built (2026-11-04) and defined in config:
 
 ```toml
 [[commands]]
@@ -883,15 +883,44 @@ description = "Extract action items from this page"
 prompt = """
 Extract action items from the page below. Return a markdown checklist.
 """
-include = ["page.content", "selection"]
-output = "sidebar"          # sidebar | new_note | clipboard
+output = "sidebar"
 ```
 
-No command writes agent output into a page note (§5.3), and only `/summarize` writes a page's summary file (§5.2). `new_note` creates a new Brauser-owned file and never replaces an existing one. To keep agent text in a page note, the user copies it from the sidebar. Config loading rejects `output = "page_note"`.
+The task bar's **Saved commands** disclosure loads a read-only host catalogue
+of names and descriptions. Choosing one and clicking **Insert command** adds
+`/name` before the current draft; only Enter or Run executes it. A typed `/name` with optional trailing
+text invokes that command; `//` escapes a literal leading slash. Unknown
+commands refuse instead of running as free text. The host checks the reviewed
+configuration revision, resolves the literal configured prompt and the page
+identity under one configuration lock, records a fixed command-name heading,
+and adds trailing user text under a fixed additional-request heading. A stale choice keeps the draft, refreshes
+the catalogue and needs another explicit Run. Page text and selection remain
+untrusted context in `page.md`; **Include this page** still controls attachment,
+including page-less tasks. Configured prompts gain no extra authority beyond
+an ordinary user task. Results use the existing **Tasks** report view; this
+first slice adds no new report renderer or file destination.
 
-Template variables: `{page.title}`, `{page.url}`, `{page.content}`, `{selection}`, `{input}`, `{date}`.
+This first slice accepts up to 32 commands with unique case-sensitive names
+matching `[a-z][a-z0-9_-]{0,31}`, descriptions of 1–256 characters, nonblank
+literal prompts up to 4096 characters and only `output = "sidebar"` (the
+default). Documented built-in names are reserved. Composition obeys the existing
+task instruction limit. Unsupported fields, outputs or documented template
+placeholders disable the whole command registry with a separate visible repair
+message; capture and ordinary tasks continue. Unrelated settings saves retain
+the raw command table, including invalid entries. The catalogue carries no
+prompt. Run history stores the effective instruction, and Reuse/recall escape
+a leading slash so a later command edit cannot change what they run.
 
-The free-text row is built as the task bar (2026-10-28, §4.5, §5.7). Slash commands and `[[commands]]` are still later; config does not read `[[commands]]` yet.
+Built-in slash actions in the table above, selective
+`include = ["page.content", "selection"]`, template variables
+(`{page.title}`, `{page.url}`, `{page.content}`, `{selection}`, `{input}`, `{date}`)
+and `new_note`/`clipboard` outputs remain planned under `brwr-cdq`. They are
+rejected rather than approximated in this slice. No command writes agent
+output automatically into a page note (§5.3); the existing explicit **Save to
+note** gesture remains separate. Only `/summarize` will write a summary file;
+a future `new_note` output must create a new owned file without replacing one.
+An older host refuses a config containing `[[commands]]`; remove those tables
+before rollback. Deploy both host and extension for command invocation.
 
 `/log` and notes are one-off actions the user takes on a single page and need no confirmation (§7). `/log` records the page as a `web.page` artifact: one `activity` event in the log, and an artifact file and index entry like any other artifact (§5.1). It does not enable automatic logging for the site.
 
@@ -1133,7 +1162,7 @@ Each state changes one area rather than the layout:
 | Brauser service unavailable | The service setup instructions and the host's reason show as the line of the summary or task that failed (in its own run area), or, when cards are restored, as one notice with **Open settings** in the task run area, which shows on both tabs. Notes and capture are unaffected. |
 | Not an HTTP(S) page | The page area says Brauser can't use the tab; only Read later is active. |
 
-Milestones fill the layout in: the page area, My note, and the capture strip first; the artifact card, the Recent tab, and the worklog view in M1.5a, and worklog files in M1.5b; Summarize & log with its run area and run cards in open access PR 3 (protocol v6); the summary file and log event in PR 4; the task bar, the Omnibar's free-text row, with its task cards on 2026-10-28; slash commands, custom commands and the answer card later; Related and Read later in M3; the full command list in M4.
+Milestones fill the layout in: the page area, My note, and the capture strip first; the artifact card, the Recent tab, and the worklog view in M1.5a, and worklog files in M1.5b; Summarize & log with its run area and run cards in open access PR 3 (protocol v6); the summary file and log event in PR 4; the task bar, the Omnibar's free-text row, with its task cards on 2026-10-28; reusable sidebar commands on 2026-11-04; built-in slash actions, richer custom commands and the answer card later; Related and Read later in M3; the full command list in M4.
 
 **Save a task report to a note (as built, `brwr-bsx`).** A succeeded page task with a nonempty retained report offers **Save to note** in its Tasks detail, beside Copy report. Clicking appends a Task report section to the source page's current host-resolved note, with the full instruction, finish time, report and a stable run-ID comment. The host fetches `get_run` itself; `save_task_note` supplies only a run ID and the config revision this Tasks page opened against. It accepts no URL, body or record key from the extension. Failed, canceled, unfinished and no-page tasks, summaries and missing reports cannot use this action. Viewing, polling or finishing a run never writes a note.
 
@@ -1861,7 +1890,7 @@ M1 validation status and the dated M1 smoke and acceptance records: (history: [d
    2. **PR 2, the service skeleton: built on `feat/agent-service-pr2`.** **[human]** checks still to run: register the dev build and close Chrome; run `start_run` from the panel console; confirm `launchctl print gui/$UID/com.rauser.brauser.service` shows the service and that it exits after 10 idle minutes; confirm `agent.env` values reach a run; confirm a rebuild plus a request restarts the service. The `agent.env` check needs a run that actually starts, which PR 3's real runners now provide. (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
    3. **PR 3, real runners, extraction, and the run card: merged (#98).** **[human]** checks still to run: a real Codex and a real Claude Code summary from the dev build, and **Open in Codex** opening the thread in Codex Desktop (TESTING.md "Real-UI acceptance"). (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
    4. **PR 4, the summary file, the `summary` log event, and index integration: built on `feat/summary-outputs-pr4`.** Its planned **[human]** check of the neutralized constructs in Obsidian and VS Code preview was dropped by John on 2026-11-02 (§5.2 step 6). (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
-11. **The task bar (2026-10-28): built on `feat/task-bar`** (plan `docs/superpowers/plans/2026-10-28-task-bar.md`; §4.5, §5.6, §5.7). The free-text row of the Omnibar runs a task through the service, with its own run cards. **[human]** checks still to run: a real Codex and a real Claude Code task, Cancel mid-run, the hostile-page and spoofed-heading canaries, and a look at the logs (TESTING.md "Real-UI acceptance"). Next: completion notifications while the panel is closed (the `notifications` permission and a worker alarm), then slash commands with `[[commands]]`. Keyboard/context-menu entry and instruction recall are built (§5.7).
+11. **The task bar (2026-10-28): built on `feat/task-bar`** (plan `docs/superpowers/plans/2026-10-28-task-bar.md`; §4.5, §5.6, §5.7). The free-text row of the Omnibar runs a task through the service, with its own run cards. **[human]** checks still to run: a real Codex and a real Claude Code task, Cancel mid-run, the hostile-page and spoofed-heading canaries, and a look at the logs (TESTING.md "Real-UI acceptance"). Next: completion notifications while the panel is closed (the `notifications` permission and a worker alarm), then built-in slash actions and richer custom commands; literal sidebar `[[commands]]` are built (§5.6). Keyboard/context-menu entry and instruction recall are built (§5.7).
 
 ## 13. Platforms and License
 

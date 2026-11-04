@@ -1272,7 +1272,34 @@ pub struct AutoSummarySkippedResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TaskCommand {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListTaskCommandsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskCommandsListed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub revision: String,
+    pub commands: Vec<TaskCommand>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StartTaskRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_page: Option<bool>,
     pub protocol_version: u32,
@@ -1582,6 +1609,7 @@ pub enum Request {
     DraftSite(DraftSiteRequest),
     StartSiteDraft(StartSiteDraftRequest),
     StartTask(StartTaskRequest),
+    ListTaskCommands(ListTaskCommandsRequest),
     SaveTaskNote(SaveTaskNoteRequest),
     StartAutoSummary(StartAutoSummaryRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
@@ -1630,6 +1658,7 @@ impl Request {
             Self::DraftSite(value) => value.protocol_version,
             Self::StartSiteDraft(value) => value.protocol_version,
             Self::StartTask(value) => value.protocol_version,
+            Self::ListTaskCommands(value) => value.protocol_version,
             Self::SaveTaskNote(value) => value.protocol_version,
             Self::StartAutoSummary(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
@@ -1678,6 +1707,7 @@ impl Request {
             Self::DraftSite(value) => &value.request_id,
             Self::StartSiteDraft(value) => &value.request_id,
             Self::StartTask(value) => &value.request_id,
+            Self::ListTaskCommands(value) => &value.request_id,
             Self::SaveTaskNote(value) => &value.request_id,
             Self::StartAutoSummary(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
@@ -1696,6 +1726,7 @@ impl Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
+    TaskCommandsListed(TaskCommandsListed),
     AdapterRepairLoaded(AdapterRepairLoaded),
     PreservedNotesListed(PreservedNotesListed),
     HelloResult(HelloResult),
@@ -1737,6 +1768,7 @@ pub enum Response {
 impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::TaskCommandsListed(value) => value.protocol_version,
             Self::AdapterRepairLoaded(value) => value.protocol_version,
             Self::PreservedNotesListed(value) => value.protocol_version,
             Self::HelloResult(value) => value.protocol_version,
@@ -1778,6 +1810,7 @@ impl Response {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::TaskCommandsListed(value) => &value.request_id,
             Self::AdapterRepairLoaded(value) => &value.request_id,
             Self::PreservedNotesListed(value) => &value.request_id,
             Self::HelloResult(value) => &value.request_id,
