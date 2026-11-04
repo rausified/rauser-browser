@@ -384,3 +384,29 @@ test("focus sessions start, rename and end by keyboard with text-only names", as
   assert.equal(await page.locator("#focus-end").isHidden(), true);
   await audit(t, page, "panel/focus-ended");
 });
+
+test("saved task commands are chosen by keyboard and require an explicit Run", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.locator("#task-run:enabled").waitFor();
+  await activate(page, "#task-input", null);
+  await page.keyboard.type("Focus on today");
+  await activate(page, "#task-commands summary", "Enter");
+  await page.locator("#task-command:enabled").waitFor();
+  await activate(page, "#task-command", null);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#task-input").inputValue(), "Focus on today");
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
+  await activate(page, "#task-command-insert", "Space");
+  await page.waitForFunction(() => document.querySelector("#task-input").value === "/actions Focus on today");
+  await focused(page, "#task-input");
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
+  await audit(t, page, "panel/saved-commands");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => fixture.requests.some((r) => r.type === "start_task"));
+  const request = await page.evaluate(() => fixture.requests.find((r) => r.type === "start_task"));
+  assert.equal(request.command_revision, "1");
+  assert.equal(request.instruction, "/actions Focus on today");
+  assert.equal("prompt" in request, false);
+});

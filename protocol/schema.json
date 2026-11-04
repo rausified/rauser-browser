@@ -83,6 +83,7 @@
         { "$ref": "#/$defs/DraftSiteRequest" },
         { "$ref": "#/$defs/StartSiteDraftRequest" },
         { "$ref": "#/$defs/StartTaskRequest" },
+        { "$ref": "#/$defs/ListTaskCommandsRequest" },
         { "$ref": "#/$defs/SaveTaskNoteRequest" },
         { "$ref": "#/$defs/StartAutoSummaryRequest" },
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
@@ -97,6 +98,7 @@
     },
     "Response": {
       "oneOf": [
+        { "$ref": "#/$defs/TaskCommandsListed" },
         { "$ref": "#/$defs/AdapterRepairLoaded" },
         { "$ref": "#/$defs/PreservedNotesListed" },
         {
@@ -2796,12 +2798,42 @@
         "reason": { "$ref": "#/$defs/AutoSummarySkipReason" }
       }
     },
+    "TaskCommand": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "required": ["name", "description"]
+    },
+    "ListTaskCommandsRequest": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "type": { "const": "list_task_commands" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "required": ["type", "protocol_version", "request_id"]
+    },
+    "TaskCommandsListed": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "type": { "const": "task_commands_listed" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "commands": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/TaskCommand" } },
+        "issue": { "oneOf": [{ "type": "string", "maxLength": 1024 }, { "type": "null" }] }
+      },
+      "required": ["type", "protocol_version", "request_id", "revision", "commands", "issue"]
+    },
     "StartTaskRequest": {
       "type": "object",
       "additionalProperties": false,
       "description": "Start a task-bar run: the user's typed instruction, with optional page context. no_page true requires url, title, content and capture_truncated to be absent and selection null; otherwise the existing complete page payload is required. The host bounds the instruction (not blank; no control characters but newline and tab), resolves the record key, and forwards a start_run with kind task. Answers run_started; existing is always false.",
       "required": ["type", "protocol_version", "request_id", "selection", "instruction", "harness", "requested_at"],
       "properties": {
+        "command_revision": { "description": "Required only for a slash command: the config revision returned by list_task_commands. The host resolves the prompt under the same lock as page identity. Ordinary and // literal tasks omit it.", "type": "string", "minLength": 1, "maxLength": 128 },
         "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "type": { "const": "start_task" },
         "protocol_version": { "type": "integer", "const": 8 },

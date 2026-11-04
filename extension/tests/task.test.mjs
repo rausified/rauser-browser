@@ -87,6 +87,20 @@ test("startTask without a page skips extraction and sends only the typed instruc
   assert.deepEqual(events, [`set:${RUNS_MAY_EXIST_KEY}`, "call:start_task", `set:${RUNS_MAY_EXIST_KEY}`]);
 });
 
+test("slash tasks require a reviewed command revision and send no caller prompt", async () => {
+  const missing = taskDeps();
+  await assert.rejects(startTask(null, "/actions", missing.deps), /Load saved commands/);
+  assert.deepEqual(missing.events, []);
+  const ready = taskDeps();
+  await startTask(null, "/actions Focus on today", ready.deps, "reviewed");
+  assert.equal(ready.requests[0].request.command_revision, "reviewed");
+  assert.equal(ready.requests[0].request.instruction, "/actions Focus on today");
+  assert.equal("prompt" in ready.requests[0].request, false);
+  const literal = taskDeps();
+  await startTask(null, "//actions literal", literal.deps, "reviewed");
+  assert.equal("command_revision" in literal.requests[0].request, false);
+});
+
 test("startTask carries a capped capture to the host", async () => {
   const { deps, requests } = taskDeps({ page: framePage({ content: "Excerpt", truncated: true }) });
   await startTask(TAB, "Read this", deps);

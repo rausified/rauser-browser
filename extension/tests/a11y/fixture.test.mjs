@@ -27,7 +27,7 @@ test("the offline host fixture emits valid wire replies for every exercised requ
     { type: "cancel_run", run_id: task(1).run_id }, { type: "discover_harnesses" },
     { type: "set_up_harness" },
     { type: "choose_folder" }, { type: "refresh_artifacts" }, { type: "open_path" },
-    { type: "start_task" }, { type: "start_run" },
+    { type: "list_task_commands" }, { type: "start_task" }, { type: "start_run" },
     { type: "update_config", config: scope.fixture.config },
   ];
   const responses = new Map();

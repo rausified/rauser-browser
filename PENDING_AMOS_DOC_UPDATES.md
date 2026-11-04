@@ -415,3 +415,11 @@
 - **Brauser — share one recorded focus session:** Recent can narrow selected-work sharing to one explicitly chosen recorded session. The host filters activity before aggregation, preserving only that session's measured time and recorded page context; unchecked entries, exact preview/Copy, rename identity, explicit omission/unavailable states and immediate stale-preview invalidation keep sharing deliberate. Rebuild host and extension together. This is a standalone Brauser capability; no AMOS integration or live deployment is implied.
 
 - **Brauser — saved summaries disclose reading coverage:** Recent and This page now show the agent's whole, partial or browser-page-only reading claim from validated summary log evidence, including summaries without an overview. Index reopen/rebuild preserves it, legacy scope stays unknown, and interrupted older appends recover exact bytes. Deploy host and extension together; older-host history reads cannot safely consume the enriched records.
+
+- Brauser now runs reusable literal sidebar task commands from its task bar:
+  local `[[commands]]` entries appear in Saved commands and `/name` invocation
+  is resolved by the host under a revision check. Selection fills the draft;
+  explicit Run starts the existing task workflow. Page context remains
+  untrusted, stale choices preserve the draft, and Reuse keeps the instruction
+  that actually ran. Built-in actions, templates and other outputs remain
+  planned; users currently author commands in config.toml.

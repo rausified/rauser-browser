@@ -4,6 +4,8 @@ import type { RunCursor, RunView } from "../protocol/ts/generated.js";
 import type { HostClient } from "./native.js";
 import { fetchOffPageRun, lastFinishedRun, listTaskPage, mergeRuns, ofKind } from "./task-history.js";
 
+import { literalTaskInstruction } from "./task-commands.js";
+
 export const MAX_RECALL_PAGES = 20;
 export const MAX_RECALL_TASKS = 200;
 
@@ -59,7 +61,7 @@ export class TaskRecall {
             this.missing.add(next); // Pruned after listing: try the next entry.
             continue;
           }
-          value = run.instruction;
+          value = literalTaskInstruction(run.instruction);
           this.edits.set(next, value);
         }
         this.cursor = next;

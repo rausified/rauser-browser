@@ -145,6 +145,8 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       case "choose_folder": return { type: "error", code: "cancelled", message: "Fixture picker canceled." };
       case "refresh_artifacts": return { type: "artifacts_refreshed", written: 0, unchanged: 0, conflicts: 0, conflict_paths: [] };
       case "open_path": return { type: "path_opened" };
+      case "list_task_commands": return { type: "task_commands_listed", revision: fixture.revision,
+        commands: [{ name: "actions", description: "Extract action items" }], issue: null };
       case "start_task":
       case "start_run": return { type: "error", code: "service_unavailable", message: "Fixture harness is offline." };
       case "update_config":

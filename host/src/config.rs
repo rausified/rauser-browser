@@ -166,6 +166,7 @@ pub struct ConfigStore {
     root_identity: Option<String>,
     knowledge_base_identity: Option<String>,
     agent: AgentView,
+    commands: Option<toml::Value>,
     adapter_extensions: BTreeMap<String, toml::Value>,
     adapter_issue: Option<String>,
     adapter_warnings: Option<Vec<AdapterWarning>>,
@@ -211,6 +212,7 @@ struct DiskState {
     root_identity: Option<String>,
     knowledge_base_identity: Option<String>,
     agent: AgentView,
+    commands: Option<toml::Value>,
     adapter_extensions: BTreeMap<String, toml::Value>,
     retired_adapter_contracts: Vec<serde_json::Value>,
 }
@@ -426,6 +428,7 @@ impl ConfigStore {
                 current.root_identity.clone(),
                 current.knowledge_base_identity.clone(),
                 &current.agent,
+                current.commands.clone(),
                 current.retired_adapter_contracts.clone(),
                 current.adapter_extensions.clone(),
             ))
@@ -482,6 +485,7 @@ impl ConfigStore {
         self.root_identity = None;
         self.knowledge_base_identity = None;
         self.agent = AgentView::default();
+        self.commands = None;
         self.adapter_extensions.clear();
         self.adapter_issue = None;
         self.adapter_warnings = Some(Vec::new());
@@ -538,6 +542,7 @@ impl ConfigStore {
             root_identity: None,
             knowledge_base_identity: None,
             agent: AgentView::default(),
+            commands: None,
             adapter_extensions: BTreeMap::new(),
             adapter_issue: None,
             adapter_warnings: Some(Vec::new()),
@@ -561,6 +566,7 @@ impl ConfigStore {
         self.root_identity = state.root_identity;
         self.knowledge_base_identity = state.knowledge_base_identity;
         self.agent = state.agent;
+        self.commands = state.commands;
         self.adapter_extensions = state.adapter_extensions;
         self.retired_adapter_contracts = state.retired_adapter_contracts;
         if revision_changed {
@@ -656,6 +662,11 @@ impl ConfigStore {
 
     pub fn root_identity(&self) -> Option<&str> {
         self.root_identity.as_deref()
+    }
+
+    /// Commands remain separate from the wire configuration and general health.
+    pub(crate) fn task_commands(&self) -> Result<Vec<crate::task_commands::Command>, &'static str> {
+        crate::task_commands::parse(self.commands.as_ref())
     }
 
     /// The folder the summary agent reads: the chosen knowledge base folder,
@@ -1413,6 +1424,7 @@ impl ConfigStore {
             next_identity.clone(),
             next_knowledge_base_identity.clone(),
             &agent,
+            current.commands.clone(),
             retired_adapter_contracts.clone(),
             adapter_extensions.clone(),
         ))
@@ -1459,6 +1471,7 @@ impl ConfigStore {
         self.root_identity = next_identity;
         self.knowledge_base_identity = next_knowledge_base_identity;
         self.agent = agent;
+        self.commands = current.commands;
         self.adapter_extensions = adapter_extensions;
         self.retired_adapter_contracts = retired_adapter_contracts;
         self.recordable = None;
@@ -1525,6 +1538,8 @@ struct StoredConfig {
     /// The summary harness the service set up, parsed apart; see `AgentView`.
     #[serde(default)]
     summarizer: Option<toml::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    commands: Option<toml::Value>,
     // Accept and ignore the retired v5 harness entry and its checked record:
     // a v5 file loads as not set up. New config writes omit them.
     #[serde(default, skip_serializing, rename = "agent")]
@@ -1654,6 +1669,7 @@ impl StoredConfig {
         root_identity: Option<String>,
         knowledge_base_identity: Option<String>,
         agent: &AgentView,
+        commands: Option<toml::Value>,
         retired_adapter_contracts: Vec<serde_json::Value>,
         adapter_extensions: BTreeMap<String, toml::Value>,
     ) -> Self {
@@ -1676,6 +1692,7 @@ impl StoredConfig {
             // The harness entry comes from the host's own view, never from
             // the extension's snapshot.
             summarizer: agent.table.clone(),
+            commands,
             _agent: None,
             _harness_record: None,
             adapters: StoredAdapters {
@@ -1725,6 +1742,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 root_identity: None,
                 knowledge_base_identity: None,
                 agent: AgentView::default(),
+                commands: None,
                 adapter_extensions: BTreeMap::new(),
                 retired_adapter_contracts: Vec::new(),
             });
@@ -1766,6 +1784,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             root_identity: None,
             knowledge_base_identity: None,
             agent: AgentView::default(),
+                commands: None,
             adapter_extensions: BTreeMap::new(),
             retired_adapter_contracts: Vec::new(),
         });
@@ -1782,6 +1801,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             let root_unconfirmed = stored.storage.is_some()
                 && (!stored.root_picker_confirmed || root_identity.is_none());
             let agent = AgentView::parse(stored.summarizer.take());
+            let commands = stored.commands.take();
             let mut config: ConfigSnapshot = stored.into();
             config.agent = agent.agent();
             upgrade_default_document_types(&mut config.summary_vocabulary);
@@ -1800,6 +1820,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     root_identity: None,
                     knowledge_base_identity: None,
                     agent,
+                    commands,
                     adapter_extensions: BTreeMap::new(),
                     retired_adapter_contracts,
                 });
@@ -1829,6 +1850,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 root_identity,
                 knowledge_base_identity,
                 agent,
+                commands,
                 adapter_extensions,
                 retired_adapter_contracts,
             })
@@ -1841,6 +1863,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             root_identity: None,
             knowledge_base_identity: None,
             agent: AgentView::default(),
+                commands: None,
             adapter_extensions: BTreeMap::new(),
             // A newer or partly invalid file may still be valid TOML.
             retired_adapter_contracts: std::str::from_utf8(&contents)
@@ -3822,6 +3845,31 @@ mod tests {
                     .contains("adapter_id_history")
             );
             assert_eq!(fs::read(&path).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn task_command_tables_survive_unrelated_saves_even_when_the_registry_is_invalid() {
+        for output in ["sidebar", "new_note"] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("config.toml");
+            let text = format!(
+                "[[commands]]\nname = \"actions\"\ndescription = \"Extract actions\"\nprompt = \"Return a checklist.\"\noutput = \"{output}\"\n"
+            );
+            fs::write(&path, &text).unwrap();
+            let mut store = loaded(&path);
+            assert!(store.config_issue().is_none());
+            assert_eq!(store.task_commands().is_ok(), output == "sidebar");
+            let before: toml::Table = toml::from_str(&text).unwrap();
+            let mut next = store.snapshot().clone();
+            next.strip_params = vec!["tracking".into()];
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let after: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(after["commands"], before["commands"]);
+            let reopened = loaded(&path);
+            assert_eq!(reopened.task_commands().is_ok(), output == "sidebar");
+            assert!(reopened.config_issue().is_none());
         }
     }
 
@@ -7231,6 +7279,7 @@ threshold = nan
                 None,
                 None,
                 &AgentView::default(),
+                None,
                 Vec::new(),
                 BTreeMap::new(),
             ))
