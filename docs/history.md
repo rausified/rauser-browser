@@ -1373,6 +1373,22 @@ Existing stored-answer deserialization, summary save retries, protocol fields
 and auto-summary eligibility remain unchanged. Tests use the in-memory
 recording harness with the actual summary finisher; no real agent is run.
 
+## 2026-11-04 — Spend the index lock-acquisition budget before refusing
+
+`brwr-rx0s`, discovered while investigating `brwr-epl1`: `BEGIN IMMEDIATE`
+previously stopped after three immediate busy retries, at most about 240 ms,
+even though its configured contention budget is ten seconds. A real SQLite
+writer holding its lock for 400 ms reproduces the early refusal when the
+waiter's busy handler is disabled. Lock acquisition now retries through one
+total deadline, caps SQLite waits and retry sleeps to the remaining budget,
+and restores the connection's configured timeout on success or failure. The
+transaction body is still executed once. Two new cases cover eventual success
+and deadline exhaustion, alongside the existing held-lock and concurrency tests.
+
+This establishes the early-refusal defect, not the Windows-specific cause of
+`brwr-epl1`: ten repeated Linux first-open runs passed even before this fix.
+That parent retains its Windows stress acceptance and remains open.
+
 ## 2026-11-04 — Measure index work and retain contention phases
 
 `brwr-gxag`: year-scale delivery tests retain deterministic work bounds,
@@ -1388,5 +1404,7 @@ warning. The four-host migration test captures each worker's diagnostics;
 multi-process result files retain structured contention fields and print them
 on failure. Seven new regressions exercise real setup/BEGIN/WAL/commit locks,
 extended-code bodies, no duplicate/no-success noise and child-result
-persistence. The held budget fix remains absent, and repeated Windows stress
-acceptance and the Windows root cause remain on `brwr-epl1`.
+persistence. Merged with `brwr-rx0s`: `BEGIN IMMEDIATE` keeps that one total
+deadline and timeout restore, and its exhaustion warning now reports the
+attempts made within it. Repeated Windows stress acceptance and the Windows
+root cause remain on `brwr-epl1`.

@@ -37,8 +37,6 @@ pub(crate) const LEGACY_APPLICATION_ID: u32 = 0x4252_5752;
 pub(crate) const SCHEMA_VERSION: i64 = super::STATE_VERSION as i64;
 /// How long one statement waits for another connection's lock.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(10_000);
-/// Retries of a busy `BEGIN IMMEDIATE` within one busy timeout.
-pub(crate) const BEGIN_RETRIES: u32 = 3;
 const JOURNAL_SIZE_LIMIT: i64 = 8 * 1024 * 1024;
 /// Sidecars removed, in this order, before a legacy main file.
 const SIDECARS: [&str; 3] = ["-wal", "-shm", "-journal"];
@@ -852,41 +850,61 @@ thread_local! {
     pub(crate) static BEGIN_ATTEMPTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// `BEGIN IMMEDIATE`, retried for a busy answer only while the busy timeout
-/// has not yet run out overall. The retries cover a busy answer SQLite gives
-/// without waiting (a snapshot that moved, WAL recovery); they never wait
-/// the full timeout again, so a busy lock surfaces after about one timeout,
-/// well inside the extension's 30 s request timeout.
+/// `BEGIN IMMEDIATE`, retried within one total busy timeout. SQLite can
+/// return BUSY without calling its handler (for example during WAL recovery),
+/// so a small attempt limit can fail long before that budget is spent. Each
+/// handler wait and retry delay is capped to the remaining budget; only lock
+/// acquisition is retried, never the transaction body. Contention that
+/// outlasts the budget is reported once, with the `operation`, the `begin`
+/// phase and the number of attempts actually made.
 fn begin_immediate<'a>(conn: &'a Connection, operation: &'static str) -> Result<Transaction<'a>> {
     let context = Operation::new(operation, "begin");
+    let configured_ms: u32 = conn
+        .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+        .map_err(|error| context.map(error))?;
+    let configured = Duration::from_millis(u64::from(configured_ms));
+    let budget = busy_timeout();
     let mut attempt = 0;
-    loop {
-        let tried = std::time::Instant::now();
-        #[cfg(test)]
-        BEGIN_ATTEMPTS.with(|count| count.set(count.get() + 1));
-        let result = Transaction::new_unchecked(conn, TransactionBehavior::Immediate);
-        #[cfg(test)]
-        if tried.elapsed() >= busy_timeout() / 2 {
-            BEGIN_WAITS.with(|waits| waits.set(waits.get() + 1));
-        }
-        match result {
-            Ok(tx) => return Ok(tx),
-            // Only an answer that came back without waiting is retried. One
-            // that already spent most of the busy timeout in SQLite's
-            // handler is a held lock: retrying it would wait the timeout
-            // again (the handler can give up just short of it).
-            Err(error)
-                if is_busy(&error)
-                    && attempt < BEGIN_RETRIES
-                    && tried.elapsed() < busy_timeout() / 2
-                    && context.started.elapsed() < busy_timeout() =>
-            {
-                attempt += 1;
-                std::thread::sleep(retry_delay(attempt));
+    let result = (|| {
+        loop {
+            let remaining = budget.saturating_sub(context.started.elapsed());
+            conn.busy_timeout(configured.min(remaining))
+                .map_err(|error| context.map_attempts(error, attempt + 1))?;
+            #[cfg(test)]
+            BEGIN_ATTEMPTS.with(|count| count.set(count.get() + 1));
+            #[cfg(test)]
+            let tried = Instant::now();
+            let result = Transaction::new_unchecked(conn, TransactionBehavior::Immediate);
+            #[cfg(test)]
+            if tried.elapsed() >= budget / 2 {
+                BEGIN_WAITS.with(|waits| waits.set(waits.get() + 1));
             }
-            Err(error) => return Err(context.map_attempts(error, attempt + 1)),
+            match result {
+                Ok(tx) => return Ok(tx),
+                // The one deadline is the whole retry rule. An earlier rule
+                // also refused to retry after an attempt that had spent half
+                // the timeout in SQLite's handler, so a held lock was not
+                // waited out twice. The cap above makes that rule redundant:
+                // a handler wait never outlasts what remains of the budget,
+                // so a retry after a long wait waits only for the remainder
+                // and the total stays about one timeout. Keeping the rule
+                // would instead refuse early whenever the connection's own
+                // timeout lies between half the budget and the budget.
+                Err(error) if is_busy(&error) && context.started.elapsed() < budget => {
+                    attempt += 1;
+                    std::thread::sleep(
+                        retry_delay(attempt).min(budget.saturating_sub(context.started.elapsed())),
+                    );
+                }
+                Err(error) => return Err(context.map_attempts(error, attempt + 1)),
+            }
         }
-    }
+    })();
+    // A reused connection retains its configured wait, on success and on
+    // failure; the reduced last-attempt timeout must not escape this call.
+    conn.busy_timeout(configured)
+        .map_err(|error| context.map(error))?;
+    result
 }
 
 /// Grows with the attempt, with jitter so retrying hosts do not stay in step.
@@ -1568,6 +1586,7 @@ mod tests {
     fn a_held_write_lock_maps_to_busy_without_sqlite_wording() {
         let dir = TempDir::new().unwrap();
         let mut holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let _short = BusyTimeout::set(Duration::from_millis(30));
         let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
         waiter.busy_timeout(Duration::from_millis(5)).unwrap();
         let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
@@ -1587,6 +1606,7 @@ mod tests {
     fn a_busy_error_that_outlasts_the_retries_is_counted() {
         let dir = TempDir::new().unwrap();
         let mut holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let _short = BusyTimeout::set(Duration::from_millis(30));
         let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
         waiter.busy_timeout(Duration::from_millis(5)).unwrap();
         let before = BUSY_SURFACED.with(std::cell::Cell::get);
@@ -1603,6 +1623,68 @@ mod tests {
         assert!(matches!(db_error(&mapped), DbError::Busy));
         assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before + 2);
         tx.rollback().unwrap();
+    }
+
+    /// SQLite can return BUSY without invoking its busy handler. A zero-wait
+    /// connection exercises that real lock failure without depending on a
+    /// platform-specific WAL recovery race.
+    #[test]
+    fn immediate_busy_replies_wait_for_a_writer_beyond_three_retries() {
+        let dir = TempDir::new().unwrap();
+        let holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
+        waiter.busy_timeout(Duration::ZERO).unwrap();
+        let (ready, locked) = std::sync::mpsc::channel();
+        let release = std::thread::spawn(move || {
+            let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
+            ready.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+            tx.rollback().unwrap();
+        });
+        locked.recv().unwrap();
+        let before = BUSY_SURFACED.with(std::cell::Cell::get);
+        let mut calls = 0;
+        let result = write_txn(&mut waiter, |tx| {
+            calls += 1;
+            tx.execute(
+                "INSERT INTO brauser_meta VALUES ('after-contention', 'once')",
+                [],
+            )?;
+            Ok(())
+        });
+        release.join().unwrap();
+        result.unwrap();
+        assert_eq!(calls, 1, "only acquiring the lock may be retried");
+        assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before);
+        assert_eq!(pragma_i64(&waiter, "busy_timeout"), 0);
+        let count: i64 = waiter
+            .query_row("SELECT count(*) FROM brauser_meta", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn immediate_busy_replies_use_one_deadline_and_preserve_the_handler_timeout() {
+        let dir = TempDir::new().unwrap();
+        let holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let timeout = Duration::from_millis(100);
+        let _short = BusyTimeout::set(timeout);
+        let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
+        waiter.busy_timeout(Duration::ZERO).unwrap();
+        let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
+        let before = BUSY_SURFACED.with(std::cell::Cell::get);
+        let started = std::time::Instant::now();
+        let error = write_txn(&mut waiter, |_| -> Result<()> {
+            panic!("a transaction body cannot run without the write lock")
+        })
+        .unwrap_err();
+        assert!(matches!(db_error(&error), DbError::Busy), "{error:#}");
+        assert!(started.elapsed() >= timeout);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before + 1);
+        assert_eq!(pragma_i64(&waiter, "busy_timeout"), 0);
+        tx.rollback().unwrap();
+        write_txn(&mut waiter, |_| Ok(())).unwrap();
     }
 
     #[test]
@@ -1669,6 +1751,7 @@ mod tests {
         assert!(matches!(db_error(&error), DbError::Busy), "{error:#}");
         // The held lock is waited out exactly once.
         assert_eq!(BEGIN_WAITS.with(std::cell::Cell::get) - waits_before, 1);
+        assert_eq!(pragma_i64(&waiter, "busy_timeout"), 1_000);
         // Retries never multiply the busy timeout: a read's catch-up must
         // give up well inside the extension's 30 s request timeout.
         assert!(waited >= timeout, "{waited:?}");
