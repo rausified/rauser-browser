@@ -539,16 +539,14 @@ function renderStarterGallery(): void {
     addText(card, "small", offer.origin);
     const status = starterStatus(offer.artifact_type);
     if (status) addText(card, "small", sentenceCase(STARTER_STATUS_TEXT[status.state]));
+    const family = starterFamily(origin);
+    const notice = family ? unscopedNotice(family) : null;
+    if (notice) addText(card, "small", notice);
     if (!scopeShown.has(origin)) {
-      const family = starterFamily(origin);
       const input = family ? scopeInput(family) : null;
-      const notice = family ? unscopedNotice(family) : null;
       if (input) {
         scopeShown.add(origin);
         renderScopeField(card, origin, input);
-      } else if (notice) {
-        scopeShown.add(origin);
-        addText(card, "small", notice);
       }
     }
     const review = document.createElement("button");
