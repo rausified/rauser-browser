@@ -1025,6 +1025,17 @@ impl ArtifactIndex {
         self.read(|tx| query::worklog_choices(tx, start, end))
     }
 
+    /// A bounded session catalog and only the selected session's direct
+    /// activity, all from the same date-scoped snapshot.
+    pub(crate) fn worklog_focus_choices(
+        &self,
+        start: Date,
+        end: Date,
+        session_id: Option<&str>,
+    ) -> Result<focus::FocusChoices> {
+        self.read(|tx| focus::choices(tx, start, end, session_id))
+    }
+
     /// Run one read in a single `read_txn` over `index.db`'s committed
     /// rows, after a stat-only freshness check: only when the logs are
     /// ahead of `brauser_logs` (or the snapshot is not this folder's under

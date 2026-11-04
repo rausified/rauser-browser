@@ -50,6 +50,7 @@ import type {
   WorklogReported,
   WorklogChoice,
   WorklogChoicesResult,
+  WorklogFocusChoicesResult,
   FocusSession,
 } from "../protocol/ts/generated.js";
 
@@ -216,6 +217,10 @@ const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
 const curateWorklog = element<HTMLInputElement>("worklog-curate");
 const worklogChoicesArea = element<HTMLElement>("worklog-choices-area");
+const worklogShareScope = element<HTMLSelectElement>("worklog-share-scope");
+const worklogFocusArea = element<HTMLElement>("worklog-focus-area");
+const worklogFocusSession = element<HTMLSelectElement>("worklog-focus-session");
+const worklogFocusStatus = element<HTMLElement>("worklog-focus-status");
 const worklogChoices = element<HTMLFieldSetElement>("worklog-choices");
 const worklogSelectAll = element<HTMLButtonElement>("worklog-select-all");
 const worklogClear = element<HTMLButtonElement>("worklog-clear");
@@ -355,7 +360,7 @@ let recentLoadSeq = 0;
 let recentWaitingForHost = false;
 let worklogWaitingForHost = false;
 let worklogLoadSeq = 0;
-let worklogReport: WorklogReported | WorklogChoicesResult | null = null;
+let worklogReport: WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | null = null;
 let worklogScope = "";
 let worklogStorage = "";
 const selectedWork = new Set<string>();
@@ -364,6 +369,10 @@ const worklogChoiceKey = (row: WorklogChoice): string => JSON.stringify([row.art
 function resetWorklogSelection(): void {
   worklogScope = "";
   selectedWork.clear();
+  worklogFocusSession.value = "";
+  worklogFocusSession.replaceChildren();
+  worklogFocusSession.disabled = true;
+  worklogFocusStatus.textContent = "";
   ++worklogLoadSeq;
   worklogReport = null;
   worklogChoices.replaceChildren();
@@ -1102,7 +1111,7 @@ function renderQueue(state: WorkerStatus): void {
 
 function render(): void {
   const connected = session.connected;
-  const storage = JSON.stringify(session.config?.storage ?? null);
+  const storage = JSON.stringify([session.config?.storage ?? null, session.revision]);
   if (storage !== worklogStorage || (!connected && artifactHostConnected)) {
     worklogStorage = storage;
     resetWorklogSelection();
@@ -1192,6 +1201,9 @@ function scheduleReload(): void {
         if (session.revision !== previousRevision) void notes.reload();
         else void notes.retry();
         void refreshArtifact(true);
+        // A policy signal can require a reload even when the host's actual
+        // revision is unchanged. Restore the invalidated sharing catalog too.
+        if (!closed && !recentView.hidden && worklogReport === null) void loadWorklog();
       });
   }, 250);
 }
@@ -1922,6 +1934,10 @@ async function loadWorklog(): Promise<void> {
   worklogSelectAll.disabled = true;
   worklogClear.disabled = true;
   worklogChoicesArea.hidden = !curateWorklog.checked;
+  const focusOnly = curateWorklog.checked && worklogShareScope.value === "focus";
+  worklogFocusArea.hidden = !focusOnly;
+  worklogFocusSession.disabled = true;
+  worklogFocusStatus.textContent = focusOnly ? "Loading recorded sessions…" : "";
   worklogSelectionStatus.textContent = "Loading choices…";
   if (!session.connected) {
     worklogWaitingForHost = true;
@@ -1937,25 +1953,34 @@ async function loadWorklog(): Promise<void> {
   }
   const range = worklogRange();
   const revision = session.revision ?? "";
-  const scope = JSON.stringify([session.config.storage, range.start, range.end]);
+  const sessionId = focusOnly ? worklogFocusSession.value || null : null;
+  const scope = JSON.stringify([session.config.storage, revision, range.start, range.end,
+    curateWorklog.checked, focusOnly, sessionId]);
   if (scope !== worklogScope) selectedWork.clear();
   worklogScope = scope;
   worklogText.textContent = "Generating…";
   copyWorklogButton.disabled = true;
   try {
     const dates = { protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), start_date: range.start, end_date: range.end };
-    const response = curateWorklog.checked
+    const response = focusOnly
+      ? await session.host.call({ ...dates, type: "worklog_focus_choices", expected_revision: revision,
+        focus_session_id: sessionId }, "worklog_focus_choices_result")
+      : curateWorklog.checked
       ? await session.host.call({ ...dates, type: "worklog_choices", expected_revision: revision }, "worklog_choices_result")
       : await session.host.call({ ...dates, type: "worklog_report" }, "worklog_reported");
     if (seq !== worklogLoadSeq || closed) return;
     if (response.start_date !== range.start || response.end_date !== range.end) throw new Error("The host returned a different worklog period. Try again.");
-    if (response.type === "worklog_choices_result") {
+    if (response.type !== "worklog_reported") {
       if (session.revision !== revision) throw new Error("Settings changed. Open Recent again to choose work to share.");
       const keys = new Set(response.choices.map(worklogChoiceKey));
       if (keys.size !== response.choices.length || response.choices.some((row) => row.local_date < range.start || row.local_date > range.end)) {
         throw new Error("The host returned invalid worklog choices. Try again.");
       }
       for (const key of selectedWork) if (!keys.has(key)) selectedWork.delete(key);
+    }
+    if (response.type === "worklog_focus_choices_result") {
+      if (response.focus_session_id !== sessionId) throw new Error("The host returned a different focus session. Try again.");
+      renderWorklogSessions(response);
     }
     worklogReport = response;
     // A delivery refresh removes the old checkbox. Restore its stable identity
@@ -1967,10 +1992,37 @@ async function loadWorklog(): Promise<void> {
   } catch (error) {
     if (seq !== worklogLoadSeq || closed) return;
     worklogSelectionStatus.textContent = "Choices unavailable. Open Recent again to retry.";
+    worklogFocusStatus.textContent = focusOnly ? "Recorded sessions unavailable. Open Recent again to retry." : "";
     worklogText.textContent = error instanceof HostError && error.code === "invalid_request" && /unsupported request/.test(error.message)
       ? "Rebuild the Brauser host and extension together, then reopen Recent to generate this worklog."
       : `Could not generate worklog: ${describe(error)}`;
   }
+}
+
+function renderWorklogSessions(report: WorklogFocusChoicesResult): void {
+  worklogFocusSession.replaceChildren();
+  const add = (value: string, text: string): void => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    worklogFocusSession.append(option);
+  };
+  add("", "Choose a session…");
+  for (const recorded of report.sessions) add(recorded.id, `${recorded.name} · ${recorded.id.slice(-8)}`);
+  if (report.focus_session_id && !report.sessions.some((recorded) => recorded.id === report.focus_session_id)) {
+    add(report.focus_session_id, report.selected_session?.name ?? "Unavailable session");
+  }
+  worklogFocusSession.value = report.focus_session_id ?? "";
+  worklogFocusSession.disabled = report.sessions.length === 0 && report.focus_session_id === null;
+  const state = report.focus_session_id !== null && report.selected_session === null
+    ? "This session has no recorded activity in this period."
+    : report.sessions.length === 0 && report.selected_session === null
+      ? "No recorded focus sessions in this period."
+      : report.selected_session === null
+        ? "Choose a session, then check entries to include."
+        : `Only this session’s direct activity is offered.${report.name_changed ? " Its name changed in this period." : ""}`;
+  worklogFocusStatus.textContent = state + (report.sessions_truncated
+    ? " More sessions omitted; choose a shorter period to find them." : "");
 }
 
 function renderWorklogChoices(focusedKey: string | null = null): void {
@@ -1979,7 +2031,7 @@ function renderWorklogChoices(focusedKey: string | null = null): void {
   legend.textContent = "Work to include";
   worklogChoices.append(legend);
   const report = worklogReport;
-  if (report?.type !== "worklog_choices_result") return;
+  if (!report || report.type === "worklog_reported") return;
   for (const row of report.choices) {
     const label = document.createElement("label");
     label.className = "check-label";
@@ -2017,21 +2069,25 @@ function renderWorklog(): void {
     worklogGapList.append(item);
   }
   let text: string;
-  if (report.type === "worklog_choices_result") {
+  if (report.type !== "worklog_reported") {
     const selected = report.choices.filter((row) => selectedWork.has(worklogChoiceKey(row)));
     worklogSelectionStatus.textContent = `${selected.length} of ${report.choices.length} shown entries selected.${report.truncated ? " More work omitted; choose a shorter period to review it." : ""}`;
     worklogSelectAll.disabled = report.choices.length === 0;
     worklogClear.disabled = selected.length === 0;
     copyWorklogButton.disabled = selected.length === 0;
+    const focus = report.type === "worklog_focus_choices_result";
+    const heading = focus && report.selected_session
+      ? `Focus session: ${report.selected_session.name}${report.name_changed ? " (name changed in this period)" : ""}\n` : "";
     text = selected.length
-      ? `Selected work: ${report.start_date} through ${report.end_date}\n${selected.length} artifact-day entr${selected.length === 1 ? "y" : "ies"}\n\n${selected.map((row) => `${row.local_date} · ${row.text}\n${row.url}`).join("\n\n")}`
-      : "Select work to include in the preview.";
+      ? `${heading}Selected work: ${report.start_date} through ${report.end_date}\n${selected.length} artifact-day entr${selected.length === 1 ? "y" : "ies"}\n\n${selected.map((row) => `${row.local_date} · ${row.text}\n${row.url}`).join("\n\n")}`
+      : focus && report.selected_session === null ? worklogFocusStatus.textContent ?? "Choose a session."
+        : "Select work to include in the preview.";
   } else {
     text = report.text;
     copyWorklogButton.disabled = false;
   }
   worklogText.textContent = text + (hasGaps && includeWorklogGaps.checked
-    ? `\n\nCapture gaps: ${report.type === "worklog_choices_result" ? "this period has missing activity" : "this worklog is incomplete"}. Counts cover full reported ranges, may overlap, and are not added to activity totals.\n${lines.join("\n")}`
+    ? `\n\nCapture gaps: ${report.type !== "worklog_reported" ? "this period has missing activity" : "this worklog is incomplete"}. Counts cover full reported ranges, may overlap, and are not added to activity totals.\n${lines.join("\n")}`
     : "");
 }
 
@@ -2242,8 +2298,13 @@ for (const radio of worklogPeriodRadios.values()) {
   });
 }
 curateWorklog.addEventListener("change", () => void loadWorklog());
+worklogShareScope.addEventListener("change", () => {
+  resetWorklogSelection();
+  void loadWorklog();
+});
+worklogFocusSession.addEventListener("change", () => void loadWorklog());
 worklogSelectAll.addEventListener("click", () => {
-  if (worklogReport?.type !== "worklog_choices_result") return;
+  if (!worklogReport || worklogReport.type === "worklog_reported") return;
   for (const row of worklogReport.choices) selectedWork.add(worklogChoiceKey(row));
   renderWorklogChoices();
   renderWorklog();
@@ -2365,7 +2426,13 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
   return false;
 });
-session.watchPolicy(scheduleReload);
+session.watchPolicy(() => {
+  // The config reload is debounced; invalidate sharing immediately so a
+  // reply from the old home/revision cannot publish during that wait.
+  resetWorklogSelection();
+  worklogText.textContent = "Settings changed. Reloading worklog…";
+  scheduleReload();
+});
 // The Tasks page may leave a Reuse instruction while this panel is open.
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "session" && REUSE_KEY in changes) void checkReuse();

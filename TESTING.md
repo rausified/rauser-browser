@@ -1834,6 +1834,33 @@ checks a markup-shaped name remains text. A sandbox skip does not establish
 browser acceptance. macOS/Windows interactive capture acceptance remains
 separate; this feature adds no dialog and changes no scripted-dialog count.
 
+## Sharing one recorded focus session
+
+`cargo test --locked -p brauser --lib index::tests::focus` covers selecting
+before aggregation: an artifact shared by two sessions and untagged work keeps
+only the chosen session's seconds, title and URL. It also covers rename versus
+same-name IDs, multi-day and absent sessions, direct container activity,
+summary exclusion, log-only rebuild, 64-session catalog omission and the shared
+200-entry/escaped-JSON byte limits. `cargo test --locked -p brauser --lib
+focus_worklog_refuses` checks dates, canonical UUIDs and locked config revisions.
+`cargo test --locked -p brauser-protocol --test wire_focus_worklog` checks the
+new additive request/result shapes without altering existing worklog messages.
+
+After the extension build, `node --test --test-isolation=none
+extension/tests/panel/recent-worklog.test.mjs` checks explicit session and entry
+selection, exact preview/clipboard equality, period-wide capture gaps, empty
+and unavailable sessions, separate omission notices, unsupported hosts and
+malformed responses. Held replies cannot restore old choices after session,
+period, scope, revision, home or host changes. Policy-change signals clear the
+preview before the debounced reload, including when the home path is unchanged.
+
+The accessibility suite includes a native-select keyboard journey through
+the session catalog, entry selection and Copy, with an axe audit of the visible
+controls. Its offline transport fixture validates both catalog and selection
+responses even when Chromium is blocked. Sandbox browser skips leave the real
+keyboard/accessibility result to the driver gate and CI. No test uses a real
+agent, external API or live user data.
+
 ## Explicit task report note copies
 
 `cargo test --locked -p brauser --lib native::task_note` uses temporary homes

@@ -1566,3 +1566,19 @@ when a read recovered by serving its snapshot. A local test exercises that
 persistence path without spawning a child. This completes the diagnostic
 implementation for brwr-bszr; it does not identify or fix brwr-epl1's Windows
 root cause or restore held PR #310's separate retry-budget change.
+
+## 2026-11-04 — Share one recorded focus session
+
+Recent now lets you share a deliberate work block instead of an entire day of
+activity on the same artifact. Turn on **Choose work to share**, choose **One
+focus session**, pick a recorded session and check the entries to include (or
+use **Select all shown**). The preview names the session and Copy receives
+exactly its displayed text. Brauser selects the session's recorded activity
+before combining artifact-days, so time, page titles and URLs from another
+session or untagged work do not slip into the result. Renames keep the same
+session identity, and empty, unavailable or shortened choices are explained.
+Capture gaps remain notices about the whole period. Settings changes and late
+host replies invalidate the old preview immediately. This uses existing local
+history, with no agent call or new capture; deploy the host and extension
+together for the new read-only query. Validation and driver handoff details are
+recorded in the implementation plan and overnight cycle log.

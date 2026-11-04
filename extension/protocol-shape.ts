@@ -1,6 +1,7 @@
 /** Runtime shape checks for host responses. The generated types describe the
  * protocol, but a native host is a separate process and its JSON is checked
  * before the extension trusts it. */
+import { isFocusSession } from "./focus-session.js";
 
 const ERROR_CODES: ReadonlySet<string> = new Set([
   "invalid_request", "unsupported_protocol_version", "invalid_config", "not_configured",
@@ -525,6 +526,22 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "worklog_choices_result":
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&
         Array.isArray(value.choices) && value.choices.length <= 200 && value.choices.every(isWorklogChoice) &&
+        typeof value.truncated === "boolean" && typeof value.gaps_truncated === "boolean" &&
+        Array.isArray(value.gaps) && value.gaps.length <= 32 && value.gaps.every(isOverflowMarker);
+    case "worklog_focus_choices_result":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "start_date", "end_date",
+        "focus_session_id", "sessions", "sessions_truncated", "selected_session", "name_changed",
+        "choices", "truncated", "gaps", "gaps_truncated"]) &&
+        typeof value.start_date === "string" && typeof value.end_date === "string" &&
+        (value.focus_session_id === null || typeof value.focus_session_id === "string" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.focus_session_id)) &&
+        Array.isArray(value.sessions) && value.sessions.length <= 64 && value.sessions.every(isFocusSession) &&
+        new Set(value.sessions.map((session) => session.id)).size === value.sessions.length &&
+        typeof value.sessions_truncated === "boolean" && typeof value.name_changed === "boolean" &&
+        (value.selected_session === null || isFocusSession(value.selected_session) &&
+          value.selected_session.id === value.focus_session_id) &&
+        Array.isArray(value.choices) && value.choices.length <= 200 && value.choices.every(isWorklogChoice) &&
+        (value.selected_session !== null || value.choices.length === 0) &&
         typeof value.truncated === "boolean" && typeof value.gaps_truncated === "boolean" &&
         Array.isArray(value.gaps) && value.gaps.length <= 32 && value.gaps.every(isOverflowMarker);
     case "worklog_reported":
