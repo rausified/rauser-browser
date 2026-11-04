@@ -51,7 +51,7 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
   };
   const configured = state !== "setup";
   const fixture = window.fixture = {
-    state, runs, requests: [], actions: [], ports: [], revision: "1",
+    state, runs, requests: [], actions: [], copied: [], ports: [], revision: "1",
     adapterIssue: state === "adapter-repair" ? "unsupported adapter format 2" : null,
     listError: state === "error", getRunReads: 0,
     config: {
@@ -107,6 +107,18 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
           text: `${title} — focused 2 min · opened 1×`, url: `https://work.example/${n}`,
         })), truncated: false, gaps: [], gaps_truncated: false,
       };
+      case "worklog_focus_choices": {
+        const session = { id: "10000000-0000-4000-8000-000000000001", name: "Release", revision: 1 };
+        const selected = request.focus_session_id === session.id ? session : null;
+        return {
+          type: "worklog_focus_choices_result", start_date: request.start_date, end_date: request.end_date,
+          focus_session_id: request.focus_session_id, sessions: [session], sessions_truncated: false,
+          selected_session: selected, name_changed: false,
+          choices: selected ? [{ artifact_id: "doc:0", local_date: request.start_date,
+            text: "Release update — focused 2 min · opened 1×", url: "https://work.example/0" }] : [],
+          truncated: false, gaps: [], gaps_truncated: false,
+        };
+      }
       case "worklog_report": return {
         type: "worklog_reported", start_date: request.start_date, end_date: request.end_date,
         text: "No recorded artifacts.", artifact_count: 0, gaps: [], gaps_truncated: false,
@@ -199,7 +211,10 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       return [{ frameId: 0, result: { title: "Work item", content: "Fixture article. ".repeat(40), selection: null, truncated: false, readable: true, href: pageUrl } }];
     } },
   };
-  Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { fixture.actions.push("copy"); } } });
+  Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text) => {
+    fixture.copied.push(text);
+    fixture.actions.push("copy");
+  } } });
 }
 
 export async function browserFixture(t, pageName, state = "configured", options = {}) {

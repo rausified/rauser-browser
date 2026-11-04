@@ -530,6 +530,16 @@ pub(super) fn worklog_text(rows: BTreeMap<String, WorklogRow>) -> (String, usize
 /// The most rows one worklog-choices answer lists.
 const MAX_WORKLOG_CHOICES: usize = 200;
 
+/// Already scoped direct activity; shared by day and session choices.
+pub(super) struct ChoiceDay {
+    pub(super) focused: u64,
+    pub(super) background: u64,
+    pub(super) opens: u64,
+    pub(super) summary: Option<SummaryEvent>,
+    pub(super) title: String,
+    pub(super) url: String,
+}
+
 /// Independent artifact-day rows for sharing, newest day first and then by
 /// artifact ID, from the direct `visits` rows only (a container's copies
 /// are never stored there) and each day's own latest title, URL and
@@ -541,14 +551,6 @@ pub(super) fn worklog_choices(
     start: Date,
     end: Date,
 ) -> Result<(Vec<WorklogChoice>, bool, Vec<OverflowMarker>, bool)> {
-    struct Day {
-        focused: u64,
-        background: u64,
-        opens: u64,
-        summary: Option<SummaryEvent>,
-        title: String,
-        url: String,
-    }
     let (gaps, gaps_truncated) = worklog_gaps(tx, start, end)?;
     // In `order_key` order, stably by instant: a full derive's visit order,
     // with durable append order for ties.
@@ -575,7 +577,7 @@ pub(super) fn worklog_choices(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     visits.sort_by(|a, b| timestamp_order(&a.2, &b.2));
-    let mut rows = BTreeMap::<(String, String), Day>::new();
+    let mut rows = BTreeMap::<(String, String), ChoiceDay>::new();
     for (local_date, artifact_id, _, focused, background, opens, title, url, summary) in visits {
         let Ok(date) = parse_date(&local_date) else {
             continue;
@@ -592,7 +594,7 @@ pub(super) fn worklog_choices(
         };
         let row = rows
             .entry((local_date, artifact_id))
-            .or_insert_with(|| Day {
+            .or_insert_with(|| ChoiceDay {
                 focused: 0,
                 background: 0,
                 opens: 0,
@@ -609,6 +611,13 @@ pub(super) fn worklog_choices(
         row.title = title;
         row.url = url;
     }
+    let (choices, truncated) = choice_rows(rows)?;
+    Ok((choices, truncated, gaps, gaps_truncated))
+}
+
+pub(super) fn choice_rows(
+    rows: BTreeMap<(String, String), ChoiceDay>,
+) -> Result<(Vec<WorklogChoice>, bool)> {
     let mut ordered = rows.into_iter().collect::<Vec<_>>();
     ordered.sort_by(|a, b| b.0.0.cmp(&a.0.0).then(a.0.1.cmp(&b.0.1)));
     let mut choices = Vec::new();
@@ -651,12 +660,12 @@ pub(super) fn worklog_choices(
         bytes = bytes.saturating_add(size);
         choices.push(choice);
     }
-    Ok((choices, truncated, gaps, gaps_truncated))
+    Ok((choices, truncated))
 }
 
 /// The overflow notices whose span intersects the range, oldest first, at
 /// most `MAX_WORKLOG_GAPS`, and whether more did.
-fn worklog_gaps(
+pub(super) fn worklog_gaps(
     tx: &Transaction<'_>,
     start: Date,
     end: Date,

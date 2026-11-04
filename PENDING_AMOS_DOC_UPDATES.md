@@ -412,3 +412,4 @@
   errors and retry behavior are unchanged. Seven new local regressions use
   real SQLite locks and isolated fixtures. The Windows root cause and repeated
   acceptance remain open on `brwr-epl1`; held PR #310 is untouched (`brwr-bszr`).
+- **Brauser — share one recorded focus session:** Recent can narrow selected-work sharing to one explicitly chosen recorded session. The host filters activity before aggregation, preserving only that session's measured time and recorded page context; unchecked entries, exact preview/Copy, rename identity, explicit omission/unavailable states and immediate stale-preview invalidation keep sharing deliberate. Rebuild host and extension together. This is a standalone Brauser capability; no AMOS integration or live deployment is implied.

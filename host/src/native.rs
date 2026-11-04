@@ -253,6 +253,7 @@ fn panel_request(body: &[u8]) -> bool {
                     | "worklog"
                     | "worklog_report"
                     | "worklog_choices"
+                    | "worklog_focus_choices"
             )
         )
     })
@@ -365,6 +366,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::CheckSiteDraft(_) => "check_site_draft",
         Request::WorklogReport(_) => "worklog_report",
         Request::WorklogChoices(_) => "worklog_choices",
+        Request::WorklogFocusChoices(_) => "worklog_focus_choices",
         Request::CheckCaptureSite(_) => "check_capture_site",
         Request::GetSiteRestore(_) => "get_site_restore",
         Request::ForgetAdoptedContracts(_) => "forget_adopted_contracts",
@@ -870,6 +872,16 @@ fn dispatch(
             },
             config,
             WorklogMode::Choices(value.expected_revision),
+        ),
+        Request::WorklogFocusChoices(value) => worklog_response(
+            brauser_protocol::WorklogRequest {
+                protocol_version: value.protocol_version,
+                request_id: value.request_id,
+                start_date: value.start_date,
+                end_date: value.end_date,
+            },
+            config,
+            WorklogMode::FocusChoices(value.expected_revision, value.focus_session_id),
         ),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         #[cfg(unix)]
@@ -3058,6 +3070,7 @@ enum WorklogMode {
     Text,
     Report,
     Choices(String),
+    FocusChoices(String, Option<String>),
 }
 
 fn worklog_response(
@@ -3103,7 +3116,22 @@ fn worklog_response(
             "worklog range must be one to seven inclusive local dates",
         );
     }
-    if let WorklogMode::Choices(expected_revision) = &mode {
+    if let WorklogMode::FocusChoices(_, Some(id)) = &mode
+        && !uuid::Uuid::parse_str(id).is_ok_and(|uuid| {
+            uuid.get_version_num() == 4
+                && uuid.get_variant() == uuid::Variant::RFC4122
+                && uuid.to_string() == *id
+        })
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "focus_session_id must be a canonical version-4 UUID",
+        );
+    }
+    if let WorklogMode::Choices(expected_revision)
+    | WorklogMode::FocusChoices(expected_revision, _) = &mode
+    {
         if config.refresh().is_err() {
             return error(
                 &value.request_id,
@@ -3123,6 +3151,32 @@ fn worklog_response(
         Ok(index) => index,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
+    if let WorklogMode::FocusChoices(_, focus_session_id) = mode {
+        return match index.worklog_focus_choices(start, end, focus_session_id.as_deref()) {
+            Ok(result) => {
+                Response::WorklogFocusChoicesResult(brauser_protocol::WorklogFocusChoicesResult {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id,
+                    start_date: value.start_date,
+                    end_date: value.end_date,
+                    focus_session_id,
+                    sessions: result.sessions,
+                    sessions_truncated: result.sessions_truncated,
+                    selected_session: result.selected_session,
+                    name_changed: result.name_changed,
+                    choices: result.choices,
+                    truncated: result.truncated,
+                    gaps: result.gaps,
+                    gaps_truncated: result.gaps_truncated,
+                })
+            }
+            Err(_) => error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "worklog history is unavailable; log catch-up could not complete",
+            ),
+        };
+    }
     if matches!(mode, WorklogMode::Choices(_)) {
         return match index.worklog_choices(start, end) {
             Ok((choices, truncated, gaps, gaps_truncated)) => {
@@ -9701,6 +9755,74 @@ id = "work:{host}/{id}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn focus_worklog_refuses_invalid_ids_dates_and_stale_config_before_reading_history() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, root) = adapter_only_config(&folder);
+        let revision = config.revision().to_owned();
+        let request = |start: &str, end: &str| brauser_protocol::WorklogRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "focus-choices".into(),
+            start_date: start.into(),
+            end_date: end.into(),
+        };
+        for (start, end, id) in [
+            ("2026-02-30", "2026-03-01", None),
+            ("2026-11-02", "2026-11-01", None),
+            ("2026-11-01", "2026-11-08", None),
+            ("2026-11-01", "2026-11-07", Some("not-a-session")),
+            (
+                "2026-11-01",
+                "2026-11-07",
+                Some("10000000-0000-1000-8000-000000000001"),
+            ),
+        ] {
+            let Response::Error(result) = worklog_response(
+                request(start, end),
+                &mut config,
+                WorklogMode::FocusChoices(revision.clone(), id.map(str::to_owned)),
+            ) else {
+                panic!("invalid scope must fail before loading history");
+            };
+            assert_eq!(result.code, ErrorCode::InvalidRequest);
+        }
+        let Response::WorklogFocusChoicesResult(result) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::FocusChoices(revision.clone(), None),
+        ) else {
+            panic!("expected empty session catalog");
+        };
+        assert!(result.sessions.is_empty());
+        assert!(result.choices.is_empty());
+        assert!(result.selected_session.is_none());
+        let Response::Error(stale) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::FocusChoices("stale".into(), None),
+        ) else {
+            panic!("stale selection must refuse");
+        };
+        assert_eq!(stale.code, ErrorCode::Conflict);
+        let path = folder.path().join("config.toml");
+        let disk = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            disk.replace("capture_enabled = true", "capture_enabled = false"),
+        )
+        .unwrap();
+        let Response::Error(changed) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::FocusChoices(revision, None),
+        ) else {
+            panic!("external settings change must refuse");
+        };
+        assert_eq!(changed.code, ErrorCode::Conflict);
+        assert!(!root.join("notes").exists());
+        assert!(!root.join("logs").exists());
     }
 
     #[test]
