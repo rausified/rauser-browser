@@ -1372,3 +1372,19 @@ nothing. Root `SUMMARY.md` states the rule and prompt tests pin its presence.
 Existing stored-answer deserialization, summary save retries, protocol fields
 and auto-summary eligibility remain unchanged. Tests use the in-memory
 recording harness with the actual summary finisher; no real agent is run.
+
+## 2026-11-04 — Spend the index lock-acquisition budget before refusing
+
+`brwr-rx0s`, discovered while investigating `brwr-epl1`: `BEGIN IMMEDIATE`
+previously stopped after three immediate busy retries, at most about 240 ms,
+even though its configured contention budget is ten seconds. A real SQLite
+writer holding its lock for 400 ms reproduces the early refusal when the
+waiter's busy handler is disabled. Lock acquisition now retries through one
+total deadline, caps SQLite waits and retry sleeps to the remaining budget,
+and restores the connection's configured timeout on success or failure. The
+transaction body is still executed once. Two new cases cover eventual success
+and deadline exhaustion, alongside the existing held-lock and concurrency tests.
+
+This establishes the early-refusal defect, not the Windows-specific cause of
+`brwr-epl1`: ten repeated Linux first-open runs passed even before this fix.
+That parent retains its Windows stress acceptance and remains open.
