@@ -1507,3 +1507,17 @@ assertions in place for the driver's unsandboxed gate. PR-doctor now checks
 whether bd is installed after the probe and reports a broken installed tool
 as an error. This was a health-only repair; no Re-learn migration or product
 behavior was enabled.
+
+## 2026-11-04 — Give contending index writers their full wait budget
+
+Brauser now gives an index writer the intended ten seconds to acquire its
+SQLite write lock even when SQLite immediately reports contention instead of
+waiting internally. Previously three quick retries could abandon the attempt
+in roughly a quarter second, making history appear unavailable while another
+writer was about to finish. A real database test reproduced that failure with
+a writer releasing its lock after 400 ms. The fix uses one total deadline,
+limits every internal wait and retry pause to what remains, and restores the
+connection's original timeout afterward. It never repeats a transaction body,
+so a successful write still happens once. The independently reproduced defect
+is tracked as `brwr-rx0s`; the original Windows concurrency investigation
+`brwr-epl1` stays open until its Windows stress acceptance is established.

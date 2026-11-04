@@ -382,3 +382,11 @@
   and explicitly skip 13 subprocess cases; strict CI still rejects denial
   and retains the original integration assertions. The repair removes false
   health failures without changing application behavior or live services.
+
+- **Brauser index contention budget (2026-11-04, `brwr-rx0s`):** Immediate
+  SQLite busy replies now retry through one total ten-second lock-acquisition
+  deadline instead of exhausting three attempts in about a quarter second.
+  Each wait stays within the remaining budget, connection timeouts are
+  restored, and transaction bodies run once. A real 400 ms writer reproduces
+  the old failure. The separate Windows regression `brwr-epl1` remains open
+  for Windows stress validation; project documentation stays in this repo.
