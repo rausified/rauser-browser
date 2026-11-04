@@ -1360,3 +1360,19 @@ git EPERM`; the shared probe confirms denied child pipes. Five generator and
 skip on denial and fail under `BRAUSER_REQUIRE_IPC_TESTS=1`. bd detection
 moves behind the probe; only a missing executable skips, while an installed
 tool's errors fail. Product and identity-migration contracts are unchanged.
+
+## 2026-11-04 — Spend the index lock-acquisition budget before refusing
+
+`brwr-rx0s`, discovered while investigating `brwr-epl1`: `BEGIN IMMEDIATE`
+previously stopped after three immediate busy retries, at most about 240 ms,
+even though its configured contention budget is ten seconds. A real SQLite
+writer holding its lock for 400 ms reproduces the early refusal when the
+waiter's busy handler is disabled. Lock acquisition now retries through one
+total deadline, caps SQLite waits and retry sleeps to the remaining budget,
+and restores the connection's configured timeout on success or failure. The
+transaction body is still executed once. Two new cases cover eventual success
+and deadline exhaustion, alongside the existing held-lock and concurrency tests.
+
+This establishes the early-refusal defect, not the Windows-specific cause of
+`brwr-epl1`: ten repeated Linux first-open runs passed even before this fix.
+That parent retains its Windows stress acceptance and remains open.
