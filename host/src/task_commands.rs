@@ -196,6 +196,15 @@ mod tests {
     }
 
     #[test]
+    fn descriptions_are_bounded_by_unicode_characters() {
+        for (description, valid) in [("🔎".repeat(256), true), ("🔎".repeat(257), false)] {
+            let mut item = recipe();
+            item["description"] = json!(description);
+            assert_eq!(parse(Some(&raw(json!([item])))).is_ok(), valid);
+        }
+    }
+
+    #[test]
     fn slash_input_is_explicit_and_literals_remove_only_one_slash() {
         assert!(matches!(
             input("/actions \n details"),

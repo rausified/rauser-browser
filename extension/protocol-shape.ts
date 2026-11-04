@@ -569,7 +569,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
           const entry = command as Record<string, unknown>;
           return hasExactKeys(entry, ["name", "description"]) &&
             typeof entry.name === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(entry.name) &&
-            isBoundedString(entry.description, 256, 1);
+            typeof entry.description === "string" && entry.description.length > 0 &&
+            Array.from(entry.description).length <= 256;
         }) && new Set(value.commands.map((command: { name: string }) => command.name)).size === value.commands.length;
     case "run_started":
       return isRunView(value.run) && typeof value.existing === "boolean";

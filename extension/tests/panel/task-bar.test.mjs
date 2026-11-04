@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ARTICLE_URL, CONFIG, PANEL_HTML, PANEL_NOTICE_KEY, READY, REUSE_KEY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
-  buttonIn, descendants, install, readablePage, settle, startsRun, storageKey, teardown, until,
+  buttonIn, descendants, install, isResponseShape, readablePage, settle, startsRun, storageKey, teardown, until,
 } from "./harness.mjs";
 
 const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
@@ -228,6 +228,21 @@ test("saved commands load on explicit review and insert before a draft without s
   assert.equal(request.command_revision, "commands-1");
   assert.equal(request.no_page, true);
   for (const key of ["prompt", "kind", "record_key", "url", "content"]) assert.equal(key in request, false, key);
+});
+
+test("saved command descriptions count Unicode characters at the host's 256-character boundary", async () => {
+  const description = "🔎".repeat(256);
+  const catalogue = { ...commandCatalogue(), protocol_version: 8, request_id: "unicode",
+    commands: [{ name: "actions", description }] };
+  assert.equal(isResponseShape(catalogue), true);
+  for (const invalid of ["", `${description}x`, "x".repeat(257), null, 256]) {
+    assert.equal(isResponseShape({ ...catalogue, commands: [{ name: "actions", description: invalid }] }), false);
+  }
+  const page = await taskPanel({ intercept: (r) => r.type === "list_task_commands"
+    ? { ...commandCatalogue(), commands: catalogue.commands } : startsTask()(r) });
+  await openCommands(page);
+  assert.equal(page.el("task-command").disabled, false);
+  assert.equal(page.el("task-command").children[1].textContent, `/actions · ${description}`);
 });
 
 test("a stale saved command refreshes the catalogue and retains the draft until another explicit Run", async () => {
