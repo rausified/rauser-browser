@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ipcDenied } from "./ipc-guard.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
 import { spawnSync as spawnSyncTop } from "node:child_process";
 
@@ -143,11 +144,15 @@ test("adopt syncs only when the doctor may push, and checks against a given fram
 // files, so GitHub reports a modify/delete conflict. The doctor applies the
 // edits through bd, moves the backlog prose into the frame, and drops the
 // files. Needs bd; skipped where it is not installed.
-const hasBd = spawnSyncTop("bd", ["version"]).status === 0;
-test("tryRepair applies a PR's queue edits through bd and drops the files", { skip: process.platform === "win32" || !hasBd }, () => doctorRepair({ conflicting: false }));
-test("tryRepair refuses, naming the bead and field, when the database changed a field the PR also changed", { skip: process.platform === "win32" || !hasBd }, () => doctorRepair({ conflicting: true }));
+test("tryRepair applies a PR's queue edits through bd and drops the files", { skip: process.platform === "win32" }, (t) => doctorRepair(t, { conflicting: false }));
+test("tryRepair refuses, naming the bead and field, when the database changed a field the PR also changed", { skip: process.platform === "win32" }, (t) => doctorRepair(t, { conflicting: true }));
 
-async function doctorRepair({ conflicting }) {
+async function doctorRepair(t, { conflicting }) {
+  if (await ipcDenied(t, "child-pipe")) return;
+  if (spawnSyncTop("bd", ["version"]).status !== 0) {
+    t.skip("bd is not installed");
+    return;
+  }
   const { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join, dirname } = await import("node:path");

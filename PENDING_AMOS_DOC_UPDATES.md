@@ -375,3 +375,5 @@
   validation remain. Settings, README and DESIGN.md describe defaults, repair
   and rollback. Offline tests use an in-process fake harness; no live model or
   deployed service was touched. Project documentation remains in this repo.
+
+- **Brauser subprocess health checks (2026-11-04, `brwr-xkd1`):** Starter-generator CLI fixtures and PR-doctor integrations now probe child-pipe access before fixtures and optional-tool detection. Restricted workspaces report explicit integration skips while 26 pure cases remain active; strict CI mode rejects all 21 denied integrations. This repairs the local development gate without changing product behavior. Full integration verification remains with the external driver; project documentation stays here.

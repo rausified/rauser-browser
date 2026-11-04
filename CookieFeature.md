@@ -1478,3 +1478,19 @@ still read process-recovery information and use their defaults on rollback.
 Offline reader, setup, storage, prompt and in-process harness tests exercise the
 feature; no real model was called. `brwr-myn8` proposes a settings preview so
 users can validate guidance before launching a summary.
+
+
+## 2026-11-04 — Repair subprocess tests in restricted workspaces
+
+The overnight health check found that the starter-generator CLI fixtures and
+PR-doctor scratch-repository integrations treated denied child-process pipes
+as application failures. Those cases now start with the existing shared IPC
+probe, before making fixtures or checking for optional tools. A sandbox denial
+produces an explicit skip; CI's required-IPC mode still fails the same cases,
+so this does not turn an unavailable integration into a passing verification.
+All pure validation, rendering and conflict-resolution checks continue to run.
+The focused real-denial and simulated-denial runs each execute 26 pure cases
+and explicitly skip 21 integrations; strict simulated denial fails all 21
+integrations with no skips. Application behavior and capture identity rules
+are unchanged. The independent driver must exercise the integrations with IPC
+available before publication.

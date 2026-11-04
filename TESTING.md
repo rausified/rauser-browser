@@ -934,6 +934,17 @@ missing-service, failed-launch and launch-timeout tests need the guard too.
 A boundary test that proves rejection without connecting but also verifies
 successful forwarding at the limit needs it for that forwarding step.
 
+Generator CLI fixtures and PR-doctor scratch-repository integrations also
+read subprocess output. Guard them with `ipcDenied(t, "child-pipe")` before
+creating fixtures or probing for optional tools such as `bd`; a tool-version
+probe at module scope can fail before any test gets a chance to skip. Pure
+family validation, rendering and conflict-resolution tests still run without
+IPC. To inspect the individual results in a sandbox, run
+`node --test --test-isolation=none scripts/tests/generate-starters.test.mjs scripts/tests/pr-doctor.test.mjs`.
+Repeat with `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` to verify explicit skips,
+then also set `BRAUSER_REQUIRE_IPC_TESTS=1` to verify those cases fail rather
+than skip. Run the ordinary complete script suite afterward.
+
 `npm run test:adapter-diff -- --cases 5000` uses the same child-pipe probe
 before starting either engine. A denied pipe explicitly reports a skip and
 "no cases compared"; with `BRAUSER_REQUIRE_IPC_TESTS=1`, it exits 1 instead.
