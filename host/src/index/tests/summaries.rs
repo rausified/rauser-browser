@@ -983,8 +983,10 @@ fn saved_scopes_survive_incremental_indexing_reopen_and_cold_replay() {
             let cache = TempDir::new().unwrap();
             let config = storage(root.path());
             let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
-            let mut summary =
-                page_summary("https://jira.example/browse/PROJ-1", "2026-10-26T18:00:00Z");
+            let mut summary = page_summary(
+                "https://jira.example/browse/PROJ-1",
+                &rfc3339_seconds_ago(5),
+            );
             summary.read_scope = scope;
             summary.overview =
                 Some("A viewer can look complete without the whole document.".into());
