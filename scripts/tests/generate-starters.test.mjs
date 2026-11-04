@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { ipcDenied } from "./ipc-guard.mjs";
 
 import { checkLock, loadFamilies, renderCatalogLine, renderTs, validateFamily } from "../generate-starters.mjs";
 
@@ -44,13 +45,15 @@ test("loads the four shipped families with seven types in legacy catalog order",
   assert.deepEqual(current, LEGACY_ORDER);
 });
 
-test("--check is clean on the committed tree", () => {
+test("--check is clean on the committed tree", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const result = run(["--check"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.stdout.trim(), "");
 });
 
-test("a stale generated file fails --check", (t) => {
+test("a stale generated file fails --check", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const tsPath = path.join(root, GENERATED_TS);
   writeFileSync(tsPath, readFileSync(tsPath, "utf8") + "\n// stale\n");
@@ -59,7 +62,8 @@ test("a stale generated file fails --check", (t) => {
   assert.match(result.stdout, new RegExp(`out of date: ${GENERATED_TS}`));
 });
 
-test("an edited ID template fails the lock", (t) => {
+test("an edited ID template fails the lock", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
   const atlassian = JSON.parse(readFileSync(atlassianPath, "utf8"));
@@ -70,7 +74,8 @@ test("an edited ID template fails the lock", (t) => {
   assert.match(result.stdout, /id template changed for jira\.issue/);
 });
 
-test("a missing adapter.id names the file and field", (t) => {
+test("a missing adapter.id names the file and field", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
   const atlassian = JSON.parse(readFileSync(atlassianPath, "utf8"));
@@ -81,7 +86,8 @@ test("a missing adapter.id names the file and field", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: types\[0\]\.adapter\.id is required/);
 });
 
-test("an unknown field names the file and field", (t) => {
+test("an unknown field names the file and field", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
   const atlassian = JSON.parse(readFileSync(atlassianPath, "utf8"));
@@ -92,7 +98,8 @@ test("an unknown field names the file and field", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json:.*unknown field "lable"/);
 });
 
-test("an invalid JSON file names the file and the parse error", (t) => {
+test("an invalid JSON file names the file and the parse error", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
   writeFileSync(atlassianPath, readFileSync(atlassianPath, "utf8").slice(0, -1) + ",}");
@@ -101,7 +108,8 @@ test("an invalid JSON file names the file and the parse error", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: invalid JSON: /);
 });
 
-test("a duplicate type or key across family files is caught", (t) => {
+test("a duplicate type or key across family files is caught", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
   const githubPath = path.join(root, "protocol", "starters", "github.json");
@@ -114,7 +122,8 @@ test("a duplicate type or key across family files is caught", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/github\.json: duplicate type "github\.pr" \(also in protocol\/starters\/atlassian\.json\)/);
 });
 
-test("a subdomain family's key without {origin} names the file and field", (t) => {
+test("a subdomain family's key without {origin} names the file and field", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
   const atlassian = JSON.parse(readFileSync(atlassianPath, "utf8"));
@@ -125,7 +134,8 @@ test("a subdomain family's key without {origin} names the file and field", (t) =
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: types\[0\]\.key must contain "\{origin\}"/);
 });
 
-test("adapter.match must be a non-empty array", (t) => {
+test("adapter.match must be a non-empty array", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
   const atlassian = JSON.parse(readFileSync(atlassianPath, "utf8"));
@@ -136,7 +146,8 @@ test("adapter.match must be a non-empty array", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: types\[0\]\.adapter\.match must be a non-empty array/);
 });
 
-test("status.checked_on must be a string or null", (t) => {
+test("status.checked_on must be a string or null", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
   const atlassian = JSON.parse(readFileSync(atlassianPath, "utf8"));
@@ -206,7 +217,8 @@ test("STARTER_FAMILY_IDS follows catalog order", () => {
   assert.match(rendered, /export const STARTER_FAMILY_IDS = \["atlassian", "sharepoint", "github", "miro"\] as const;/);
 });
 
-test("--check tolerates a CRLF checkout of the generated outputs", (t) => {
+test("--check tolerates a CRLF checkout of the generated outputs", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const tsPath = path.join(root, GENERATED_TS);
   const catalogPath = path.join(root, CATALOG_JSON);
@@ -225,7 +237,8 @@ function writeFamily(root, name, data) {
   writeFileSync(path.join(root, "protocol", "starters", `${name}.json`), JSON.stringify(data, null, 2));
 }
 
-test("display_name is required", (t) => {
+test("display_name is required", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   delete atlassian.display_name;
@@ -235,7 +248,8 @@ test("display_name is required", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: display_name is required/);
 });
 
-test("review_prompt must be a string when a family has more than one type or a scope", (t) => {
+test("review_prompt must be a string when a family has more than one type or a scope", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.review_prompt = null;
@@ -246,7 +260,8 @@ test("review_prompt must be a string when a family has more than one type or a s
     /protocol\/starters\/atlassian\.json: review_prompt must be a string when a family has more than one type or a scope/);
 });
 
-test('scope.kind must be "github_org", "tenant_name" or "unscoped"', (t) => {
+test('scope.kind must be "github_org", "tenant_name" or "unscoped"', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const github = readFamily(root, "github");
   github.scope = { kind: "oauth" };
@@ -257,7 +272,8 @@ test('scope.kind must be "github_org", "tenant_name" or "unscoped"', (t) => {
     /protocol\/starters\/github\.json: scope\.kind must be "github_org", "tenant_name" or "unscoped"/);
 });
 
-test("scope.max must be an integer from 1 to 32", (t) => {
+test("scope.max must be an integer from 1 to 32", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.scope = { kind: "tenant_name", max: 0, label: "Workspaces", placeholder: "acme" };
@@ -268,7 +284,8 @@ test("scope.max must be an integer from 1 to 32", (t) => {
     /protocol\/starters\/miro\.json: scope\.max must be an integer from 1 to 32/);
 });
 
-test("an unscoped family's marker and {scope} example_path are both caught", (t) => {
+test("an unscoped family's marker and {scope} example_path are both caught", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.scope = { kind: "unscoped", notice: "x" };
@@ -282,7 +299,8 @@ test("an unscoped family's marker and {scope} example_path are both caught", (t)
   assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.example_path uses \{scope\} but the family has no scope values/);
 });
 
-test('an unscoped family requires adapter.unscoped to be "acknowledged"', (t) => {
+test('an unscoped family requires adapter.unscoped to be "acknowledged"', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.scope = { kind: "unscoped", notice: "x" };
@@ -293,7 +311,8 @@ test('an unscoped family requires adapter.unscoped to be "acknowledged"', (t) =>
     /protocol\/starters\/miro\.json: types\[0\]\.adapter\.unscoped must be "acknowledged" for an unscoped family/);
 });
 
-test('a scoped family requires a {"$scope": true} marker on every type', (t) => {
+test('a scoped family requires a {"$scope": true} marker on every type', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const github = readFamily(root, "github");
   delete github.types[0].adapter.scope;
@@ -304,7 +323,8 @@ test('a scoped family requires a {"$scope": true} marker on every type', (t) => 
     /protocol\/starters\/github\.json: types\[0\]\.adapter needs a \{"\$scope": true\} marker for a scoped family/);
 });
 
-test('example_path must start with "/"', (t) => {
+test('example_path must start with "/"', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.types[0].example_path = "browse/PROJ-42";
