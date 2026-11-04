@@ -1349,3 +1349,14 @@ later user text. The shared Markdown scanner additionally neutralizes report
 brackets so its definitions cannot activate earlier user image/link references.
 This adds only `save_task_note` / `task_note_saved` within v8;
 ordinary note messages, physical ownership and browser-local recovery remain.
+
+## 2026-11-04 — Guard script integrations before child IPC
+
+`brwr-xkd1`: starter-generator CLI tests and PR-doctor's real-bd integration
+tests now use `scripts/tests/ipc-guard.mjs` before spawning or creating
+fixtures. Baseline health reproduced empty CLI diagnostics and `spawnSync
+git EPERM`; the shared probe confirms denied child pipes. Five generator and
+18 doctor pure tests remain active, while 13 integration cases explicitly
+skip on denial and fail under `BRAUSER_REQUIRE_IPC_TESTS=1`. bd detection
+moves behind the probe; only a missing executable skips, while an installed
+tool's errors fail. Product and identity-migration contracts are unchanged.
