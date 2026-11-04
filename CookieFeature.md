@@ -1521,3 +1521,18 @@ connection's original timeout afterward. It never repeats a transaction body,
 so a successful write still happens once. The independently reproduced defect
 is tracked as `brwr-rx0s`; the original Windows concurrency investigation
 `brwr-epl1` stays open until its Windows stress acceptance is established.
+
+## 2026-11-04 — Surface contradictory summary reading claims
+
+Brauser now catches an agent that claims to have read a whole or partial
+artifact while also reporting a sign-in, permission or not-found wall. Those
+answers previously ended as successful runs that quietly saved nothing,
+hiding the contradiction. Fresh answers now receive the existing single
+correction turn with a clear explanation; a repeated contradiction fails the
+run visibly as invalid output. A wall reported with page-only reading still
+succeeds without creating a summary, log event or index entry, leaving the
+artifact eligible for a later summary. The compiled summary instructions now
+state the same rule. Stored older answers remain readable, and no protocol
+or migration behavior changes. Offline regression coverage exercises all six
+contradictions, all valid wall types, correction success and ordinary readable
+artifacts through the parser and actual summary finisher.

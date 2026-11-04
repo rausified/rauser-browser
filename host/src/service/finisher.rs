@@ -1109,7 +1109,9 @@ mod tests {
             let run = run(&world, PAGE, HarnessId::Codex);
             let mut wall = answer();
             wall["access"] = serde_json::json!(access);
-            let saved = world.finisher().save(&run, &wall).unwrap();
+            wall["read_scope"] = serde_json::json!("page_only");
+            let accepted = world.finisher().accept(&run, &wall.to_string()).unwrap();
+            let saved = world.finisher().save(&run, &accepted).unwrap();
             assert_eq!(saved.summary_path, None, "{access}");
             assert_eq!(saved.written_key, run.start_key, "{access}");
             assert!(

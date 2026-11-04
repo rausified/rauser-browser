@@ -390,3 +390,10 @@
   restored, and transaction bodies run once. A real 400 ms writer reproduces
   the old failure. The separate Windows regression `brwr-epl1` remains open
   for Windows stress validation; project documentation stays in this repo.
+
+- **Brauser — contradictory summary reading claims now surface:** A fresh
+  answer reporting both an access wall and whole/partial artifact reading gets
+  one correction turn, then a visible invalid-output failure if it remains
+  contradictory. Valid page-only walls still save nothing and leave the page
+  eligible for later summary; old stored answers remain readable. The summary
+  instructions and validation now agree (`brwr-divh`).

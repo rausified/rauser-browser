@@ -1361,6 +1361,18 @@ skip on denial and fail under `BRAUSER_REQUIRE_IPC_TESTS=1`. bd detection
 moves behind the probe; only a missing executable skips, while an installed
 tool's errors fail. Product and identity-migration contracts are unchanged.
 
+## 2026-11-04 — Reject contradictory summary access and reading scope
+
+`brwr-divh`: `answer::parse_answer` rejects a fresh sign-in, denied or
+not-found answer unless its reading scope is `page_only`. Validation occurs
+before `SummaryFinisher` can turn a wall into a successful no-save result.
+The ordinary one-correction flow supplies the reason, then fails repeated
+contradictions as `invalid_output`; a corrected page-only wall still saves
+nothing. Root `SUMMARY.md` states the rule and prompt tests pin its presence.
+Existing stored-answer deserialization, summary save retries, protocol fields
+and auto-summary eligibility remain unchanged. Tests use the in-memory
+recording harness with the actual summary finisher; no real agent is run.
+
 ## 2026-11-04 — Spend the index lock-acquisition budget before refusing
 
 `brwr-rx0s`, discovered while investigating `brwr-epl1`: `BEGIN IMMEDIATE`
