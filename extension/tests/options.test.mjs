@@ -6,7 +6,7 @@ const { PROTOCOL_VERSION } = await import("../dist/native.js");
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
 const { setStarterFamiliesForTest } = await import("../dist/starter-adapters.js");
 const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
-const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY } = await import("./starter-fixtures.mjs");
+const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY } = await import("./starter-fixtures.mjs");
 
 // Run after build:extension. Each test loads a fresh copy of the settings page
 // against a fake DOM, a scripted native host, a stub worker, and a
@@ -1167,6 +1167,35 @@ test("an unscoped card shows its notice and no input", async (t) => {
   assert.ok(nodeText(gallery).includes(EXAMPLE_UNSCOPED_FAMILY.scope.notice));
   assert.match(nodeText(gallery), /Not yet checked on a real account/);
   assert.equal(gallery.querySelectorAll("input").length, 0);
+});
+
+test("every card of an unscoped family carries its notice", async (t) => {
+  // Review Focus 2: a gallery with an unscoped origin (Pair, two types, so
+  // two cards) and a scoped origin (the tenant family) at once. Every Pair
+  // card must carry the notice, and the tenant origin must still get exactly
+  // one scope input, not one per card.
+  setStarterFamiliesForTest([EXAMPLE_UNSCOPED_PAIR_FAMILY, EXAMPLE_TENANT_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const exampleAdapter = {
+    type: "example.item", origin: "https://example.test", scope: { workspace: ["acme"] },
+    match: [{ path: "/{workspace:name|lower}/item/{id:int}" }],
+    id: "example.item:{host}/{workspace}/{id}",
+  };
+  install({ adapters: [exampleAdapter] });
+  await openSettings();
+  typeSite(EXAMPLE_UNSCOPED_PAIR_FAMILY.origin.origin);
+  const gallery = env.elements.get("starter-gallery");
+  const cards = gallery.querySelectorAll("article");
+  const pairCards = cards.filter((card) => card.querySelectorAll("button")
+    .some((button) => button.dataset.siteOrigin === EXAMPLE_UNSCOPED_PAIR_FAMILY.origin.origin));
+  assert.equal(pairCards.length, 2);
+  for (const card of pairCards) assert.ok(nodeText(card).includes(EXAMPLE_UNSCOPED_PAIR_FAMILY.scope.notice));
+
+  const tenantCards = cards.filter((card) => card.querySelectorAll("button")
+    .some((button) => button.dataset.siteOrigin === "https://example.test"));
+  assert.ok(tenantCards.length > 0);
+  const tenantInputs = tenantCards.flatMap((card) => card.querySelectorAll("input"));
+  assert.equal(tenantInputs.length, 1);
 });
 
 test("adapter workspace names overlaps and highlights a matching safety probe", async () => {

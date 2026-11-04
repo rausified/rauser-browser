@@ -24,6 +24,7 @@ SCRIPTS = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import git_test_env  # noqa: E402
 import work_queue  # noqa: E402
 from test_render_backlog import SKELETON, bead, jsonl  # noqa: E402
 
@@ -32,6 +33,9 @@ IDENTITY = {
     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
 }
 GATE = bead("brwr-gate", status="deferred")
+# Background git maintenance off in every scratch repo, for git, bd and Dolt
+# alike (they inherit os.environ): see git_test_env.
+QUIET_GIT = git_test_env.quiet_variables()
 COMMITTED_METADATA = {"database": "dolt", "backend": "dolt", "dolt_mode": "embedded", "dolt_database": "brwr",
                       "project_id": "11111111-2222-3333-4444-555555555555"}
 
@@ -157,7 +161,7 @@ class DoltIntegrationTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.tmp = pathlib.Path(tmp.name).resolve()
-        environ = unittest.mock.patch.dict(os.environ, {**IDENTITY, "BD_NON_INTERACTIVE": "1"})
+        environ = unittest.mock.patch.dict(os.environ, {**IDENTITY, **QUIET_GIT, "BD_NON_INTERACTIVE": "1"})
         environ.start()
         self.addCleanup(environ.stop)
         os.environ.pop(work_queue.WORKSPACE_ENV, None)
@@ -328,11 +332,12 @@ class DoltIntegrationTests(unittest.TestCase):
         # GH_TOKEN, a credential helper in GIT_CONFIG_*, BOSUN_WORKSPACE.
         self.seed(bead("brwr-a1"))
         b = self.clone("b")
-        env = {
-            **os.environ, "GH_TOKEN": "not-a-real-token", "BOSUN_WORKSPACE": str(b),
-            "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper",
-            "GIT_CONFIG_VALUE_0": "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f",
-        }
+        # The driver's helper is appended after the quiet settings already in
+        # os.environ (git_test_env.env keeps existing GIT_CONFIG_* entries).
+        env = git_test_env.env(
+            extra_config=[("credential.helper", "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f")],
+            GH_TOKEN="not-a-real-token", BOSUN_WORKSPACE=str(b),
+        )
         contract = json.loads((SCRIPTS.parent / "worker-contract.json").read_text(encoding="utf-8"))
 
         def run(command: str) -> subprocess.CompletedProcess[str]:

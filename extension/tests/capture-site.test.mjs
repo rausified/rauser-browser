@@ -3,9 +3,12 @@ import test from "node:test";
 
 const { captureOrigin, chooseMessage, planCaptureSite } = await import("../dist/capture-site.js");
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
-const { setStarterFamiliesForTest, starterOffers } = await import("../dist/starter-adapters.js");
+const {
+  setStarterFamiliesForTest, starterOffers, starterFamilies, starterFamily, starterKind,
+} = await import("../dist/starter-adapters.js");
+const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
-const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY } = await import("./starter-fixtures.mjs");
+const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, draftModeAt } = await import("./starter-fixtures.mjs");
 const CONFIG = {
   storage: { root: "/vault" }, capture_enabled: false,
   adapters: { format: 1, artifacts: [] },
@@ -391,7 +394,8 @@ test("pending scope blocks the plan until scope or unscoped is chosen", () => {
   assert.deepEqual(unscoped.checked.scope, ["unscoped"]);
 });
 
-test("unscoped-only origins offer only the unscoped statement", () => {
+test("unscoped-only origins offer only the unscoped statement", async (t) => {
+  await draftModeAt(t, DOCS);
   const draft = docsDraft();
   const url = `${DOCS}/document/d/a1b2c3/edit`;
   assert.equal(drafting(draft, select(draft), url).ok, false);
@@ -921,4 +925,25 @@ test("the harness hint text is shared with Summarize", async () => {
   assert.ok(!panel.includes(NEEDS_HARNESS_MESSAGE));
   assert.match(panel, /import \{[^}]*\bNEEDS_HARNESS_MESSAGE\b[^}]*\} from "\.\/summarize\.js"/);
   assert.match(panel, /import \{[^}]*\bharnessReady\b[^}]*\} from "\.\/summarize\.js"/);
+});
+
+// --- draftModeAt (Task 2) ---------------------------------------------------
+
+test("draftModeAt removes whichever family claims the origin", async (t) => {
+  // A one-type copy of EXAMPLE_UNSCOPED_FAMILY, claiming docs.google.com:
+  // a stand-in for PR D's Google family, which will claim this origin for
+  // real. draftModeAt has to remove whichever family claims the origin, not
+  // a hardcoded one, so this proves the removal is origin-driven.
+  const CLAIMS_DOCS = { ...EXAMPLE_UNSCOPED_FAMILY, origin: { kind: "exact", origin: DOCS } };
+  setStarterFamiliesForTest([...STARTER_FAMILIES, CLAIMS_DOCS]);
+  t.after(() => setStarterFamiliesForTest(null));
+  assert.equal(starterKind(DOCS), CLAIMS_DOCS.family);
+  await draftModeAt(t, DOCS);
+  assert.equal(starterKind(DOCS), null);
+  assert.equal(starterKind("https://github.com"), "github");
+});
+
+test("draftModeAt leaves the list alone for an unclaimed origin", async (t) => {
+  await draftModeAt(t, "https://tools.example.com");
+  assert.equal(starterFamilies().length, STARTER_FAMILIES.length);
 });

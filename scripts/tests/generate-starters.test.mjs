@@ -334,9 +334,9 @@ test("the test-only tenant_name and unscoped fixtures pass the generator's own f
   // means it cannot quietly drift out of the file format (as
   // EXAMPLE_UNSCOPED_FAMILY once did with a null review_prompt on a scoped
   // family) without a test catching it.
-  const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY } =
+  const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY } =
     await import("../../extension/tests/starter-fixtures.mjs");
-  for (const fixture of [EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY]) {
+  for (const fixture of [EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY]) {
     const problems = [];
     validateFamily(problems, "<fixture>", fixture);
     assert.deepEqual(problems, [], fixture.family);

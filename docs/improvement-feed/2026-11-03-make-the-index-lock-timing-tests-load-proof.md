@@ -11,3 +11,4 @@ Each failure costs a full macOS rerun (about 15 minutes, more when runners are
 starved). Change: assert the outcome (busy reported, snapshot served) and only
 a generous upper bound, or drive the timeout from an injected clock. Where:
 `host/src/index/db.rs`, `host/src/index/tests/reads.rs`.
+- +1 2026-11-03: failed on Windows too (PR #296, run 41743790598, host/src/index/tests/reads.rs:222); rerun passed.
