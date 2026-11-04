@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { ipcDenied } from "./ipc-guard.mjs";
 
 import { checkLock, loadFamilies, renderCatalogLine, renderTs, validateFamily } from "../generate-starters.mjs";
 import { ipcDenied } from "./ipc-guard.mjs";

@@ -936,17 +936,17 @@ successful forwarding at the limit needs it for that forwarding step.
 
 The starter-generator CLI tests and PR-doctor's real-bd integration tests
 also capture child output. Their `child-pipe` guard runs before fixture
-creation or bd detection; the generator's five pure tests and the doctor's
-18 pure tests still run without IPC. To inspect the per-case results rather
+creation or bd detection; the generator's seven pure tests and the doctor's
+19 pure tests still run without IPC. To inspect the per-case results rather
 than Node's file-level summary:
 
 ```sh
 node --test --test-isolation=none scripts/tests/generate-starters.test.mjs scripts/tests/pr-doctor.test.mjs
 ```
 
-With `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, this reports 23 passes and 13
+With `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, this reports 26 passes and 21
 explicit skips on a non-Windows machine. Adding `BRAUSER_REQUIRE_IPC_TESTS=1`
-must instead fail those 13 cases. This checks the test boundary; the driver's
+must instead fail those 21 cases. This checks the test boundary; the driver's
 unsandboxed gate exercises the actual subprocess assertions. An installed bd
 that fails `bd version` is an error, not an unavailable-tool skip.
 
