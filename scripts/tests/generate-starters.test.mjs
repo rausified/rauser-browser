@@ -237,7 +237,8 @@ function writeFamily(root, name, data) {
   writeFileSync(path.join(root, "protocol", "starters", `${name}.json`), JSON.stringify(data, null, 2));
 }
 
-test("display_name is required", (t) => {
+test("display_name is required", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   delete atlassian.display_name;
@@ -247,7 +248,8 @@ test("display_name is required", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: display_name is required/);
 });
 
-test("review_prompt must be a string when a family has more than one type or a scope", (t) => {
+test("review_prompt must be a string when a family has more than one type or a scope", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.review_prompt = null;
@@ -258,7 +260,8 @@ test("review_prompt must be a string when a family has more than one type or a s
     /protocol\/starters\/atlassian\.json: review_prompt must be a string when a family has more than one type or a scope/);
 });
 
-test('scope.kind must be "github_org", "tenant_name" or "unscoped"', (t) => {
+test('scope.kind must be "github_org", "tenant_name" or "unscoped"', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const github = readFamily(root, "github");
   github.scope = { kind: "oauth" };
@@ -269,7 +272,8 @@ test('scope.kind must be "github_org", "tenant_name" or "unscoped"', (t) => {
     /protocol\/starters\/github\.json: scope\.kind must be "github_org", "tenant_name" or "unscoped"/);
 });
 
-test("scope.max must be an integer from 1 to 32", (t) => {
+test("scope.max must be an integer from 1 to 32", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.scope = { kind: "tenant_name", max: 0, label: "Workspaces", placeholder: "acme" };
@@ -280,7 +284,8 @@ test("scope.max must be an integer from 1 to 32", (t) => {
     /protocol\/starters\/miro\.json: scope\.max must be an integer from 1 to 32/);
 });
 
-test("an unscoped family's marker and {scope} example_path are both caught", (t) => {
+test("an unscoped family's marker and {scope} example_path are both caught", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.scope = { kind: "unscoped", notice: "x" };
@@ -294,7 +299,8 @@ test("an unscoped family's marker and {scope} example_path are both caught", (t)
   assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.example_path uses \{scope\} but the family has no scope values/);
 });
 
-test('an unscoped family requires adapter.unscoped to be "acknowledged"', (t) => {
+test('an unscoped family requires adapter.unscoped to be "acknowledged"', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.scope = { kind: "unscoped", notice: "x" };
@@ -305,7 +311,8 @@ test('an unscoped family requires adapter.unscoped to be "acknowledged"', (t) =>
     /protocol\/starters\/miro\.json: types\[0\]\.adapter\.unscoped must be "acknowledged" for an unscoped family/);
 });
 
-test('a scoped family requires a {"$scope": true} marker on every type', (t) => {
+test('a scoped family requires a {"$scope": true} marker on every type', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const github = readFamily(root, "github");
   delete github.types[0].adapter.scope;
@@ -316,7 +323,8 @@ test('a scoped family requires a {"$scope": true} marker on every type', (t) => 
     /protocol\/starters\/github\.json: types\[0\]\.adapter needs a \{"\$scope": true\} marker for a scoped family/);
 });
 
-test('example_path must start with "/"', (t) => {
+test('example_path must start with "/"', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.types[0].example_path = "browse/PROJ-42";
