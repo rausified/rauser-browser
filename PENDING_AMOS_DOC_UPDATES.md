@@ -375,3 +375,10 @@
   validation remain. Settings, README and DESIGN.md describe defaults, repair
   and rollback. Offline tests use an in-process fake harness; no live model or
   deployed service was touched. Project documentation remains in this repo.
+
+- **Brauser subprocess health checks (2026-11-04, `brwr-xkd1`):** Starter
+  generation and PR-doctor integration tests now probe child IPC before
+  creating fixtures or inspecting bd. Restricted workers run 23 pure tests
+  and explicitly skip 13 subprocess cases; strict CI still rejects denial
+  and retains the original integration assertions. The repair removes false
+  health failures without changing application behavior or live services.

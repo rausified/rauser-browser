@@ -1478,3 +1478,17 @@ still read process-recovery information and use their defaults on rollback.
 Offline reader, setup, storage, prompt and in-process harness tests exercise the
 feature; no real model was called. `brwr-myn8` proposes a settings preview so
 users can validate guidance before launching a summary.
+
+## 2026-11-04 — Keep subprocess health checks honest in the sandbox
+
+The overnight health check caught two newly added script suites treating denied
+child-process pipes as application failures. Starter-generator checks received
+empty diagnostic output, while PR-doctor's scratch queue integration failed
+with `spawnSync git EPERM`. Both suites now use the repository's shared IPC
+probe before starting subprocess fixtures. Their 23 pure unit tests still run;
+13 subprocess cases visibly skip when the sandbox denies pipes. The strict
+CI flag turns that same denial into failure, leaving all original integration
+assertions in place for the driver's unsandboxed gate. PR-doctor now checks
+whether bd is installed after the probe and reports a broken installed tool
+as an error. This was a health-only repair; no Re-learn migration or product
+behavior was enabled.
