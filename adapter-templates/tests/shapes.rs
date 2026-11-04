@@ -130,11 +130,17 @@ fn starter_shape_rows_all_name_a_doc() {
     // starter-shapes.json's rows are the ones this task moved out of
     // shapes.json (protocol/starters/README.md "Recorded samples"); each
     // one's note still names the doc page `renderStarterShapes` suffixed it
-    // with, and shapes.json keeps none of them.
-    for (note, _) in section_rows(&starter_fixture(), "accept") {
+    // with, and shapes.json keeps none of them. The emptiness checks guard
+    // against both loops passing vacuously if starter-shapes.json ever
+    // shipped with no rows.
+    let starter_rows = section_rows(&starter_fixture(), "accept");
+    assert!(!starter_rows.is_empty(), "starter-shapes.json accept rows");
+    for (note, _) in &starter_rows {
         assert!(note.contains("(docs/adapters/"), "{note}");
     }
-    for (note, _) in section_rows(&fixture(), "accept") {
+    let shape_rows = section_rows(&fixture(), "accept");
+    assert!(!shape_rows.is_empty(), "shapes.json accept rows");
+    for (note, _) in &shape_rows {
         assert!(!note.contains("(docs/adapters/"), "{note}");
     }
 }

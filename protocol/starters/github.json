@@ -30,7 +30,7 @@
         {
           "note": "GitHub pull request overview",
           "url": "https://github.com/Acme/Widget/pull/42",
-          "title": "Fix login by alice · Pull Request #42 · acme-corp/widgets · GitHub",
+          "title": "Fix login by alice · Pull Request #42 · acme/widget · GitHub",
           "shape": "/{slug}/{slug}/pull/{num}"
         },
         {
@@ -78,7 +78,7 @@
         {
           "note": "GitHub issue",
           "url": "https://github.com/acme/widget/issues/42",
-          "title": "Crash on start · Issue #7 · acme-corp/widgets · GitHub",
+          "title": "Crash on start · Issue #42 · acme/widget · GitHub",
           "shape": "/acme/widget/issues/{num}"
         }
       ],

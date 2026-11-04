@@ -140,6 +140,11 @@ fn starter_recorded_urls_draft_to_matching_adapters_one_per_kind() {
         .iter()
         .map(|t| t.as_str().expect("type string").to_owned())
         .collect();
+    assert!(
+        types.len() >= 6,
+        "expected the shared fixture, saw {} starter types: {types:?}",
+        types.len()
+    );
     assert_eq!(
         starters, types,
         "every starter with samples has a recorded URL"
@@ -884,10 +889,16 @@ fn drafted_rules_pass_the_draft_checks_again_and_never_match_the_root() {
         )
         .collect();
     let corpus: Vec<&str> = corpus.iter().map(String::as_str).collect();
+    // Pinned rather than `&corpus[..1]`: `fixture_rows()` chains two files
+    // now (shapes.json then starter-shapes.json), so "the corpus's first
+    // shape" is no longer a stable seed on its own. `/browse/{key}` is still
+    // in the corpus (a jira.issue sample, protocol/starters/atlassian.json),
+    // so this keeps today's single-visit case exactly as before.
+    let single_visit = ["/browse/{key}"];
     let policy = policy();
     let mut drafted = 0;
     for origin in [TOOLS, GITHUB] {
-        for (visited, links) in [(&corpus[..], &[][..]), (&corpus[..1], &corpus[..])] {
+        for (visited, links) in [(&corpus[..], &[][..]), (&single_visit[..], &corpus[..])] {
             let site = draft(origin, &empty(), visited, links);
             let mut accepted = Vec::new();
             for adapter in &site.adapters {

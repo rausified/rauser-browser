@@ -31,7 +31,7 @@
         {
           "note": "Jira canonical issue",
           "url": "https://acme.atlassian.net/browse/PROJ-42",
-          "title": "[PROJ-1] Fix the bug - Jira",
+          "title": "[PROJ-42] Fix the bug - Jira",
           "shape": "/browse/{key}"
         },
         {
