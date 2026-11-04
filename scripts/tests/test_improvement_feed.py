@@ -10,7 +10,6 @@ Run with `npm run test:dev-tools` (python3 -m unittest discover -s scripts/tests
 from __future__ import annotations
 
 import os
-import stat
 import pathlib
 import shutil
 import subprocess
@@ -21,20 +20,11 @@ import unittest
 SCRIPTS = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _make_writable_and_retry(func, path, _exc):
-    # git marks object files read-only; Windows refuses to unlink those.
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
-
-
-def _rmtree(path: pathlib.Path) -> None:
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_make_writable_and_retry)
-    else:
-        shutil.rmtree(path, onerror=_make_writable_and_retry)
-
 REPO = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+import git_test_env  # noqa: E402
 
 import check_improvement_feed  # noqa: E402
 
@@ -100,17 +90,18 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(len(errors), 2, errors)
 
 
+# No user or system config, so no merge driver (or rerere) can be
+# registered: the same plain text merge GitHub's server does. Background
+# maintenance is off (git_test_env), so cleanup never races it.
+GIT_ENV = git_test_env.env(
+    GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+    GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
+)
+
+
 def git(cwd: pathlib.Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    env = {
-        **os.environ,
-        # No user or system config, so no merge driver (or rerere) can be
-        # registered: the same plain text merge GitHub's server does.
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
-    }
-    return subprocess.run(["git", *args], cwd=cwd, env=env, check=check, capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run(["git", *args], cwd=cwd, env=GIT_ENV, check=check, capture_output=True, text=True, encoding="utf-8")
 
 
 class PlainMergeTests(unittest.TestCase):
@@ -118,7 +109,7 @@ class PlainMergeTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.repo = pathlib.Path(tempfile.mkdtemp())
-        self.addCleanup(_rmtree, self.repo)
+        self.addCleanup(git_test_env.rmtree, self.repo)
         git(self.repo, "init", "-q", "-b", "main")
         # The repository's real merge rules, so the test fails if the feed
         # ever comes to depend on a driver again.
