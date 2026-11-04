@@ -324,6 +324,40 @@ test("an unscoped starter shows its every-account notice", async (t) => {
   assert.equal(page.el("capture-site-save").disabled, false);
 });
 
+test("an unscoped family with several types shows its notice before the checkboxes", async (t) => {
+  const { setStarterFamiliesForTest } = await import("../../dist/starter-adapters.js");
+  const { EXAMPLE_UNSCOPED_PAIR_FAMILY } = await import("../starter-fixtures.mjs");
+  setStarterFamiliesForTest([EXAMPLE_UNSCOPED_PAIR_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const url = `${EXAMPLE_UNSCOPED_PAIR_FAMILY.origin.origin}/p/1`;
+  const page = await captureReview(url);
+  const group = starterGroup(page);
+  const hintIndex = group.children.findIndex((node) =>
+    node.className === "hint" && node.textContent === EXAMPLE_UNSCOPED_PAIR_FAMILY.scope.notice);
+  const boxesFieldIndex = group.children.findIndex((node) =>
+    descendants(node).some((descendant) => descendant.dataset.starterType));
+  assert.notEqual(hintIndex, -1);
+  assert.notEqual(boxesFieldIndex, -1);
+  assert.ok(hintIndex < boxesFieldIndex, "the notice must come before the checkboxes");
+  const boxes = descendants(group).filter((node) => node.dataset.starterType);
+  assert.equal(boxes.length, 2);
+  assert.ok(boxes.every((box) => box.checked));
+  assert.equal(starterScope(page, "pair"), null);
+
+  // Review Focus 3: reopening Capture Site on another origin with the real
+  // families leaves no trace of the Pair notice — clear() replaces the
+  // container, so no stale .hint remains.
+  page.el("capture-site-cancel").click();
+  setStarterFamiliesForTest(null);
+  const nextUrl = "https://github.com/acme/x/pull/1";
+  page.navigate(nextUrl, 2);
+  await until(() => page.el("page-url").textContent === nextUrl, "the new page to render");
+  page.el("capture-site").click();
+  assert.equal(page.el("capture-site-review").hidden, false);
+  assert.doesNotMatch(page.el("capture-site-starter").textContent,
+    /Records every Pair page and board from every account in this Chrome profile\./);
+});
+
 test("a tenant_name starter renders its own field", async (t) => {
   const { setStarterFamiliesForTest } = await import("../../dist/starter-adapters.js");
   const { EXAMPLE_TENANT_FAMILY } = await import("../starter-fixtures.mjs");
@@ -344,6 +378,42 @@ test("a tenant_name starter renders its own field", async (t) => {
   scope.dispatch("input");
   await until(() => !page.el("capture-site-save").disabled, "the tenant preflight");
   assert.match(page.el("capture-site-preview").textContent, /Records Example items and Example notes only for: acme\./);
+});
+
+test("the records line reads the marked scope key, not the scope table's first key", async (t) => {
+  // Codex P2: the records line read Object.values(adapter.scope)[0], the
+  // scope table's first key in object order. A template with a fixed
+  // narrowing key (here, "category") declared ahead of its {"$scope": true}
+  // key ("workspace") showed that fixed value instead of what Save actually
+  // records.
+  const { setStarterFamiliesForTest } = await import("../../dist/starter-adapters.js");
+  const { EXAMPLE_TENANT_FAMILY } = await import("../starter-fixtures.mjs");
+  const family = {
+    ...EXAMPLE_TENANT_FAMILY,
+    types: [
+      {
+        ...EXAMPLE_TENANT_FAMILY.types[0],
+        adapter: {
+          ...EXAMPLE_TENANT_FAMILY.types[0].adapter,
+          // "category" is a required, non-"$scope" capture bound to one
+          // literal ("work") — a fixed narrowing key the engine accepts
+          // because it anchors a real path segment, not a placeholder.
+          match: [{ path: "/{category:(work)}/{workspace:name|lower}/item/{id:int}" }],
+          scope: { category: ["work"], workspace: { "$scope": true } },
+        },
+      },
+    ],
+  };
+  setStarterFamiliesForTest([family]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const url = "https://example.test/work/acme/item/1";
+  const page = await captureReview(url);
+  const scope = starterScope(page, "example");
+  scope.value = "acme";
+  scope.dispatch("input");
+  await until(() => !page.el("capture-site-save").disabled, "the tenant preflight");
+  assert.match(page.el("capture-site-preview").textContent, /Records Example items only for: acme\./);
+  assert.doesNotMatch(page.el("capture-site-preview").textContent, /only for: work/);
 });
 
 test("a same-URL tab switch and an SPA route change dismiss the review", async () => {

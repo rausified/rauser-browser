@@ -51,6 +51,7 @@ use crate::vault::{
 
 mod catchup;
 mod db;
+mod focus;
 mod fold;
 mod legacy;
 mod ord;

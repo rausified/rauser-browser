@@ -63,7 +63,21 @@ pub(super) fn projection(scan: &LogScan, derived: Derived) -> Result<RekeyProjec
                 *start,
                 *end,
             );
-            let (text, artifact_count) = worklog_derived(&derived, *start, *end);
+            let (mut text, artifact_count) = worklog_derived(&derived, *start, *end);
+            let mut groups = focus::FocusGroups::default();
+            for visit in &derived.visits {
+                if visit.contained || parse_date(&visit.local_date).is_err() {
+                    continue;
+                }
+                if let Some(CachedEvent {
+                    data: EventData::Activity(event),
+                    ..
+                }) = scan.events.get(&visit.event_id)
+                {
+                    groups.add(&visit.artifact_id, event);
+                }
+            }
+            groups.append(&mut text);
             Some(ProjectedWorklog {
                 start: start.to_string(),
                 end: end.to_string(),

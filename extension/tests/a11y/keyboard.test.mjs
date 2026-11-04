@@ -2,6 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { activate, audit, browserFixture, enterPanelTab, focused, task } from "./fixture.mjs";
 
+test("a task report saves to its source note by keyboard with focus and confirmation", async (t) => {
+  const page = await browserFixture(t, "tasks");
+  if (!page) return;
+  const save = page.getByRole("button", { name: "Save to note", exact: true });
+  await save.waitFor();
+  assert.equal(await page.evaluate(() => fixture.requests.filter((r) => r.type === "save_task_note").length), 0);
+  await activate(page, save, "Space");
+  await page.getByRole("status").filter({ hasText: "Report saved to the source page's note." }).waitFor();
+  assert.equal(await save.evaluate((node) => node === document.activeElement), true);
+  assert.equal(await page.evaluate(() => fixture.requests.filter((r) => r.type === "save_task_note").length), 1);
+  await audit(t, page, "tasks/report-saved-to-note");
+});
+
 test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;
@@ -311,3 +324,26 @@ for (const name of ["panel", "tasks"]) {
     assert.ok(await page.evaluate(() => fixture.actions.includes("settings")));
   });
 }
+
+
+test("focus sessions start, rename and end by keyboard with text-only names", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await activate(page, "#focus-heading");
+  await activate(page, "#focus-name", null);
+  await page.keyboard.type("Release planning");
+  await page.locator("#focus-save:enabled").waitFor();
+  await activate(page, "#focus-save");
+  await page.waitForFunction(() => document.querySelector("#focus-current").textContent === "Release planning");
+  await audit(t, page, "panel/focus-session");
+  await activate(page, "#focus-name", null);
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("<img src=x onerror=attack()>");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector("#focus-current").textContent === "<img src=x onerror=attack()>");
+  assert.equal(await page.locator("#focus-current img").count(), 0);
+  await activate(page, "#focus-end");
+  await page.waitForFunction(() => document.querySelector("#focus-current").textContent === "None");
+  assert.equal(await page.locator("#focus-end").isHidden(), true);
+  await audit(t, page, "panel/focus-ended");
+});

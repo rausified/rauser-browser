@@ -83,6 +83,7 @@
         { "$ref": "#/$defs/DraftSiteRequest" },
         { "$ref": "#/$defs/StartSiteDraftRequest" },
         { "$ref": "#/$defs/StartTaskRequest" },
+        { "$ref": "#/$defs/SaveTaskNoteRequest" },
         { "$ref": "#/$defs/StartAutoSummaryRequest" },
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
         { "$ref": "#/$defs/WorklogReportRequest" },
@@ -127,6 +128,7 @@
         {
           "$ref": "#/$defs/NoteSaved"
         },
+        { "$ref": "#/$defs/TaskNoteSaved" },
         {
           "$ref": "#/$defs/NoteConflict"
         },
@@ -1051,6 +1053,31 @@
         }
       }
     },
+    "SaveTaskNoteRequest": {
+      "description": "Explicitly append a retained successful page-task report to its host-resolved note. expected_revision binds the current config/home; the host loads and version-checks the note under its config lock. No caller-supplied report, URL or record key.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "run_id", "expected_revision"],
+      "properties": {
+        "type": { "const": "save_task_note" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "TaskNoteSaved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "run_id", "already_saved"],
+      "properties": {
+        "type": { "const": "task_note_saved" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "already_saved": { "type": "boolean" }
+      }
+    },
     "SaveNoteRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -1970,6 +1997,16 @@
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 }
       }
     },
+    "FocusSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "revision"],
+      "properties": {
+        "id": { "type": "string", "minLength": 36, "maxLength": 36 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "revision": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+      }
+    },
     "ActivityEvent": {
       "type": "object",
       "additionalProperties": false,
@@ -1987,7 +2024,8 @@
         "background_seconds": { "type": "integer", "minimum": 0, "maximum": 7200 },
         "modes": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/ActivityMode" } },
         "trails": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/ActivityTrail" } },
-        "refs": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/ActivityRef" } }
+        "refs": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/ActivityRef" } },
+        "focus_session": { "$ref": "#/$defs/FocusSession" }
       }
     },
     "WhyEvent": {

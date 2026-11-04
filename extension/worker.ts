@@ -22,6 +22,7 @@ import {
   type WorkerRequest,
   type WorkerStatus,
 } from "./model.js";
+import { isFocusSession, sameFocus } from "./focus-session.js";
 import { APP_NAME, BINARY_NAME, storageKey } from "./brand.js";
 import { diag, initDiag } from "./diag.js";
 import { evaluate, type EvaluateResult } from "./adapter-templates.js";
@@ -39,7 +40,7 @@ import {
   autoSummarizeTab, summarizeFailureText, summarizeTab,
 } from "./summarize.js";
 import {
-  activateTab, createdNavigationTarget, emptyActivityState, focusWindow, freezeCompleted,
+  activateTab, changeFocus, createdNavigationTarget, emptyActivityState, focusWindow, freezeCompleted,
   recordNavigation, removeTab, replaceTab, setIdle, settleActivity,
   type ActivityState,
 } from "./activity.js";
@@ -162,6 +163,9 @@ async function readActivity(): Promise<ActivityState> {
       (totals as { version?: unknown }).version === 1 &&
       Array.isArray((totals as { totals?: unknown }).totals)) {
     fresh.totals = structuredClone((totals as { totals: ActivityState["totals"] }).totals);
+    const active = (totals as { focus_session?: unknown }).focus_session;
+    if (active != null && !isFocusSession(active)) throw new Error("The saved focus session is unreadable.");
+    fresh.focus_session = active == null ? null : structuredClone(active);
   }
   if (typeof context === "object" && context !== null &&
       (context as { version?: unknown }).version === 1) {
@@ -176,17 +180,25 @@ async function readActivity(): Promise<ActivityState> {
       fresh.chrome_focused = saved.chrome_focused;
       fresh.idle = saved.idle;
       fresh.measured_at = saved.measured_at;
+      // Local totals may have committed before the session-context write
+      // failed. Never measure that already-persisted interval twice.
+      const cursor = (totals as { measured_at?: unknown } | undefined)?.measured_at;
+      if (typeof cursor === "number" && Number.isFinite(cursor)) {
+        fresh.measured_at = Math.max(fresh.measured_at, cursor);
+      }
     }
   }
   return fresh;
 }
 
 async function writeActivity(state: ActivityState): Promise<void> {
-  const { totals, ...context } = state;
-  await Promise.all([
-    chrome.storage.local.set({ [ACTIVITY_TOTALS_KEY]: { version: 1, totals } }),
-    activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: context }),
-  ]);
+  const { totals, focus_session, ...context } = state;
+  // Publish totals/label/cursor first. Session context must never get ahead
+  // of the durable envelope if a local-storage write fails.
+  await chrome.storage.local.set({ [ACTIVITY_TOTALS_KEY]: {
+    version: 1, totals, focus_session, measured_at: state.measured_at,
+  } });
+  await activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: context });
   // Activity is the one record of which tabs show a recognized artifact and
   // which tab has the user's attention, so auto-summary follows it.
   await syncAutoSummary(state, Date.now()).catch((error: unknown) =>
@@ -431,9 +443,10 @@ function narrowQueuedTrails(items: QueuedVisit[], lease: PolicyLease): void {
   }
 }
 
-function activityContext(state: ActivityState): Omit<ActivityState, "totals"> {
-  const { totals, ...context } = state;
+function activityContext(state: ActivityState): Omit<ActivityState, "totals" | "focus_session"> {
+  const { totals, focus_session, ...context } = state;
   void totals;
+  void focus_session;
   return context;
 }
 
@@ -584,7 +597,8 @@ function coalesceActivity(queue: QueueState, event: ActivityEvent): boolean {
     item.dispatched !== true && isActivityEvent(item.event) &&
     item.event.artifact_id === event.artifact_id &&
     item.event.artifact_type === event.artifact_type &&
-    item.event.occurred_at === event.occurred_at);
+    item.event.occurred_at === event.occurred_at &&
+    sameFocus(item.event.focus_session, event.focus_session));
   if (!existing || !isActivityEvent(existing.event)) return false;
   const merged = structuredClone(existing.event);
   merged.opens = Math.min(100_000, merged.opens + event.opens);
@@ -620,8 +634,11 @@ function coalesceActivity(queue: QueueState, event: ActivityEvent): boolean {
 /** Freeze completed local hours and move them into the durable delivery
  * queue. The total and queue are published in one storage.local update so a
  * worker stop cannot lose the handoff. */
-async function freezeActivity(now = Date.now()): Promise<number> {
+async function freezeActivity(
+  now = Date.now(), change?: (activity: ActivityState) => void,
+): Promise<number> {
   const activity = await readActivity();
+  change?.(activity);
   const frozen = freezeCompleted(activity, now, () => crypto.randomUUID());
   if (!frozen.length) {
     await writeActivity(activity);
@@ -649,13 +666,11 @@ async function freezeActivity(now = Date.now()): Promise<number> {
     queue.items = next;
     accepted += 1;
   }
-  await Promise.all([
-    chrome.storage.local.set({
-      [ACTIVITY_TOTALS_KEY]: { version: 1, totals: activity.totals },
-      [QUEUE_KEY]: queue,
-    }),
-    activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: activityContext(activity) }),
-  ]);
+  await chrome.storage.local.set({
+    [ACTIVITY_TOTALS_KEY]: { version: 1, totals: activity.totals, focus_session: activity.focus_session, measured_at: activity.measured_at },
+    [QUEUE_KEY]: queue,
+  });
+  await activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: activityContext(activity) });
   await updatePressureBadge(queue);
   return accepted;
 }
@@ -1050,6 +1065,7 @@ async function currentStatus(
     nextRetryAt = Math.min(nextRetryAt ?? Infinity, visits.overflow_delivery.retry_after);
   }
   return {
+    focus_session: activity.focus_session,
     queued: visits.items.length,
     live_activity: activity.totals.length,
     next_retry_at: nextRetryAt,
@@ -1444,6 +1460,17 @@ async function handleMessage(message: WorkerRequest): Promise<unknown> {
     }
     case "get_pending":
       return (await takeReady())?.items ?? [];
+    case "change_focus": {
+      const lease = await activeLease();
+      const now = Date.now();
+      await freezeActivity(now, (activity) => {
+        // Expired/off capture never measures an interval merely because the
+        // user changes a label. The ordinary policy checks still own capture.
+        if (!lease || !leaseActive(lease)) activity.measured_at = now;
+        changeFocus(activity, message.expected, message.name, now, () => crypto.randomUUID());
+      });
+      return currentStatus();
+    }
     case "get_activity": {
       await freezeActivity();
       return (await readActivity()).totals;

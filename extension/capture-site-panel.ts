@@ -13,7 +13,7 @@ import {
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
 import {
-  choiceNoun, displayTypes, parseTenantList, recordLabel, starterFamily, starterOffers, starterStatus,
+  choiceNoun, displayTypes, parseTenantList, recordLabel, scopedValuesOf, starterFamily, starterOffers, starterStatus,
 } from "./starter-adapters.js";
 import { scopeInput } from "./starter-scopes.js";
 import { renderStarterChoice, type StarterChoiceView } from "./starter-choice-view.js";
@@ -933,8 +933,12 @@ export class CaptureSitePanel {
       if (family && input) {
         const checkedTypes = new Set(plan.offers.map((offer) => offer.artifact_type));
         const nouns = displayTypes(family).filter((type) => checkedTypes.has(type.type)).map((type) => choiceNoun(type));
-        const scope = plan.offers[0]?.adapter?.scope as Record<string, string[]> | undefined;
-        const values = scope ? Object.values(scope)[0] ?? [] : [];
+        // scopedValuesOf reads only the key(s) the family's templates mark
+        // {"$scope": true}, not just the scope table's first key: a fixed
+        // narrowing key placed ahead of the marked key in the template
+        // would otherwise show up here instead of the recorded scope.
+        const firstAdapter = plan.offers[0]?.adapter;
+        const values = firstAdapter ? scopedValuesOf(firstAdapter) : [];
         const line = document.createElement("p");
         line.textContent = input.records(joinRecordedTypes(nouns), values.join(", "));
         this.preview.append(line);

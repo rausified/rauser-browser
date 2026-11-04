@@ -312,19 +312,42 @@ export type AdapterRule = Record<string, unknown>;
 // Config validation caps rules per adapter (adapter-templates.md §10.3).
 const MAX_RULES = 16;
 
-function ownersOf(adapter: AdapterObject): string[] {
+/** `adapter`'s own values under its family's marked scope key(s) (today,
+ * GitHub's `owner`; a `tenant_name` family's own key) — the same account
+ * data `configuredScope` reads back across a whole origin, and for the same
+ * reason: a hand-added narrowing key the family's templates do not mark
+ * with `{"$scope": true}` is left out, so it is never fed back into
+ * `starterOffers` as if it were the starter's own scope. `[]` when the
+ * adapter's origin names no known family or carries no marked key (today,
+ * a non-GitHub origin with no marked key at all). Exported so the panel's
+ * "Records … for: …" line can read a drafted offer's own scope by the same
+ * rule `matchingStarter` uses, instead of guessing the first key in object
+ * order (which a fixed narrowing key ahead of the marked key in the
+ * template would get wrong). */
+export function scopedValuesOf(adapter: AdapterObject): string[] {
+  if (typeof adapter.origin !== "string") return [];
+  const family = starterFamily(adapter.origin);
+  if (!family) return [];
   const scope = adapter.scope;
   if (!scope || typeof scope !== "object" || Array.isArray(scope)) return [];
-  const owner = (scope as Record<string, unknown>).owner;
-  return Array.isArray(owner) ? owner.filter((entry): entry is string => typeof entry === "string") : [];
+  const keys = markedScopeKeys(family);
+  const values: string[] = [];
+  for (const [key, entry] of Object.entries(scope as Record<string, unknown>)) {
+    if (!keys.has(key) || !Array.isArray(entry)) continue;
+    for (const value of entry) if (typeof value === "string") values.push(value);
+  }
+  return values;
 }
 
 /** The current starter `adapter` was saved from: same origin, type, and `id`
- * template string. A GitHub starter is built with the adapter's own
- * organizations, so its scope never decides the match. */
+ * template string. A starter is built from the adapter's own scope values
+ * under its family's marked key(s) (GitHub's organizations, or a
+ * `tenant_name` family's own list), so a saved adapter's scope never
+ * decides the match on its own, and a family that keys its scope some other
+ * way than `owner` (a `tenant_name` family) is still recognised. */
 export function matchingStarter(adapter: AdapterObject): StarterOffer | null {
   if (typeof adapter.origin !== "string") return null;
-  return starterOffers(adapter.origin, ownersOf(adapter)).find((offer) =>
+  return starterOffers(adapter.origin, scopedValuesOf(adapter)).find((offer) =>
     offer.adapter !== null && offer.adapter.type === adapter.type &&
     offer.adapter.id === adapter.id) ?? null;
 }

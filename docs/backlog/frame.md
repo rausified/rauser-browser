@@ -295,6 +295,21 @@ optional run inputs in sidecars avoids expanding strict process-recovery status
 for every new prompt preference. Assigned Re-learn remains behind the driver's
 human/pr-held `brwr-9eio`; this cycle does not alter or duplicate that gate.
 
+- **2026-11-03 task reports now have an explicit durable destination.**
+  `brwr-bsx` adds Save to note in Tasks, preserving existing source-page note
+  text and recognizing exact retries. Full final required/README gates pass
+  (1,565 Rust-reported outcomes, 44 extension files; explicit IPC/Chromium
+  sandbox skips). Fresh review reproduced and fixed cross-note Markdown
+  reference definitions; all 573 composed renderings are inert. Follow-up
+  `brwr-vuvc` offers a direct Open note action after saving. Prefer another
+  contextual capability once assigned work is actionable, rather than more
+  task-history presentation polish. The three assigned Re-learn items remain
+  behind the driver's human/pr-held `brwr-9eio`; do not infer its reconciliation
+  from merged local history or duplicate held work. Queue hydration/export
+  retains earlier local-only completion records, whose implementation/publication
+  must be verified separately by the driver. This cycle ships only `brwr-bsx`.
+
+
 - **2026-11-02 Re-learn review prerequisites completed.** The cycle began
   clean and the full health gate passed with explicit sandbox skips. Assigned
   `brwr-eo7` and `brwr-r62` now refuse damaged owned markers and foreign-occupied
@@ -2001,3 +2016,36 @@ brwr-pgxz with concrete evidence: A/B notes in a chain to C need original owner
 keys and read-only inspection when C has no primary. Driver owns external
 verification, independent approval and publication. No live service, API,
 remote Git or real harness was used.
+
+
+### Cycle observations (2026-11-03 — named focus sessions)
+
+The required baseline gate passed on `ec258171`; no quarantine report or
+broken working tree was present. The pre-existing queue diff includes driver
+and earlier-cycle metadata, retained through hydration/export. Assigned
+Re-learn remains gated by human/pr-held `brwr-9eio` and its open apply decisions;
+this cycle neither closes that gate nor duplicates held implementation.
+With no actionable assigned or P2 work, `brwr-ued` adds a new captured-work
+concept rather than another task-card refinement. Names are explicit,
+profile-local and append-only snapshots, with no inferred intent or API use.
+
+The independent design challenge caught both bucket lookups and frozen
+pressure merging before implementation. One independent Codex diff review
+found no P1/P2 and one P3 omission-notice issue; a failing regression preceded
+the fix in the existing renderer. Initial final-gate Rust compilation included
+that deliberate failing reproduction; the corrected focused suite passes and
+the complete gate is rerunning. Browser keyboard acceptance still belongs to
+the existing driver/platform gate. New `brwr-1jeb` proposes choosing one session
+in the curated worklog picker; artifact-day selection cannot express two
+sessions touching the same artifact. The related-tabs scope ask above was
+posted to Wardroom; no new human decision blocks the focus-session feature.
+
+
+Final result for this cycle: all required and README checks pass after the
+review correction (`target/cookie-focus-reviewed/`). `brwr-ued` is closed;
+1,560 Rust-reported passes (+7; 2 ignored), all 46 extension files, 13 new
+offline extension cases, both Clippy builds and 229 Python tests (92 platform
+skips). Accessibility is 2 fixture passes and 43 explicit browser sandbox
+skips, so the driver/CI must establish keyboard/browser acceptance. The
+scripted-dialog count is unchanged. `.bosun_commit_msg` is prepared; publication
+and the final commit SHA belong to the driver.

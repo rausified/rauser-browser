@@ -119,6 +119,8 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
         const run = fixture.runs.find((run) => run.run_id === request.run_id);
         return { type: "run_fetched", run, stream_text: "", next_offset: 0, more: false };
       }
+      case "save_task_note":
+        return { type: "task_note_saved", run_id: request.run_id, already_saved: false };
       case "cancel_run": {
         const run = fixture.runs.find((run) => run.run_id === request.run_id);
         Object.assign(run, { state: "canceled", finished_at: new Date().toISOString() });
@@ -167,7 +169,19 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
         fixture.ports.push(port);
         return port;
       },
-      async sendMessage(request) { return { ok: true, value: request.kind === "get_site_patterns" ? [] : status }; },
+      async sendMessage(request) {
+        if (request.kind === "change_focus") {
+          const current = status.focus_session ?? null;
+          if (JSON.stringify(request.expected) !== JSON.stringify(current)) {
+            return { ok: false, value: null, error: "The focus session changed in another panel." };
+          }
+          status.focus_session = request.name === null ? null : {
+            id: current?.id ?? "00000000-0000-4000-8000-000000000077",
+            name: request.name, revision: (current?.revision ?? 0) + 1,
+          };
+        }
+        return { ok: true, value: request.kind === "get_site_patterns" ? [] : status };
+      },
     },
     storage: { local: area("local"), session: area("session"), onChanged: storageChanged },
     permissions: { contains: async () => true, onAdded: event(), onRemoved: event() },

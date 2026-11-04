@@ -285,6 +285,24 @@ pub struct LoadNoteRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SaveTaskNoteRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub run_id: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskNoteSaved {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub run_id: String,
+    pub already_saved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SaveNoteRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -747,6 +765,14 @@ pub struct ActivityMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FocusSession {
+    pub id: String,
+    pub name: String,
+    pub revision: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActivityEvent {
     pub event_id: String,
     pub artifact_id: String,
@@ -762,6 +788,8 @@ pub struct ActivityEvent {
     pub modes: Vec<ActivityMode>,
     pub trails: Vec<ActivityTrail>,
     pub refs: Vec<ActivityRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_session: Option<FocusSession>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1520,6 +1548,7 @@ pub enum Request {
     DraftSite(DraftSiteRequest),
     StartSiteDraft(StartSiteDraftRequest),
     StartTask(StartTaskRequest),
+    SaveTaskNote(SaveTaskNoteRequest),
     StartAutoSummary(StartAutoSummaryRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
     WorklogReport(WorklogReportRequest),
@@ -1566,6 +1595,7 @@ impl Request {
             Self::DraftSite(value) => value.protocol_version,
             Self::StartSiteDraft(value) => value.protocol_version,
             Self::StartTask(value) => value.protocol_version,
+            Self::SaveTaskNote(value) => value.protocol_version,
             Self::StartAutoSummary(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
             Self::WorklogReport(value) => value.protocol_version,
@@ -1612,6 +1642,7 @@ impl Request {
             Self::DraftSite(value) => &value.request_id,
             Self::StartSiteDraft(value) => &value.request_id,
             Self::StartTask(value) => &value.request_id,
+            Self::SaveTaskNote(value) => &value.request_id,
             Self::StartAutoSummary(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
             Self::WorklogReport(value) => &value.request_id,
@@ -1640,6 +1671,7 @@ pub enum Response {
     WhyRecorded(WhyRecorded),
     NoteLoaded(NoteLoaded),
     NoteSaved(NoteSaved),
+    TaskNoteSaved(TaskNoteSaved),
     NoteConflict(NoteConflict),
     ArtifactResult(ArtifactResult),
     ArtifactListResult(ArtifactListResult),
@@ -1679,6 +1711,7 @@ impl Response {
             Self::WhyRecorded(value) => value.protocol_version,
             Self::NoteLoaded(value) => value.protocol_version,
             Self::NoteSaved(value) => value.protocol_version,
+            Self::TaskNoteSaved(value) => value.protocol_version,
             Self::NoteConflict(value) => value.protocol_version,
             Self::ArtifactResult(value) => value.protocol_version,
             Self::ArtifactListResult(value) => value.protocol_version,
@@ -1718,6 +1751,7 @@ impl Response {
             Self::WhyRecorded(value) => &value.request_id,
             Self::NoteLoaded(value) => &value.request_id,
             Self::NoteSaved(value) => &value.request_id,
+            Self::TaskNoteSaved(value) => &value.request_id,
             Self::NoteConflict(value) => &value.request_id,
             Self::ArtifactResult(value) => &value.request_id,
             Self::ArtifactListResult(value) => &value.request_id,

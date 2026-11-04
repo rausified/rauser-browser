@@ -24,6 +24,9 @@ use crate::note;
 use crate::service::client::{ServiceError, ServiceLink};
 use crate::vault::Vault;
 
+#[cfg(unix)]
+mod task_note;
+
 const MAX_REQUEST_ID_CHARS: usize = 128;
 
 pub fn serve(config: ConfigStore) -> Result<()> {
@@ -358,6 +361,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::DraftSite(_) => "draft_site",
         Request::StartSiteDraft(_) => "start_site_draft",
         Request::StartTask(_) => "start_task",
+        Request::SaveTaskNote(_) => "save_task_note",
         Request::CheckSiteDraft(_) => "check_site_draft",
         Request::WorklogReport(_) => "worklog_report",
         Request::WorklogChoices(_) => "worklog_choices",
@@ -410,6 +414,7 @@ fn request_run_fields(request: &Request) -> RunFields<'_> {
         Request::StartTask(value) => (None, value.harness),
         Request::SetUpHarness(value) => (None, Some(value.harness)),
         Request::GetRun(value) => (Some(&value.run_id), None),
+        Request::SaveTaskNote(value) => (Some(&value.run_id), None),
         Request::CancelRun(value) => (Some(&value.run_id), None),
         Request::RetrySave(value) => (Some(&value.run_id), None),
         _ => (None, None),
@@ -887,6 +892,8 @@ fn dispatch(
         #[cfg(unix)]
         Request::StartTask(value) => start_task(value, config, context.service),
         #[cfg(unix)]
+        Request::SaveTaskNote(value) => task_note::save(value, config, context.service),
+        #[cfg(unix)]
         Request::StartAutoSummary(value) => start_auto_summary(value, config, context.service),
         // Run ids and offsets are the service's to check, harness setup
         // detects and probes on the service's PATH and environment, and
@@ -914,6 +921,7 @@ fn dispatch(
         Request::StartRun(_)
         | Request::StartSiteDraft(_)
         | Request::StartTask(_)
+        | Request::SaveTaskNote(_)
         | Request::GetRun(_)
         | Request::ListRuns(_)
         | Request::CancelRun(_)
@@ -4958,6 +4966,7 @@ id = "work:{host}/{id}"
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "activity-1".into(),
                 event: ActivityEvent {
+                    focus_session: None,
                     event_id: uuid::Uuid::new_v4().to_string(),
                     artifact_id: "work:work.example/7".into(),
                     artifact_type: "work.item".into(),
@@ -5315,6 +5324,7 @@ id = "jira:{host}/{key}"
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "modal-activity".into(),
                     event: ActivityEvent {
+                        focus_session: None,
                         event_id: uuid::Uuid::new_v4().to_string(),
                         artifact_id: format!("jira:acme.atlassian.net/{issue}"),
                         artifact_type: "jira.issue".into(),
@@ -6003,6 +6013,7 @@ id = "work:{host}/{id}"
 
             fn activity(&self) -> ActivityEvent {
                 ActivityEvent {
+                    focus_session: None,
                     event_id: uuid::Uuid::new_v4().to_string(),
                     artifact_id: "work:work.example/7".into(),
                     artifact_type: "work.item".into(),
@@ -6133,6 +6144,7 @@ id = "work:{host}/{id}"
                         protocol_version: PROTOCOL_VERSION,
                         request_id: "must-stay-off".into(),
                         event: ActivityEvent {
+                            focus_session: None,
                             event_id: uuid::Uuid::new_v4().to_string(),
                             ..event.clone()
                         },
@@ -7595,6 +7607,7 @@ id = "work:{host}/{id}"
 
     fn activity_for_invalid_policy() -> ActivityEvent {
         ActivityEvent {
+            focus_session: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: "work:work.example/1".into(),
             artifact_type: "work.item".into(),
@@ -9349,6 +9362,7 @@ id = "work:{host}/{id}"
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap();
         let event = |artifact_id: &str, trails: Vec<ActivityTrail>| ActivityEvent {
+            focus_session: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: artifact_id.into(),
             artifact_type: "work.item".into(),
@@ -9496,6 +9510,7 @@ id = "work:{host}/{id}"
 
     fn work_item_activity(occurred_at: &str, trails: Vec<ActivityTrail>) -> ActivityEvent {
         ActivityEvent {
+            focus_session: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: "work:work.example/7".into(),
             artifact_type: "work.item".into(),
@@ -11947,6 +11962,7 @@ id = "work:{host}/{id}"
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "deliver".into(),
                     event: ActivityEvent {
+                        focus_session: None,
                         event_id: uuid::Uuid::new_v4().to_string(),
                         artifact_id: "work:work.example/7".into(),
                         artifact_type: "work.item".into(),

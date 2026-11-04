@@ -38,6 +38,22 @@
 
       <div id="status" class="status" role="status" aria-live="polite">Connecting to native host…</div>
 
+      <section class="focus-session" aria-labelledby="focus-heading">
+        <details id="focus-details">
+          <summary id="focus-heading">Focus session · <span id="focus-current">None</span></summary>
+          <p class="page-url">Group captured pages under a name. New activity uses this name; earlier captures keep theirs. Names are saved in your activity log and copied worklogs.</p>
+          <form id="focus-form">
+            <label for="focus-name">Session name</label>
+            <input id="focus-name" type="text" maxlength="240" placeholder="For example, prepare the release" />
+            <div class="button-row">
+              <button id="focus-save" type="submit" class="secondary compact" disabled>Start session</button>
+              <button id="focus-end" type="button" class="secondary compact" hidden>End session</button>
+            </div>
+          </form>
+          <p id="focus-message" class="page-url" role="status" aria-live="polite"></p>
+        </details>
+      </section>
+
       <section id="page-area" class="card page-card" aria-labelledby="page-heading">
         <h2 id="page-heading" class="visually-hidden">Current page</h2>
         <div class="page-head">

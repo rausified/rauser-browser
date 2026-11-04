@@ -38,6 +38,7 @@ fn capture_ids_survive_reindex(kind: &str) {
         };
         if kind == "why" {
             let seed = ActivityEvent {
+                focus_session: None,
                 event_id: Uuid::new_v4().to_string(),
                 ..event.clone()
             };
@@ -185,6 +186,7 @@ fn historical_noncanonical_uuid_markers_survive_reindex() {
             forged["event_id"] = Uuid::new_v4().to_string().into();
             assert!(parse_marker_event(&marker(&forged, canonical, kind), "").is_none());
             let seed = ActivityEvent {
+                focus_session: None,
                 event_id: Uuid::new_v4().to_string(),
                 ..event.clone()
             };

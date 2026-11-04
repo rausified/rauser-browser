@@ -7,6 +7,7 @@ import {
   hostReply, indexOf, install, linearDraft, ruleBox, saveCapture, siteChecked,
   until, updates,
 } from "./harness.mjs";
+import { draftModeAt } from "../starter-fixtures.mjs";
 
 test("saving a draft unchecked down to one rule saves exactly that rule", async () => {
   const page = await draftedSave();
@@ -126,7 +127,8 @@ test("saving a pending-scope shared-origin draft with chosen scope succeeds", as
   assert.equal(saved[0].unscoped, undefined);
 });
 
-test("saving an unscoped-only origin draft with the unscoped statement succeeds", async () => {
+test("saving an unscoped-only origin draft with the unscoped statement succeeds", async (t) => {
+  await draftModeAt(t, "https://docs.google.com");
   const docsUrl = "https://docs.google.com/document/d/a1b2c3d4e5f6a7b8c9d0e1/edit";
   const table = { type: "docs.document", origin: "https://docs.google.com", match: [{ path: "/document/d/{doc:token}/edit" }], id: "docs.document:{host}/{doc}" };
   const page = await draftedSave(docsUrl, { scopes: ["unscoped_only"], draft: () => ({
