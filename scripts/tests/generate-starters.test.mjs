@@ -8,6 +8,7 @@ import test from "node:test";
 import { ipcDenied } from "./ipc-guard.mjs";
 
 import { checkLock, loadFamilies, renderCatalogLine, renderTs, validateFamily } from "../generate-starters.mjs";
+import { ipcDenied } from "./ipc-guard.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = path.join(REPO, "scripts", "generate-starters.mjs");

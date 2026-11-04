@@ -149,14 +149,17 @@ test("tryRepair refuses, naming the bead and field, when the database changed a 
 
 async function doctorRepair(t, { conflicting }) {
   if (await ipcDenied(t, "child-pipe")) return;
-  if (spawnSyncTop("bd", ["version"]).status !== 0) {
-    t.skip("bd is not installed");
-    return;
-  }
   const { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join, dirname } = await import("node:path");
   const { spawnSync } = await import("node:child_process");
+  const version = spawnSync("bd", ["version"], { encoding: "utf8" });
+  if (version.error?.code === "ENOENT") {
+    t.skip("needs bd (beads) installed");
+    return;
+  }
+  if (version.error) throw version.error;
+  assert.equal(version.status, 0, version.stdout + version.stderr);
   const { fileURLToPath } = await import("node:url");
   const scripts = join(dirname(fileURLToPath(import.meta.url)), "..");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pr-doctor-queue-")));

@@ -1,12 +1,14 @@
 ## 2026-11-04 — Check new subprocess tests for IPC guards
 
-Add a focused development check for tests that capture child-process output
-without the shared IPC guard, with explicit exemptions for injected transports
-and regular-file stdio. The repair for `brwr-xkd1` found 19 generator CLI
-fixtures and two PR-doctor integrations that depend on child pipes;
-normal CI with IPC available cannot reveal that missing boundary. Keep pure
-unit tests active and require denial to fail in strict CI mode.
+Add a development-tool check that flags new subprocess-capturing integration
+tests without the shared IPC probe, with an explicit exemption for injected
+transports or regular-file stdio. Apply it to `scripts/tests/` and extension
+test tooling, and run it with `npm run test:scripts` or the Dev tools job.
 
-Implement the check alongside `scripts/tests/` and run it through the existing
-Dev tools or script gate. Track it as `brwr-f774`; this repair only reuses
-`scripts/tests/ipc-guard.mjs` and does not add a checker.
+Evidence: the health gate on baseline `48f76003` caught 11 starter-generator
+CLI cases and two PR-doctor integration cases missing the required guard.
+They failed here with empty diagnostics or `spawnSync git EPERM`.
+`brwr-xkd1` repairs these two suites; ordinary CI alone cannot identify the
+next missing guard because its IPC is allowed.
+Keep pure tests active, require guards before fixture/tool setup, and retain
+strict failures under `BRAUSER_REQUIRE_IPC_TESTS=1`.

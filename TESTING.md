@@ -934,16 +934,21 @@ missing-service, failed-launch and launch-timeout tests need the guard too.
 A boundary test that proves rejection without connecting but also verifies
 successful forwarding at the limit needs it for that forwarding step.
 
-Generator CLI fixtures and PR-doctor scratch-repository integrations also
-read subprocess output. Guard them with `ipcDenied(t, "child-pipe")` before
-creating fixtures or probing for optional tools such as `bd`; a tool-version
-probe at module scope can fail before any test gets a chance to skip. Pure
-family validation, rendering and conflict-resolution tests still run without
-IPC. To inspect the individual results in a sandbox, run
-`node --test --test-isolation=none scripts/tests/generate-starters.test.mjs scripts/tests/pr-doctor.test.mjs`.
-Repeat with `BRAUSER_TEST_SIMULATE_IPC_DENIED=1` to verify explicit skips,
-then also set `BRAUSER_REQUIRE_IPC_TESTS=1` to verify those cases fail rather
-than skip. Run the ordinary complete script suite afterward.
+The starter-generator CLI tests and PR-doctor's real-bd integration tests
+also capture child output. Their `child-pipe` guard runs before fixture
+creation or bd detection; the generator's five pure tests and the doctor's
+18 pure tests still run without IPC. To inspect the per-case results rather
+than Node's file-level summary:
+
+```sh
+node --test --test-isolation=none scripts/tests/generate-starters.test.mjs scripts/tests/pr-doctor.test.mjs
+```
+
+With `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, this reports 23 passes and 13
+explicit skips on a non-Windows machine. Adding `BRAUSER_REQUIRE_IPC_TESTS=1`
+must instead fail those 13 cases. This checks the test boundary; the driver's
+unsandboxed gate exercises the actual subprocess assertions. An installed bd
+that fails `bd version` is an error, not an unavailable-tool skip.
 
 `npm run test:adapter-diff -- --cases 5000` uses the same child-pipe probe
 before starting either engine. A denied pipe explicitly reports a skip and

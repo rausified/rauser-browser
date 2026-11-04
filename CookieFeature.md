@@ -1494,3 +1494,16 @@ and explicitly skip 21 integrations; strict simulated denial fails all 21
 integrations with no skips. Application behavior and capture identity rules
 are unchanged. The independent driver must exercise the integrations with IPC
 available before publication.
+## 2026-11-04 — Keep subprocess health checks honest in the sandbox
+
+The overnight health check caught two newly added script suites treating denied
+child-process pipes as application failures. Starter-generator checks received
+empty diagnostic output, while PR-doctor's scratch queue integration failed
+with `spawnSync git EPERM`. Both suites now use the repository's shared IPC
+probe before starting subprocess fixtures. Their 23 pure unit tests still run;
+13 subprocess cases visibly skip when the sandbox denies pipes. The strict
+CI flag turns that same denial into failure, leaving all original integration
+assertions in place for the driver's unsandboxed gate. PR-doctor now checks
+whether bd is installed after the probe and reports a broken installed tool
+as an error. This was a health-only repair; no Re-learn migration or product
+behavior was enabled.
