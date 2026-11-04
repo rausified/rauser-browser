@@ -87,6 +87,20 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
   ],
 };
 
+// Puts the test seam into "draft mode" at `origin`: whichever starter family
+// (today's shipped catalog, not a fixture) claims `origin` is removed from
+// `STARTER_FAMILIES` for the duration of the test, so a drafted-site test
+// that captures on a shared origin like docs.google.com stays drafted even
+// after a later starter family claims that origin. Restores the default
+// catalog via `t.after`, same as every other `setStarterFamiliesForTest` use.
+export async function draftModeAt(t, origin) {
+  const { setStarterFamiliesForTest, starterFamily } = await import("../dist/starter-adapters.js");
+  const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
+  const claimer = starterFamily(origin);
+  setStarterFamiliesForTest(STARTER_FAMILIES.filter((family) => family !== claimer));
+  t.after(() => setStarterFamiliesForTest(null));
+}
+
 // A two-type unscoped family, for tests that need to tell "the notice shows
 // once" (EXAMPLE_UNSCOPED_FAMILY, one type) apart from "the notice shows
 // before every checkbox and on every gallery card" (this fixture). Notion is

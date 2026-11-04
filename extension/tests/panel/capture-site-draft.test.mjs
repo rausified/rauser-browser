@@ -6,6 +6,7 @@ import {
   LINEAR_URL, WIKI, WIKI_URL, descendants, draftReview, draftRule, draftText,
   drafted, linearDraft, ruleBox, sentAfter, starterGroup, until, updates, wikiDraft,
 } from "./harness.mjs";
+import { draftModeAt } from "../starter-fixtures.mjs";
 
 function notionDraft(revision = "1") {
   return {
@@ -187,7 +188,8 @@ test("a page that navigated before links were read cancels the draft without cal
 // one click on Save confirms it; it stays editable, and the every-account
 // statement stays the alternative. This replaced "scope pending, Enable
 // disabled until the user chooses" (DESIGN §5.1, §12.2 step 7.6).
-test("a shared origin pre-fills this tab's tenant as Capture for <tenant> and saves with one click", async () => {
+test("a shared origin pre-fills this tab's tenant as Capture for <tenant> and saves with one click", async (t) => {
+  await draftModeAt(t, "https://docs.google.com");
   const page = await draftReview(LINEAR_URL, { draft: () => linearDraft(),
     script: async () => ({ current: "/{slug}/issue/{key}", links: [] }) });
   await drafted(page);
