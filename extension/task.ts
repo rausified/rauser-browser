@@ -119,9 +119,12 @@ export async function startTask(
   tab: { id: number; url: string; title: string } | null,
   instruction: string,
   deps: SummarizeDeps,
+  commandRevision?: string,
 ): Promise<RunView | null> {
   const cleaned = cleanInstruction(instruction);
   if (cleaned === "") return null;
+  const command = cleaned.startsWith("/") && !cleaned.startsWith("//");
+  if (command && !commandRevision) throw new HostError("invalid_request", "Load saved commands before running a slash command.");
   await markRunsMayExist(deps.storage, deps.now().getTime());
   const page = tab === null ? null : await readTab(tab, deps);
   const response = await deps.host.call({
@@ -134,6 +137,7 @@ export async function startTask(
       selection: page.selection,
     }),
     instruction: cleaned,
+    ...(command && commandRevision ? { command_revision: commandRevision } : {}),
     harness: null,
     requested_at: localTimestamp(deps.now()),
   }, "run_started");

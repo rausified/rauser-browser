@@ -2373,6 +2373,7 @@ mod tests {
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let request = Request::StartTask(brauser_protocol::StartTaskRequest {
+            command_revision: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "direct-task".into(),

@@ -137,6 +137,14 @@
             placeholder="Tell the agent what to do…"></textarea>
           <button id="task-run" type="submit" class="run-button" aria-label="Run task" title="Run task"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span id="task-run-label" class="visually-hidden">Run</span></button>
         </form>
+        <details id="task-commands" class="task-command-options">
+          <summary>Saved commands</summary>
+          <label for="task-command">Insert a saved command</label>
+          <select id="task-command" aria-describedby="task-command-status" disabled><option value="">Choose a command…</option></select>
+          <button id="task-command-insert" type="button" class="secondary compact" disabled>Insert command</button>
+          <button id="task-command-refresh" type="button" class="secondary compact">Refresh commands</button>
+          <p id="task-command-status" class="page-url">Open to load commands from config.toml.</p>
+        </details>
         <label class="task-page-choice"><input id="task-use-page" type="checkbox" checked> Include this page</label>
         <div class="task-meta">
           <p id="task-context" class="task-context"></p>

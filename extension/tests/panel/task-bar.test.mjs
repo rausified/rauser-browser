@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ARTICLE_URL, CONFIG, PANEL_HTML, PANEL_NOTICE_KEY, READY, REUSE_KEY, RUN_VIEW, SETUP_WARNING, SET_UP, WARNING_SEEN_KEY,
-  buttonIn, descendants, install, readablePage, settle, startsRun, storageKey, teardown, until,
+  buttonIn, descendants, install, isResponseShape, readablePage, settle, startsRun, storageKey, teardown, until,
 } from "./harness.mjs";
 
 const RUNS_MAY_EXIST_KEY = storageKey("runs_may_exist_v1");
@@ -192,6 +192,109 @@ test("Reuse of a task without a page keeps that scope while a web page is follow
   enter(page);
   await until(() => page.sent("start_task").length === 1, "explicit Run");
   assert.equal(page.sent("start_task")[0].no_page, true);
+});
+
+const commandCatalogue = (revision = "commands-1", issue = null) => ({
+  type: "task_commands_listed", revision,
+  commands: issue ? [] : [{ name: "actions", description: "<img> Extract actions" }], issue,
+});
+
+async function openCommands(page) {
+  page.el("task-commands").open = true;
+  page.el("task-commands").dispatch("toggle");
+  await until(() => page.sent("list_task_commands").length > 0 && !page.el("task-command-refresh").disabled, "saved commands to load");
+}
+
+test("saved commands load on explicit review and insert before a draft without starting a run", async () => {
+  const page = await taskPanel({ intercept: (r) => r.type === "list_task_commands" ? commandCatalogue() : startsTask()(r) });
+  assert.equal(page.sent("list_task_commands").length, 0, "no background command reads");
+  type(page, "Focus on today");
+  await openCommands(page);
+  assert.equal(page.el("task-command").disabled, false);
+  assert.equal(page.el("task-command").children[1].textContent, "/actions · <img> Extract actions");
+  page.el("task-command").value = "actions";
+  page.el("task-command").dispatch("change");
+  assert.equal(page.el("task-input").value, "Focus on today", "selection alone keeps the draft");
+  assert.equal(page.el("task-command-insert").disabled, false);
+  page.el("task-command-insert").click();
+  assert.equal(page.el("task-input").value, "/actions Focus on today");
+  assert.equal(page.sent("start_task").length, 0);
+  page.el("task-use-page").checked = false;
+  page.el("task-use-page").dispatch("change");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1, "explicit command start");
+  const request = page.sent("start_task")[0];
+  assert.equal(request.instruction, "/actions Focus on today");
+  assert.equal(request.command_revision, "commands-1");
+  assert.equal(request.no_page, true);
+  for (const key of ["prompt", "kind", "record_key", "url", "content"]) assert.equal(key in request, false, key);
+});
+
+test("saved command descriptions count Unicode characters at the host's 256-character boundary", async () => {
+  const description = "🔎".repeat(256);
+  const catalogue = { ...commandCatalogue(), protocol_version: 8, request_id: "unicode",
+    commands: [{ name: "actions", description }] };
+  assert.equal(isResponseShape(catalogue), true);
+  for (const invalid of ["", `${description}x`, "x".repeat(257), null, 256]) {
+    assert.equal(isResponseShape({ ...catalogue, commands: [{ name: "actions", description: invalid }] }), false);
+  }
+  const page = await taskPanel({ intercept: (r) => r.type === "list_task_commands"
+    ? { ...commandCatalogue(), commands: catalogue.commands } : startsTask()(r) });
+  await openCommands(page);
+  assert.equal(page.el("task-command").disabled, false);
+  assert.equal(page.el("task-command").children[1].textContent, `/actions · ${description}`);
+});
+
+test("a stale saved command refreshes the catalogue and retains the draft until another explicit Run", async () => {
+  let revision = "commands-1";
+  let starts = 0;
+  const page = await taskPanel({ intercept: (r) => {
+    if (r.type === "list_task_commands") return commandCatalogue(revision);
+    if (r.type === "start_task" && ++starts === 1) {
+      revision = "commands-2";
+      return { type: "error", code: "conflict", message: "Saved commands changed. Review the refreshed list and press Run again." };
+    }
+    return startsTask()(r);
+  } });
+  await openCommands(page);
+  type(page, "/actions Keep this draft");
+  enter(page);
+  await until(() => page.sent("list_task_commands").length === 2 && !page.el("task-input").readOnly, "stale review to refresh");
+  assert.equal(page.el("task-input").value, "/actions Keep this draft");
+  assert.equal(page.sent("start_task").length, 1, "never retries execution automatically");
+  assert.match(page.el("task-run-area").textContent, /Review the refreshed list/);
+  enter(page);
+  await until(() => page.sent("start_task").length === 2, "second explicit run");
+  assert.equal(page.sent("start_task")[1].command_revision, "commands-2");
+});
+
+test("invalid command registries and older hosts refuse slash tasks while ordinary tasks still work", async () => {
+  for (const answer of [commandCatalogue("commands-1", "Fix [[commands]]; ordinary tasks still work."),
+    { type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" }]) {
+    const page = await taskPanel({ intercept: (r) => r.type === "list_task_commands" ? answer : startsTask()(r) });
+    type(page, "/actions");
+    enter(page);
+    await until(() => page.sent("list_task_commands").length === 1 && !page.el("task-input").readOnly, "command refusal");
+    assert.equal(page.sent("start_task").length, 0, "no raw slash task reaches an old host");
+    assert.equal(page.el("task-input").value, "/actions");
+    assert.match(page.el("task-run-area").textContent, /Fix \[\[commands\]\]|Rebuild the Brauser host/);
+    type(page, "Ordinary task");
+    enter(page);
+    await until(() => page.sent("start_task").length === 1, "ordinary task still works");
+    assert.equal("command_revision" in page.sent("start_task")[0], false);
+    teardown.splice(0).forEach((listener) => listener());
+  }
+});
+
+test("Reuse escapes a stored leading slash so it stays a literal instruction", async () => {
+  const session = new Map([[REUSE_KEY, { instruction: "/actions literal prompt", no_page: true, window_id: 1, at: Date.now() }]]);
+  const page = await taskPanel({ session });
+  await until(() => page.el("task-input").value === "//actions literal prompt", "literal Reuse");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1, "literal start");
+  assert.equal(page.sent("list_task_commands").length, 0);
+  assert.equal(page.sent("start_task")[0].instruction, "//actions literal prompt");
+  assert.equal("command_revision" in page.sent("start_task")[0], false);
 });
 
 test("the hint explains each disabled state in order", async () => {

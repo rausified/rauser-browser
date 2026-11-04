@@ -1467,3 +1467,33 @@ remain inert. Accessibility reports two offline passes and 47 explicit
 sandbox browser skips. Fresh complete diff review and one independent
 in-session Codex pass found no actionable issues; the driver owns external
 review, real browser/platform validation and publication.
+
+## 2026-11-04 — Reusable sidebar task commands
+
+`brwr-f410` delivers the first custom-command slice of `brwr-cdq`.
+`host/src/task_commands.rs` validates bounded literal sidebar recipes;
+`ConfigStore` retains their raw TOML independently of the wire snapshot and
+carries it through unrelated config saves, including an invalid registry.
+The read-only `list_task_commands` catalogue returns descriptors, a command
+issue and the config revision. `start_task.command_revision` binds a slash
+invocation; native task preparation resolves the page key and command under
+one config lock and checks the composed instruction before service access.
+Both additions are within protocol v8. Existing task service records need no
+new fields because they store the effective instruction.
+
+The panel loads the catalogue on explicit review or slash execution, explicitly inserts
+a chosen command before the draft, and never starts it implicitly. Stale
+choices refresh without retrying execution. `//` escapes a literal slash, and
+Reuse/recall escape stored leading slashes. Templates, `include`, built-in
+actions and non-sidebar outputs remain unsupported and are refused visibly.
+See `docs/superpowers/plans/2026-11-04-task-commands.md` for the design challenge,
+scope decisions and validation. Ordinary config saves retain ID freezing.
+
+Validation: the full required and README gate passes with 1,619 Rust-reported
+passes (+10; 94 explicit IPC guards, two ignored), 47 extension files (+6 new
+JavaScript regressions), both Clippy configurations, 12 script files, 252
+Python tooling cases (92 platform skips), queue checks and 10,696 inert
+Markdown renderings. Accessibility reports two offline fixture passes and
+48 explicit sandbox browser skips. Fresh complete manual diff review and one
+independent in-session Codex pass found no actionable issues; the external
+driver owns real browser/platform validation, approval and publication.
