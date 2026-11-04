@@ -117,8 +117,10 @@ export function mergifyQueueStatus(check) {
   if (FAILED.has(check.state)) phase = "dequeued";
   else if (/^Merged\b/i.test(title)) phase = "merged";
   else if (meta?.queued_at || /^(Queued\b|Running merge queue checks)/i.test(title)) phase = "queued";
-  else if (meta?.state === "waiting" || /^Waiting for queue conditions/i.test(title)) phase = "waiting";
+  // Before the payload's state: Mergify embeds state "waiting" (nothing
+  // unmet) under a "Merge queue is ready" title too (#265, 2026-11-04).
   else if (/^Merge queue is ready/i.test(title)) phase = "ready";
+  else if (meta?.state === "waiting" || /^Waiting for queue conditions/i.test(title)) phase = "waiting";
   return { phase, unmet: phase === "waiting" ? unmet : [], title };
 }
 
