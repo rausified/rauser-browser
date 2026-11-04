@@ -67,14 +67,19 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
   // `SHARED_ORIGINS`) only allows an `unscoped` marker on its five hardcoded
   // shared origins; an unscoped family's fixture has to use one of them, not
   // a synthetic test domain, or a full plan/validate round trip fails
-  // "unscoped_not_shared". Figma is in that set and claimed by no starter
-  // family or other fixture.
-  origin: { kind: "exact", origin: "https://www.figma.com" },
+  // "unscoped_not_shared". Linear is in that set and claimed by no starter
+  // family or other fixture. (This fixture used to sit on www.figma.com;
+  // Task 5 moved it to linear.app because PR D's Figma family will claim
+  // www.figma.com, and the generator's origin-collision check, exercised
+  // against every starter-fixtures.mjs family in
+  // scripts/tests/generate-starters.test.mjs, would otherwise flag this
+  // fixture as colliding with it.)
+  origin: { kind: "exact", origin: "https://linear.app" },
   scope: {
     kind: "unscoped",
     notice: "Records every Everyone page from every account in this Chrome profile.",
   },
-  sample_origin: "https://www.figma.com",
+  sample_origin: "https://linear.app",
   sample_scope: [],
   overlaps: [],
   types: [

@@ -139,6 +139,73 @@ have neither that marker nor `{scope}` in an `example_path`. A `"kind":
 origins. `scripts/generate-starters.mjs` enforces all of this, file and
 field named.
 
+## Registry and policy checks
+
+`scripts/generate-starters.mjs`'s validation (plain generation and
+`--check`) also runs the pure registry checks of
+`docs/superpowers/specs/2026-11-03-starter-families-design.md` §4, in the
+same pass as the family-file shape validation above (Open decision 13): a
+family file's own validation problems are still reported, and every other
+file, and these checks, still run. A file is left out of the pass only when
+it is not valid JSON, or its shape is too broken to read further (not even
+a plain object with a `types` array).
+
+**Shared-origin policy** (a family's `origin` against
+`protocol/capture-site/catalog.json`'s `shared_origins`):
+
+- **Origin collisions.** Two families' origins may not overlap: a subdomain
+  suffix inside another suffix always collides, whatever `labels` or
+  `exclude` say; an exact origin collides with a suffix family only when
+  that family would claim it (`familyClaims`); a repeated exact origin
+  always collides. The problem is reported on whichever file sorts later:
+  `<file>: origin overlaps <other file>`.
+- **A shared origin always needs account values.** An exact origin listed in
+  `shared_origins` may not have `scope: null`
+  (`<file>: origin <o> is a shared origin, so scope must not be null`).
+- **`unscoped` needs an exact origin `shared_origins` lists.** The engine
+  (`extension/adapter-templates.ts` `SHARED_ORIGINS`) only allows the
+  `unscoped` marker on one of its hard-coded shared origins
+  (`<file>: scope "unscoped" needs an exact origin in
+  protocol/capture-site/catalog.json shared_origins`).
+- **`github_org` is only for GitHub itself**
+  (`<file>: scope "github_org" is only for https://github.com`).
+- **`tenant_name` must use the host's own tenant capture.** A shared origin
+  whose `tenant` is `null` (today: `docs.google.com`, `www.figma.com`) names
+  no tenant at all, so no family there may use `tenant_name`
+  (`<file>: scope "tenant_name" cannot be used on <o>, whose URLs name no
+  tenant`). Otherwise every type's adapter `scope` table must use exactly
+  the origin's `tenant.capture` as its one key — the same capture Task 3's
+  host `taken_types` computation reads
+  (`<file>: types[N].adapter.scope must use "<capture>", the host's tenant
+  capture for <o>`).
+
+**Registry cross-checks** (spec §4 check 2's reverse direction, and check 3):
+
+- Every `docs/adapters/*.md` file (other than its own `README.md`) must be
+  some type's own `docs` (`docs/adapters/<x>.md: no family type`).
+- A `protocol/capture-site/shapes.json` row whose note names a starter doc
+  belongs in a family file's `samples` instead
+  (`protocol/capture-site/shapes.json: row "<note>" names a starter doc; it
+  belongs in a family file's samples`).
+- A `protocol/capture-site/starter-shapes.json` row must still name a real
+  family type (`protocol/capture-site/starter-shapes.json: row "<note>"
+  names no family type`); `--check`'s own byte comparison already flags a
+  hand edit there, but this message names the row.
+- Every type's `docs` file must exist
+  (`<file>: types[N].docs docs/adapters/<type>.md is missing`), and its
+  first `Status:` line must open with the text its `status` implies (Open
+  decision 6): `Status: release-certified <checked_on>.` (certified, live
+  method), `Status: certified <checked_on> from real browsing history.`
+  (certified, history method), or `Status: development draft.` (not yet
+  certified) — otherwise `docs/adapters/<type>.md: first Status line does
+  not match status (expected "<opening>")`.
+
+Two checks need the built engine instead of the generator's own JSON
+validation, so they live in `extension/tests/starter-registry.test.mjs`:
+spec §4 check 4 (every match rule has a positive and a negative evaluate
+vector, and a sample whose title the title template accepts) and check 8
+(`node scripts/generate-starters.mjs --check` is clean).
+
 ## Adding a type
 
 1. Add a `types[]` entry to the family's JSON file (or a new family file, named `<family>.json`, for a tool with no existing entry) following the shape above.

@@ -217,7 +217,7 @@ test("a tenant_name family plans through its parser", (t) => {
 test("an unscoped family plans without extra input", (t) => {
   setStarterFamiliesForTest([EXAMPLE_UNSCOPED_FAMILY]);
   t.after(() => setStarterFamiliesForTest(null));
-  const result = planCaptureSite(CONFIG, "https://www.figma.com/p/1", { types: new Set(), scopes: {} });
+  const result = planCaptureSite(CONFIG, `${EXAMPLE_UNSCOPED_FAMILY.origin.origin}/p/1`, { types: new Set(), scopes: {} });
   assert.equal(result.ok, true, result.message);
   for (const adapter of result.plan.document.artifacts) assert.equal(adapter.unscoped, "acknowledged");
 });

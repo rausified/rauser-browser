@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
-  checkLock, familyClaims, loadFamilies, renderCatalogLine, renderTs, validateFamily,
+  checkLock, checkPolicy, checkRegistry, familyClaims, loadFamilies, loadFamilyEntries, renderCatalogLine, renderTs,
+  validateFamily,
 } from "../generate-starters.mjs";
 import { ORIGIN_CASES, STRICT_ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
 import { EXAMPLE_STRICT_FAMILY } from "../../extension/tests/starter-fixtures.mjs";
@@ -27,6 +28,7 @@ function tmpRoot(t) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "generate-starters-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(path.join(REPO, "protocol", "starters"), path.join(dir, "protocol", "starters"), { recursive: true });
+  cpSync(path.join(REPO, "docs", "adapters"), path.join(dir, "docs", "adapters"), { recursive: true });
   cpSync(path.join(REPO, CATALOG_JSON), path.join(dir, CATALOG_JSON));
   cpSync(path.join(REPO, GENERATED_TS), path.join(dir, GENERATED_TS));
   cpSync(path.join(REPO, SHAPES_JSON), path.join(dir, SHAPES_JSON));
@@ -678,4 +680,391 @@ test("the test-only tenant_name, unscoped and strict-subdomain fixtures pass the
     validateFamily(problems, "<fixture>", fixture);
     assert.deepEqual(problems, [], fixture.family);
   }
+});
+
+// --- Task 5: shared-origin policy (checks 6, 7, gaps 1, 6, 8) --------------
+
+test('scope "unscoped" needs a shared exact origin (gap 1)', (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.review_prompt = "Choose whether to remember Miro boards.";
+  miro.scope = { kind: "unscoped", notice: "Records every Miro board from every account in this Chrome profile." };
+  miro.types[0].adapter.unscoped = "acknowledged";
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: scope "unscoped" needs an exact origin in protocol\/capture-site\/catalog\.json shared_origins/,
+  );
+});
+
+test("a suffix nested inside another suffix always collides (check 6)", (t) => {
+  const root = tmpRoot(t);
+  const sharepoint = readFamily(root, "sharepoint");
+  const onedrive = {
+    ...sharepoint,
+    family: "onedrive",
+    display_name: "OneDrive",
+    origin: { kind: "subdomain", suffix: ".my.sharepoint.com" },
+    sample_origin: "https://acme.my.sharepoint.com",
+    types: sharepoint.types.map((type) => ({
+      ...type,
+      type: "onedrive.doc",
+      key: "onedrive:{origin}",
+      docs: "docs/adapters/onedrive.doc.md",
+      adapter: { ...type.adapter, type: "onedrive.doc", id: "onedrive:{host}/{doc}" },
+      samples: [],
+      samples_shape: false,
+    })),
+  };
+  writeFamily(root, "onedrive", onedrive);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/sharepoint\.json: origin overlaps protocol\/starters\/onedrive\.json/,
+  );
+});
+
+test("an exact origin collides with a subdomain family that would claim it (check 6)", (t) => {
+  const root = tmpRoot(t);
+  const extra = {
+    family: "zzzacme",
+    display_name: "Acme",
+    review_prompt: null,
+    origin: { kind: "exact", origin: "https://acme.atlassian.net" },
+    scope: null,
+    sample_origin: "https://acme.atlassian.net",
+    sample_scope: [],
+    overlaps: [],
+    types: [{
+      type: "zzzacme.page",
+      key: "zzzacme.page",
+      label: "Acme pages",
+      label_variants: [],
+      description: "An example page.",
+      record_label: null,
+      example_path: null,
+      adapter: { type: "zzzacme.page", match: [{ path: "/p/{id:int}" }], id: "zzzacme.page:{host}/{id}" },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/zzzacme.page.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+  writeFamily(root, "zzzacme", extra);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/zzzacme\.json: origin overlaps protocol\/starters\/atlassian\.json/,
+  );
+});
+
+test('scope "github_org" is only for https://github.com (gap 8)', (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.review_prompt = "Choose whether to remember Miro boards.";
+  miro.scope = { kind: "github_org" };
+  miro.sample_scope = ["acme"];
+  miro.types[0].adapter.scope = { owner: { "$scope": true } };
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: scope "github_org" is only for https:\/\/github\.com/,
+  );
+});
+
+test("a tenant_name family's adapter.scope key must be the host's own tenant capture (gap 6)", (t) => {
+  const root = tmpRoot(t);
+  const notion = {
+    family: "notionteam",
+    display_name: "Notion",
+    review_prompt: "Choose what to remember on Notion.",
+    origin: { kind: "exact", origin: "https://www.notion.so" },
+    scope: { kind: "tenant_name", max: 4, label: "Workspaces", placeholder: "acme" },
+    sample_origin: "https://www.notion.so",
+    sample_scope: ["acme"],
+    overlaps: [],
+    types: [{
+      type: "notionteam.page",
+      key: "notionteam.page:{host}/{id}",
+      label: "Notion pages",
+      label_variants: [],
+      description: "A Notion page.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "notionteam.page",
+        match: [{ path: "/{team:name|lower}/{id:token(32)}" }],
+        scope: { team: { "$scope": true } },
+        id: "notionteam.page:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/notionteam.page.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+  writeFamily(root, "notionteam", notion);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/notionteam\.json: types\[0\]\.adapter\.scope must use "workspace", the host's tenant capture for https:\/\/www\.notion\.so/,
+  );
+});
+
+test('"tenant_name" cannot be used where URLs name no tenant (gap 6)', (t) => {
+  const root = tmpRoot(t);
+  const gdocsteam = {
+    family: "gdocsteam",
+    display_name: "Google Docs",
+    review_prompt: "Choose what to remember on Google Docs.",
+    origin: { kind: "exact", origin: "https://docs.google.com" },
+    scope: { kind: "tenant_name", max: 4, label: "Workspaces", placeholder: "acme" },
+    sample_origin: "https://docs.google.com",
+    sample_scope: ["acme"],
+    overlaps: [],
+    types: [{
+      type: "gdocsteam.doc",
+      key: "gdocsteam.doc:{host}/{id}",
+      label: "Google Docs",
+      label_variants: [],
+      description: "A Google Doc.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "gdocsteam.doc",
+        match: [{ path: "/document/d/{id:token(20,64)}" }],
+        scope: { workspace: { "$scope": true } },
+        id: "gdocsteam.doc:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/gdocsteam.doc.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+  writeFamily(root, "gdocsteam", gdocsteam);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/gdocsteam\.json: scope "tenant_name" cannot be used on https:\/\/docs\.google\.com, whose URLs name no tenant/,
+  );
+});
+
+test("a shared origin always needs account values (check 7)", (t) => {
+  const root = tmpRoot(t);
+  const linearteam = {
+    family: "linearteam",
+    display_name: "Linear",
+    review_prompt: null,
+    origin: { kind: "exact", origin: "https://linear.app" },
+    scope: null,
+    sample_origin: "https://linear.app",
+    sample_scope: [],
+    overlaps: [],
+    types: [{
+      type: "linearteam.issue",
+      key: "linearteam.issue:{host}/{id}",
+      label: "Linear issues",
+      label_variants: [],
+      description: "A Linear issue.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "linearteam.issue",
+        match: [{ path: "/issue/{id:token(10)}" }],
+        id: "linearteam.issue:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/linearteam.issue.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+  writeFamily(root, "linearteam", linearteam);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/linearteam\.json: origin https:\/\/linear\.app is a shared origin, so scope must not be null/,
+  );
+});
+
+// --- Task 5: registry cross-checks (spec §4 check 2 reverse, check 3) -----
+
+test("a stray docs/adapters/*.md file names no family type (check 2 reverse)", (t) => {
+  const root = tmpRoot(t);
+  writeFileSync(path.join(root, "docs", "adapters", "stray.md"), "# Stray\n\nStatus: development draft.\n");
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, /docs\/adapters\/stray\.md: no family type/);
+});
+
+test("a shapes.json row naming a starter doc belongs in a family file's samples (check 2 reverse)", (t) => {
+  const root = tmpRoot(t);
+  const shapesPath = path.join(root, SHAPES_JSON);
+  const shapes = JSON.parse(readFileSync(shapesPath, "utf8"));
+  shapes.accept.push({
+    note: "Jira canonical issue (docs/adapters/jira.issue.md)",
+    url: "https://acme.atlassian.net/browse/PROJ-1",
+    shape: "/browse/{key}",
+  });
+  writeFileSync(shapesPath, JSON.stringify(shapes, null, 2));
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/capture-site\/shapes\.json: row "Jira canonical issue \(docs\/adapters\/jira\.issue\.md\)" names a starter doc; it belongs in a family file's samples/,
+  );
+});
+
+test("a type's missing doc page names the file and field (check 3)", (t) => {
+  const root = tmpRoot(t);
+  rmSync(path.join(root, "docs", "adapters", "miro.board.md"));
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: types\[0\]\.docs docs\/adapters\/miro\.board\.md is missing/,
+  );
+});
+
+test("a certified doc's Status line disagreeing with its checked_on is caught (check 3)", (t) => {
+  const root = tmpRoot(t);
+  const docPath = path.join(root, "docs", "adapters", "jira.issue.md");
+  writeFileSync(docPath, readFileSync(docPath, "utf8").replace("2026-11-02", "2026-11-03"));
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /docs\/adapters\/jira\.issue\.md: first Status line does not match status \(expected "Status: release-certified 2026-11-02\."\)/,
+  );
+});
+
+test("a development type's doc wrongly claiming certification is caught (check 3)", (t) => {
+  const root = tmpRoot(t);
+  const docPath = path.join(root, "docs", "adapters", "confluence.page.md");
+  const updated = readFileSync(docPath, "utf8").replace(/^Status:.*$/m, "Status: release-certified 2026-11-02.");
+  writeFileSync(docPath, updated);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /docs\/adapters\/confluence\.page\.md: first Status line does not match status \(expected "Status: development draft\."\)/,
+  );
+});
+
+// --- Task 5: one pass -------------------------------------------------------
+
+test("validation, policy and registry problems are all reported in one pass", (t) => {
+  const root = tmpRoot(t);
+
+  // A family validation problem (unknown field).
+  const miro = readFamily(root, "miro");
+  miro.types[0].lable = "typo";
+  writeFamily(root, "miro", miro);
+
+  // A policy problem (gap 8) on a different, unrelated family.
+  const extragithub = {
+    family: "extragithub",
+    display_name: "Extra",
+    review_prompt: "Choose what to remember on Extra.",
+    origin: { kind: "exact", origin: "https://example.test" },
+    scope: { kind: "github_org" },
+    sample_origin: "https://example.test",
+    sample_scope: ["acme"],
+    overlaps: [],
+    types: [{
+      type: "extragithub.item",
+      key: "extragithub.item",
+      label: "Extra items",
+      label_variants: [],
+      description: "An example item.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "extragithub.item",
+        match: [{ path: "/{owner:name|lower}/item/{id:int}" }],
+        scope: { owner: { "$scope": true } },
+        id: "extragithub.item:{host}/{owner}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/extragithub.item.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+  writeFamily(root, "extragithub", extragithub);
+  writeFileSync(path.join(root, "docs", "adapters", "extragithub.item.md"), "# Extra item\n\nStatus: development draft.\n");
+
+  // A registry problem (check 3, a stale doc), on a third, unrelated file.
+  const docPath = path.join(root, "docs", "adapters", "jira.issue.md");
+  writeFileSync(docPath, readFileSync(docPath, "utf8").replace("2026-11-02", "2026-11-03"));
+
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /protocol\/starters\/miro\.json:.*unknown field "lable"/);
+  assert.match(output, /protocol\/starters\/extragithub\.json: scope "github_org" is only for https:\/\/github\.com/);
+  assert.match(
+    output,
+    /docs\/adapters\/jira\.issue\.md: first Status line does not match status \(expected "Status: release-certified 2026-11-02\."\)/,
+  );
+});
+
+// --- Task 5: fixtures do not collide with real families (gap 5) -----------
+
+test("fixtures do not collide with real families (gap 5)", async () => {
+  const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY, EXAMPLE_STRICT_FAMILY: strictFixture } =
+    await import("../../extension/tests/starter-fixtures.mjs");
+  const catalog = JSON.parse(readFileSync(path.join(REPO, CATALOG_JSON), "utf8"));
+  const realEntries = loadFamilyEntries(REPO);
+  const fixtureEntries = [
+    { file: "<fixture EXAMPLE_TENANT_FAMILY>", family: EXAMPLE_TENANT_FAMILY },
+    { file: "<fixture EXAMPLE_UNSCOPED_FAMILY>", family: EXAMPLE_UNSCOPED_FAMILY },
+    { file: "<fixture EXAMPLE_UNSCOPED_PAIR_FAMILY>", family: EXAMPLE_UNSCOPED_PAIR_FAMILY },
+    { file: "<fixture EXAMPLE_STRICT_FAMILY>", family: strictFixture },
+  ];
+  assert.deepEqual(checkPolicy([...realEntries, ...fixtureEntries], catalog), []);
+});
+
+test("an unmoved www.figma.com fixture would have collided with a Figma starter family (gap 5 regression bite)", () => {
+  // Proves checkPolicy's check 6 has teeth: before Task 5 moved it,
+  // EXAMPLE_UNSCOPED_FAMILY sat on https://www.figma.com, which PR D's real
+  // Figma family will claim. This manufactures that old shape locally,
+  // without touching the real (already-moved) fixture, and a PR D-shaped
+  // family claiming the same origin, to show the collision is caught.
+  const figmaFamily = {
+    family: "figma",
+    origin: { kind: "exact", origin: "https://www.figma.com" },
+  };
+  const unmovedFixture = {
+    family: "everyone",
+    origin: { kind: "exact", origin: "https://www.figma.com" },
+  };
+  const entries = [
+    { file: "protocol/starters/figma.json", family: figmaFamily },
+    { file: "<fixture EXAMPLE_UNSCOPED_FAMILY>", family: unmovedFixture },
+  ];
+  const catalog = JSON.parse(readFileSync(path.join(REPO, CATALOG_JSON), "utf8"));
+  assert.deepEqual(checkPolicy(entries, catalog), [
+    "protocol/starters/figma.json: origin overlaps <fixture EXAMPLE_UNSCOPED_FAMILY>",
+  ]);
 });
