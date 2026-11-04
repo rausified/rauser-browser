@@ -6,12 +6,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { checkLock, loadFamilies, renderCatalogLine, renderTs, validateFamily } from "../generate-starters.mjs";
+import {
+  checkLock, familyClaims, loadFamilies, renderCatalogLine, renderTs, validateFamily,
+} from "../generate-starters.mjs";
+import { ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = path.join(REPO, "scripts", "generate-starters.mjs");
 const GENERATED_TS = "extension/starter-families.generated.ts";
 const CATALOG_JSON = "protocol/capture-site/catalog.json";
+const SHAPES_JSON = "protocol/capture-site/shapes.json";
+const STARTER_SHAPES_JSON = "protocol/capture-site/starter-shapes.json";
 
 const LEGACY_ORDER = ["jira.issue", "confluence.page", "sharepoint.doc", "github.pr", "github.issue", "github.repo", "miro.board"];
 
@@ -21,6 +26,8 @@ function tmpRoot(t) {
   cpSync(path.join(REPO, "protocol", "starters"), path.join(dir, "protocol", "starters"), { recursive: true });
   cpSync(path.join(REPO, CATALOG_JSON), path.join(dir, CATALOG_JSON));
   cpSync(path.join(REPO, GENERATED_TS), path.join(dir, GENERATED_TS));
+  cpSync(path.join(REPO, SHAPES_JSON), path.join(dir, SHAPES_JSON));
+  cpSync(path.join(REPO, STARTER_SHAPES_JSON), path.join(dir, STARTER_SHAPES_JSON));
   return dir;
 }
 
@@ -313,6 +320,172 @@ test('example_path must start with "/"', (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stdout + result.stderr,
     /protocol\/starters\/atlassian\.json: types\[0\]\.example_path must start with "\/"/);
+});
+
+test("a missing samples names the file and field", (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  delete miro.types[0].samples;
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, /protocol\/starters\/miro\.json: types\[0\]\.samples is required/);
+});
+
+test("a sample URL off the family's origin is refused", (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.types[0].samples[0].url = "https://example.com/app/board/x=/";
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: types\[0\]\.samples\[0\]\.url is not on this family's origin/,
+  );
+});
+
+test("samples must be empty when samples_shape is false", (t) => {
+  const root = tmpRoot(t);
+  const github = readFamily(root, "github");
+  github.types[2].samples.push({ url: "https://github.com/acme/widget", title: null, shape: "/acme/widget", note: "x" });
+  writeFamily(root, "github", github);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/github\.json: types\[2\]\.samples must be empty when samples_shape is false/,
+  );
+});
+
+test("samples must not be empty when samples_shape is true", (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.types[0].samples = [];
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: types\[0\]\.samples must not be empty when samples_shape is true/,
+  );
+});
+
+test("a stale starter-shapes.json fails --check", (t) => {
+  const root = tmpRoot(t);
+  const starterShapesPath = path.join(root, STARTER_SHAPES_JSON);
+  const starterShapes = JSON.parse(readFileSync(starterShapesPath, "utf8"));
+  starterShapes.accept[0].shape = "/changed";
+  writeFileSync(starterShapesPath, JSON.stringify(starterShapes, null, 2) + "\n");
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, new RegExp(`out of date: ${STARTER_SHAPES_JSON}`));
+});
+
+// Today's 15 starter shape rows, copied byte for byte from
+// protocol/capture-site/shapes.json at 3d39a6d (before this task moved them
+// into the family files). Permanent (design challenge e3): proves the move
+// changed nothing but location, and today's total of 40 accept rows across
+// the two files never shrinks.
+const TODAY_STARTER_ROWS = [
+  {
+    note: "Jira canonical issue (docs/adapters/jira.issue.md)",
+    url: "https://acme.atlassian.net/browse/PROJ-42",
+    shape: "/browse/{key}",
+  },
+  {
+    note: "Jira board modal (docs/adapters/jira.issue.md)",
+    url: "https://acme.atlassian.net/jira/software/projects/PROJ/boards/7?selectedIssue=PROJ-42",
+    shape: "/jira/software/projects/{slug}/boards/{num}?{param}={key}",
+  },
+  {
+    note: "Confluence page (docs/adapters/confluence.page.md)",
+    url: "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan",
+    shape: "/wiki/spaces/{slug}/pages/{num}/{slug}",
+  },
+  {
+    note: "Confluence page without a slug (docs/adapters/confluence.page.md)",
+    url: "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000002",
+    shape: "/wiki/spaces/{slug}/pages/{num}",
+  },
+  {
+    note: "Confluence page in a personal space (docs/adapters/confluence.page.md)",
+    url: "https://acme.atlassian.net/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1000003/Some+Page",
+    shape: "/wiki/spaces/{slug}/pages/{num}/{slug}",
+  },
+  {
+    note: "Confluence page version history (docs/adapters/confluence.page.md)",
+    url: "https://acme.atlassian.net/wiki/spaces/ENG/history/1000004/Release+Plan",
+    shape: "/wiki/spaces/{slug}/history/{num}/{slug}",
+  },
+  {
+    note: "Miro board (docs/adapters/miro.board.md)",
+    url: "https://miro.com/app/board/uXjVM0uuBLo=/",
+    shape: "/app/board/{id}/",
+  },
+  {
+    note: "GitHub issue (docs/adapters/github.issue.md)",
+    url: "https://github.com/acme/widget/issues/42",
+    shape: "/acme/widget/issues/{num}",
+  },
+  {
+    note: "GitHub pull request overview (docs/adapters/github.pr.md)",
+    url: "https://github.com/Acme/Widget/pull/42",
+    shape: "/{slug}/{slug}/pull/{num}",
+  },
+  {
+    note: "GitHub pull request files (docs/adapters/github.pr.md)",
+    url: "https://github.com/acme/widget/pull/42/files",
+    shape: "/acme/widget/pull/{num}/files",
+  },
+  {
+    note: "GitHub pull request commits (docs/adapters/github.pr.md)",
+    url: "https://github.com/acme/widget/pull/42/commits",
+    shape: "/acme/widget/pull/{num}/commits",
+  },
+  {
+    note: "GitHub pull request checks (docs/adapters/github.pr.md)",
+    url: "https://github.com/acme/widget/pull/42/checks",
+    shape: "/acme/widget/pull/{num}/checks",
+  },
+  {
+    note: "SharePoint site document (docs/adapters/sharepoint.doc.md)",
+    url: "https://acme.sharepoint.com/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
+    shape: "/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}",
+  },
+  {
+    note: "SharePoint personal document (docs/adapters/sharepoint.doc.md)",
+    url: "https://acme-my.sharepoint.com/personal/jdoe_acme_com/_layouts/15/Doc.aspx?sourcedoc=0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+    shape: "/personal/{slug}/_layouts/{num}/{slug}?sourcedoc={uuid}",
+  },
+  {
+    note: "SharePoint sharing form (docs/adapters/sharepoint.doc.md)",
+    url: "https://acme.sharepoint.com/:w:/r/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
+    shape: "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}",
+  },
+];
+
+test("today's 15 starter shape rows are pinned", () => {
+  assert.equal(TODAY_STARTER_ROWS.length, 15);
+  const shapes = JSON.parse(readFileSync(path.join(REPO, SHAPES_JSON), "utf8"));
+  const starterShapes = JSON.parse(readFileSync(path.join(REPO, STARTER_SHAPES_JSON), "utf8"));
+  for (const row of TODAY_STARTER_ROWS) {
+    const inStarterShapes = starterShapes.accept.filter((candidate) => JSON.stringify(candidate) === JSON.stringify(row));
+    assert.equal(inStarterShapes.length, 1, `${row.note} appears exactly once in starter-shapes.json`);
+    const inShapes = shapes.accept.some((candidate) => JSON.stringify(candidate) === JSON.stringify(row));
+    assert.equal(inShapes, false, `${row.note} must not appear in shapes.json`);
+  }
+  assert.ok(shapes.accept.length + starterShapes.accept.length >= 40);
+});
+
+test("familyClaims agrees with starterKind on the 40 origins", () => {
+  const families = loadFamilies(REPO);
+  assert.equal(ORIGIN_CASES.length, 40);
+  for (const [origin, expected] of ORIGIN_CASES) {
+    const claimants = families.filter((family) => familyClaims(family.origin, origin));
+    assert.ok(claimants.length <= 1, `${origin}: more than one family claims it: ${claimants.map((f) => f.family)}`);
+    assert.equal(claimants[0]?.family ?? null, expected, origin);
+  }
 });
 
 test("the test-only tenant_name and unscoped fixtures pass the generator's own family validation", async () => {

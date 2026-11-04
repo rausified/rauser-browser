@@ -3,36 +3,6 @@
   "description": "Shared URL-shape fixture (DESIGN §5.1). Every accept row pins the in-page shaper (extension/site-patterns.ts inspectSitePatterns) and the host parser (adapter-templates/src/shape.rs UrlShape::parse) to one canonical shape. Every reject row must fail both isUrlShape and UrlShape::parse. {\"$build\": [...]} concatenates strings and {\"repeat\", \"times\"} parts.",
   "accept": [
     {
-      "note": "Jira canonical issue (docs/adapters/jira.issue.md)",
-      "url": "https://acme.atlassian.net/browse/PROJ-42",
-      "shape": "/browse/{key}"
-    },
-    {
-      "note": "Jira board modal (docs/adapters/jira.issue.md)",
-      "url": "https://acme.atlassian.net/jira/software/projects/PROJ/boards/7?selectedIssue=PROJ-42",
-      "shape": "/jira/software/projects/{slug}/boards/{num}?{param}={key}"
-    },
-    {
-      "note": "Confluence page (docs/adapters/confluence.page.md)",
-      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan",
-      "shape": "/wiki/spaces/{slug}/pages/{num}/{slug}"
-    },
-    {
-      "note": "Confluence page without a slug (docs/adapters/confluence.page.md)",
-      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000002",
-      "shape": "/wiki/spaces/{slug}/pages/{num}"
-    },
-    {
-      "note": "Confluence page in a personal space (docs/adapters/confluence.page.md)",
-      "url": "https://acme.atlassian.net/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1000003/Some+Page",
-      "shape": "/wiki/spaces/{slug}/pages/{num}/{slug}"
-    },
-    {
-      "note": "Confluence page version history (docs/adapters/confluence.page.md)",
-      "url": "https://acme.atlassian.net/wiki/spaces/ENG/history/1000004/Release+Plan",
-      "shape": "/wiki/spaces/{slug}/history/{num}/{slug}"
-    },
-    {
       "note": "Confluence page editor, a confluence.page starter rule the structural drafter does not draft: edit-v2 reads as an {id}",
       "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/edit-v2/1000002",
       "shape": "/wiki/spaces/{slug}/pages/{id}/{num}"
@@ -41,51 +11,6 @@
       "note": "Confluence legacy page link, a confluence.page starter rule the structural drafter does not draft: the pageId key is a private {param}",
       "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=1000001",
       "shape": "/wiki/pages/{slug}?{param}={num}"
-    },
-    {
-      "note": "Miro board (docs/adapters/miro.board.md)",
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
-      "shape": "/app/board/{id}/"
-    },
-    {
-      "note": "GitHub issue (docs/adapters/github.issue.md)",
-      "url": "https://github.com/acme/widget/issues/42",
-      "shape": "/acme/widget/issues/{num}"
-    },
-    {
-      "note": "GitHub pull request overview (docs/adapters/github.pr.md)",
-      "url": "https://github.com/Acme/Widget/pull/42",
-      "shape": "/{slug}/{slug}/pull/{num}"
-    },
-    {
-      "note": "GitHub pull request files (docs/adapters/github.pr.md)",
-      "url": "https://github.com/acme/widget/pull/42/files",
-      "shape": "/acme/widget/pull/{num}/files"
-    },
-    {
-      "note": "GitHub pull request commits (docs/adapters/github.pr.md)",
-      "url": "https://github.com/acme/widget/pull/42/commits",
-      "shape": "/acme/widget/pull/{num}/commits"
-    },
-    {
-      "note": "GitHub pull request checks (docs/adapters/github.pr.md)",
-      "url": "https://github.com/acme/widget/pull/42/checks",
-      "shape": "/acme/widget/pull/{num}/checks"
-    },
-    {
-      "note": "SharePoint site document (docs/adapters/sharepoint.doc.md)",
-      "url": "https://acme.sharepoint.com/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
-      "shape": "/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
-    },
-    {
-      "note": "SharePoint personal document (docs/adapters/sharepoint.doc.md)",
-      "url": "https://acme-my.sharepoint.com/personal/jdoe_acme_com/_layouts/15/Doc.aspx?sourcedoc=0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
-      "shape": "/personal/{slug}/_layouts/{num}/{slug}?sourcedoc={uuid}"
-    },
-    {
-      "note": "SharePoint sharing form (docs/adapters/sharepoint.doc.md)",
-      "url": "https://acme.sharepoint.com/:w:/r/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
-      "shape": "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
     },
     {
       "note": "SharePoint braced sourcedoc",

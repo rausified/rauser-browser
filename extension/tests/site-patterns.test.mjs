@@ -179,8 +179,13 @@ test("corrupt samples are discarded and origin, shape and metadata budgets are i
 });
 
 // One fixture pins this shaper and the host's Rust parser
-// (adapter-templates/src/shape.rs) to the same canonical shapes.
-const shapeFixture = JSON.parse(readFileSync(new URL("../../protocol/capture-site/shapes.json", import.meta.url), "utf8"));
+// (adapter-templates/src/shape.rs) to the same canonical shapes. The 15
+// starter rows this moved out of shapes.json now live in
+// starter-shapes.json (protocol/starters/README.md "Recorded samples");
+// concatenate both so the combined fixture is unchanged.
+const shapesA = JSON.parse(readFileSync(new URL("../../protocol/capture-site/shapes.json", import.meta.url), "utf8"));
+const shapesB = JSON.parse(readFileSync(new URL("../../protocol/capture-site/starter-shapes.json", import.meta.url), "utf8"));
+const shapeFixture = { accept: [...shapesA.accept, ...shapesB.accept], reject: [...shapesA.reject, ...shapesB.reject] };
 const built = (value) => typeof value === "string" ? value : value.$build.map((part) =>
   typeof part === "string" ? part : part.repeat.repeat(part.times)).join("");
 

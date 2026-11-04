@@ -28,6 +28,8 @@ export const EXAMPLE_TENANT_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/example.item.md",
+      samples: [],
+      samples_shape: false,
     },
     {
       type: "example.note",
@@ -46,6 +48,8 @@ export const EXAMPLE_TENANT_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/example.note.md",
+      samples: [],
+      samples_shape: false,
     },
   ],
 };
@@ -83,6 +87,8 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/everyone.page.md",
+      samples: [],
+      samples_shape: false,
     },
   ],
 };
@@ -132,6 +138,8 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/pair.page.md",
+      samples: [],
+      samples_shape: false,
     },
     {
       type: "pair.board",
@@ -150,6 +158,8 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/pair.board.md",
+      samples: [],
+      samples_shape: false,
     },
   ],
 };

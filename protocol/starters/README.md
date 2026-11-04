@@ -31,10 +31,33 @@ source of truth for the current shape.
     "adapter": { "type": "jira.issue", "match": [...], "id": "...", ... },
     "history": [],                 // earlier shipped { "match": [...] } entries, oldest first
     "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
-    "docs": "docs/adapters/jira.issue.md"
+    "docs": "docs/adapters/jira.issue.md",
+    "samples": [{
+      "note": "Jira canonical issue",            // becomes "<note> (<docs>)" in starter-shapes.json
+      "url": "https://acme.atlassian.net/browse/PROJ-42",
+      "title": "[PROJ-1] Fix the bug - Jira",     // the recorded page's raw <title>, or null
+      "shape": "/browse/{key}"
+    }],
+    "samples_shape": true          // false (and samples: []) when the type has no URL shape
+                                    // worth a shapes.json-style row (today: github.repo)
   }]
 }
 ```
+
+## Recorded samples
+
+Each type's `samples` are real recorded URL forms of that type, one per shape
+worth distinguishing (the SharePoint "sharing form" vs. "site document"
+routes, for example). `scripts/generate-starters.mjs` writes every sample
+whose type has `samples_shape: true` into the generated
+`protocol/capture-site/starter-shapes.json`, in the same `{note, url, shape}`
+row shape `protocol/capture-site/shapes.json` uses, so the host's and the
+in-page shaper's tests can pin both files the same way. A sample's `url`
+must sit on the family's own `origin` (`familyClaims`); the generator
+refuses one that doesn't, file and field named. `title` is the page's raw
+`<title>` at the time it was recorded, or `null` when the sample has none;
+every type whose adapter has a `title` template needs at least one sample
+with a non-null `title`.
 
 `adapter` is an adapter-template document (`adapter-templates.md` §3) with
 `origin` omitted: the generator and, at runtime, `starterOffers` fill it in
@@ -83,7 +106,7 @@ field named.
 
 1. Add a `types[]` entry to the family's JSON file (or a new family file, named `<family>.json`, for a tool with no existing entry) following the shape above.
 2. Add the type's `adapter.id` template (and any `within.id`) to `ids.lock.json`; `generate-starters.mjs` fails closed with "no lock entry for `<type>`" until it is there.
-3. Run `npm run gen:starters` and commit the regenerated `extension/starter-families.generated.ts` and `protocol/capture-site/catalog.json` alongside the source change.
+3. Run `npm run gen:starters` and commit the regenerated `extension/starter-families.generated.ts`, `protocol/capture-site/catalog.json` and (when the type's `samples_shape` is true) `protocol/capture-site/starter-shapes.json` alongside the source change.
 4. Add the type's doc page, `docs/adapters/<type>.md` (`adapter-templates.md` §11.1), and its shared test vectors.
 
 ## Frozen IDs
@@ -100,10 +123,11 @@ matches its lock entry.
 ## Generating
 
 ```sh
-npm run gen:starters          # write extension/starter-families.generated.ts
-                               # and the starter_types line of
-                               # protocol/capture-site/catalog.json
-node scripts/generate-starters.mjs --check   # fail if either is out of date,
+npm run gen:starters          # write extension/starter-families.generated.ts,
+                               # the starter_types line of
+                               # protocol/capture-site/catalog.json, and
+                               # protocol/capture-site/starter-shapes.json
+node scripts/generate-starters.mjs --check   # fail if any is out of date,
                                               # or a lock problem exists
 ```
 

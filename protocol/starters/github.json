@@ -25,7 +25,34 @@
       },
       "history": [],
       "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
-      "docs": "docs/adapters/github.pr.md"
+      "docs": "docs/adapters/github.pr.md",
+      "samples": [
+        {
+          "note": "GitHub pull request overview",
+          "url": "https://github.com/Acme/Widget/pull/42",
+          "title": "Fix login by alice · Pull Request #42 · acme-corp/widgets · GitHub",
+          "shape": "/{slug}/{slug}/pull/{num}"
+        },
+        {
+          "note": "GitHub pull request files",
+          "url": "https://github.com/acme/widget/pull/42/files",
+          "title": null,
+          "shape": "/acme/widget/pull/{num}/files"
+        },
+        {
+          "note": "GitHub pull request commits",
+          "url": "https://github.com/acme/widget/pull/42/commits",
+          "title": null,
+          "shape": "/acme/widget/pull/{num}/commits"
+        },
+        {
+          "note": "GitHub pull request checks",
+          "url": "https://github.com/acme/widget/pull/42/checks",
+          "title": null,
+          "shape": "/acme/widget/pull/{num}/checks"
+        }
+      ],
+      "samples_shape": true
     },
     {
       "type": "github.issue",
@@ -46,7 +73,16 @@
       },
       "history": [],
       "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
-      "docs": "docs/adapters/github.issue.md"
+      "docs": "docs/adapters/github.issue.md",
+      "samples": [
+        {
+          "note": "GitHub issue",
+          "url": "https://github.com/acme/widget/issues/42",
+          "title": "Crash on start · Issue #7 · acme-corp/widgets · GitHub",
+          "shape": "/acme/widget/issues/{num}"
+        }
+      ],
+      "samples_shape": true
     },
     {
       "type": "github.repo",
@@ -64,7 +100,9 @@
       },
       "history": [],
       "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
-      "docs": "docs/adapters/github.repo.md"
+      "docs": "docs/adapters/github.repo.md",
+      "samples": [],
+      "samples_shape": false
     }
   ]
 }
