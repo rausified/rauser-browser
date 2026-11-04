@@ -4,6 +4,9 @@
   "review_prompt": "Choose the kinds of work to remember on this Atlassian site.",
   "origin": { "kind": "subdomain", "suffix": ".atlassian.net" },
   "scope": null,
+  "sample_origin": "https://acme.atlassian.net",
+  "sample_scope": [],
+  "overlaps": [{ "a": "jira.issue", "b": "confluence.page", "expect": "disjoint" }],
   "types": [
     {
       "type": "jira.issue",
@@ -41,7 +44,8 @@
           "shape": "/jira/software/projects/{slug}/boards/{num}?{param}={key}"
         }
       ],
-      "samples_shape": true
+      "samples_shape": true,
+      "vectors": []
     },
     {
       "type": "confluence.page",
@@ -92,7 +96,8 @@
           "shape": "/wiki/spaces/{slug}/history/{num}/{slug}"
         }
       ],
-      "samples_shape": true
+      "samples_shape": true,
+      "vectors": []
     }
   ]
 }

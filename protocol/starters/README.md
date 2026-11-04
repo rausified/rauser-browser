@@ -20,6 +20,11 @@ source of truth for the current shape.
   // or: { "kind": "exact", "origin": "https://miro.com" }
   "scope": null,
   // or one of the three scope kinds below
+  "sample_origin": "https://acme.atlassian.net",  // must sit on the family's own origin
+  "sample_scope": [],              // e.g. ["acme"]; non-empty exactly when scope is
+                                    // "github_org" or "tenant_name"
+  "overlaps": [{ "a": "jira.issue", "b": "confluence.page", "expect": "disjoint" }],
+  // every pair of types that is not one the other's `within` container needs an entry
   "types": [{
     "type": "jira.issue",
     "key": "jira:{origin}",
@@ -38,8 +43,9 @@ source of truth for the current shape.
       "title": "[PROJ-1] Fix the bug - Jira",     // the recorded page's raw <title>, or null
       "shape": "/browse/{key}"
     }],
-    "samples_shape": true          // false (and samples: []) when the type has no URL shape
+    "samples_shape": true,         // false (and samples: []) when the type has no URL shape
                                     // worth a shapes.json-style row (today: github.repo)
+    "vectors": []                  // vectors.json cases for this type, each missing "doc"
   }]
 }
 ```
@@ -71,6 +77,31 @@ account; `checked_by` names them) or `"history"` (real browsing history
 confirmed every rule and title; `checked_by` names the agent session). A
 development type has not been certified yet and carries `method: null`,
 `checked_on: null`, `checked_by: null`.
+
+## Test vectors and overlaps
+
+`sample_origin` and `sample_scope` are the values `scripts/generate-starters.mjs`
+feeds into every type's `adapter` to build the family's `starter:<family>`
+fixture in `protocol/adapter-templates/starter-vectors.json` (`synthesizeFixture`):
+the same document `starterOffers(sample_origin, sample_scope)` builds for that
+origin at runtime. `sample_origin` must sit on the family's own `origin`, the
+same rule a recorded sample's `url` follows, and `sample_scope` is non-empty
+exactly when `scope` needs account values (`github_org` or `tenant_name`).
+
+`overlaps` declares, for every pair of the family's types that is not one the
+other's `within` container, whether their rules may overlap: today, only
+`"disjoint"` is accepted. The generator refuses a missing pair, naming both
+types, and refuses an `a`/`b` that does not name a type in the family. Each
+declared pair becomes the family's single `overlap_report.starter.<family>`
+case, expecting `{"pairs": []}`.
+
+Each type's own `vectors` are `protocol/adapter-templates/vectors.json`
+(`adapter-templates.md` §12) cases for that type, minus `doc`: the generator
+adds `doc: {"$fixture": "starter:<family>"}` itself, so a vector that already
+carries one is refused. A vector naming a `url` must sit on the family's own
+origin, and its `id` must not already exist in `vectors.json` or another
+family's vectors — the generator names the file and the duplicate id either
+way.
 
 ## Scope kinds
 
@@ -106,8 +137,8 @@ field named.
 
 1. Add a `types[]` entry to the family's JSON file (or a new family file, named `<family>.json`, for a tool with no existing entry) following the shape above.
 2. Add the type's `adapter.id` template (and any `within.id`) to `ids.lock.json`; `generate-starters.mjs` fails closed with "no lock entry for `<type>`" until it is there.
-3. Run `npm run gen:starters` and commit the regenerated `extension/starter-families.generated.ts`, `protocol/capture-site/catalog.json` and (when the type's `samples_shape` is true) `protocol/capture-site/starter-shapes.json` alongside the source change.
-4. Add the type's doc page, `docs/adapters/<type>.md` (`adapter-templates.md` §11.1), and its shared test vectors.
+3. Run `npm run gen:starters` and commit the regenerated `extension/starter-families.generated.ts`, `protocol/capture-site/catalog.json`, (when the type's `samples_shape` is true) `protocol/capture-site/starter-shapes.json`, and `protocol/adapter-templates/starter-vectors.json` alongside the source change.
+4. Add the type's doc page, `docs/adapters/<type>.md` (`adapter-templates.md` §11.1), and its test vectors to the type's `vectors` ("Test vectors and overlaps" above).
 
 ## Frozen IDs
 
@@ -125,8 +156,9 @@ matches its lock entry.
 ```sh
 npm run gen:starters          # write extension/starter-families.generated.ts,
                                # the starter_types line of
-                               # protocol/capture-site/catalog.json, and
-                               # protocol/capture-site/starter-shapes.json
+                               # protocol/capture-site/catalog.json,
+                               # protocol/capture-site/starter-shapes.json, and
+                               # protocol/adapter-templates/starter-vectors.json
 node scripts/generate-starters.mjs --check   # fail if any is out of date,
                                               # or a lock problem exists
 ```

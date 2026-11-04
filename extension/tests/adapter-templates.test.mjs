@@ -12,7 +12,24 @@ const {
 } = await import("../dist/adapter-templates.js");
 
 const readJson = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
-const vectors = readJson("../../protocol/adapter-templates/vectors.json");
+
+// Merges vectors.json and starter-vectors.json (protocol/adapter-templates/
+// README.md): the two "fixtures" maps, refusing a name both define, and the
+// two "cases" arrays, chained. adapter_template_vectors_have_unique_ids_and_
+// known_disputes then covers ids across both files at once.
+function mergeVectors(legacy, starters) {
+  const fixtures = { ...legacy.fixtures };
+  for (const [name, fixture] of Object.entries(starters.fixtures)) {
+    assert.ok(!(name in fixtures), `fixture ${name} defined twice`);
+    fixtures[name] = fixture;
+  }
+  return { ...legacy, fixtures, cases: [...legacy.cases, ...starters.cases] };
+}
+
+const vectors = mergeVectors(
+  readJson("../../protocol/adapter-templates/vectors.json"),
+  readJson("../../protocol/adapter-templates/starter-vectors.json"),
+);
 const disputed = new Set(readJson("./adapter-templates-disputed.json"));
 const engineSource = readFileSync(new URL("../adapter-templates.ts", import.meta.url), "utf8");
 

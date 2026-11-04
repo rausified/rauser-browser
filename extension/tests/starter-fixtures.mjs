@@ -10,6 +10,9 @@ export const EXAMPLE_TENANT_FAMILY = {
   review_prompt: "Choose what to remember on Example.",
   origin: { kind: "exact", origin: "https://example.test" },
   scope: { kind: "tenant_name", max: 4, label: "Workspaces", placeholder: "acme" },
+  sample_origin: "https://example.test",
+  sample_scope: ["acme"],
+  overlaps: [{ a: "example.item", b: "example.note", expect: "disjoint" }],
   types: [
     {
       type: "example.item",
@@ -30,6 +33,7 @@ export const EXAMPLE_TENANT_FAMILY = {
       docs: "docs/adapters/example.item.md",
       samples: [],
       samples_shape: false,
+      vectors: [],
     },
     {
       type: "example.note",
@@ -50,6 +54,7 @@ export const EXAMPLE_TENANT_FAMILY = {
       docs: "docs/adapters/example.note.md",
       samples: [],
       samples_shape: false,
+      vectors: [],
     },
   ],
 };
@@ -69,6 +74,9 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
     kind: "unscoped",
     notice: "Records every Everyone page from every account in this Chrome profile.",
   },
+  sample_origin: "https://www.figma.com",
+  sample_scope: [],
+  overlaps: [],
   types: [
     {
       type: "everyone.page",
@@ -89,6 +97,7 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
       docs: "docs/adapters/everyone.page.md",
       samples: [],
       samples_shape: false,
+      vectors: [],
     },
   ],
 };
@@ -120,6 +129,9 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
     kind: "unscoped",
     notice: "Records every Pair page and board from every account in this Chrome profile.",
   },
+  sample_origin: "https://www.notion.so",
+  sample_scope: [],
+  overlaps: [{ a: "pair.page", b: "pair.board", expect: "disjoint" }],
   types: [
     {
       type: "pair.page",
@@ -140,6 +152,7 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
       docs: "docs/adapters/pair.page.md",
       samples: [],
       samples_shape: false,
+      vectors: [],
     },
     {
       type: "pair.board",
@@ -160,6 +173,7 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
       docs: "docs/adapters/pair.board.md",
       samples: [],
       samples_shape: false,
+      vectors: [],
     },
   ],
 };

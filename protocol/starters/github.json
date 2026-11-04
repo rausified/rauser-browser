@@ -4,6 +4,9 @@
   "review_prompt": "Choose the kinds of work to remember and the work organizations that own them. Only repositories, pull requests and issues owned by the names you enter are included. Leave personal accounts out.",
   "origin": { "kind": "exact", "origin": "https://github.com" },
   "scope": { "kind": "github_org" },
+  "sample_origin": "https://github.com",
+  "sample_scope": ["acme"],
+  "overlaps": [{ "a": "github.pr", "b": "github.issue", "expect": "disjoint" }],
   "types": [
     {
       "type": "github.pr",
@@ -52,7 +55,8 @@
           "shape": "/acme/widget/pull/{num}/checks"
         }
       ],
-      "samples_shape": true
+      "samples_shape": true,
+      "vectors": []
     },
     {
       "type": "github.issue",
@@ -82,7 +86,8 @@
           "shape": "/acme/widget/issues/{num}"
         }
       ],
-      "samples_shape": true
+      "samples_shape": true,
+      "vectors": []
     },
     {
       "type": "github.repo",
@@ -102,7 +107,8 @@
       "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
       "docs": "docs/adapters/github.repo.md",
       "samples": [],
-      "samples_shape": false
+      "samples_shape": false,
+      "vectors": []
     }
   ]
 }

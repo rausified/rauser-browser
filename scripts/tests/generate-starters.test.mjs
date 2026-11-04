@@ -17,6 +17,8 @@ const GENERATED_TS = "extension/starter-families.generated.ts";
 const CATALOG_JSON = "protocol/capture-site/catalog.json";
 const SHAPES_JSON = "protocol/capture-site/shapes.json";
 const STARTER_SHAPES_JSON = "protocol/capture-site/starter-shapes.json";
+const VECTORS_JSON = "protocol/adapter-templates/vectors.json";
+const STARTER_VECTORS_JSON = "protocol/adapter-templates/starter-vectors.json";
 
 const LEGACY_ORDER = ["jira.issue", "confluence.page", "sharepoint.doc", "github.pr", "github.issue", "github.repo", "miro.board"];
 
@@ -28,6 +30,8 @@ function tmpRoot(t) {
   cpSync(path.join(REPO, GENERATED_TS), path.join(dir, GENERATED_TS));
   cpSync(path.join(REPO, SHAPES_JSON), path.join(dir, SHAPES_JSON));
   cpSync(path.join(REPO, STARTER_SHAPES_JSON), path.join(dir, STARTER_SHAPES_JSON));
+  cpSync(path.join(REPO, VECTORS_JSON), path.join(dir, VECTORS_JSON));
+  cpSync(path.join(REPO, STARTER_VECTORS_JSON), path.join(dir, STARTER_VECTORS_JSON));
   return dir;
 }
 
@@ -486,6 +490,136 @@ test("familyClaims agrees with starterKind on the 40 origins", () => {
     assert.ok(claimants.length <= 1, `${origin}: more than one family claims it: ${claimants.map((f) => f.family)}`);
     assert.equal(claimants[0]?.family ?? null, expected, origin);
   }
+});
+
+test("sample_scope must not be empty for a scoped family", (t) => {
+  const root = tmpRoot(t);
+  const github = readFamily(root, "github");
+  github.sample_scope = [];
+  writeFamily(root, "github", github);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/github\.json: sample_scope must not be empty for a scoped family/,
+  );
+});
+
+test("sample_scope must be empty for an unscoped family", (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.sample_scope = ["acme"];
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: sample_scope must be empty for an unscoped family/,
+  );
+});
+
+test("sample_origin must be on the family's own origin", (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.sample_origin = "https://example.com";
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: sample_origin is not on this family's origin/,
+  );
+});
+
+test('overlaps[].expect must be "disjoint"', (t) => {
+  const root = tmpRoot(t);
+  const atlassian = readFamily(root, "atlassian");
+  atlassian.overlaps[0].expect = "may_overlap";
+  writeFamily(root, "atlassian", atlassian);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/atlassian\.json: overlaps\[0\]\.expect must be "disjoint"/,
+  );
+});
+
+test("overlaps[].a and .b must name a type in this family", (t) => {
+  const root = tmpRoot(t);
+  const atlassian = readFamily(root, "atlassian");
+  atlassian.overlaps[0].b = "jira.page";
+  writeFamily(root, "atlassian", atlassian);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/atlassian\.json: overlaps\[0\]\.b "jira\.page" is not a type in this family/,
+  );
+});
+
+test("every pair of types that is not a within container needs an overlaps entry", (t) => {
+  const root = tmpRoot(t);
+  const atlassian = readFamily(root, "atlassian");
+  atlassian.overlaps = [];
+  writeFamily(root, "atlassian", atlassian);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/atlassian\.json: jira\.issue and confluence\.page have no overlaps entry/,
+  );
+});
+
+test("a within container is exempt from the pair-coverage check", (t) => {
+  const root = tmpRoot(t);
+  const github = readFamily(root, "github");
+  github.overlaps = [];
+  writeFamily(root, "github", github);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /protocol\/starters\/github\.json: github\.pr and github\.issue have no overlaps entry/);
+  assert.doesNotMatch(output, /github\.pr and github\.repo have no overlaps entry/);
+  assert.doesNotMatch(output, /github\.issue and github\.repo have no overlaps entry/);
+});
+
+test('a vector must not carry "doc"', (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.types[0].vectors.push({ id: "eval.miro.extra", doc: { "$fixture": "starters" } });
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\] must not carry "doc" \(the family fixture is implied\)/,
+  );
+});
+
+test("a vector URL off the family's origin is refused", (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.types[0].vectors.push({ id: "eval.miro.extra", url: "https://example.com/app/board/x=/" });
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.url is not on this family's origin/,
+  );
+});
+
+test("a vector id duplicating a legacy vectors.json case is caught", (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.types[0].vectors.push({ id: "eval.miro.title" });
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: duplicate vector id "eval\.miro\.title" \(also in protocol\/adapter-templates\/vectors\.json\)/,
+  );
 });
 
 test("the test-only tenant_name and unscoped fixtures pass the generator's own family validation", async () => {

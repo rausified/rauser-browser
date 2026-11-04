@@ -4,6 +4,9 @@
   "review_prompt": null,
   "origin": { "kind": "exact", "origin": "https://miro.com" },
   "scope": null,
+  "sample_origin": "https://miro.com",
+  "sample_scope": [],
+  "overlaps": [],
   "types": [
     {
       "type": "miro.board",
@@ -30,7 +33,8 @@
           "shape": "/app/board/{id}/"
         }
       ],
-      "samples_shape": true
+      "samples_shape": true,
+      "vectors": []
     }
   ]
 }

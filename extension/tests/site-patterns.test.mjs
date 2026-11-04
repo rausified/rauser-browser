@@ -49,7 +49,10 @@ test("one shaper covers Jira, SharePoint, GitHub and named future tool URL forms
 test("every recorded starter fixture URL produces a valid private shape", () => {
   let checked = 0;
   const vectors = JSON.parse(readFileSync(new URL("../../protocol/adapter-templates/vectors.json", import.meta.url), "utf8"));
-  for (const vector of vectors.cases.filter((row) => row.doc?.$fixture === "starters" && typeof row.url === "string")) {
+  const starterVectors = JSON.parse(readFileSync(new URL("../../protocol/adapter-templates/starter-vectors.json", import.meta.url), "utf8"));
+  const isStarterFixtureDoc = (fixture) => fixture === "starters" || fixture.startsWith("starter:");
+  const cases = [...vectors.cases, ...starterVectors.cases];
+  for (const vector of cases.filter((row) => isStarterFixtureDoc(row.doc?.$fixture ?? "") && typeof row.url === "string")) {
     const origin = httpOrigin(vector.url);
     if (!origin || new URL(vector.url).pathname.split("/").length > 33) {
       assert.equal(shape(vector.url), null, vector.id);

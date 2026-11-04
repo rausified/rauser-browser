@@ -4,6 +4,9 @@
   "review_prompt": null,
   "origin": { "kind": "subdomain", "suffix": ".sharepoint.com" },
   "scope": null,
+  "sample_origin": "https://acme.sharepoint.com",
+  "sample_scope": [],
+  "overlaps": [],
   "types": [
     {
       "type": "sharepoint.doc",
@@ -54,7 +57,8 @@
           "shape": "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
         }
       ],
-      "samples_shape": true
+      "samples_shape": true,
+      "vectors": []
     }
   ]
 }

@@ -4,6 +4,8 @@
 
 Where the specification leaves something open, this file defines it. That covers error granularity, the order of checks, error locations, and the readings listed under "Spec questions". Both engines must follow those definitions.
 
+`starter-vectors.json`, alongside this file, is the second half of the shared oracle: `scripts/generate-starters.mjs` generates it from `protocol/starters/*.json` (`protocol/starters/README.md` "Test vectors and overlaps"), one synthesized `starter:<family>` fixture per starter family plus the family's own `validate`, `overlap_report`, and recorded type vectors. Both engines' test harnesses (`adapter-templates/tests/vectors.rs`, `extension/tests/adapter-templates.test.mjs`) merge the two files' `fixtures` and `cases` before running, and treat a fixture name or vector id repeated between them as a failure, not a shadow.
+
 ## File layout
 
 ```json

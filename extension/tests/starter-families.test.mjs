@@ -1,6 +1,7 @@
 // Unit tests for the STARTER_FAMILIES-driven starterKind/starterStatus in
 // extension/starter-adapters.ts, from dist (npm run build:extension).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -215,4 +216,29 @@ test("every titled sample's recorded title agrees with its own URL's captures (a
     }
   }
   assert.ok(titledSamples >= 5, `expected at least 5 titled samples, saw ${titledSamples}`);
+});
+
+test("starter-vectors fixtures are the runtime offers", () => {
+  // protocol/adapter-templates/starter-vectors.json's starter:<family>
+  // fixtures (scripts/generate-starters.mjs synthesizeFixture) must stay
+  // exactly the documents starterOffers builds for the family's own
+  // sample_origin and sample_scope at runtime: the load-bearing guarantee
+  // that a generated fixture is not a stand-in the engines test against
+  // while the shipped offers quietly drift from it.
+  const families = loadFamilies(REPO);
+  const starterVectors = JSON.parse(
+    readFileSync(path.join(REPO, "protocol", "adapter-templates", "starter-vectors.json"), "utf8"),
+  );
+  assert.ok(families.length > 0);
+  for (const family of families) {
+    const fixture = starterVectors.fixtures[`starter:${family.family}`];
+    assert.ok(fixture, `starter-vectors.json has no starter:${family.family} fixture`);
+    const offers = starterOffers(family.sample_origin, family.sample_scope);
+    const adapters = family.types.map((type) => {
+      const offer = offers.find((candidate) => candidate.artifact_type === type.type);
+      assert.ok(offer, `${family.sample_origin} offers no ${type.type}`);
+      return offer.adapter;
+    });
+    assert.deepEqual(fixture.artifacts, adapters, family.family);
+  }
 });
