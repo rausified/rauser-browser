@@ -378,8 +378,11 @@ fn many_concurrent_first_opens_never_fail() {
                     let index = v8.index();
                     let barrier = &barrier;
                     scope.spawn(move || {
-                        barrier.wait();
-                        index.artifact(V8_DIRTY)
+                        let (result, _, diagnostics) = crate::diag::test_capture::capture(|| {
+                            barrier.wait();
+                            index.artifact(V8_DIRTY)
+                        });
+                        (result, diagnostics)
                     })
                 })
                 .collect::<Vec<_>>()
@@ -387,8 +390,12 @@ fn many_concurrent_first_opens_never_fail() {
                 .map(|host| host.join().unwrap())
                 .collect::<Vec<_>>()
         });
-        for result in results {
-            assert!(result.unwrap().is_some());
+        for (result, diagnostics) in results {
+            assert!(
+                result
+                    .unwrap_or_else(|error| panic!("{error:#}\n{diagnostics}"))
+                    .is_some()
+            );
         }
         assert_eq!(v8.legacy_import(), vec![vec![text("done")]]);
     }

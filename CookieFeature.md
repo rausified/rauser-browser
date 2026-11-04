@@ -1522,3 +1522,33 @@ state the same rule. Stored older answers remain readable, and no protocol
 or migration behavior changes. Offline regression coverage exercises all six
 contradictions, all valid wall types, correction success and ordinary readable
 artifacts through the parser and actual summary finisher.
+
+## 2026-11-04 — Keep index bounds independent of runner speed
+
+The year-scale index tests now judge deliveries by the work they perform:
+events loaded, rows written, group derives, transactions, log bytes read and
+whether database or artifact files were replaced. They still compare the
+result with a full rebuild and print elapsed times. A correctly bounded
+Windows delivery had taken 12 seconds on a loaded runner, failing a three
+second ceiling despite updating only 16 rows. Removing those timing ceilings
+lets the tests distinguish actual unbounded work from slow infrastructure.
+The two reported held-lock tests likewise retain their exact one-wait and
+Busy/snapshot assertions without an elapsed-time upper bound. Windows CI
+remains the final platform acceptance for brwr-gxag.
+
+## 2026-11-04 — Identify the database boundary that exhausts contention
+
+Index contention logs now name the operation and phase that failed, the
+SQLite primary and extended codes, elapsed milliseconds and actual attempts.
+An operator can distinguish connection setup, schema creation, WAL switching,
+BEGIN acquisition, statement execution and commit instead of receiving only
+the shared unavailable-history error. Caller errors and lock retry behavior
+are preserved, and errors already translated at an inner boundary are not
+logged twice. Real SQLite locks verify setup, BEGIN, WAL and commit behavior;
+read/write body tests retain extended codes, and successful or unrelated
+operations add no contention event. The Windows stress harness now preserves
+these fields in each child's JSON result and prints them on failure, including
+when a read recovered by serving its snapshot. A local test exercises that
+persistence path without spawning a child. This completes the diagnostic
+implementation for brwr-bszr; it does not identify or fix brwr-epl1's Windows
+root cause or restore held PR #310's separate retry-budget change.

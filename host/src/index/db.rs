@@ -22,6 +22,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Result;
 use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
@@ -91,6 +92,72 @@ fn busy() -> anyhow::Error {
     #[cfg(test)]
     BUSY_SURFACED.with(|count| count.set(count.get() + 1));
     DbError::Busy.into()
+}
+
+/// Records only contention that escapes this boundary. Retried failures and
+/// already mapped errors produce no extra event or BUSY_SURFACED increment.
+/// Keep SQLite's text and statement context out of this diagnostic.
+struct Operation {
+    operation: &'static str,
+    phase: &'static str,
+    started: Instant,
+}
+
+impl Operation {
+    fn new(operation: &'static str, phase: &'static str) -> Self {
+        Self {
+            operation,
+            phase,
+            started: Instant::now(),
+        }
+    }
+
+    fn map(&self, error: impl Into<anyhow::Error>) -> anyhow::Error {
+        self.map_attempts(error, 1)
+    }
+
+    fn map_attempts(&self, error: impl Into<anyhow::Error>, attempts: u32) -> anyhow::Error {
+        let error = error.into();
+        let code = error.chain().find_map(|cause| {
+            let sqlite = cause.downcast_ref::<rusqlite::Error>()?;
+            is_busy(sqlite).then(|| sqlite.sqlite_error()).flatten()
+        });
+        if let Some(code) = code {
+            self.report(code, attempts);
+            busy()
+        } else {
+            error
+        }
+    }
+
+    fn report(&self, code: &rusqlite::ffi::Error, attempts: u32) {
+        tracing::warn!(
+            operation = self.operation,
+            phase = self.phase,
+            sqlite_code = ?code.code,
+            sqlite_extended_code = code.extended_code,
+            elapsed_ms = self.started.elapsed().as_millis() as u64,
+            attempts,
+            "index contention exhausted"
+        );
+    }
+
+    /// Legacy replacement wraps these errors in its own Unavailable reason.
+    /// Report them without changing that pre-existing caller-visible policy.
+    fn observe(&self, error: &rusqlite::Error) {
+        if let Some(code) = error.sqlite_error().filter(|_| is_busy(error)) {
+            self.report(code, 1);
+        }
+    }
+}
+
+fn step<T, E: Into<anyhow::Error>>(
+    operation: &'static str,
+    phase: &'static str,
+    body: impl FnOnce() -> std::result::Result<T, E>,
+) -> Result<T> {
+    let context = Operation::new(operation, phase);
+    body().map_err(|error| context.map(error))
 }
 
 /// The format 9 schema (DESIGN §5.5). Public tables first, then the
@@ -403,6 +470,7 @@ fn open_once(
     if let Some(hook) = BEFORE_SQLITE_OPEN.with(|hook| hook.borrow_mut().take()) {
         hook(&path);
     }
+    let connecting = Operation::new("open", "connect");
     let mut conn = match Connection::open_with_flags(&path, flags) {
         Ok(conn) => conn,
         Err(error) => {
@@ -412,14 +480,14 @@ fn open_once(
                     Mode::ReadWrite => Opened::Vanished,
                 });
             }
-            return Err(sqlite(error));
+            return Err(connecting.map(error));
         }
     };
-    configure(&conn).map_err(sqlite)?;
+    step("open", "configure", || configure(&conn))?;
     match mode {
         Mode::ReadWrite => ensure_schema(&mut conn)?,
         Mode::IfExists => {
-            let (application_id, user_version) = identity(&conn).map_err(sqlite)?;
+            let (application_id, user_version) = step("open", "identity", || identity(&conn))?;
             check_identity(application_id, user_version)?;
         }
     }
@@ -432,18 +500,14 @@ fn open_once(
 /// nothing to commit yet: `index.db` is created only to commit ingested
 /// data, so its absence after a successful catch-up means "no history".
 pub(crate) fn empty() -> Result<Connection> {
-    let mut conn = Connection::open_in_memory().map_err(sqlite)?;
-    configure(&conn).map_err(sqlite)?;
+    let mut conn = step("empty", "connect", Connection::open_in_memory)?;
+    step("empty", "configure", || configure(&conn))?;
     ensure_schema(&mut conn)?;
     Ok(conn)
 }
 
 fn unavailable(path: &Path, error: io::Error) -> anyhow::Error {
     DbError::Unavailable(format!("{}: {error}", path.display())).into()
-}
-
-fn sqlite(error: rusqlite::Error) -> anyhow::Error {
-    map_busy(error.into())
 }
 
 /// Windows refuses to open, create or delete a name while another handle
@@ -539,8 +603,10 @@ fn set_journal_mode(conn: &Connection) -> Result<()> {
     // conflicting switch as SQLITE_BUSY at once, without the busy handler.
     // Another host's switch makes this one unnecessary, so a busy answer is
     // retried within the busy timeout until the file reads as WAL.
-    let started = std::time::Instant::now();
+    let context = Operation::new("open", "wal");
+    let mut attempts = 0;
     let refused = loop {
+        attempts += 1;
         match mode("WAL") {
             Ok(current) if current.eq_ignore_ascii_case("wal") => return Ok(()),
             Ok(current) => break current,
@@ -551,8 +617,8 @@ fn set_journal_mode(conn: &Connection) -> Result<()> {
                 if current.eq_ignore_ascii_case("wal") {
                     return Ok(());
                 }
-                if started.elapsed() >= busy_timeout() {
-                    return Err(busy());
+                if context.started.elapsed() >= busy_timeout() {
+                    return Err(context.map_attempts(error, attempts));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
@@ -563,7 +629,7 @@ fn set_journal_mode(conn: &Connection) -> Result<()> {
         journal_mode = %refused,
         "index.db refused WAL; using the DELETE journal, which blocks readers during writes"
     );
-    mode("DELETE").map_err(sqlite)?;
+    step("open", "delete_journal", || mode("DELETE"))?;
     Ok(())
 }
 
@@ -590,11 +656,11 @@ fn check_identity(application_id: i64, user_version: i64) -> Result<()> {
 /// and waiting behind another connection's write here would spend a read's
 /// whole busy budget before its catch-up even begins.
 fn ensure_schema(conn: &mut Connection) -> Result<()> {
-    let (application_id, user_version) = identity(conn).map_err(sqlite)?;
+    let (application_id, user_version) = step("schema", "identity", || identity(conn))?;
     if application_id != 0 || user_version != 0 {
         return check_identity(application_id, user_version);
     }
-    write_txn(conn, |tx| {
+    write_txn_for(conn, "schema", |tx| {
         let (application_id, user_version) = identity(tx)?;
         if application_id == 0 && user_version == 0 {
             let objects: i64 = tx.query_row(
@@ -710,9 +776,13 @@ pub(crate) fn clear_legacy(
 fn drop_in_place(path: &Path) -> Result<()> {
     let attempt = || -> Result<()> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let mut conn = Connection::open_with_flags(path, flags)?;
-        conn.busy_timeout(busy_timeout())?;
-        write_txn(&mut conn, |tx| {
+        let connecting = Operation::new("replace", "connect");
+        let mut conn = Connection::open_with_flags(path, flags)
+            .inspect_err(|error| connecting.observe(error))?;
+        let configuring = Operation::new("replace", "configure");
+        conn.busy_timeout(busy_timeout())
+            .inspect_err(|error| configuring.observe(error))?;
+        write_txn_for(&mut conn, "replace", |tx| {
             let mut statement = tx.prepare(
                 "SELECT type, name FROM sqlite_master
                  WHERE type IN ('trigger', 'view', 'table') AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
@@ -752,11 +822,19 @@ pub(crate) fn write_txn<T>(
     conn: &mut Connection,
     f: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
+    write_txn_for(conn, "write", f)
+}
+
+fn write_txn_for<T>(
+    conn: &mut Connection,
+    operation: &'static str,
+    f: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
     #[cfg(test)]
     let changes = conn.total_changes();
-    let tx = begin_immediate(conn)?;
-    let value = f(&tx).map_err(map_busy)?;
-    tx.commit().map_err(sqlite)?;
+    let tx = begin_immediate(conn, operation)?;
+    let value = step(operation, "statement", || f(&tx))?;
+    step(operation, "commit", || tx.commit())?;
     #[cfg(test)]
     {
         super::TRANSACTIONS.with(|count| count.set(count.get() + 1));
@@ -771,6 +849,7 @@ thread_local! {
     /// `BEGIN IMMEDIATE` attempts on this thread that spent half the busy
     /// timeout or more in SQLite's busy handler (tests of single waits).
     pub(crate) static BEGIN_WAITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static BEGIN_ATTEMPTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// `BEGIN IMMEDIATE`, retried for a busy answer only while the busy timeout
@@ -778,11 +857,13 @@ thread_local! {
 /// without waiting (a snapshot that moved, WAL recovery); they never wait
 /// the full timeout again, so a busy lock surfaces after about one timeout,
 /// well inside the extension's 30 s request timeout.
-fn begin_immediate(conn: &Connection) -> Result<Transaction<'_>> {
-    let started = std::time::Instant::now();
+fn begin_immediate<'a>(conn: &'a Connection, operation: &'static str) -> Result<Transaction<'a>> {
+    let context = Operation::new(operation, "begin");
     let mut attempt = 0;
     loop {
         let tried = std::time::Instant::now();
+        #[cfg(test)]
+        BEGIN_ATTEMPTS.with(|count| count.set(count.get() + 1));
         let result = Transaction::new_unchecked(conn, TransactionBehavior::Immediate);
         #[cfg(test)]
         if tried.elapsed() >= busy_timeout() / 2 {
@@ -798,12 +879,12 @@ fn begin_immediate(conn: &Connection) -> Result<Transaction<'_>> {
                 if is_busy(&error)
                     && attempt < BEGIN_RETRIES
                     && tried.elapsed() < busy_timeout() / 2
-                    && started.elapsed() < busy_timeout() =>
+                    && context.started.elapsed() < busy_timeout() =>
             {
                 attempt += 1;
                 std::thread::sleep(retry_delay(attempt));
             }
-            Err(error) => return Err(sqlite(error)),
+            Err(error) => return Err(context.map_attempts(error, attempt + 1)),
         }
     }
 }
@@ -820,18 +901,21 @@ pub(crate) fn read_txn<T>(
     conn: &mut Connection,
     f: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
-    conn.pragma_update(None, "query_only", true)
-        .map_err(sqlite)?;
-    let result = (|| {
-        let tx = Transaction::new(conn, TransactionBehavior::Deferred).map_err(sqlite)?;
-        let value = f(&tx)?;
-        tx.commit().map_err(sqlite)?;
+    step("read", "query_only", || {
+        conn.pragma_update(None, "query_only", true)
+    })?;
+    let result: Result<T> = (|| {
+        let tx = step("read", "begin", || {
+            Transaction::new(conn, TransactionBehavior::Deferred)
+        })?;
+        let value = step("read", "statement", || f(&tx))?;
+        step("read", "commit", || tx.commit())?;
         Ok(value)
     })();
-    let reset = conn
-        .pragma_update(None, "query_only", false)
-        .map_err(sqlite);
-    let value = result.map_err(map_busy)?;
+    let reset = step("read", "reset", || {
+        conn.pragma_update(None, "query_only", false)
+    });
+    let value = result?;
     reset?;
     Ok(value)
 }
@@ -875,15 +959,6 @@ pub(crate) fn is_busy(error: &rusqlite::Error) -> bool {
         error.sqlite_error_code(),
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
     )
-}
-
-/// Replaces a busy or locked SQLite error anywhere in `error`'s chain with
-/// [`DbError::Busy`], so SQLite's wording never reaches a response.
-pub(crate) fn map_busy(error: anyhow::Error) -> anyhow::Error {
-    let busy = error
-        .chain()
-        .any(|cause| cause.downcast_ref::<rusqlite::Error>().is_some_and(is_busy));
-    if busy { self::busy() } else { error }
 }
 
 #[cfg(test)]
@@ -1321,6 +1396,174 @@ mod tests {
         assert_eq!(rows, 0);
     }
 
+    fn contention_fields(lines: &[serde_json::Value]) -> &serde_json::Value {
+        let events = crate::diag::test_capture::events(lines, "index contention exhausted");
+        assert_eq!(events.len(), 1, "{lines:#?}");
+        let fields = &events[0]["fields"];
+        assert_eq!(events[0]["level"], "WARN");
+        assert!(fields["elapsed_ms"].as_u64().is_some(), "{fields}");
+        assert!(fields["attempts"].as_u64().unwrap() >= 1, "{fields}");
+        fields
+    }
+
+    #[test]
+    fn begin_contention_reports_the_actual_attempts_and_preserves_the_error() {
+        let dir = TempDir::new().unwrap();
+        let holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        let mut waiter = open(dir.path(), Mode::IfExists).unwrap().unwrap();
+        let _short = BusyTimeout::set(Duration::from_secs(1));
+        waiter.busy_timeout(Duration::from_millis(1)).unwrap();
+        let tx = Transaction::new_unchecked(&holder, TransactionBehavior::Immediate).unwrap();
+        let before = BUSY_SURFACED.with(std::cell::Cell::get);
+        let attempts_before = BEGIN_ATTEMPTS.with(std::cell::Cell::get);
+        let (error, lines, text) = crate::diag::test_capture::capture(|| {
+            write_txn(&mut waiter, |_| -> Result<()> {
+                panic!("body must not run")
+            })
+            .unwrap_err()
+        });
+        let fields = contention_fields(&lines);
+        assert_eq!(fields["operation"], "write");
+        assert_eq!(fields["phase"], "begin");
+        assert_eq!(fields["sqlite_extended_code"], rusqlite::ffi::SQLITE_BUSY);
+        assert_eq!(
+            fields["attempts"],
+            BEGIN_ATTEMPTS.with(std::cell::Cell::get) - attempts_before
+        );
+        assert!(fields["elapsed_ms"].as_u64().unwrap() > 0);
+        assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before + 1);
+        assert!(matches!(db_error(&error), DbError::Busy));
+        assert_eq!(error.to_string(), DbError::Busy.to_string());
+        assert!(!text.contains("database is locked"));
+        tx.rollback().unwrap();
+    }
+
+    #[test]
+    fn opening_behind_an_exclusive_lock_reports_configuration_contention() {
+        let dir = TempDir::new().unwrap();
+        let holder = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        holder
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+        holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let _short = BusyTimeout::set(Duration::from_millis(20));
+        let (error, lines, _) =
+            crate::diag::test_capture::capture(|| open(dir.path(), Mode::IfExists).unwrap_err());
+        let fields = contention_fields(&lines);
+        assert_eq!(fields["operation"], "open");
+        assert_eq!(fields["phase"], "configure");
+        assert_eq!(fields["sqlite_extended_code"], rusqlite::ffi::SQLITE_BUSY);
+        assert_eq!(fields["attempts"], 1);
+        assert!(matches!(db_error(&error), DbError::Busy));
+        holder.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn a_blocked_wal_switch_reports_its_own_phase_and_attempts() {
+        let dir = TempDir::new().unwrap();
+        let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        conn.pragma_update(None, "journal_mode", "DELETE").unwrap();
+        conn.busy_timeout(Duration::from_millis(1)).unwrap();
+        let reader = Connection::open(db_path(dir.path())).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT * FROM brauser_meta;")
+            .unwrap();
+        let _short = BusyTimeout::set(Duration::from_millis(20));
+        let (error, lines, _) =
+            crate::diag::test_capture::capture(|| set_journal_mode(&conn).unwrap_err());
+        let fields = contention_fields(&lines);
+        assert_eq!(fields["operation"], "open");
+        assert_eq!(fields["phase"], "wal");
+        assert_eq!(fields["sqlite_extended_code"], rusqlite::ffi::SQLITE_BUSY);
+        assert!(matches!(db_error(&error), DbError::Busy));
+        reader.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn a_commit_blocked_by_a_reader_is_distinguished_from_begin() {
+        let dir = TempDir::new().unwrap();
+        let mut writer = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        writer
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+        writer.busy_timeout(Duration::from_millis(1)).unwrap();
+        let reader = Connection::open(db_path(dir.path())).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT * FROM brauser_meta;")
+            .unwrap();
+        let (error, lines, _) = crate::diag::test_capture::capture(|| {
+            write_txn(&mut writer, |tx| {
+                tx.execute("INSERT INTO brauser_meta(key, value) VALUES ('k', 'v')", [])?;
+                Ok(())
+            })
+            .unwrap_err()
+        });
+        let fields = contention_fields(&lines);
+        assert_eq!(fields["operation"], "write");
+        assert_eq!(fields["phase"], "commit");
+        assert_eq!(fields["sqlite_extended_code"], rusqlite::ffi::SQLITE_BUSY);
+        assert_eq!(fields["attempts"], 1);
+        assert!(matches!(db_error(&error), DbError::Busy));
+        reader.execute_batch("ROLLBACK").unwrap();
+        let rows: i64 = writer
+            .query_row("SELECT count(*) FROM brauser_meta", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "the failed commit must still roll back");
+    }
+
+    #[test]
+    fn statement_contention_keeps_extended_codes_without_relogging_mapped_errors() {
+        let dir = TempDir::new().unwrap();
+        let mut conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+        for operation in ["read", "write"] {
+            let before = BUSY_SURFACED.with(std::cell::Cell::get);
+            let fail = |_: &Transaction<'_>| -> Result<()> {
+                Err(anyhow::Error::new(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_LOCKED_SHAREDCACHE),
+                    Some("private SQL details".into()),
+                ))
+                .context("private statement context"))
+            };
+            let (error, lines, text) = crate::diag::test_capture::capture(|| {
+                let error = if operation == "read" {
+                    read_txn(&mut conn, fail)
+                } else {
+                    write_txn(&mut conn, fail)
+                }
+                .unwrap_err();
+                // Outer operations may see an already mapped failure.
+                write_txn(&mut conn, |_| -> Result<()> { Err(error.context("outer")) }).unwrap_err()
+            });
+            let fields = contention_fields(&lines);
+            assert_eq!(fields["operation"], operation);
+            assert_eq!(fields["phase"], "statement");
+            assert_eq!(
+                fields["sqlite_extended_code"],
+                rusqlite::ffi::SQLITE_LOCKED_SHAREDCACHE
+            );
+            assert_eq!(fields["attempts"], 1);
+            assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before + 1);
+            assert!(matches!(db_error(&error), DbError::Busy));
+            assert!(!text.contains("private"));
+        }
+    }
+
+    #[test]
+    fn success_and_unrelated_failures_emit_no_contention_event() {
+        let dir = TempDir::new().unwrap();
+        let (_, lines, _) = crate::diag::test_capture::capture(|| {
+            let mut conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
+            write_txn(&mut conn, |_| Ok(())).unwrap();
+            read_txn(&mut conn, |_| Ok(())).unwrap();
+            let error = write_txn(&mut conn, |_| -> Result<()> {
+                anyhow::bail!("ordinary failure")
+            })
+            .unwrap_err();
+            assert_eq!(error.to_string(), "ordinary failure");
+        });
+        assert!(crate::diag::test_capture::events(&lines, "index contention exhausted").is_empty());
+    }
+
     #[test]
     fn a_held_write_lock_maps_to_busy_without_sqlite_wording() {
         let dir = TempDir::new().unwrap();
@@ -1355,7 +1598,8 @@ mod tests {
         write_txn(&mut waiter, |_| Ok(())).unwrap_err();
         assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before + 1);
         // An already mapped error is not counted twice.
-        let mapped = map_busy(write_txn(&mut waiter, |_| Ok(())).unwrap_err());
+        let mapped = Operation::new("test", "statement")
+            .map(write_txn(&mut waiter, |_| Ok(())).unwrap_err());
         assert!(matches!(db_error(&mapped), DbError::Busy));
         assert_eq!(BUSY_SURFACED.with(std::cell::Cell::get), before + 2);
         tx.rollback().unwrap();
@@ -1428,9 +1672,8 @@ mod tests {
         // Retries never multiply the busy timeout: a read's catch-up must
         // give up well inside the extension's 30 s request timeout.
         assert!(waited >= timeout, "{waited:?}");
-        // The count above is the exact check; this wall-clock bound only
-        // catches a multiplied timeout, with room for a slow CI runner.
-        assert!(waited < timeout * 4, "{waited:?}");
+        // BEGIN_WAITS detects a multiplied timeout without treating a
+        // descheduled test thread as a database regression.
         tx.rollback().unwrap();
     }
 
@@ -1458,7 +1701,8 @@ mod tests {
             Some("database is locked".into()),
         );
         assert!(is_busy(&busy));
-        let mapped = map_busy(anyhow::Error::new(busy).context("reading the index"));
+        let mapped = Operation::new("test", "statement")
+            .map(anyhow::Error::new(busy).context("reading the index"));
         assert!(matches!(db_error(&mapped), DbError::Busy));
         assert!(!format!("{mapped:#}").contains("locked"));
         let locked = rusqlite::Error::SqliteFailure(
@@ -1467,7 +1711,7 @@ mod tests {
         );
         assert!(is_busy(&locked));
         assert!(!is_busy(&rusqlite::Error::QueryReturnedNoRows));
-        let other = map_busy(anyhow::anyhow!("other"));
+        let other = Operation::new("test", "statement").map(anyhow::anyhow!("other"));
         assert_eq!(other.to_string(), "other");
     }
 
