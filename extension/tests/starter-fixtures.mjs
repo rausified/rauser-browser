@@ -86,3 +86,56 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
     },
   ],
 };
+
+// A two-type unscoped family, for tests that need to tell "the notice shows
+// once" (EXAMPLE_UNSCOPED_FAMILY, one type) apart from "the notice shows
+// before every checkbox and on every gallery card" (this fixture). Notion is
+// in SHARED_ORIGINS and claimed by no starter family or other fixture.
+export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
+  family: "pair",
+  display_name: "Pair",
+  review_prompt: "Choose what to remember on Pair.",
+  origin: { kind: "exact", origin: "https://www.notion.so" },
+  scope: {
+    kind: "unscoped",
+    notice: "Records every Pair page and board from every account in this Chrome profile.",
+  },
+  types: [
+    {
+      type: "pair.page",
+      key: "pair.page:{host}/{id}",
+      label: "Pair pages",
+      label_variants: [],
+      description: "An example unscoped page.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "pair.page",
+        match: [{ path: "/p/{id:int}" }],
+        unscoped: "acknowledged",
+        id: "pair.page:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/pair.page.md",
+    },
+    {
+      type: "pair.board",
+      key: "pair.board:{host}/{id}",
+      label: "Pair boards",
+      label_variants: [],
+      description: "An example unscoped board.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "pair.board",
+        match: [{ path: "/b/{id:int}" }],
+        unscoped: "acknowledged",
+        id: "pair.board:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/pair.board.md",
+    },
+  ],
+};
