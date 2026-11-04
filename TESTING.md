@@ -1551,6 +1551,27 @@ cleanup; on Windows an open handle makes the cleanup fail.
   exact point it would race. These use local temporary folders only; no
   browser, dialog or service is involved.
 
+### Contention budget
+
+Run `cargo test --locked -p brauser --lib index::db::tests` for the database
+boundary. `immediate_busy_replies_wait_for_a_writer_beyond_three_retries` uses
+a real SQLite writer, a channel confirming it holds the lock, and a second
+connection with its busy-handler timeout set to zero. Releasing the writer
+after 400 ms demonstrates that immediate busy replies must keep retrying past
+the old three-attempt limit; only lock acquisition repeats, and the body writes
+one row once. The ordinary ten-second acquisition budget leaves room for a
+slow runner. This models an immediate BUSY response, not a specific operating
+system's WAL recovery implementation.
+
+The exhaustion case uses a short thread-local acquisition budget and a writer
+that never releases during the attempt. It verifies one mapped busy failure,
+no body execution, connection-timeout preservation, and later reuse. The
+existing held-lock case also verifies restoration of a nonzero timeout after
+it was reduced to the remaining deadline. All database cases use temporary
+folders and no external service. The separate Windows regression `brwr-epl1`
+still requires ten consecutive Windows runs of the migration and multi-process
+concurrency tests; Linux results do not establish that acceptance.
+
 ## Worklog capture gaps
 
 `cargo test --locked -p brauser index::tests` covers gap date intersection in
