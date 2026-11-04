@@ -135,10 +135,11 @@ test("a summarized page's re-summarize icon sits in the Summary card, named and 
   for (const colorScheme of ["light", "dark"]) {
     const page = await browserFixture(t, "panel", "configured", { colorScheme, summary: {
       summarized_at: "2026-11-02T10:00:00-07:00", document_type: "report", category: "work", importance: "high",
-      summary_path: "summaries/2026-11-02 Work item.md", harness: "codex", overview: "A fixture overview.",
+      summary_path: "summaries/2026-11-02 Work item.md", harness: "codex", overview: "A fixture overview.", read_scope: "page_only",
     } });
     if (!page) return;
     await page.locator("#page-summary:visible").waitFor();
+    await page.locator("#page-summary-chips").getByText("Agent read: browser page only", { exact: true }).waitFor();
     assert.equal(await page.locator("#page-summary-head #summarize").count(), 1);
     assert.equal(await page.locator("#page-actions #summarize").count(), 0);
     await page.getByRole("button", { name: "Summarize again" }).waitFor();

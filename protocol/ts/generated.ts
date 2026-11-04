@@ -508,6 +508,7 @@ export interface ContainedArtifactView {
 }
 
 export interface SummaryView {
+  read_scope?: AnswerReadScope;
   overview?: string;
   summarized_at: string;
   document_type: string;

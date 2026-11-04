@@ -413,3 +413,5 @@
   real SQLite locks and isolated fixtures. The Windows root cause and repeated
   acceptance remain open on `brwr-epl1`; held PR #310 is untouched (`brwr-bszr`).
 - **Brauser — share one recorded focus session:** Recent can narrow selected-work sharing to one explicitly chosen recorded session. The host filters activity before aggregation, preserving only that session's measured time and recorded page context; unchecked entries, exact preview/Copy, rename identity, explicit omission/unavailable states and immediate stale-preview invalidation keep sharing deliberate. Rebuild host and extension together. This is a standalone Brauser capability; no AMOS integration or live deployment is implied.
+
+- **Brauser — saved summaries disclose reading coverage:** Recent and This page now show the agent's whole, partial or browser-page-only reading claim from validated summary log evidence, including summaries without an overview. Index reopen/rebuild preserves it, legacy scope stays unknown, and interrupted older appends recover exact bytes. Deploy host and extension together; older-host history reads cannot safely consume the enriched records.

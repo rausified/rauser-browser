@@ -3,6 +3,7 @@ use super::*;
 fn page_summary(url: &str, occurred_at: &str) -> crate::summary::PageSummary {
     crate::summary::PageSummary {
         overview: None,
+        read_scope: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         url: url.into(),
         title: "A good discussion".into(),
@@ -178,6 +179,7 @@ fn a_summary_joins_the_m1_legacy_visit_of_the_same_url() {
 
     let event = SummaryEvent {
         overview: None,
+        read_scope: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         artifact_id: artifact_id.clone(),
         artifact_type: "web.page".into(),
@@ -226,6 +228,7 @@ fn forged_summary_markers_are_ignored() {
     let url_hash = sha256_hex(url.as_bytes());
     let event = SummaryEvent {
         overview: None,
+        read_scope: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         artifact_id:
             "web:evil.example/0000000000000000000000000000000000000000000000000000000000000000"
@@ -259,6 +262,7 @@ fn forged_summary_markers_are_ignored() {
 pub(super) fn web_summary(url: &str, at: &str) -> SummaryEvent {
     SummaryEvent {
         overview: None,
+        read_scope: None,
         event_id: uuid::Uuid::new_v4().to_string(),
         artifact_id: crate::summary::web_page_artifact_id(url).unwrap(),
         artifact_type: "web.page".into(),
@@ -563,6 +567,7 @@ fn worklog_keeps_measures_when_a_summary_lands_on_an_already_measured_artifact()
     index
         .record_summary(&SummaryEvent {
             overview: None,
+            read_scope: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             artifact_id: event.artifact_id.clone(),
             artifact_type: event.artifact_type.clone(),
@@ -960,6 +965,96 @@ fn reusing_a_summary_event_id_with_other_content_bails() {
     assert_eq!(
         index.artifact(&first.artifact_id).unwrap().unwrap().title,
         "A good discussion"
+    );
+}
+
+#[test]
+fn saved_scopes_survive_incremental_indexing_reopen_and_cold_replay() {
+    use crate::answer::ReadScope;
+    use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore};
+    for scope in [
+        None,
+        Some(ReadScope::Whole),
+        Some(ReadScope::Partial),
+        Some(ReadScope::PageOnly),
+    ] {
+        for adapter_key in [false, true] {
+            let root = TempDir::new().unwrap();
+            let cache = TempDir::new().unwrap();
+            let config = storage(root.path());
+            let capture = CaptureStore::open_in(&config, None, cache.path()).unwrap();
+            let mut summary =
+                page_summary("https://jira.example/browse/PROJ-1", "2026-10-26T18:00:00Z");
+            summary.read_scope = scope;
+            summary.overview =
+                Some("A viewer can look complete without the whole document.".into());
+            if adapter_key {
+                summary.record_key = brauser_protocol::RecordKey {
+                    kind: brauser_protocol::RecordKeyKind::Artifact,
+                    value: "jira:PROJ-1".into(),
+                };
+                summary.artifact_type = "jira.issue".into();
+            }
+            let policy = CapturePolicy {
+                enabled: true,
+                origins: &[],
+                strip_params: &[],
+            };
+            let (CaptureOutcome::Persisted { .. }, Some(event)) =
+                capture.record_summary(policy, &summary)
+            else {
+                panic!("persisted summary")
+            };
+            assert_eq!(event.read_scope, scope);
+            let first = index(&root, &cache);
+            first.record_summary(&event).unwrap();
+            let expected = Some(expected_view(&event));
+            assert_eq!(
+                first.artifact_with_summary(&event.artifact_id).unwrap().1,
+                expected
+            );
+            drop(first);
+            let reopened = index(&root, &cache);
+            assert_eq!(reopened.summary_for(&event.artifact_id).unwrap(), expected);
+            reopened.reindex().unwrap();
+            assert_eq!(
+                reopened
+                    .artifact_with_summary(&event.artifact_id)
+                    .unwrap()
+                    .1,
+                expected
+            );
+            assert_eq!(
+                reopened.recent(None, None, 32).unwrap().0[0].summary,
+                expected
+            );
+            // A genuinely empty cache must derive the same claim from the log.
+            let cold_cache = TempDir::new().unwrap();
+            let cold = index(&root, &cold_cache);
+            cold.reindex().unwrap();
+            assert_eq!(cold.summary_for(&event.artifact_id).unwrap(), expected);
+            let payload = serde_json::to_value(&event).unwrap();
+            assert_eq!(payload.get("read_scope").is_some(), scope.is_some());
+        }
+    }
+}
+
+#[test]
+fn malformed_recorded_scope_is_not_a_summary() {
+    let event = web_summary(
+        "https://news.ycombinator.com/item?id=1",
+        "2026-10-26T18:00:00Z",
+    );
+    let mut payload = serde_json::to_value(&event).unwrap();
+    payload["read_scope"] = "most".into();
+    let invalid = summary_marker(&event).replace(
+        &hex::encode(serde_json::to_vec(&event).unwrap()),
+        &hex::encode(serde_json::to_vec(&payload).unwrap()),
+    );
+    assert!(
+        !parse_log(&invalid)
+            .iter()
+            .any(|entry| matches!(entry.data, EventData::Summary(_)))
     );
 }
 

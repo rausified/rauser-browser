@@ -688,8 +688,22 @@ detail label it as what the agent read, with an access-wall message taking
 precedence. It is never emitted as null. The schema and extension reject
 null and unknown scopes; the Rust optional field follows the existing Serde
 convention of reading null as absent. Rebuild host and extension together:
-an older extension rejects the extra reply field. Stored answers and summary
-files already hold this information, so this adds no disk-format change.
+an older extension rejects the extra reply field.
+
+`SummaryView.read_scope` carries the same optional enum from the saved summary
+log event, so Recent and This page show coverage without the run card. The
+service copies only the validated answer's scope into `PageSummary` and the
+summary marker; the cache retains it in the existing event body without a
+schema migration. Older event bodies stay byte-identical and scope stays
+unknown, even if a summary file currently claims otherwise. Recovery tries
+historical prepared payloads in order: current fields, overview without scope,
+then neither field. It restores exactly the frozen journal bytes and never
+adds scope to an older event or changes a recorded scope or overview.
+
+Deploy the host and extension together. Downgrading after writing scoped
+events is unsupported: older hosts reject scoped cache bodies and may fail
+history queries; their reindex skips the newer summary markers. Re-upgrade
+and run `brauser reindex` to recover the view from the unchanged logs.
 
 
 ## Focus-session activity snapshots

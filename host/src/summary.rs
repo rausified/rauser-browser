@@ -49,6 +49,7 @@ pub const MAX_SUMMARY_PATH_BYTES: usize = 1024;
 /// supply one.
 #[derive(Clone, Debug)]
 pub struct PageSummary {
+    pub read_scope: Option<ReadScope>,
     pub overview: Option<String>,
     pub event_id: String,
     pub url: String,
@@ -66,11 +67,13 @@ pub struct PageSummary {
 /// The durable, indexed form of a `PageSummary`: the marker payload stored in
 /// the daily log and replayed by `ArtifactIndex`. `url` and `artifact_id`
 /// hold the normalized URL and the identity derived from it, not whatever a
-/// caller originally supplied. `overview` is absent on older events.
+/// caller originally supplied. `overview` and `read_scope` are absent on older events.
 /// No caller wrote a summary event before `record_key` and `harness` existed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SummaryEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_scope: Option<ReadScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
     pub event_id: String,
@@ -189,6 +192,7 @@ pub(crate) fn check_summary_path(path: &str) -> Result<(), &'static str> {
 pub(crate) fn validate_summary_event(event: &SummaryEvent) -> bool {
     let as_summary = PageSummary {
         overview: event.overview.clone(),
+        read_scope: event.read_scope,
         event_id: event.event_id.clone(),
         url: event.url.clone(),
         title: event.title.clone(),
@@ -698,6 +702,7 @@ mod tests {
     fn summary() -> PageSummary {
         PageSummary {
             overview: None,
+            read_scope: None,
             event_id: "11111111-1111-1111-1111-111111111111".into(),
             url: HN_URL.into(),
             title: "A good discussion".into(),
@@ -717,6 +722,7 @@ mod tests {
         let s = summary();
         SummaryEvent {
             overview: None,
+            read_scope: None,
             event_id: s.event_id,
             artifact_id: web_page_artifact_id(HN_URL).unwrap(),
             artifact_type: s.artifact_type,

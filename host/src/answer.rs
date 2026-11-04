@@ -115,6 +115,16 @@ impl ReadScope {
     }
 }
 
+impl From<ReadScope> for brauser_protocol::AnswerReadScope {
+    fn from(scope: ReadScope) -> Self {
+        match scope {
+            ReadScope::Whole => Self::Whole,
+            ReadScope::Partial => Self::Partial,
+            ReadScope::PageOnly => Self::PageOnly,
+        }
+    }
+}
+
 /// Whether the agent could see the artifact, or met a wall instead. Anything
 /// but `Ok` means the run saves no summary (`finisher::SummaryFinisher`).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]

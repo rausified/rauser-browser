@@ -1885,3 +1885,17 @@ trusted run-ID comment is omitted from that check):
 BRAUSER_TASK_NOTE_CORPUS_OUT="$PWD/target/task-note-markdown.json" cargo test --locked -p brauser --lib native::task_note::tests::report_and_instruction_use_the_shared_markdown_safety_helpers
 node scripts/check-markdown-neutralizer.mjs --outputs target/task-note-markdown.json
 ```
+
+
+### Saved-summary reading coverage
+
+`brwr-30xv` records the validated answer's scope in new summary events and
+projects it to This page and Recent. Offline finisher tests distinguish whole
+reading after capped capture from page-only reading. Index tests cover URL
+and adapter keys, legacy omission, incremental updates, reopen, cold replay
+and reindex; malformed recorded scope cannot become a summary. Capture tests
+truncate the log before, during and after older prepared entries, preserve
+their exact bytes, and refuse changed scope, overview or path. Built panel
+and wire tests cover every scope with and without an overview, literal text,
+legacy absence and clearing on navigation. These fixtures do not certify the
+agent's actual reading or a live browser deployment.
