@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { quietGitEnv } from "./git-test-env.mjs";
 import { spawnSync as spawnSyncTop } from "node:child_process";
 
 import {
@@ -154,7 +155,8 @@ async function doctorRepair({ conflicting }) {
   const { fileURLToPath } = await import("node:url");
   const scripts = join(dirname(fileURLToPath(import.meta.url)), "..");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pr-doctor-queue-")));
-  const identity = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com", BD_NON_INTERACTIVE: "1" };
+  // Background git maintenance off in every scratch repo (git-test-env.mjs).
+  const identity = quietGitEnv({ GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com", BD_NON_INTERACTIVE: "1" });
   const saved = { ...process.env };
   const cwd = process.cwd();
   const run = (cmd, dir, ...args) => {
@@ -244,3 +246,11 @@ async function doctorRepair({ conflicting }) {
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("scratch-repo git env turns background maintenance off and keeps existing entries", () => {
+  const env = quietGitEnv({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "!echo" });
+  assert.equal(env.GIT_CONFIG_COUNT, "4");
+  assert.equal(env.GIT_CONFIG_KEY_0, "credential.helper");
+  const pairs = Object.fromEntries([1, 2, 3].map((i) => [env[`GIT_CONFIG_KEY_${i}`], env[`GIT_CONFIG_VALUE_${i}`]]));
+  assert.deepEqual(pairs, { "maintenance.auto": "false", "gc.auto": "0", "gc.autoDetach": "false" });
+});
