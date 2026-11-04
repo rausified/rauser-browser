@@ -219,3 +219,20 @@ test("adapter_templates_engine_uses_no_regular_expressions", () => {
   const evalSource = readFileSync(new URL("../../scripts/adapter-templates-eval.mjs", import.meta.url), "utf8");
   assert.deepEqual(regexUses(evalSource, "adapter-templates-eval.mjs"), []);
 });
+
+test("the engine's SHARED_ORIGINS equal the host catalog's shared_origins", () => {
+  const declaration = engineSource.match(
+    /const SHARED_ORIGINS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\);/,
+  );
+  assert.ok(declaration, "SHARED_ORIGINS declaration not found in adapter-templates.ts");
+  const engineOrigins = [...declaration[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const catalog = readJson("../../protocol/capture-site/catalog.json");
+  const catalogOrigins = Object.keys(catalog.shared_origins).sort();
+  const missing = catalogOrigins.filter((o) => !engineOrigins.includes(o));
+  const extra = engineOrigins.filter((o) => !catalogOrigins.includes(o));
+  assert.deepEqual(
+    engineOrigins,
+    catalogOrigins,
+    `SHARED_ORIGINS and catalog.json shared_origins disagree; missing from the engine: ${JSON.stringify(missing)}; extra in the engine: ${JSON.stringify(extra)}`,
+  );
+});
