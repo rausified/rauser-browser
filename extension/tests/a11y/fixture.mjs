@@ -119,6 +119,8 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
         const run = fixture.runs.find((run) => run.run_id === request.run_id);
         return { type: "run_fetched", run, stream_text: "", next_offset: 0, more: false };
       }
+      case "save_task_note":
+        return { type: "task_note_saved", run_id: request.run_id, already_saved: false };
       case "cancel_run": {
         const run = fixture.runs.find((run) => run.run_id === request.run_id);
         Object.assign(run, { state: "canceled", finished_at: new Date().toISOString() });

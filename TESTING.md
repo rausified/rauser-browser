@@ -1778,3 +1778,27 @@ renames and ends a session using only the keyboard, audits both states, and
 checks a markup-shaped name remains text. A sandbox skip does not establish
 browser acceptance. macOS/Windows interactive capture acceptance remains
 separate; this feature adds no dialog and changes no scripted-dialog count.
+
+## Explicit task report note copies
+
+`cargo test --locked -p brauser --lib native::task_note` uses temporary homes
+and a fake service reply at the transport boundary, with real config locking,
+identity resolution, note ownership, version checks and atomic file writes.
+It covers appending to empty and existing notes, concurrent reports, uncertain
+reply retries after later user edits, stale editors, home changes during the
+fetch, artifact/URL identity, stripped parameters, unowned/symlink files,
+rejected run kinds and note limits. No harness, live service or API is used.
+`panel/tasks-page.test.mjs` covers no-click/no-write, exact request fields,
+double clicks, retry feedback and excluded tasks; `run-card.test.mjs` covers
+keyboard-focus restoration. The browser keyboard journey additionally saves
+with Space and audits the confirmation; its sandbox skip is not browser
+acceptance. The macOS smoke dialog count is unchanged.
+
+To render actual task-report sections with the existing three-renderer safety
+checker, including composition with earlier user image/link references (the
+trusted run-ID comment is omitted from that check):
+
+```sh
+BRAUSER_TASK_NOTE_CORPUS_OUT="$PWD/target/task-note-markdown.json" cargo test --locked -p brauser --lib native::task_note::tests::report_and_instruction_use_the_shared_markdown_safety_helpers
+node scripts/check-markdown-neutralizer.mjs --outputs target/task-note-markdown.json
+```

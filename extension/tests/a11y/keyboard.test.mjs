@@ -2,6 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { activate, audit, browserFixture, enterPanelTab, focused, task } from "./fixture.mjs";
 
+test("a task report saves to its source note by keyboard with focus and confirmation", async (t) => {
+  const page = await browserFixture(t, "tasks");
+  if (!page) return;
+  const save = page.getByRole("button", { name: "Save to note", exact: true });
+  await save.waitFor();
+  assert.equal(await page.evaluate(() => fixture.requests.filter((r) => r.type === "save_task_note").length), 0);
+  await activate(page, save, "Space");
+  await page.getByRole("status").filter({ hasText: "Report saved to the source page's note." }).waitFor();
+  assert.equal(await save.evaluate((node) => node === document.activeElement), true);
+  assert.equal(await page.evaluate(() => fixture.requests.filter((r) => r.type === "save_task_note").length), 1);
+  await audit(t, page, "tasks/report-saved-to-note");
+});
+
 test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

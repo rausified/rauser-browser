@@ -708,3 +708,17 @@ the same ID; Start after End creates a fresh ID. Worklogs group direct captured
 activity by ID and retain immutable historical name snapshots. Deploy host and
 extension together; older hosts reject tagged activity and cannot index its
 new log payloads after rollback.
+
+### Explicit task-report note copy (additive protocol v8)
+
+`save_task_note { run_id, expected_revision }` is extension-to-host only;
+`expected_revision` names the configuration/home this Tasks page opened against.
+The host fetches the retained run through service `get_run`, accepts only a
+succeeded page task with a nonempty report, then locks, refreshes and checks
+configuration before loading and version-checking its own resolved page note.
+There is no caller-provided URL, record key, instruction or report.
+`task_note_saved { run_id, already_saved }` acknowledges an append or an exact
+existing report section. A stale configuration or an intervening file edit
+refuses with `conflict`; ownership, folder and note-size errors retain their
+ordinary codes. No automatic task finish or worker message sends this request.
+An older host refuses the new request; existing run/note messages are unchanged.

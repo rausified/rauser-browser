@@ -8,8 +8,9 @@
 // textContent only, and none of it reaches diag (DESIGN.md §15).
 import type { RunView } from "../protocol/ts/generated.js";
 import { serviceSetupText } from "./agent.js";
+import { APP_NAME } from "./brand.js";
 import { initDiag } from "./diag.js";
-import { HostError } from "./native.js";
+import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
 import {
   RUNS_REBUILD_HOST_MESSAGE, TaskDetail, dismissedIds, elapsedText, isTerminal, runsMayExist,
   type TaskDetailDeps,
@@ -80,6 +81,9 @@ let refreshAgain = false;
 let listErrorShown = false;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let closed = false;
+// The home/config this history page opened against; a later settings change
+// makes a note write refuse until the user reloads this page.
+let noteConfigRevision: string | null = null;
 
 function make<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -311,6 +315,22 @@ const detailDeps: TaskDetailDeps = {
   copy: (text) => navigator.clipboard.writeText(text),
   visible,
   storage,
+  saveToNote: async (run) => {
+    if (!noteConfigRevision) throw new Error("Settings have not loaded. Reload Tasks and try again.");
+    try {
+      const saved = await session.host.call({
+        type: "save_task_note", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        run_id: run.run_id, expected_revision: noteConfigRevision,
+      }, "task_note_saved");
+      if (saved.run_id !== run.run_id) throw new Error("The host answered for a different task. Reload Tasks and try again.");
+      return saved.already_saved;
+    } catch (error) {
+      if (error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT) {
+        throw new Error(`Rebuild the ${APP_NAME} host and extension together to save task reports to notes.`, { cause: error });
+      }
+      throw error;
+    }
+  },
   // Opens the side panel for this page's window before any await, as the
   // user gesture requires, then hands the instruction off to it: to its
   // window once the panel is known to be there, or to any window once
@@ -542,7 +562,9 @@ async function open(): Promise<void> {
   showStatus("Waiting for the native host…");
   let ready: boolean;
   try {
-    ready = harnessReady({ agentStatus: (await session.readHostConfig()).agent_status });
+    const config = await session.readHostConfig();
+    noteConfigRevision = config.revision;
+    ready = harnessReady({ agentStatus: config.agent_status });
   } catch (error) {
     showListError(error);
     return;
