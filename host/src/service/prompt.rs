@@ -1350,6 +1350,7 @@ mod tests {
             "sign_in when the page shows a sign-in or session-expired screen",
             "denied for a no-permission screen",
             "not_found for a not-found or deleted page",
+            "When access is not ok, read_scope must be page_only",
         ] {
             assert!(prompt.contains(rule), "{rule} missing from:\n{prompt}");
         }

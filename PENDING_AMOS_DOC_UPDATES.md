@@ -382,3 +382,10 @@
   and explicitly skip 13 subprocess cases; strict CI still rejects denial
   and retains the original integration assertions. The repair removes false
   health failures without changing application behavior or live services.
+
+- **Brauser — contradictory summary reading claims now surface:** A fresh
+  answer reporting both an access wall and whole/partial artifact reading gets
+  one correction turn, then a visible invalid-output failure if it remains
+  contradictory. Valid page-only walls still save nothing and leave the page
+  eligible for later summary; old stored answers remain readable. The summary
+  instructions and validation now agree (`brwr-divh`).
