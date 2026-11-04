@@ -389,3 +389,18 @@
   contradictory. Valid page-only walls still save nothing and leave the page
   eligible for later summary; old stored answers remain readable. The summary
   instructions and validation now agree (`brwr-divh`).
+
+- **Brauser — index bounds follow work rather than runner speed (2026-11-04):**
+  Year-scale delivery tests retain row/event/transaction/log-byte bounds,
+  ownership/file identity checks and full-rebuild equivalence while reporting
+  elapsed time without fixed speed ceilings. The two reported held-lock tests
+  retain exact one-wait and Busy/snapshot outcomes. Windows platform acceptance
+  remains with CI (`brwr-gxag`).
+
+- **Brauser — locate exhausted index contention (2026-11-04):** Structured
+  diagnostics distinguish setup, schema/WAL, BEGIN, statement and commit
+  failures with extended SQLite codes, elapsed milliseconds and attempts.
+  Threaded and multi-process stress failures preserve the evidence; caller
+  errors and retry behavior are unchanged. Seven new local regressions use
+  real SQLite locks and isolated fixtures. The Windows root cause and repeated
+  acceptance remain open on `brwr-epl1`; held PR #310 is untouched (`brwr-bszr`).

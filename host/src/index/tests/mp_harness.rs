@@ -186,6 +186,8 @@ pub(crate) struct ChildResult {
     pub(crate) trace: Vec<RegenSpan>,
     /// Busy errors that outlasted every wait and retry (`BUSY_SURFACED`).
     pub(crate) busy_surfaced: u64,
+    /// Structured contention events, including waits a read recovered from.
+    pub(crate) contention: Vec<serde_json::Value>,
 }
 
 /// The shared layout every child of one run opens.
@@ -329,10 +331,11 @@ fn run_child(spec: &ChildSpec) -> ChildResult {
         delivered: Vec::new(),
         trace: Vec::new(),
         busy_surfaced: 0,
+        contention: Vec::new(),
     };
     wait_for_barrier(&layout);
     let busy_before = BUSY_SURFACED.with(std::cell::Cell::get);
-    let ((), trace) = traced(|| match spec.role {
+    let run = || match spec.role {
         Role::Deliver => deliver(&layout, &index, spec.seed, &mut result),
         Role::Read => read(&index, &mut result),
         // The explicit refresh (waits for the lock) alternating with the
@@ -371,8 +374,14 @@ fn run_child(spec: &ChildSpec) -> ChildResult {
                 result.errors.push(format!("{error:#}"));
             }
         }
-    });
+    };
+    let (((), trace), diagnostics, _) = crate::diag::test_capture::capture(|| traced(run));
     result.trace = trace;
+    result.contention =
+        crate::diag::test_capture::events(&diagnostics, "index contention exhausted")
+            .into_iter()
+            .map(|event| event["fields"].clone())
+            .collect();
     result.busy_surfaced = BUSY_SURFACED.with(std::cell::Cell::get) - busy_before;
     result
 }
@@ -440,6 +449,59 @@ fn write_result(spec: &ChildSpec, result: &ChildResult) {
     let partial = layout.results.join(format!("{name}.partial"));
     fs::write(&partial, serde_json::to_vec_pretty(result).unwrap()).unwrap();
     fs::rename(&partial, layout.results.join(format!("{name}.json"))).unwrap();
+}
+
+/// Exercise the actual child result path without subprocess IPC: a reader
+/// serves its snapshot while catch-up cannot acquire a real SQLite writer.
+/// The recovered busy events must still reach the parent as structured data.
+#[test]
+fn child_results_retain_contention_even_when_reads_serve_the_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = Layout::prepare(dir.path());
+    let index = layout.index();
+    let first = activity(
+        "00000000-0000-4000-8000-000000000001",
+        "mp0",
+        "First",
+        "2026-10-15T10:00:00Z",
+    );
+    write_log(&layout.root, "2026-10-15.md", &[&first]);
+    index.record_activity(&first, &[]).unwrap();
+    let later = activity(
+        "00000000-0000-4000-8000-000000000002",
+        "mp1",
+        "Later",
+        "2026-10-15T11:00:00Z",
+    );
+    write_log(&layout.root, "2026-10-15.md", &[&first, &later]);
+    let holder = rusqlite::Connection::open(index.database_path()).unwrap();
+    holder.execute("BEGIN IMMEDIATE", []).unwrap();
+    let _short = BusyTimeout::set(Duration::from_millis(2));
+    release(dir.path());
+    let spec = ChildSpec {
+        role: Role::Read,
+        dir: dir.path().to_path_buf(),
+        seed: 0,
+    };
+    let result = run_child(&spec);
+    assert!(result.errors.is_empty(), "{result:#?}");
+    assert_eq!(result.ops, BATCHES * 2);
+    assert!(result.busy_surfaced > 0);
+    assert_eq!(result.contention.len() as u64, result.busy_surfaced);
+    for event in &result.contention {
+        assert_eq!(event["operation"], "write");
+        assert_eq!(event["phase"], "begin");
+        assert_eq!(event["sqlite_extended_code"], rusqlite::ffi::SQLITE_BUSY);
+        assert!(event["elapsed_ms"].is_u64());
+        assert!(event["attempts"].as_u64().unwrap() >= 1);
+    }
+    write_result(&spec, &result);
+    let saved: ChildResult =
+        serde_json::from_slice(&fs::read(layout.results.join("read-0.json")).unwrap()).unwrap();
+    assert_eq!(saved.contention, result.contention);
+    assert_eq!(saved.busy_surfaced, result.busy_surfaced);
+    holder.execute("ROLLBACK", []).unwrap();
+    assert_eq!(index.recent(None, None, 10).unwrap().0.len(), 2);
 }
 
 /// The child entry point. A no-op unless a harness spawned this process.
@@ -561,12 +623,17 @@ fn mp_deliver_read_and_regenerate_share_one_cache() {
     for result in &results {
         assert!(
             result.errors.is_empty(),
-            "{:?} {}: {:#?}",
+            "{:?} {}: {:#?}\ncontention: {:#?}",
             result.role,
             result.seed,
-            result.errors
+            result.errors,
+            result.contention
         );
-        assert_eq!(result.busy_surfaced, 0, "{:?} {}", result.role, result.seed);
+        assert_eq!(
+            result.busy_surfaced, 0,
+            "{:?} {}\ncontention: {:#?}",
+            result.role, result.seed, result.contention
+        );
         assert_eq!(
             result.ops,
             BATCHES * if result.role == Role::Read { 2 } else { 1 }

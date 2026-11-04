@@ -1372,3 +1372,21 @@ nothing. Root `SUMMARY.md` states the rule and prompt tests pin its presence.
 Existing stored-answer deserialization, summary save retries, protocol fields
 and auto-summary eligibility remain unchanged. Tests use the in-memory
 recording harness with the actual summary finisher; no real agent is run.
+
+## 2026-11-04 — Measure index work and retain contention phases
+
+`brwr-gxag`: year-scale delivery tests retain deterministic work bounds,
+file identities and full-derive equivalence, while elapsed time is diagnostic
+only. Removed the two reported held-lock upper timing bounds, preserving the
+exact one-long-wait and Busy/snapshot checks. No production timeout changed.
+
+`brwr-bszr`: `index/db.rs` maps contention through operation/phase-aware
+boundaries, retaining primary/extended SQLite codes, elapsed milliseconds and
+actual BEGIN/WAL attempt counts in one warning. Ordinary errors, rollback and
+legacy-replacement wording remain intact. Recovered reads can also emit that
+warning. The four-host migration test captures each worker's diagnostics;
+multi-process result files retain structured contention fields and print them
+on failure. Seven new regressions exercise real setup/BEGIN/WAL/commit locks,
+extended-code bodies, no duplicate/no-success noise and child-result
+persistence. The held budget fix remains absent, and repeated Windows stress
+acceptance and the Windows root cause remain on `brwr-epl1`.

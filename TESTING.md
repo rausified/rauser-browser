@@ -1514,8 +1514,26 @@ cleanup; on Windows an open handle makes the cleanup fail.
   every index test also checks the incremental paths.
 - **Bounds.** Counters such as `FULL_DERIVES`, `LOG_BYTES_READ` and the
   transaction count prove that a delivery reads only the appended tail and
-  updates only the affected groups. The bounds are asserted on counters;
-  any wall-clock ceiling is loose and only catches gross regressions.
+  updates only the affected groups. The year-scale tests also bound events
+  loaded, rows written and group derives, preserve database/file identities,
+  and compare with the full-derive oracle. Elapsed delivery times are printed
+  for diagnosis, without runner-speed assertions: a bounded Windows delivery
+  took 12 seconds on a loaded runner (`brwr-gxag`). The held-lock database and
+  snapshot-read tests assert exactly one long BEGIN wait plus the Busy or
+  snapshot outcome, without a wall-clock upper bound.
+- **Contention diagnostics.** `host/src/index/db.rs` tests real SQLite locks
+  at BEGIN, connection setup, the WAL switch and commit. They check one
+  `index contention exhausted` event with operation, phase, extended SQLite
+  code, elapsed milliseconds and attempts, preserve rollback and caller error
+  wording, and check contextual extended codes in both read and write bodies.
+  Successful operations, unrelated errors and already mapped failures do not
+  add contention events. The four-host first-open test prints each failing
+  thread's captured diagnostics. Multi-process results retain contention
+  fields even when a read serves the committed snapshot; the parent prints
+  them on error or a nonzero busy count. A real held-writer test exercises
+  that child/result-file path without subprocess IPC. Linux coverage does
+  not complete `brwr-epl1`'s repeated Windows stress acceptance, and this
+  diagnostic change does not restore the held contention-budget fix.
 - **Several processes.** `host/src/index/tests/mp_harness.rs` re-executes the
   test binary with `--exact <mp_child> --nocapture --test-threads=1` and
   passes each child its role, directory and seed through
@@ -1523,7 +1541,7 @@ cleanup; on Windows an open handle makes the cleanup fail.
   test process's environment is never changed, and `mp_child` is a no-op
   without the variable. Children share one root and cache, start together
   on a barrier file, never take `.config.lock`, and each writes one JSON
-  result (errors, busy count and a regeneration trace) under
+  result (errors, busy count, contention diagnostics and a regeneration trace) under
   `<dir>/results`. `mp_deliver_read_and_regenerate_share_one_cache` runs
   deliverers (with retried batches), readers and regenerators at once and
   requires no error and no surfaced busy in any process, no lost or
