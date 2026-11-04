@@ -15,19 +15,18 @@ import {
   MAX_SHAPE_COUNT, MAX_SITE_SHAPES, httpOrigin, isUrlShape, type SampledShape, type SitePatterns,
 } from "./site-patterns.js";
 import {
-  githubOwnerFromUrl, linkedToPresentContainers, orderContainedFirst, parseGitHubOrganizations, parseTenantList, starterKind,
-  starterOffers, type StarterOffer,
+  choiceNoun, displayTypes, linkedToPresentContainers, orderContainedFirst, parseTenantList, starterFamily, starterKind,
+  starterOffers, starterType, type StarterOffer,
 } from "./starter-adapters.js";
+import { scopeInput } from "./starter-scopes.js";
 
 export interface CaptureChoice {
-  /** One shared, comma-separated organization list, used for every checked GitHub type. */
-  organizations: string;
-  repositories: boolean;
-  pullRequests: boolean;
-  issues: boolean;
-  /** The Atlassian Cloud starters: either or both may be chosen. */
-  jiraIssues: boolean;
-  confluencePages: boolean;
+  /** The family's checked artifact types (`github.pr`, `jira.issue`, …).
+   * Ignored for a one-type family, which always captures its one type. */
+  types: Set<string>;
+  /** Each scoped family's typed scope text, keyed by family id. An unscoped
+   * or scope-less family has no entry. */
+  scopes: Record<string, string>;
 }
 
 export interface CapturePlan {
@@ -40,8 +39,14 @@ export interface CapturePlan {
   startsCapture: boolean;
 }
 
-// A repository example is its home page.
-const GITHUB_EXAMPLE_ROUTES: Record<string, string> = { "github.pr": "/pull/123", "github.issue": "/issues/123" };
+/** The refusal message when every box in a multi-type family is unchecked:
+ * one noun needs no "or", two join with "or both", three or more with "or
+ * some combination". */
+export function chooseMessage(nouns: readonly string[]): string {
+  if (nouns.length <= 1) return `Choose ${nouns[0]}.`;
+  if (nouns.length === 2) return `Choose ${nouns[0]}, ${nouns[1]}, or both.`;
+  return `Choose ${nouns.join(", ")}, or some combination.`;
+}
 
 export function captureOrigin(url: string): string | null {
   try {
@@ -67,32 +72,20 @@ export function planCaptureSite(
   // Re-learning a configured site requires explicit aliases/re-keying. Never
   // replace a custom definition or silently add overlapping starter rules.
   if (siteConfigured(config, origin)) return { ok: false, message: "This site already has capture rules. Manage them in settings." };
-  const offers: StarterOffer[] = [];
-  if (starterKind(origin) === "github") {
-    const checkedTypes = [
-      ["github.pr", choice.pullRequests],
-      ["github.issue", choice.issues],
-      ["github.repo", choice.repositories],
-    ] as const;
-    if (!checkedTypes.some(([, checked]) => checked)) {
-      return { ok: false, message: "Choose repositories, pull requests, issues, or some combination." };
-    }
-    const organizations = parseGitHubOrganizations(choice.organizations);
-    if (!organizations) return { ok: false, message: "Enter 1–32 comma-separated GitHub organizations, or uncheck every GitHub page type." };
-    const allOffers = starterOffers(origin, organizations);
-    for (const [type, checked] of checkedTypes) {
-      if (!checked) continue;
-      offers.push(allOffers.find((offer) => offer.artifact_type === type)!);
-    }
-  } else if (starterKind(origin) === "atlassian") {
-    const checked = new Set<string>();
-    if (choice.jiraIssues) checked.add("jira.issue");
-    if (choice.confluencePages) checked.add("confluence.page");
-    if (!checked.size) return { ok: false, message: "Choose Jira issues, Confluence pages, or both." };
-    offers.push(...starterOffers(origin, []).filter((offer) => checked.has(offer.artifact_type)));
-  } else {
-    offers.push(...starterOffers(origin, []));
+  const family = starterFamily(origin)!;
+  const types = displayTypes(family);
+  const chosen = types.length === 1
+    ? new Set(types.map((type) => type.type))
+    : new Set(types.filter((type) => choice.types.has(type.type)).map((type) => type.type));
+  if (!chosen.size) return { ok: false, message: chooseMessage(types.map(choiceNoun)) };
+  const input = scopeInput(family);
+  let values: string[] = [];
+  if (input) {
+    const parsed = input.parse(choice.scopes[family.family] ?? "");
+    if (!parsed) return { ok: false, message: input.invalid };
+    values = parsed;
   }
+  const offers = starterOffers(origin, values).filter((offer) => chosen.has(offer.artifact_type));
   const artifacts = linkedToPresentContainers(offers.map((offer) => offer.adapter!), config.adapters.artifacts);
   const additions: AdapterDocument = { format: 1, artifacts: orderContainedFirst(artifacts) };
   const document: AdapterDocument = {
@@ -107,12 +100,10 @@ export function planCaptureSite(
   if (probes.some((row) => row.result.match)) return { ok: false, message: "The proposed capture rules match a safety-check page. Use settings to review them." };
   const examples: PreviewRow[] = [];
   for (const offer of offers) {
-    let example = exampleUrl(offer.adapter!);
-    if (offer.kind === "github") {
-      const scope = offer.adapter!.scope as { owner: string[] };
-      const route = GITHUB_EXAMPLE_ROUTES[offer.artifact_type] ?? "";
-      example = `${origin}/${scope.owner[0]}/example-repository${route}`;
-    }
+    const examplePath = starterType(offer.artifact_type)?.example_path;
+    const example = examplePath
+      ? origin + examplePath.replace("{scope}", () => values[0]!)
+      : exampleUrl(offer.adapter!);
     const result = previewDocument(additions, example, "", false);
     if (result.ok) examples.push(...result.rows);
   }
@@ -240,7 +231,10 @@ export function tenantPrefill(url: string, view: DraftedAdapterView | null): str
   if (canonical === null || isBlockedRouteWord(canonical)) return "";
   // On GitHub the starter's owner reading (#126) also knows GitHub's own
   // routes (settings, notifications, …), which are never an organization.
-  if (starterKind(parsed.origin) === "github" && githubOwnerFromUrl(url) !== canonical) return "";
+  // Other scope kinds declare no `fromUrl` in PR B, so this never narrows them.
+  const family = starterFamily(parsed.origin);
+  const input = family && scopeInput(family);
+  if (input?.fromUrl && input.fromUrl(url) !== canonical) return "";
   // The kept drafted rules, scoped to this one candidate, must record this
   // page with the candidate as its tenant.
   const match = view.adapter.match;

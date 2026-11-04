@@ -1,5 +1,7 @@
 {
   "family": "github",
+  "display_name": "GitHub",
+  "review_prompt": "Choose the kinds of work to remember and the work organizations that own them. Only repositories, pull requests and issues owned by the names you enter are included. Leave personal accounts out.",
   "origin": { "kind": "exact", "origin": "https://github.com" },
   "scope": { "kind": "github_org" },
   "types": [
@@ -9,6 +11,8 @@
       "label": "GitHub pull requests",
       "label_variants": [],
       "description": "Pull request routes share one artifact; files use review mode, while commits and checks use view mode.",
+      "record_label": "pull requests",
+      "example_path": "/{scope}/example-repository/pull/123",
       "adapter": {
         "type": "github.pr",
         "match": [{ "path": "/{owner:name|lower}/{repo:name|lower}/pull/{number:int}/{mode?:(files|commits|checks)}/{*}" }],
@@ -29,6 +33,8 @@
       "label": "GitHub issues",
       "label_variants": [],
       "description": "Issue pages are captured only for the organizations you name.",
+      "record_label": "issues",
+      "example_path": "/{scope}/example-repository/issues/123",
       "adapter": {
         "type": "github.issue",
         "match": [{ "path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
@@ -48,6 +54,8 @@
       "label": "GitHub repositories",
       "label_variants": [],
       "description": "Every page inside a repository counts toward it; pull requests and issues count toward both.",
+      "record_label": "repositories",
+      "example_path": "/{scope}/example-repository",
       "adapter": {
         "type": "github.repo",
         "match": [{ "path": "/{owner:name|lower}/{repo:name|lower}/{*}" }],

@@ -12,10 +12,14 @@ import {
   type CaptureMode, type CapturePlan, type DraftPlan, type DraftRequest, type DraftSelection,
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
-import { githubOwnerFromUrl, parseTenantList, starterKind, starterOffers, starterStatus } from "./starter-adapters.js";
+import {
+  choiceNoun, displayTypes, parseTenantList, recordLabel, scopedValuesOf, starterFamily, starterOffers, starterStatus,
+} from "./starter-adapters.js";
+import { scopeInput } from "./starter-scopes.js";
+import { renderStarterChoice, type StarterChoiceView } from "./starter-choice-view.js";
 import { SitePatternPanel, collectPagePatterns } from "./site-pattern-panel.js";
 import { draftHandoff, handoffKey, storeDraftHandoff } from "./capture-site-handoff.js";
-import { GITHUB_RECORD_LABELS, GITHUB_RECORD_ORDER, joinRecordedTypes } from "./site-coverage.js";
+import { joinRecordedTypes } from "./site-coverage.js";
 
 export interface CapturePage {
   url: string;
@@ -36,20 +40,20 @@ interface CaptureActions {
   agentReady(): boolean;
 }
 
-const STARTER_DRAFT_SOURCE = "Development starter draft · live-tool certification is still pending.";
-const STARTER_CERTIFIED_SOURCE = "Starter rules checked against the live tool.";
+const STARTER_DRAFT_SOURCE = "Development starter draft · not yet checked on a real account.";
+const STARTER_CERTIFIED_SOURCE = "Certified starter rules · checked on real pages.";
 
 /** The starter source line for an origin, from each offered starter's status
- * in protocol/starters: certified, a development draft, or a mix that names
- * the drafts. */
+ * in protocol/starters: certified (live or history alike — both mean
+ * "checked on real pages"), a development draft, or a mix that names the
+ * drafts. */
 function starterSource(origin: string): string {
   const offers = starterOffers(origin, []);
   const drafts = offers.filter((offer) => starterStatus(offer.artifact_type)?.state !== "certified");
   if (!offers.length || drafts.length === offers.length) return STARTER_DRAFT_SOURCE;
   if (!drafts.length) return STARTER_CERTIFIED_SOURCE;
-  const names = drafts.map((offer) => offer.label).join(", ");
-  const what = drafts.length === 1 ? "a development draft whose" : "development drafts whose";
-  return `Starter rules checked against the live tool, except ${names}: ${what} live-tool certification is still pending.`;
+  const names = joinRecordedTypes(drafts.map((offer) => offer.label));
+  return `Certified starter rules, except ${names}: not yet checked on a real account.`;
 }
 const DRAFT_SOURCE = "Drafted by Brauser from this site's page patterns. No agent and no page content were used; review each kind of page before saving.";
 const AGENT_SOURCE = "Drafted by Brauser from this site's page patterns, then improved by AI from the same patterns. No page content was used, and Brauser checked every rule; review each kind of page before saving.";
@@ -175,14 +179,8 @@ export class CaptureSitePanel {
   private readonly hint = element<HTMLElement>("capture-site-hint");
   private readonly review = element<HTMLElement>("capture-site-review");
   private readonly heading = element<HTMLElement>("capture-site-heading");
-  private readonly atlassian = element<HTMLElement>("capture-site-atlassian");
-  private readonly jira = element<HTMLInputElement>("capture-site-jira");
-  private readonly confluence = element<HTMLInputElement>("capture-site-confluence");
-  private readonly github = element<HTMLElement>("capture-site-github");
-  private readonly repos = element<HTMLInputElement>("capture-site-repos");
-  private readonly prs = element<HTMLInputElement>("capture-site-prs");
-  private readonly issues = element<HTMLInputElement>("capture-site-issues");
-  private readonly orgs = element<HTMLInputElement>("capture-site-orgs");
+  private readonly starterContainer = element<HTMLElement>("capture-site-starter");
+  private starterView: StarterChoiceView | null = null;
   private readonly preview = element<HTMLElement>("capture-site-preview");
   private readonly message = element<HTMLElement>("capture-site-message");
   private readonly save = element<HTMLButtonElement>("capture-site-save");
@@ -254,9 +252,6 @@ export class CaptureSitePanel {
       cancel();
     });
     this.save.addEventListener("click", () => void this.commit());
-    for (const input of [this.jira, this.confluence, this.repos, this.prs, this.issues, this.orgs]) {
-      input.addEventListener("input", () => this.updatePreview());
-    }
     this.scoped.addEventListener("input", () => {
       if (this.scoped.checked) this.unscoped.checked = false;
       this.updateDraftPreview();
@@ -376,15 +371,12 @@ export class CaptureSitePanel {
     this.recurringStart.hidden = true;
     this.heading.textContent = `Capture work on ${new URL(origin).host}`;
     this.source.textContent = mode === "draft" ? DRAFT_SOURCE : starterSource(origin);
-    this.atlassian.hidden = mode !== "starter" || starterKind(origin) !== "atlassian";
-    this.jira.checked = true;
-    this.confluence.checked = true;
-    this.github.hidden = mode !== "starter" || starterKind(origin) !== "github";
-    this.repos.checked = true;
-    this.prs.checked = true;
-    this.issues.checked = true;
-    // Shown and confirmed, never applied unseen: the user still has to save.
-    this.orgs.value = mode === "starter" ? githubOwnerFromUrl(page.url) ?? "" : "";
+    if (mode === "starter") {
+      this.starterView = renderStarterChoice(this.starterContainer, origin, page.url, () => this.updatePreview());
+    } else {
+      this.starterContainer.replaceChildren();
+      this.starterView = null;
+    }
     if (mode === "draft" && siteConfigured(this.session.config!, origin)) void this.startDraft(this.target);
     else void this.startReview(this.target);
     this.heading.focus();
@@ -417,11 +409,11 @@ export class CaptureSitePanel {
       this.restorePlan = { origin: target.origin, document, startsCapture: this.session.config!.capture_enabled };
       this.heading.textContent = `Restore capture on ${new URL(target.origin).host}`;
       this.source.textContent = "Recorded capture rules · existing notes keep their identity. Title cleanup and reference extraction can be adjusted in settings.";
-      this.atlassian.hidden = true;
-      this.github.hidden = true;
+      this.starterView?.clear();
+      this.starterView = null;
       this.preview.replaceChildren();
       for (const adapter of recorded.artifacts) {
-        const name = GITHUB_RECORD_LABELS[String(adapter.type)] ?? String(adapter.type).replace(/[._]/g, " ");
+        const name = recordLabel(String(adapter.type)) ?? String(adapter.type).replace(/[._]/g, " ");
         const rules = Array.isArray(adapter.match) ? adapter.match : [];
         child(this.preview, "p", `Recorded page kind: ${name} — pages like ${rules.map(describeRule).join(" or ")}.`);
         const scope = adapter.scope;
@@ -470,7 +462,8 @@ export class CaptureSitePanel {
     this.draftViews = [];
     this.previewMessage = "";
     this.review.hidden = true;
-    this.orgs.value = "";
+    this.starterView?.clear();
+    this.starterView = null;
     this.preview.replaceChildren();
     this.kinds.replaceChildren();
     this.dropped.replaceChildren();
@@ -758,10 +751,7 @@ export class CaptureSitePanel {
     this.message.textContent = problem ?? this.previewMessage;
     this.save.disabled = busy || !plan || !!problem || !this.session.connected;
     this.cancel.disabled = this.saving;
-    for (const input of [this.jira, this.confluence, this.repos, this.prs, this.issues, this.orgs]) {
-      input.disabled = this.saving || stale;
-    }
-    this.orgs.disabled ||= !this.repos.checked && !this.prs.checked && !this.issues.checked;
+    this.starterView?.setDisabled(this.saving || stale);
     const draftInputs = [
       ...this.draftViews.flatMap((view) => [view.type, ...view.rules]), this.scoped, this.unscoped, this.titleSuffix,
     ];
@@ -908,14 +898,7 @@ export class CaptureSitePanel {
   private updatePreview(): void {
     if (!this.target || this.target.mode !== "starter" || !this.session.config || this.saving || !this.freshRulesAllowed) return;
     this.preview.replaceChildren();
-    const result = planCaptureSite(this.session.config, this.target.url, {
-      organizations: this.orgs.value,
-      repositories: this.repos.checked,
-      pullRequests: this.prs.checked,
-      issues: this.issues.checked,
-      jiraIssues: this.jira.checked,
-      confluencePages: this.confluence.checked,
-    });
+    const result = planCaptureSite(this.session.config, this.target.url, this.starterView!.choice());
     const target = this.target;
     const check = ++this.starterCheck;
     this.plan = null;
@@ -945,14 +928,20 @@ export class CaptureSitePanel {
         line.textContent = offer.description;
         this.preview.append(line);
       }
-      const githubOffer = plan.offers.find((offer) => offer.kind === "github");
-      if (githubOffer) {
-        const scope = githubOffer.adapter!.scope as { owner: string[] };
+      const family = starterFamily(plan.origin);
+      const input = family && scopeInput(family);
+      if (family && input) {
         const checkedTypes = new Set(plan.offers.map((offer) => offer.artifact_type));
-        const labels = GITHUB_RECORD_ORDER.filter((type) => checkedTypes.has(type)).map((type) => GITHUB_RECORD_LABELS[type]!);
-        const orgs = document.createElement("p");
-        orgs.textContent = `Records ${joinRecordedTypes(labels)} owned by: ${scope.owner.join(", ")}.`;
-        this.preview.append(orgs);
+        const nouns = displayTypes(family).filter((type) => checkedTypes.has(type.type)).map((type) => choiceNoun(type));
+        // scopedValuesOf reads only the key(s) the family's templates mark
+        // {"$scope": true}, not just the scope table's first key: a fixed
+        // narrowing key placed ahead of the marked key in the template
+        // would otherwise show up here instead of the recorded scope.
+        const firstAdapter = plan.offers[0]?.adapter;
+        const values = firstAdapter ? scopedValuesOf(firstAdapter) : [];
+        const line = document.createElement("p");
+        line.textContent = input.records(joinRecordedTypes(nouns), values.join(", "));
+        this.preview.append(line);
       }
       const current = document.createElement("p");
       current.textContent = plan.current.result.match ? `This page: will be captured — ${plan.current.url}`
