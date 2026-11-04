@@ -206,6 +206,18 @@ pub(crate) fn wikilink(target: &str, label: Option<&str>) -> String {
 /// (DESIGN.md §5.2 step 6).
 #[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn neutralize_remote(text: &str) -> String {
+    neutralize(text, false)
+}
+
+/// Text appended to an existing user's note also cannot define references
+/// used by earlier note text (including images). Reuse the same scanner,
+/// rendering brackets literally and retaining its backslash parity rules.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn neutralize_note_append(text: &str) -> String {
+    neutralize(text, true)
+}
+
+fn neutralize(text: &str, escape_brackets: bool) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len() + text.len() / 4);
     let mut backslashes = 0usize;
@@ -242,6 +254,12 @@ pub(crate) fn neutralize_remote(text: &str) -> String {
             continue;
         }
         match ch {
+            '[' | ']' if escape_brackets => {
+                if escaped {
+                    out.pop();
+                }
+                out.push_str(if ch == '[' { "&#91;" } else { "&#93;" });
+            }
             '<' => out.push_str("&lt;"),
             // A `!` at the end is escaped too, so a `[` written after the
             // output cannot make an image of it.

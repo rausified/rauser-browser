@@ -1335,3 +1335,17 @@ worklog identifies name changes in its selected range. Existing event bytes
 omit absent metadata, and frozen capture recovery stays intact. The shared
 worklog renderer also serves the cache-independent Re-learn projection.
 Browser/platform acceptance remains separate from offline tests.
+
+
+## 2026-11-03 — Explicitly keep task reports beside their source pages
+
+`brwr-bsx`: Tasks detail now offers Save to note for successful page tasks with
+a retained report. The native host fetches that report, refreshes/checks the
+home's config revision under lock, then appends a Markdown-safe section through
+the existing location-aware, ownership-checked and version-checked note path
+(`host/src/native/task_note.rs`). Finishing/polling still writes nothing.
+Full-block recognition makes uncertain-reply retries idempotent while preserving
+later user text. The shared Markdown scanner additionally neutralizes report
+brackets so its definitions cannot activate earlier user image/link references.
+This adds only `save_task_note` / `task_note_saved` within v8;
+ordinary note messages, physical ownership and browser-local recovery remain.

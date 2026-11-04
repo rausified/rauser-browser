@@ -8,6 +8,33 @@ use serde_json::{Value, json};
 mod common;
 use common::{assert_request_round_trips, assert_response_round_trips, schema_subset};
 
+#[test]
+fn saving_a_task_report_supplies_only_the_run_and_config_revision() {
+    let request = json!({
+        "type": "save_task_note", "protocol_version": 8, "request_id": "save",
+        "run_id": "00000000-0000-4000-8000-000000000071", "expected_revision": "config-rev",
+    });
+    assert_request_round_trips("SaveTaskNoteRequest", &request);
+    for field in ["url", "body", "report", "record_key", "instruction"] {
+        let mut forged = request.clone();
+        forged[field] = json!("untrusted");
+        assert!(
+            serde_json::from_value::<Request>(forged.clone()).is_err(),
+            "{field}"
+        );
+        assert!(!schema_subset::valid("SaveTaskNoteRequest", &forged));
+    }
+    for already_saved in [false, true] {
+        assert_response_round_trips(
+            "TaskNoteSaved",
+            &json!({
+                "type": "task_note_saved", "protocol_version": 8, "request_id": "save",
+                "run_id": request["run_id"], "already_saved": already_saved,
+            }),
+        );
+    }
+}
+
 fn start_task() -> Value {
     json!({
         "type": "start_task", "protocol_version": 8, "request_id": "r",
