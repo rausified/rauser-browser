@@ -417,6 +417,27 @@ test('labeled, green and stuck at "Merge queue is ready": advise the contract\'s
   assert.match(d.message, /Merge Protections/);
 });
 
+// What Mergify really reports for a labeled, green PR it has not queued
+// (#265, 2026-11-04): the "ready" title, but an embedded state of "waiting"
+// with nothing unmet. The title must win, or the comment advice never shows.
+const READY_REAL = () => mq("Merge queue is ready", {
+  meta: WAITING_META([]),
+  markdown: "This pull request can be added to the merge queue.\n\nUse `@Mergifyio queue` or the [Mergify dashboard](https://dashboard.mergify.com) to queue this pull request for merging.\n",
+});
+
+test('a real-shaped "Merge queue is ready" check with a "waiting" payload is phase ready', () => {
+  const check = latestChecks([READY_REAL()])[0];
+  assert.equal(mergifyQueueStatus(check).phase, "ready");
+});
+
+test('labeled, green, stuck at a real-shaped "ready" check: advise the queue comment, not the conditions', () => {
+  const contexts = rollup([READY_REAL()]);
+  const since = new Date(Date.parse(NOW) - (ADMIT_GRACE_MINUTES + 1) * 60000).toISOString();
+  const d = decide(snap({ contexts }), { now: NOW, admitWaitSince: since });
+  assert.equal(d.action, "queue-ready-not-admitted");
+  assert.match(d.message, /gh pr comment 243 --body "@Mergifyio queue"/);
+});
+
 test("the queue comment pr-watch advises is the worker contract's merge.comment", async () => {
   const { readFileSync } = await import("node:fs");
   const contract = JSON.parse(readFileSync(new URL("../../worker-contract.json", import.meta.url), "utf8"));

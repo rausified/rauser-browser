@@ -1,15 +1,34 @@
 import type { AdapterObject } from "./adapter-review.js";
 import { canonicalCapture, compileDocument } from "./adapter-templates.js";
 import { canonicalJson } from "./capture-site-handoff.js";
-import { STARTER_FAMILIES, type StarterFamilyData, type StarterTypeData } from "./starter-families.generated.js";
+import {
+  STARTER_FAMILIES,
+  STARTER_FAMILY_IDS,
+  type StarterFamilyData,
+  type StarterFamilyId,
+  type StarterTypeData,
+} from "./starter-families.generated.js";
 
 /** The starter family an origin belongs to: a `STARTER_FAMILIES` entry's
- * `family` id. One family can offer several starters: an Atlassian Cloud
- * site offers Jira issues and Confluence pages, GitHub offers pull requests,
- * issues and repositories. Today's families are "atlassian", "sharepoint",
- * "github" and "miro"; the type stays `string` so a new family added to
- * protocol/starters/*.json needs no signature change here. */
-export type StarterKind = string;
+ * `family` id, typed to the generated `STARTER_FAMILY_IDS` union so a
+ * misspelt family id literal fails `tsc` instead of silently matching
+ * nothing. One family can offer several starters: an Atlassian Cloud site
+ * offers Jira issues and Confluence pages, GitHub offers pull requests,
+ * issues and repositories. */
+export type StarterKind = StarterFamilyId;
+
+/** Test-only seam (no other `extension/` module has one): the family list
+ * `starterFamily`, `starterFamilies`, `starterType`, `displayTypes`,
+ * `recordLabel`, `recordOrder`, `isContainerType`, `configuredScope`,
+ * `starterKind`, `starterOffers` and `starterStatus` read, defaulting to
+ * `STARTER_FAMILIES`. Tests swap in a synthetic family (a `tenant_name` or
+ * `unscoped` example, `extension/tests/starter-fixtures.mjs`) that is not
+ * part of the shipped catalog, then restore the default with `null`. */
+let families: readonly StarterFamilyData[] = STARTER_FAMILIES;
+
+export function setStarterFamiliesForTest(swap: readonly StarterFamilyData[] | null): void {
+  families = swap ?? STARTER_FAMILIES;
+}
 
 export interface StarterOffer {
   key: string;
@@ -57,15 +76,19 @@ function secureHostname(origin: string): string | null {
   }
 }
 
-function familyFor(origin: string): StarterFamilyData | null {
-  for (const family of STARTER_FAMILIES) {
+/** The starter family `origin` belongs to, from the test-seam-aware
+ * `families` list: today's private `familyFor`, exported so Capture Site and
+ * the gallery (Tasks 2-4) can build their UI from the family's own data
+ * instead of per-family branches. */
+export function starterFamily(origin: string): StarterFamilyData | null {
+  for (const family of families) {
     if (family.origin.kind === "exact" && origin === family.origin.origin) return family;
   }
   const host = secureHostname(origin);
   if (!host) return null;
   let best: StarterFamilyData | null = null;
   let bestSuffixLength = -1;
-  for (const family of STARTER_FAMILIES) {
+  for (const family of families) {
     if (family.origin.kind !== "subdomain") continue;
     const suffix = family.origin.suffix;
     if (host.endsWith(suffix) && host !== suffix.slice(1) && suffix.length > bestSuffixLength) {
@@ -76,20 +99,96 @@ function familyFor(origin: string): StarterFamilyData | null {
   return best;
 }
 
+/** Every known starter family, in `STARTER_FAMILY_IDS` (catalog) order; while
+ * the test seam is set, the injected list in its own order. */
+export function starterFamilies(): readonly StarterFamilyData[] {
+  if (families !== STARTER_FAMILIES) return families;
+  const rank = new Map(STARTER_FAMILY_IDS.map((id, index) => [id, index]));
+  return [...families].sort((a, b) => (rank.get(a.family) ?? 0) - (rank.get(b.family) ?? 0));
+}
+
+/** The starter type data for `type`, or `null` when it names no known
+ * starter. */
+export function starterType(type: string): StarterTypeData | null {
+  for (const family of families) {
+    for (const starterType of family.types) {
+      if (starterType.type === type) return starterType;
+    }
+  }
+  return null;
+}
+
 export function starterKind(origin: string): StarterKind | null {
-  return familyFor(origin)?.family ?? null;
+  return starterFamily(origin)?.family ?? null;
 }
 
 /** The current status of a starter type, or `null` when `type` names no
  * known starter. */
 export function starterStatus(type: string): StarterTypeData["status"] | null {
-  for (const family of STARTER_FAMILIES) {
-    for (const starterType of family.types) {
-      if (starterType.type === type) return starterType.status;
+  return starterType(type)?.status ?? null;
+}
+
+/** `type`'s declared `within.type` target, or `null` when it declares none
+ * or declares one some other way (not a plain object, or no string `type`). */
+function withinTarget(type: StarterTypeData): string | null {
+  const within = (type.adapter as Record<string, unknown>).within;
+  if (!within || typeof within !== "object" || Array.isArray(within)) return null;
+  const to = (within as Record<string, unknown>).type;
+  return typeof to === "string" ? to : null;
+}
+
+/** `family`'s types in display order: every type that is another type's
+ * `within.type` target (a container, such as `github.repo`) first, each
+ * group in the family's own source order, then every other type, also in
+ * source order. This is today's GitHub checkbox order. */
+export function displayTypes(family: StarterFamilyData): StarterTypeData[] {
+  const containerTypes = new Set<string>();
+  for (const type of family.types) {
+    const to = withinTarget(type);
+    if (to !== null) containerTypes.add(to);
+  }
+  const containers = family.types.filter((type) => containerTypes.has(type.type));
+  const rest = family.types.filter((type) => !containerTypes.has(type.type));
+  return [...containers, ...rest];
+}
+
+/** The noun a checkbox or gallery card uses for `type`: its `record_label`
+ * when it has one, else its plain `label`, in sentence case as written
+ * ("Repositories", "Jira issues"). */
+export function choiceNoun(type: StarterTypeData): string {
+  return type.record_label ?? type.label;
+}
+
+/** `type`'s `record_label`, or `null` when it names no known starter or the
+ * starter has none (most types: only a type whose records are named in a
+ * "Remember: …" summary, such as GitHub's, has one). */
+export function recordLabel(type: string): string | null {
+  return starterType(type)?.record_label ?? null;
+}
+
+/** Every known type with a `record_label`, in display order, family by
+ * family (`starterFamilies` order, then each family's `displayTypes`
+ * order). Today, GitHub's three types are the only ones with a label. */
+export function recordOrder(): string[] {
+  const order: string[] = [];
+  for (const family of starterFamilies()) {
+    for (const type of displayTypes(family)) {
+      if (type.record_label !== null) order.push(type.type);
     }
   }
-  return null;
+  return order;
 }
+
+/** Whether `type` is some other starter type's `within.type` target (a
+ * container, such as `github.repo`). */
+export function isContainerType(type: string): boolean {
+  return families.some((family) => family.types.some((entry) => withinTarget(entry) === type));
+}
+
+export const STARTER_STATUS_TEXT: Readonly<Record<"certified" | "development", string>> = {
+  certified: "certified",
+  development: "not yet checked on a real account",
+};
 
 export function parseGitHubOrganizations(value: string): string[] | null {
   const entries = value.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean);
@@ -183,12 +282,14 @@ function starterLabel(type: StarterTypeData, origin: string): string {
 }
 
 /** The starter drafts for one site origin. A starter type whose family needs
- * a scope (today, GitHub's organizations) stays without an adapter until
- * `githubOrganizations` names at least one organization. */
+ * a scope value (today, GitHub's organizations; a `tenant_name` family's own
+ * list) stays without an adapter until `githubOrganizations` names at least
+ * one value. An `unscoped` family's scope is non-null but asks for no value,
+ * so it is excluded here too. */
 export function starterOffers(origin: string, githubOrganizations: string[]): StarterOffer[] {
-  const family = familyFor(origin);
+  const family = starterFamily(origin);
   if (!family) return [];
-  const needsScope = family.scope !== null;
+  const needsScope = family.scope !== null && family.scope.kind !== "unscoped";
   return family.types.map((type) => ({
     // A function replacer, not a replacement string: String.replace treats
     // `$'`, `$&`, `$1`, etc. in a replacement string as special patterns, and
@@ -211,19 +312,42 @@ export type AdapterRule = Record<string, unknown>;
 // Config validation caps rules per adapter (adapter-templates.md §10.3).
 const MAX_RULES = 16;
 
-function ownersOf(adapter: AdapterObject): string[] {
+/** `adapter`'s own values under its family's marked scope key(s) (today,
+ * GitHub's `owner`; a `tenant_name` family's own key) — the same account
+ * data `configuredScope` reads back across a whole origin, and for the same
+ * reason: a hand-added narrowing key the family's templates do not mark
+ * with `{"$scope": true}` is left out, so it is never fed back into
+ * `starterOffers` as if it were the starter's own scope. `[]` when the
+ * adapter's origin names no known family or carries no marked key (today,
+ * a non-GitHub origin with no marked key at all). Exported so the panel's
+ * "Records … for: …" line can read a drafted offer's own scope by the same
+ * rule `matchingStarter` uses, instead of guessing the first key in object
+ * order (which a fixed narrowing key ahead of the marked key in the
+ * template would get wrong). */
+export function scopedValuesOf(adapter: AdapterObject): string[] {
+  if (typeof adapter.origin !== "string") return [];
+  const family = starterFamily(adapter.origin);
+  if (!family) return [];
   const scope = adapter.scope;
   if (!scope || typeof scope !== "object" || Array.isArray(scope)) return [];
-  const owner = (scope as Record<string, unknown>).owner;
-  return Array.isArray(owner) ? owner.filter((entry): entry is string => typeof entry === "string") : [];
+  const keys = markedScopeKeys(family);
+  const values: string[] = [];
+  for (const [key, entry] of Object.entries(scope as Record<string, unknown>)) {
+    if (!keys.has(key) || !Array.isArray(entry)) continue;
+    for (const value of entry) if (typeof value === "string") values.push(value);
+  }
+  return values;
 }
 
 /** The current starter `adapter` was saved from: same origin, type, and `id`
- * template string. A GitHub starter is built with the adapter's own
- * organizations, so its scope never decides the match. */
+ * template string. A starter is built from the adapter's own scope values
+ * under its family's marked key(s) (GitHub's organizations, or a
+ * `tenant_name` family's own list), so a saved adapter's scope never
+ * decides the match on its own, and a family that keys its scope some other
+ * way than `owner` (a `tenant_name` family) is still recognised. */
 export function matchingStarter(adapter: AdapterObject): StarterOffer | null {
   if (typeof adapter.origin !== "string") return null;
-  return starterOffers(adapter.origin, ownersOf(adapter)).find((offer) =>
+  return starterOffers(adapter.origin, scopedValuesOf(adapter)).find((offer) =>
     offer.adapter !== null && offer.adapter.type === adapter.type &&
     offer.adapter.id === adapter.id) ?? null;
 }
@@ -372,19 +496,48 @@ export function withContainerLinks(artifacts: AdapterObject[], repo: AdapterObje
     : adapter);
 }
 
-/** The union of `scope.owner` across `https://github.com`
- * adapters, in adapter order, to pre-fill the organization field. */
-export function configuredGitHubOrganizations(artifacts: AdapterObject[]): string[] {
-  const owners: string[] = [];
+/** The scope-table key(s) `family`'s templates mark with a bare
+ * `{"$scope": true}` entry (today, GitHub's `owner`; a `tenant_name`
+ * family's own key). Only these keys hold the account data the starter
+ * itself records; a hand-written adapter can carry other scope keys (a
+ * second capture narrowing the match further), and those must not be read
+ * back into the UI as if the starter had recorded them. */
+function markedScopeKeys(family: StarterFamilyData): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const type of family.types) {
+    const scope = (type.adapter as Record<string, unknown>).scope;
+    if (!scope || typeof scope !== "object" || Array.isArray(scope)) continue;
+    for (const [key, value] of Object.entries(scope as Record<string, unknown>)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length === 1 && entries[0]![0] === "$scope" && entries[0]![1] === true) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+/** The union of every value (lower-cased) under `origin`'s adapters' marked
+ * scope key(s), in adapter order, to pre-fill a scoped starter's input:
+ * GitHub's `scope.owner`, or a future `tenant_name` family's own scope key.
+ * A scope table entry whose key the family's templates do not mark
+ * `{"$scope": true}` is a hand-written narrowing, not account data the
+ * starter recorded, and is left out. Adapters on another origin, or when
+ * `origin` names no known family, are ignored. */
+export function configuredScope(artifacts: AdapterObject[], origin: string): string[] {
+  const family = starterFamily(origin);
+  if (!family) return [];
+  const keys = markedScopeKeys(family);
+  const values: string[] = [];
   for (const adapter of artifacts) {
-    if (adapter.origin !== GITHUB_ORIGIN) continue;
+    if (adapter.origin !== origin) continue;
     const scope = adapter.scope;
     if (!scope || typeof scope !== "object" || Array.isArray(scope)) continue;
-    const owner = (scope as Record<string, unknown>).owner;
-    if (!Array.isArray(owner)) continue;
-    for (const entry of owner) if (typeof entry === "string") owners.push(entry.toLowerCase());
+    for (const [key, entry] of Object.entries(scope as Record<string, unknown>)) {
+      if (!keys.has(key) || !Array.isArray(entry)) continue;
+      for (const value of entry) if (typeof value === "string") values.push(value.toLowerCase());
+    }
   }
-  return [...new Set(owners)];
+  return [...new Set(values)];
 }
 
 function containerType(adapter: AdapterObject): string | null {

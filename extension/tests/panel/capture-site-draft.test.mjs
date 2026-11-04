@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   LINEAR_URL, WIKI, WIKI_URL, descendants, draftReview, draftRule, draftText,
-  drafted, linearDraft, ruleBox, sentAfter, until, updates, wikiDraft,
+  drafted, linearDraft, ruleBox, sentAfter, starterGroup, until, updates, wikiDraft,
 } from "./harness.mjs";
 
 function notionDraft(revision = "1") {
@@ -41,7 +41,7 @@ test("Capture Site on an unknown site drafts with no permission request or nativ
   // The origin has no adapter, so the worker has no sample to read.
   assert.equal(page.state.workerRequests.filter((message) => message.kind === "get_site_patterns").length, 0);
   assert.equal(page.el("capture-site-heading").textContent, "Capture work on wiki.example.com");
-  assert.equal(page.el("capture-site-github").hidden, true);
+  assert.equal(starterGroup(page), null);
   assert.equal(updates(page).length, 0);
 });
 

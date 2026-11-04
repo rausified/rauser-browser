@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CONFIG, GITHUB_URL, JIRA_URL, captureReview, isResponseShape, saveCapture,
-  settle, until, updates,
+  settle, starterBox, starterGroup, starterScope, until, updates,
 } from "./harness.mjs";
 
 const JIRA_OTHER_ADAPTER = { type: "work.item", origin: "https://work.example", match: [{ path: "/items/{id:int}" }], id: "work:{host}/{id}" };
@@ -37,7 +37,7 @@ for (const paused of [false, true]) {
     assert.match(page.el("capture-site-preview").textContent, /Recorded page kind: custom issue/);
     assert.match(page.el("capture-site-preview").textContent, /This page: will be captured/);
     assert.doesNotMatch(page.el("capture-site-preview").textContent, /custom:\{host\}|"match"/);
-    assert.equal(page.el("capture-site-github").hidden, true);
+    assert.equal(starterGroup(page), null);
     assert.equal(page.el("capture-site-save").textContent, paused ? "Restore rules · keep capture paused" : "Restore capture rules");
     assert.equal(updates(page).length, 0);
     assert.equal(page.sent("save_note").length, 0);
@@ -68,7 +68,7 @@ test("restore review shows fixed shared-origin account scope with text-only page
   const page = await captureReview(GITHUB_URL, { intercept: (request) =>
     request.type === "get_site_restore" ? restoreReply(request, adapters) : undefined });
   assert.match(page.el("capture-site-preview").textContent, /only for owner: acme-corp, partner/);
-  assert.equal(page.el("capture-site-github").hidden, true);
+  assert.equal(starterGroup(page), null);
   await saveCapture(page);
   assert.deepEqual(updates(page)[0].config.adapters.artifacts, adapters.artifacts);
 });
@@ -172,10 +172,10 @@ test("GitHub starter edits cannot bypass a failed recorded-rule review", async (
   } });
   const refusal = page.el("capture-site-message").textContent;
   assert.match(refusal, /Could not review recorded rules/);
-  page.el("capture-site-orgs").value = "other-org";
-  page.el("capture-site-orgs").dispatch("input");
-  page.el("capture-site-repos").checked = false;
-  page.el("capture-site-repos").dispatch("input");
+  starterScope(page, "github").value = "other-org";
+  starterScope(page, "github").dispatch("input");
+  starterBox(page, "github.repo").checked = false;
+  starterBox(page, "github.repo").dispatch("input");
   await settle();
   assert.equal(page.el("capture-site-message").textContent, refusal);
   assert.equal(page.el("capture-site-save").disabled, true);
