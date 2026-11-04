@@ -1507,3 +1507,18 @@ assertions in place for the driver's unsandboxed gate. PR-doctor now checks
 whether bd is installed after the probe and reports a broken installed tool
 as an error. This was a health-only repair; no Re-learn migration or product
 behavior was enabled.
+
+## 2026-11-04 — Surface contradictory summary reading claims
+
+Brauser now catches an agent that claims to have read a whole or partial
+artifact while also reporting a sign-in, permission or not-found wall. Those
+answers previously ended as successful runs that quietly saved nothing,
+hiding the contradiction. Fresh answers now receive the existing single
+correction turn with a clear explanation; a repeated contradiction fails the
+run visibly as invalid output. A wall reported with page-only reading still
+succeeds without creating a summary, log event or index entry, leaving the
+artifact eligible for a later summary. The compiled summary instructions now
+state the same rule. Stored older answers remain readable, and no protocol
+or migration behavior changes. Offline regression coverage exercises all six
+contradictions, all valid wall types, correction success and ordinary readable
+artifacts through the parser and actual summary finisher.
