@@ -21,9 +21,10 @@ const {
   setStarterFamiliesForTest,
 } = await import("../dist/starter-adapters.js");
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
-const { EXAMPLE_TENANT_FAMILY } = await import("./starter-fixtures.mjs");
-const { ORIGIN_CASES } = await import("./starter-origin-cases.mjs");
+const { EXAMPLE_TENANT_FAMILY, EXAMPLE_STRICT_FAMILY } = await import("./starter-fixtures.mjs");
+const { ORIGIN_CASES, STRICT_ORIGIN_CASES } = await import("./starter-origin-cases.mjs");
 const { loadFamilies } = await import("../../scripts/generate-starters.mjs");
+const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -49,6 +50,18 @@ const TENANT_TWO_RULE_FAMILY = {
 
 test("starterKind agrees with the legacy rules on 40 origins", () => {
   assert.equal(ORIGIN_CASES.length, 40);
+  for (const [origin, expected] of ORIGIN_CASES) {
+    assert.equal(starterKind(origin), expected, origin);
+  }
+});
+
+test("strict subdomain families claim one label and skip excluded hosts", (t) => {
+  setStarterFamiliesForTest([...STARTER_FAMILIES, EXAMPLE_STRICT_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  for (const [origin, expected] of STRICT_ORIGIN_CASES) {
+    assert.equal(starterKind(origin), expected, origin);
+  }
+  // Adding the strict family must not change what the real families claim.
   for (const [origin, expected] of ORIGIN_CASES) {
     assert.equal(starterKind(origin), expected, origin);
   }

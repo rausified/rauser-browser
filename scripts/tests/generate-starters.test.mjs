@@ -9,7 +9,8 @@ import test from "node:test";
 import {
   checkLock, familyClaims, loadFamilies, renderCatalogLine, renderTs, validateFamily,
 } from "../generate-starters.mjs";
-import { ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
+import { ORIGIN_CASES, STRICT_ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
+import { EXAMPLE_STRICT_FAMILY } from "../../extension/tests/starter-fixtures.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = path.join(REPO, "scripts", "generate-starters.mjs");
@@ -492,6 +493,47 @@ test("familyClaims agrees with starterKind on the 40 origins", () => {
   }
 });
 
+test("familyClaims agrees with starterKind on the strict-subdomain origins", () => {
+  assert.equal(STRICT_ORIGIN_CASES.length, 10);
+  for (const [origin, expected] of STRICT_ORIGIN_CASES) {
+    const claims = familyClaims(EXAMPLE_STRICT_FAMILY.origin, origin);
+    assert.equal(claims ? EXAMPLE_STRICT_FAMILY.family : null, expected, origin);
+  }
+});
+
+test("origin.labels must be 1", (t) => {
+  const root = tmpRoot(t);
+  const atlassian = readFamily(root, "atlassian");
+  atlassian.origin.labels = 2;
+  writeFamily(root, "atlassian", atlassian);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: origin\.labels must be 1/);
+});
+
+test("origin.exclude must be a list of lowercase DNS labels", (t) => {
+  const root = tmpRoot(t);
+  const atlassian = readFamily(root, "atlassian");
+  atlassian.origin.exclude = ["WWW"];
+  writeFamily(root, "atlassian", atlassian);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/atlassian\.json: origin\.exclude must be a list of lowercase DNS labels/,
+  );
+});
+
+test('origin unknown field "labels" on an exact origin', (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.origin.labels = 1;
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, /protocol\/starters\/miro\.json: origin unknown field "labels"/);
+});
+
 test("sample_scope must not be empty for a scoped family", (t) => {
   const root = tmpRoot(t);
   const github = readFamily(root, "github");
@@ -622,16 +664,16 @@ test("a vector id duplicating a legacy vectors.json case is caught", (t) => {
   );
 });
 
-test("the test-only tenant_name and unscoped fixtures pass the generator's own family validation", async () => {
+test("the test-only tenant_name, unscoped and strict-subdomain fixtures pass the generator's own family validation", async () => {
   // extension/tests/starter-fixtures.mjs stands in for a protocol/starters/
   // family file in panel, gallery and capture-site tests. Running it through
   // the same validateFamily the generator applies to every real family file
   // means it cannot quietly drift out of the file format (as
   // EXAMPLE_UNSCOPED_FAMILY once did with a null review_prompt on a scoped
   // family) without a test catching it.
-  const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY } =
+  const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY, EXAMPLE_STRICT_FAMILY: strictFixture } =
     await import("../../extension/tests/starter-fixtures.mjs");
-  for (const fixture of [EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY]) {
+  for (const fixture of [EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY, strictFixture]) {
     const problems = [];
     validateFamily(problems, "<fixture>", fixture);
     assert.deepEqual(problems, [], fixture.family);

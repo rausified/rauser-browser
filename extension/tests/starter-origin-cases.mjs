@@ -57,3 +57,25 @@ export const ORIGIN_CASES = [
   ["https://miro.com:443", null],
   ["https://miro.co", null],
 ];
+
+// A strict subdomain family (labels: 1, exclude: ["www", "signin"]),
+// test-only, exercising Task 4's tighter subdomain rule: unlike Atlassian
+// and SharePoint above, which claim any subdomain prefix (including nested
+// ones and "www"/"signin"-style product hosts), a strict family claims only
+// a single label that is not on its exclude list. Shared the same way as
+// ORIGIN_CASES, between extension/tests/starter-families.test.mjs
+// (starterKind, with EXAMPLE_STRICT_FAMILY added to STARTER_FAMILIES via
+// setStarterFamiliesForTest) and scripts/tests/generate-starters.test.mjs
+// (familyClaims applied directly to EXAMPLE_STRICT_FAMILY.origin).
+export const STRICT_ORIGIN_CASES = [
+  ["https://acme.strict.test", "strict"],
+  ["https://www.strict.test", null], // excluded product host
+  ["https://signin.strict.test", null], // excluded product host
+  ["https://a.b.strict.test", null], // two labels: labels: 1 refuses it
+  ["https://strict.test", null], // the bare suffix host itself is excluded
+  ["https://acme.strict.test:8443", "strict"], // same port rule as Atlassian's sweep row
+  ["https://acme.strict.test.", null], // trailing dot is not a canonical origin
+  ["http://acme.strict.test", null], // not https
+  ["https://ACME.strict.test", null], // not a canonical origin (URL lowercases the host)
+  ["https://acme-www.strict.test", "strict"], // one label; "acme-www" is not the excluded "www"
+];

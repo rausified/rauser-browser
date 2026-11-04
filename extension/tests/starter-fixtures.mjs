@@ -102,6 +102,52 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
   ],
 };
 
+// A strict subdomain family (Task 4): `labels: 1` restricts the subdomain
+// prefix to a single label, and `exclude` removes specific product hosts
+// (`www`, `signin`) a permissive suffix match would otherwise claim. Used
+// by extension/tests/starter-origin-cases.mjs's STRICT_ORIGIN_CASES, via
+// setStarterFamiliesForTest([...STARTER_FAMILIES, EXAMPLE_STRICT_FAMILY]),
+// and by the generator's own familyClaims tests.
+export const EXAMPLE_STRICT_FAMILY = {
+  family: "strict",
+  display_name: "Strict",
+  review_prompt: null,
+  origin: { kind: "subdomain", suffix: ".strict.test", labels: 1, exclude: ["www", "signin"] },
+  scope: null,
+  sample_origin: "https://acme.strict.test",
+  sample_scope: [],
+  overlaps: [],
+  types: [
+    {
+      type: "strict.item",
+      key: "strict.item:{origin}",
+      label: "Strict items",
+      label_variants: [],
+      description: "An example strict-subdomain item.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "strict.item",
+        match: [{ path: "/item/{id:int}" }],
+        id: "strict.item:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/strict.item.md",
+      samples: [
+        {
+          note: "Strict item",
+          url: "https://acme.strict.test/item/1",
+          title: null,
+          shape: "/item/{id}",
+        },
+      ],
+      samples_shape: true,
+      vectors: [],
+    },
+  ],
+};
+
 // Puts the test seam into "draft mode" at `origin`: whichever starter family
 // (today's shipped catalog, not a fixture) claims `origin` is removed from
 // `STARTER_FAMILIES` for the duration of the test, so a drafted-site test

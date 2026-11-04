@@ -79,7 +79,12 @@ function secureHostname(origin: string): string | null {
 /** The starter family `origin` belongs to, from the test-seam-aware
  * `families` list: today's private `familyFor`, exported so Capture Site and
  * the gallery (Tasks 2-4) can build their UI from the family's own data
- * instead of per-family branches. */
+ * instead of per-family branches. A subdomain family can be strict (Task 4:
+ * `labels`, `exclude`), narrowing the permissive suffix match: once the
+ * permissive rule holds, `prefix` is the host's labels before the suffix.
+ * `labels: 1` refuses a `prefix` with more than one label (a dot in it);
+ * `exclude` refuses a `prefix` whose first label names an excluded product
+ * host (`www`, `signin`). Same rule as the generator's `familyClaims`. */
 export function starterFamily(origin: string): StarterFamilyData | null {
   for (const family of families) {
     if (family.origin.kind === "exact" && origin === family.origin.origin) return family;
@@ -90,8 +95,12 @@ export function starterFamily(origin: string): StarterFamilyData | null {
   let bestSuffixLength = -1;
   for (const family of families) {
     if (family.origin.kind !== "subdomain") continue;
-    const suffix = family.origin.suffix;
-    if (host.endsWith(suffix) && host !== suffix.slice(1) && suffix.length > bestSuffixLength) {
+    const { suffix, labels, exclude } = family.origin;
+    if (!(host.endsWith(suffix) && host !== suffix.slice(1))) continue;
+    const prefix = host.slice(0, -suffix.length);
+    if (labels && prefix.includes(".")) continue;
+    if (exclude && exclude.includes(prefix.split(".")[0] ?? prefix)) continue;
+    if (suffix.length > bestSuffixLength) {
       best = family;
       bestSuffixLength = suffix.length;
     }

@@ -18,6 +18,12 @@ source of truth for the current shape.
   // or null, only when the family has exactly one type and no scope (today: sharepoint, miro)
   "origin": { "kind": "subdomain", "suffix": ".atlassian.net" },
   // or: { "kind": "exact", "origin": "https://miro.com" }
+  // a subdomain origin can be strict: { "kind": "subdomain", "suffix": ".strict.test",
+  // "labels": 1, "exclude": ["www", "signin"] } claims exactly one label before the
+  // suffix (not "a.b.strict.test") and skips the named product hosts (not
+  // "www.strict.test" or "signin.strict.test"); both keys are optional and only
+  // allowed on a subdomain origin. Atlassian and SharePoint stay permissive (any
+  // prefix, any number of labels) — strict matching is opt-in per family.
   "scope": null,
   // or one of the three scope kinds below
   "sample_origin": "https://acme.atlassian.net",  // must sit on the family's own origin

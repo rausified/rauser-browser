@@ -53,7 +53,7 @@ export interface StarterFamilyData {
   family: StarterFamilyId;
   display_name: string;
   review_prompt: string | null;
-  origin: { kind: "exact"; origin: string } | { kind: "subdomain"; suffix: string };
+  origin: { kind: "exact"; origin: string } | { kind: "subdomain"; suffix: string; labels?: 1; exclude?: string[] };
   scope: StarterScopeData | null;
   types: StarterTypeData[];
 }
@@ -101,7 +101,13 @@ function isPlainObject(value) {
  * one family's origin at a time rather than picking the best match across
  * every family: an exact origin is equal; a subdomain needs an `https:` URL
  * whose own `origin` equals the input (so `origin` is itself canonical), a
- * lower-cased hostname ending in `suffix`, and not the bare suffix host. */
+ * lower-cased hostname ending in `suffix`, and not the bare suffix host.
+ * Once that permissive match holds, a strict subdomain family (Task 4:
+ * `labels` and/or `exclude`) narrows it further: take `prefix = host.slice(0,
+ * -suffix.length)`, the labels between the host and the suffix. `labels: 1`
+ * refuses a `prefix` with more than one label (a dot in it); `exclude`
+ * refuses a `prefix` whose first label (its leftmost, nearest the host's
+ * start) names one of the excluded product hosts (`www`, `signin`). */
 export function familyClaims(familyOrigin, origin) {
   if (!isPlainObject(familyOrigin)) return false;
   if (familyOrigin.kind === "exact") return origin === familyOrigin.origin;
@@ -115,7 +121,11 @@ export function familyClaims(familyOrigin, origin) {
   if (url.origin !== origin || url.protocol !== "https:") return false;
   const host = url.hostname.toLowerCase();
   const suffix = familyOrigin.suffix;
-  return host.endsWith(suffix) && host !== suffix.slice(1);
+  if (!(host.endsWith(suffix) && host !== suffix.slice(1))) return false;
+  const prefix = host.slice(0, -suffix.length);
+  if (familyOrigin.labels && prefix.includes(".")) return false;
+  if (familyOrigin.exclude && familyOrigin.exclude.includes(prefix.split(".")[0])) return false;
+  return true;
 }
 
 /** The canonical origin of `url`, or `null` when `url` is not a valid,
@@ -128,7 +138,9 @@ function originOf(url) {
   }
 }
 
-const ORIGIN_KEYS = { exact: ["kind", "origin"], subdomain: ["kind", "suffix"] };
+const ORIGIN_KEYS = { exact: ["kind", "origin"], subdomain: ["kind", "suffix", "labels", "exclude"] };
+const ORIGIN_REQUIRED = { exact: ["kind", "origin"], subdomain: ["kind", "suffix"] };
+const DNS_LABEL_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SCOPE_KEYS_BY_KIND = {
   github_org: ["kind"],
   tenant_name: ["kind", "max", "label", "placeholder"],
@@ -152,6 +164,14 @@ const STATUS_METHODS = ["live", "history", null];
 const SAMPLE_KEYS = ["url", "title", "shape", "note"];
 const OVERLAP_KEYS = ["a", "b", "expect"];
 
+/** Validates a family's `origin`: `kind` is `"exact"` or `"subdomain"`, with
+ * the fields `ORIGIN_KEYS` allows for that kind. A subdomain origin's
+ * `labels` and `exclude` (Task 4) are optional, so they are checked for
+ * shape, not required: `labels`, when present, must be exactly `1` (the
+ * spec allows no other count), and `exclude`, when present, must be an
+ * array of single lowercase DNS labels (`www`, not `www.sub` or `WWW`).
+ * Neither key is allowed on an exact origin; `checkKeys` already reports
+ * one there as an unknown field. */
 function validateOrigin(problems, file, origin, where) {
   if (!isPlainObject(origin)) {
     fail(problems, file, `${where} must be an object`);
@@ -163,7 +183,16 @@ function validateOrigin(problems, file, origin, where) {
     return;
   }
   checkKeys(problems, file, origin, allowed, where);
-  requireKeys(problems, file, origin, allowed, where);
+  requireKeys(problems, file, origin, ORIGIN_REQUIRED[origin.kind], where);
+  if (origin.kind === "subdomain") {
+    if ("labels" in origin && origin.labels !== 1) {
+      fail(problems, file, `${at(where, "labels")} must be 1`);
+    }
+    if ("exclude" in origin) {
+      const isValid = Array.isArray(origin.exclude) && origin.exclude.every((label) => typeof label === "string" && DNS_LABEL_RE.test(label));
+      if (!isValid) fail(problems, file, `${at(where, "exclude")} must be a list of lowercase DNS labels`);
+    }
+  }
 }
 
 /** `scope`'s three kinds (protocol/starters/README.md "Scope kinds"):
