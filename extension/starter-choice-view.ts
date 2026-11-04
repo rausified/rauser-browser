@@ -62,6 +62,13 @@ export function renderStarterChoice(
   prompt.textContent = family.review_prompt ?? "";
   group.append(prompt);
 
+  if (notice) {
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = notice;
+    group.append(hint);
+  }
+
   const boxes: HTMLInputElement[] = [];
   if (types.length >= 2) {
     const field = document.createElement("div");
@@ -104,11 +111,6 @@ export function renderStarterChoice(
     field.append(label, box);
     group.append(field);
     scopeBox = box;
-  } else if (notice) {
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = notice;
-    group.append(hint);
   }
 
   container.replaceChildren(group);
