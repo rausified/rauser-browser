@@ -27,21 +27,6 @@ const FRESH_ID: &str = "work:example.com/FRESH";
 /// provenance, artifact, day, group state and dirty marker, plus the log
 /// watermark and the meta counters. Nothing proportional to history.
 const ROWS_WRITTEN_BOUND: u64 = 40;
-/// The loose debug wall-clock ceilings. An in-order delivery is
-/// O(batch); a backdated child event re-derives its container,
-/// O(container) (open decision 4), so it is reported against its own.
-/// The counter assertions are what prove the bound; wall time only
-/// catches a gross regression.
-#[cfg(not(windows))]
-const IN_ORDER_CEILING: Duration = Duration::from_millis(500);
-/// Windows CI runners pay far more per commit (fsync on a slow virtual
-/// disk, Defender scanning each new `index.db-wal` page): a correctly
-/// bounded fresh-artifact delivery (11 rows, one transaction) took
-/// 521 ms there. Looser, but still far below an O(history) derive.
-#[cfg(windows)]
-const IN_ORDER_CEILING: Duration = Duration::from_secs(3);
-const BACKDATED_CEILING: Duration = Duration::from_secs(30);
-
 struct Year {
     root: TempDir,
     cache: TempDir,
@@ -284,19 +269,14 @@ fn deliver(year: &mut Year, event: &ActivityEvent) -> Delivery {
 
 /// One in-order delivery of `event`: the fast path for each of its
 /// `groups` that has a row, a re-derive of only the new event otherwise.
-fn assert_in_order(delivery: &Delivery, fast_paths: u64, ceiling: Duration) {
+fn assert_in_order(delivery: &Delivery, fast_paths: u64) {
     assert_eq!(delivery.fast_paths, fast_paths, "{delivery:?}");
     // At most the batch (one event) is read back from the store.
     assert!(delivery.events_loaded <= 1, "{delivery:?}");
     assert!(delivery.rows_written <= ROWS_WRITTEN_BOUND, "{delivery:?}");
-    assert!(
-        delivery.elapsed <= ceiling,
-        "an in-order delivery took {:?}: {delivery:?}",
-        delivery.elapsed
-    );
 }
 
-fn run_year(per_day: u32, in_order_ceiling: Duration, backdated_ceiling: Duration) {
+fn run_year(per_day: u32) {
     // The full-derive oracle after every write would make each delivery
     // O(history); `incremental_equals_reindex` and the replay tests keep
     // the fold exact at small scale.
@@ -340,18 +320,18 @@ fn run_year(per_day: u32, in_order_ceiling: Duration, backdated_ceiling: Duratio
 
     // A fresh artifact: no row to extend, so its one event is re-derived.
     let delivery = deliver(&mut year, &page(fresh, "FRESH", DAYS, &late));
-    assert_in_order(&delivery, 0, in_order_ceiling);
+    assert_in_order(&delivery, 0);
     assert_eq!(delivery.group_derives, 1, "{delivery:?}");
 
     // A long-lived artifact, seen every day of the year: the fast path.
     let delivery = deliver(&mut year, &page(long_lived, "LONG", DAYS, &late));
-    assert_in_order(&delivery, 1, in_order_ceiling);
+    assert_in_order(&delivery, 1);
     assert_eq!(delivery.group_derives, 0, "{delivery:?}");
 
     // In order to a child of the big container: both groups take the
     // fast path, and neither reads the container's history.
     let delivery = deliver(&mut year, &pull(child, 1, DAYS, &late));
-    assert_in_order(&delivery, 2, in_order_ceiling);
+    assert_in_order(&delivery, 2);
     assert_eq!(delivery.group_derives, 0, "{delivery:?}");
 
     // Backdated to that child: the child and its container re-derive,
@@ -383,14 +363,9 @@ fn run_year(per_day: u32, in_order_ceiling: Duration, backdated_ceiling: Duratio
         "{owned} owned rows: {delivery:?}"
     );
     eprintln!(
-        "backdated child of a {children}-event container: {:?} (ceiling {backdated_ceiling:?}), \
+        "backdated child of a {children}-event container: {:?}, \
          {} rows written for {owned} owned",
         delivery.elapsed, delivery.rows_written
-    );
-    assert!(
-        delivery.elapsed <= backdated_ceiling,
-        "a backdated container delivery took {:?}",
-        delivery.elapsed
     );
 
     // Recent, the worklog and the card all answer over the year.
@@ -435,7 +410,7 @@ fn run_year(per_day: u32, in_order_ceiling: Duration, backdated_ceiling: Duratio
 
 #[test]
 fn a_year_of_history_keeps_every_delivery_bounded() {
-    run_year(200, IN_ORDER_CEILING, BACKDATED_CEILING);
+    run_year(200);
 }
 
 /// The 100k-event variant, for a release build on one CI OS:
@@ -443,7 +418,7 @@ fn a_year_of_history_keeps_every_delivery_bounded() {
 #[test]
 #[ignore = "release-only 100k-event variant; run with --release -- --ignored"]
 fn a_100k_event_year_keeps_every_delivery_bounded() {
-    run_year(274, IN_ORDER_CEILING, BACKDATED_CEILING);
+    run_year(274);
 }
 
 /// The year-scale test measures deliveries, which the oracle's full derive

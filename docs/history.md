@@ -1388,3 +1388,23 @@ and deadline exhaustion, alongside the existing held-lock and concurrency tests.
 This establishes the early-refusal defect, not the Windows-specific cause of
 `brwr-epl1`: ten repeated Linux first-open runs passed even before this fix.
 That parent retains its Windows stress acceptance and remains open.
+
+## 2026-11-04 — Measure index work and retain contention phases
+
+`brwr-gxag`: year-scale delivery tests retain deterministic work bounds,
+file identities and full-derive equivalence, while elapsed time is diagnostic
+only. Removed the two reported held-lock upper timing bounds, preserving the
+exact one-long-wait and Busy/snapshot checks. No production timeout changed.
+
+`brwr-bszr`: `index/db.rs` maps contention through operation/phase-aware
+boundaries, retaining primary/extended SQLite codes, elapsed milliseconds and
+actual BEGIN/WAL attempt counts in one warning. Ordinary errors, rollback and
+legacy-replacement wording remain intact. Recovered reads can also emit that
+warning. The four-host migration test captures each worker's diagnostics;
+multi-process result files retain structured contention fields and print them
+on failure. Seven new regressions exercise real setup/BEGIN/WAL/commit locks,
+extended-code bodies, no duplicate/no-success noise and child-result
+persistence. Merged with `brwr-rx0s`: `BEGIN IMMEDIATE` keeps that one total
+deadline and timeout restore, and its exhaustion warning now reports the
+attempts made within it. Repeated Windows stress acceptance and the Windows
+root cause remain on `brwr-epl1`.

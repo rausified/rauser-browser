@@ -1976,6 +1976,19 @@ Brauser keeps local diagnostics so a failure can be followed after the fact: str
 
 **Levels.** `error`: something failed that the user will notice. `warn`: degraded but continued (what was an `eprintln!` warning). `info`: one line per request and per run lifecycle step. `debug`: detail, such as batch internals. The info volume stays modest: one line per capture or visit request, never one per event in a batch.
 
+**Index contention.** A SQLite busy or locked error that escapes an index
+boundary logs one `warn` event, `index contention exhausted`, before the
+existing caller error is returned. It carries `operation` (open, schema,
+replace, empty, read or write), `phase` (connect, configure, identity, wal,
+delete_journal, begin, statement, commit, query_only or reset), `sqlite_code`,
+the numeric `sqlite_extended_code`, `elapsed_ms` for that boundary including
+retries, and `attempts` including the first attempt. BEGIN acquisition and WAL
+switches count their actual attempts; other boundaries run once. Already
+mapped errors are not logged again. A read may subsequently serve its
+committed snapshot, so this event records exhausted contention at a boundary,
+not necessarily a failed protocol request. The existing request/process spans
+provide correlation. Retries and caller-visible wording are unchanged.
+
 **stderr.** Warnings and errors are also written to stderr as plain text, as before the files existed: Chrome's log for the host, and launchd's `~/Library/Logs/Brauser/service.log` for the development service (§3.2).
 
 **Extension.** `extension/diag.ts` keeps a capped in-memory ring buffer of recent events in each extension context (`{ts, level, ctx, event, fields}`, with `ctx` naming the context), under the same field names and privacy rules, and puts the `request_id` it sends on its own events. The options page's **Copy diagnostics** copies the buffer to the clipboard as JSON lines; nothing else takes it out of the extension.
