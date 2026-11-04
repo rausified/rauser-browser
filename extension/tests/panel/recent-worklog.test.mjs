@@ -573,6 +573,26 @@ test("session refresh preserves checked entries and leaves newly arriving entrie
   assert.doesNotMatch(page.el("worklog-text").textContent, /NEW/);
 });
 
+test("the session selector stays usable while an earlier selection is loading", async () => {
+  let waiting, release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const page = await focusCuration((request) => {
+    if (request.focus_session_id === FOCUS_ONE.id) { waiting = request; return pending; }
+    return focusChoicesReply(request);
+  });
+  chooseFocus(page, FOCUS_ONE.id);
+  await until(() => waiting, "first session request");
+  assert.equal(page.el("worklog-focus-session").disabled, false,
+    "disabling a focused native select drops keyboard focus");
+  chooseFocus(page, FOCUS_TWO.id);
+  await until(() => choiceRows(page).length === 1, "second session entries");
+  release(focusChoicesReply(waiting));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(page.el("worklog-focus-session").value, FOCUS_TWO.id);
+  assert.match(page.el("worklog-choices").textContent, /PRIVATE/);
+  assert.doesNotMatch(page.el("worklog-choices").textContent, /RELEASE/);
+});
+
 for (const changed of ["session", "period", "scope", "config", "home", "host exit"]) {
   test(`a late session response cannot restore sharing after changing ${changed}`, async () => {
     let pendingRequest, release;

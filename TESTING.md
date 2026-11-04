@@ -1855,7 +1855,8 @@ period, scope, revision, home or host changes. Policy-change signals clear the
 preview before the debounced reload, including when the home path is unchanged.
 
 The accessibility suite includes a native-select keyboard journey through
-the session catalog, entry selection and Copy, with an axe audit of the visible
+the session catalog, repeated session choices without losing focus, entry
+selection and Copy, with an axe audit of the visible
 controls. Its offline transport fixture validates both catalog and selection
 responses even when Chromium is blocked. Sandbox browser skips leave the real
 keyboard/accessibility result to the driver gate and CI. No test uses a real

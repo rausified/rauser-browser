@@ -1936,7 +1936,8 @@ async function loadWorklog(): Promise<void> {
   worklogChoicesArea.hidden = !curateWorklog.checked;
   const focusOnly = curateWorklog.checked && worklogShareScope.value === "focus";
   worklogFocusArea.hidden = !focusOnly;
-  worklogFocusSession.disabled = true;
+  // Keep an existing catalog usable: disabling a native select drops its
+  // keyboard focus. The sequence guard discards superseded selections.
   worklogFocusStatus.textContent = focusOnly ? "Loading recorded sessions…" : "";
   worklogSelectionStatus.textContent = "Loading choices…";
   if (!session.connected) {

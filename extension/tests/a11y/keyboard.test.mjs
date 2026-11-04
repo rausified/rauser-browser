@@ -84,6 +84,16 @@ test("sharing a recorded focus session is named, keyboard operable and copies th
   await page.keyboard.press("Enter");
   const choice = page.locator('#worklog-choices input[type="checkbox"]').first();
   await choice.waitFor();
+  await focused(page, "#worklog-focus-session");
+  // A second keyboard choice must work without focusing the select again.
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await page.getByText("Choose a session, then check entries to include.", { exact: true }).first().waitFor();
+  await focused(page, "#worklog-focus-session");
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await choice.waitFor();
+  await focused(page, "#worklog-focus-session");
   await activate(page, choice, "Space");
   const preview = await page.locator("#worklog-text").textContent();
   assert.match(preview, /Focus session: Release/);
