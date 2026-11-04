@@ -43,20 +43,25 @@ import {
   type AdapterObject,
 } from "./adapter-review.js";
 import {
-  configuredGitHubOrganizations,
+  configuredScope,
   containerLinks,
   hasAdapter,
+  isContainerType,
   linkedToPresentContainers,
   orderContainedFirst,
   matchingStarter,
-  parseGitHubOrganizations,
+  STARTER_STATUS_TEXT,
+  starterFamilies,
+  starterFamily,
   starterOffers,
   starterRuleAddition,
   starterRuleUpdate,
+  starterStatus,
   type AdapterRule,
   withContainerLinks,
   type StarterOffer,
 } from "./starter-adapters.js";
+import { scopeInput, unscopedNotice, type ScopeInput } from "./starter-scopes.js";
 import { checkReason, type DraftChecked } from "./capture-site.js";
 import { canonicalJson, takeDraftHandoff, type DraftHandoff } from "./capture-site-handoff.js";
 
@@ -139,10 +144,12 @@ type AdapterEdit =
 
 let adapterEdit: AdapterEdit | null = null;
 let adapterOpener: HTMLElement | null = null;
-let githubScopeText = "";
-// Until the user types in the organization field, it follows the
-// organizations the configured GitHub rules already name.
-let githubScopeEdited = false;
+// Until the user types in a family's scope field, its typed text follows the
+// configured scope values for that origin (as GitHub's organization field
+// always has). Keyed by origin, since two scoped origins can sit in the
+// gallery together, each with its own field.
+const scopeTexts = new Map<string, string>();
+const scopeEdited = new Set<string>();
 
 const LINKS_EXISTING_RULES = "Also links your existing pull request and issue rules to their repositories.";
 const SKIPS_UNLINKABLE_RULES = "Some existing pull request or issue rules can't be linked to repositories because they don't capture owner and repo; they stay as they are.";
@@ -432,12 +439,37 @@ function offerConfigured(offer: StarterOffer): boolean {
   return hasAdapter(session.config?.adapters.artifacts ?? [], offer);
 }
 
-function githubScope(): string[] {
-  return parseGitHubOrganizations(githubScopeText) ?? [];
+/** "A", "A or B", or "A, B, …, or Z" — no Oxford comma before "or" with two
+ * items, one before it with three or more. */
+function joinOr(items: readonly string[]): string {
+  if (items.length < 2) return items.join("");
+  if (items.length === 2) return `${items[0]} or ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, or ${items[items.length - 1]}`;
+}
+
+function sentenceCase(text: string): string {
+  return text.length ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+/** The hint shown while no typed or configured site has a starter family,
+ * built from the known families so a new one needs no change here. */
+function starterGalleryHint(): string {
+  return `Enter an ${joinOr(starterFamilies().map((family) => family.display_name))} site address above to see starter drafts.`;
+}
+
+/** The scope values `origin`'s family asks for, parsed from the gallery's
+ * typed text for that origin. `[]` for a family with no scope kind, an
+ * unscoped family (which asks for no value), or typed text that fails to
+ * parse — the same "no organizations yet" state GitHub's field has always
+ * left offers in. */
+function scopeValues(origin: string): string[] {
+  const family = starterFamily(origin);
+  const input = family ? scopeInput(family) : null;
+  return input ? input.parse(scopeTexts.get(origin) ?? "") ?? [] : [];
 }
 
 function currentStarterOffer(origin: string, key: string): StarterOffer | null {
-  return starterOffers(origin, githubScope()).find((offer) => offer.key === key) ?? null;
+  return starterOffers(origin, scopeValues(origin)).find((offer) => offer.key === key) ?? null;
 }
 
 function setStarterButtonState(button: HTMLButtonElement, origin: string, key: string): void {
@@ -449,55 +481,75 @@ function setStarterButtonState(button: HTMLButtonElement, origin: string, key: s
   button.disabled = !session.connected || busy || repairing || button.dataset.available !== "true";
 }
 
+/** A scoped family's input/guidance block, from the scope-kind registry, on
+ * `origin`'s first card. Mutating the field only updates this origin's own
+ * buttons: another scoped origin's card in the same gallery keeps its own
+ * typed text and its own buttons' availability. */
+function renderScopeField(card: HTMLElement, origin: string, input: ScopeInput): void {
+  const label = document.createElement("label");
+  label.textContent = input.galleryLabel;
+  const field = document.createElement("input");
+  field.type = "text";
+  field.maxLength = input.maxLength;
+  field.value = scopeTexts.get(origin) ?? "";
+  field.placeholder = input.galleryPlaceholder;
+  field.autocomplete = "off";
+  field.spellcheck = false;
+  label.append(field);
+  card.append(label);
+  const guidance = addText(card, "small", input.guidance);
+  guidance.className = input.parse(field.value) ? "" : "warning";
+  field.addEventListener("input", () => {
+    scopeTexts.set(origin, field.value);
+    scopeEdited.add(origin);
+    const valid = input.parse(field.value) !== null;
+    guidance.className = valid ? "" : "warning";
+    for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
+      if (scoped.dataset.siteOrigin === origin) {
+        setStarterButtonState(scoped, origin, scoped.dataset.starterKey ?? "");
+      }
+    }
+  });
+}
+
 function renderStarterGallery(): void {
   starterGallery.replaceChildren();
-  if (!githubScopeEdited) {
-    githubScopeText = configuredGitHubOrganizations(session.config?.adapters.artifacts ?? []).join(", ");
-  }
   // The typed site address first, then the sites that already have adapters.
   const typed = typedOrigin();
   const origins = [...new Set([
     ...(typed ? [typed] : []),
     ...(session.config ? siteOrigins(session.config.adapters) : []),
   ])];
-  const compatible = origins.flatMap((origin) => starterOffers(origin, githubScope())
+  for (const origin of origins) {
+    if (scopeEdited.has(origin)) continue;
+    scopeTexts.set(origin, configuredScope(session.config?.adapters.artifacts ?? [], origin).join(", "));
+  }
+  const compatible = origins.flatMap((origin) => starterOffers(origin, scopeValues(origin))
     .map((offer) => ({ origin, offer })));
   if (!compatible.length) {
-    addText(starterGallery, "p", "Enter an Atlassian Cloud (Jira or Confluence), SharePoint/OneDrive, GitHub, or Miro site address above to see starter drafts.");
+    addText(starterGallery, "p", starterGalleryHint());
     return;
   }
-  let githubScopeRendered = false;
+  const scopeShown = new Set<string>();
   for (const { origin, offer } of compatible) {
     const card = document.createElement("article");
     card.className = "starter-card";
     addText(card, "h3", offer.label);
     addText(card, "p", offer.description);
     addText(card, "small", offer.origin);
-    if (offer.kind === "github" && !githubScopeRendered) {
-      githubScopeRendered = true;
-      const label = document.createElement("label");
-      label.textContent = "Work organizations (comma-separated)";
-      const input = document.createElement("input");
-      input.type = "text";
-      input.value = githubScopeText;
-      input.placeholder = "acme-corp, partner-org";
-      input.autocomplete = "off";
-      input.spellcheck = false;
-      label.append(input);
-      card.append(label);
-      const guidance = addText(card, "small", "Required: GitHub is shared across accounts, so the starter never captures every organization.");
-      guidance.className = parseGitHubOrganizations(githubScopeText) ? "" : "warning";
-      input.addEventListener("input", () => {
-        githubScopeText = input.value;
-        githubScopeEdited = true;
-        const valid = parseGitHubOrganizations(githubScopeText) !== null;
-        guidance.className = valid ? "" : "warning";
-        for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
-          if (scoped.dataset.siteOrigin === origin) {
-            setStarterButtonState(scoped, origin, scoped.dataset.starterKey ?? "");
-          }
-        }
-      });
+    const status = starterStatus(offer.artifact_type);
+    if (status) addText(card, "small", sentenceCase(STARTER_STATUS_TEXT[status.state]));
+    if (!scopeShown.has(origin)) {
+      const family = starterFamily(origin);
+      const input = family ? scopeInput(family) : null;
+      const notice = family ? unscopedNotice(family) : null;
+      if (input) {
+        scopeShown.add(origin);
+        renderScopeField(card, origin, input);
+      } else if (notice) {
+        scopeShown.add(origin);
+        addText(card, "small", notice);
+      }
     }
     const review = document.createElement("button");
     review.type = "button";
@@ -508,7 +560,7 @@ function renderStarterGallery(): void {
       const selected = currentStarterOffer(origin, offer.key);
       if (!selected?.adapter || offerConfigured(selected)) return;
       const [draft] = linkedToPresentContainers([selected.adapter], session.config?.adapters.artifacts ?? []);
-      beginAdapterDraft(draft!, selected.label, selected.artifact_type === "github.repo");
+      beginAdapterDraft(draft!, selected.label, isContainerType(selected.artifact_type));
     });
     card.append(review);
     starterGallery.append(card);

@@ -1,5 +1,7 @@
 {
   "family": "sharepoint",
+  "display_name": "SharePoint/OneDrive",
+  "review_prompt": null,
   "origin": { "kind": "subdomain", "suffix": ".sharepoint.com" },
   "scope": null,
   "types": [
@@ -9,6 +11,8 @@
       "label": "SharePoint documents",
       "label_variants": [{ "host_suffix": "-my.sharepoint.com", "label": "OneDrive for work documents" }],
       "description": "Office document links resolve to the stable sourcedoc GUID, across common sharing routes.",
+      "record_label": null,
+      "example_path": null,
       "adapter": {
         "type": "sharepoint.doc",
         "path_case": "insensitive",

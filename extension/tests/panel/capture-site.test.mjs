@@ -3,9 +3,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  CONFIG, GITHUB_URL, JIRA_URL, captureReview, hostReply, install,
-  noteLoaded, recoveryBody, recoveryRows, saveCapture, settle, until, updates,
+  CONFIG, GITHUB_URL, JIRA_URL, captureReview, descendants, hostReply, install,
+  noteLoaded, recoveryBody, recoveryRows, saveCapture, settle, starterBox, starterGroup, starterScope, until, updates,
 } from "./harness.mjs";
+
+// The checkbox's label text (sentence-cased noun + status), found by the box
+// it contains: `label.check-label > input[data-starter-type] + span`.
+function starterLabelText(page, type) {
+  const box = starterBox(page, type);
+  const label = descendants(page.el("capture-site-starter")).find((node) =>
+    node.tagName === "LABEL" && node.children.includes(box));
+  return label.textContent;
+}
 
 test("Capture Site waits for the host's history check before promising a save", async () => {
   let release;
@@ -26,8 +35,8 @@ test("Capture Site ignores history replies for superseded selections and cancele
     if (request.type === "check_capture_site") return new Promise((resolve) => pending.push({ request, resolve }));
   } });
   await until(() => pending.length === 1, "the first preflight");
-  page.el("capture-site-orgs").value = "other-org";
-  page.el("capture-site-orgs").dispatch("input");
+  starterScope(page, "github").value = "other-org";
+  starterScope(page, "github").dispatch("input");
   assert.equal(page.el("capture-site-save").disabled, true);
   await until(() => pending.length === 2, "the edited preflight");
   assert.deepEqual(pending[1].request.adapters.artifacts[0].scope, { owner: ["other-org"] });
@@ -40,17 +49,17 @@ test("Capture Site ignores history replies for superseded selections and cancele
   assert.equal(page.el("capture-site-save").disabled, true);
   assert.match(page.el("capture-site-message").textContent, /Recorded adapter/);
 
-  page.el("capture-site-orgs").value = "third-org";
-  page.el("capture-site-orgs").dispatch("input");
+  starterScope(page, "github").value = "third-org";
+  starterScope(page, "github").dispatch("input");
   await until(() => pending.length === 3, "another preflight");
-  page.el("capture-site-orgs").value = "";
-  page.el("capture-site-orgs").dispatch("input");
+  starterScope(page, "github").value = "";
+  starterScope(page, "github").dispatch("input");
   pending[2].resolve({ type: "capture_site_checked", revision: "1" });
   await settle();
   assert.equal(page.el("capture-site-save").disabled, true, "a reply cannot enable an invalid selection");
 
-  page.el("capture-site-orgs").value = "fourth-org";
-  page.el("capture-site-orgs").dispatch("input");
+  starterScope(page, "github").value = "fourth-org";
+  starterScope(page, "github").dispatch("input");
   await until(() => pending.length === 4, "the canceled preflight");
   page.el("capture-site-cancel").click();
   page.el("capture-site").click();
@@ -108,7 +117,7 @@ test("Capture Site previews Jira and installs the host-returned policy in one sa
 test("Capture Site recognizes OneDrive document routes without scope or JSON", async () => {
   const url = "https://acme-my.sharepoint.com/personal/alex/_layouts/15/Doc.aspx?sourcedoc=%7B123e4567-e89b-12d3-a456-426614174000%7D";
   const page = await captureReview(url);
-  assert.equal(page.el("capture-site-github").hidden, true);
+  assert.equal(starterGroup(page), null);
   assert.match(page.el("capture-site-preview").textContent, /OneDrive for work documents/);
   assert.match(page.el("capture-site-preview").textContent, /will be captured/);
   await saveCapture(page);
@@ -118,22 +127,21 @@ test("Capture Site recognizes OneDrive document routes without scope or JSON", a
 test("the starter source line follows each starter's certification status", async () => {
   // GitHub's three starters are release-certified, so nothing is pending.
   const github = await captureReview(GITHUB_URL);
-  assert.equal(github.el("capture-site-source").textContent, "Starter rules checked against the live tool.");
+  assert.equal(github.el("capture-site-source").textContent, "Certified starter rules · checked on real pages.");
   // Jira is certified and Confluence pages is still a development draft.
   const atlassian = await captureReview(JIRA_URL);
   assert.equal(atlassian.el("capture-site-source").textContent,
-    "Starter rules checked against the live tool, except Confluence pages: a development draft whose live-tool certification is still pending.");
+    "Certified starter rules, except Confluence pages: not yet checked on a real account.");
   // Miro's only starter is a development draft.
   const miro = await captureReview("https://miro.com/app/board/uXjVM0uuBLo=/");
   assert.equal(miro.el("capture-site-source").textContent,
-    "Development starter draft · live-tool certification is still pending.");
+    "Development starter draft · not yet checked on a real account.");
 });
 
 test("Capture Site offers Miro boards as a starter, keyed by the padded board ID", async () => {
   const url = "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990";
   const page = await captureReview(url);
-  assert.equal(page.el("capture-site-github").hidden, true);
-  assert.equal(page.el("capture-site-atlassian").hidden, true);
+  assert.equal(starterGroup(page), null);
   const preview = page.el("capture-site-preview").textContent;
   assert.match(preview, /Miro boards/);
   assert.match(preview, /every Miro account signed in to this Chrome profile/);
@@ -150,10 +158,9 @@ const CONFLUENCE_URL = "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001
 
 test("Capture Site offers Jira issues and Confluence pages on an Atlassian site, both chosen", async () => {
   const page = await captureReview(CONFLUENCE_URL);
-  assert.equal(page.el("capture-site-atlassian").hidden, false);
-  assert.equal(page.el("capture-site-github").hidden, true);
-  assert.equal(page.el("capture-site-jira").checked, true);
-  assert.equal(page.el("capture-site-confluence").checked, true);
+  assert.equal(starterGroup(page).dataset.family, "atlassian");
+  assert.equal(starterBox(page, "jira.issue").checked, true);
+  assert.equal(starterBox(page, "confluence.page").checked, true);
   const preview = page.el("capture-site-preview").textContent;
   assert.match(preview, /Remember: Jira issues and Confluence pages\./);
   assert.match(preview, /one artifact by its page ID/);
@@ -168,8 +175,8 @@ test("Capture Site offers Jira issues and Confluence pages on an Atlassian site,
 
 test("Capture Site saves only the Atlassian kind left checked", async () => {
   const page = await captureReview(CONFLUENCE_URL);
-  page.el("capture-site-jira").checked = false;
-  page.el("capture-site-jira").dispatch("input");
+  starterBox(page, "jira.issue").checked = false;
+  starterBox(page, "jira.issue").dispatch("input");
   assert.match(page.el("capture-site-preview").textContent, /Remember: Confluence pages\./);
   await saveCapture(page);
   assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((artifact) => artifact.type), ["confluence.page"]);
@@ -177,14 +184,14 @@ test("Capture Site saves only the Atlassian kind left checked", async () => {
 
 test("unchecking both Atlassian kinds disables save; a Jira-only choice warns on a Confluence page", async () => {
   const page = await captureReview(CONFLUENCE_URL);
-  for (const id of ["capture-site-jira", "capture-site-confluence"]) {
-    page.el(id).checked = false;
-    page.el(id).dispatch("input");
+  for (const type of ["jira.issue", "confluence.page"]) {
+    starterBox(page, type).checked = false;
+    starterBox(page, type).dispatch("input");
   }
   assert.equal(page.el("capture-site-save").disabled, true);
   assert.match(page.el("capture-site-message").textContent, /Choose Jira issues, Confluence pages, or both\./);
-  page.el("capture-site-jira").checked = true;
-  page.el("capture-site-jira").dispatch("input");
+  starterBox(page, "jira.issue").checked = true;
+  starterBox(page, "jira.issue").dispatch("input");
   await until(() => !page.el("capture-site-save").disabled, "the Jira-only preflight");
   assert.match(page.el("capture-site-preview").textContent, /This page: will not be captured/);
   await saveCapture(page);
@@ -193,12 +200,11 @@ test("unchecking both Atlassian kinds disables save; a Jira-only choice warns on
 
 test("Capture Site pre-fills the organization from the current GitHub page", async () => {
   const page = await captureReview(GITHUB_URL);
-  assert.equal(page.el("capture-site-github").hidden, false);
-  assert.equal(page.el("capture-site-atlassian").hidden, true);
-  assert.equal(page.el("capture-site-orgs").value, "acme-corp");
-  assert.equal(page.el("capture-site-repos").checked, true);
-  assert.equal(page.el("capture-site-prs").checked, true);
-  assert.equal(page.el("capture-site-issues").checked, true);
+  assert.equal(starterGroup(page).dataset.family, "github");
+  assert.equal(starterScope(page, "github").value, "acme-corp");
+  assert.equal(starterBox(page, "github.repo").checked, true);
+  assert.equal(starterBox(page, "github.pr").checked, true);
+  assert.equal(starterBox(page, "github.issue").checked, true);
   assert.equal(page.el("capture-site-save").disabled, false);
   assert.match(page.el("capture-site-preview").textContent, /Records repositories, pull requests and issues owned by: acme-corp\./);
   await saveCapture(page);
@@ -210,8 +216,8 @@ test("Capture Site pre-fills the organization from the current GitHub page", asy
 
 test("editing the pre-filled organization keeps the user's edit, not the page's owner", async () => {
   const page = await captureReview(GITHUB_URL);
-  page.el("capture-site-orgs").value = "other-org";
-  page.el("capture-site-orgs").dispatch("input");
+  starterScope(page, "github").value = "other-org";
+  starterScope(page, "github").dispatch("input");
   assert.match(page.el("capture-site-preview").textContent, /owned by: other-org\./);
   await saveCapture(page);
   assert.deepEqual(updates(page)[0].config.adapters.artifacts[0].scope, { owner: ["other-org"] });
@@ -219,8 +225,8 @@ test("editing the pre-filled organization keeps the user's edit, not the page's 
 
 test("unchecking repositories omits the repo adapter", async () => {
   const page = await captureReview(GITHUB_URL);
-  page.el("capture-site-repos").checked = false;
-  page.el("capture-site-repos").dispatch("input");
+  starterBox(page, "github.repo").checked = false;
+  starterBox(page, "github.repo").dispatch("input");
   await until(() => !page.el("capture-site-save").disabled, "the edited selection preflight");
   await saveCapture(page);
   assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((artifact) => artifact.type),
@@ -229,46 +235,46 @@ test("unchecking repositories omits the repo adapter", async () => {
 
 test("the confirmation line names only the checked types, truthfully and in a fixed order", async () => {
   const page = await captureReview(GITHUB_URL);
-  page.el("capture-site-repos").checked = false;
-  page.el("capture-site-repos").dispatch("input");
-  page.el("capture-site-prs").checked = false;
-  page.el("capture-site-prs").dispatch("input");
+  starterBox(page, "github.repo").checked = false;
+  starterBox(page, "github.repo").dispatch("input");
+  starterBox(page, "github.pr").checked = false;
+  starterBox(page, "github.pr").dispatch("input");
   assert.match(page.el("capture-site-preview").textContent, /Records issues owned by: acme-corp\./);
 
-  page.el("capture-site-repos").checked = true;
-  page.el("capture-site-repos").dispatch("input");
-  page.el("capture-site-prs").checked = true;
-  page.el("capture-site-prs").dispatch("input");
-  page.el("capture-site-issues").checked = false;
-  page.el("capture-site-issues").dispatch("input");
+  starterBox(page, "github.repo").checked = true;
+  starterBox(page, "github.repo").dispatch("input");
+  starterBox(page, "github.pr").checked = true;
+  starterBox(page, "github.pr").dispatch("input");
+  starterBox(page, "github.issue").checked = false;
+  starterBox(page, "github.issue").dispatch("input");
   assert.match(page.el("capture-site-preview").textContent, /Records repositories and pull requests owned by: acme-corp\./);
 
-  page.el("capture-site-issues").checked = true;
-  page.el("capture-site-issues").dispatch("input");
+  starterBox(page, "github.issue").checked = true;
+  starterBox(page, "github.issue").dispatch("input");
   assert.match(page.el("capture-site-preview").textContent, /Records repositories, pull requests and issues owned by: acme-corp\./);
 });
 
 test("unchecking every GitHub kind disables save, and clearing the organization blocks it", async () => {
   const page = await captureReview(GITHUB_URL);
-  for (const id of ["capture-site-repos", "capture-site-prs", "capture-site-issues"]) {
-    page.el(id).checked = false;
-    page.el(id).dispatch("input");
+  for (const type of ["github.repo", "github.pr", "github.issue"]) {
+    starterBox(page, type).checked = false;
+    starterBox(page, type).dispatch("input");
   }
   assert.equal(page.el("capture-site-save").disabled, true);
-  assert.equal(page.el("capture-site-orgs").disabled, true);
-  page.el("capture-site-repos").checked = true;
-  page.el("capture-site-repos").dispatch("input");
-  page.el("capture-site-orgs").value = "";
-  page.el("capture-site-orgs").dispatch("input");
+  assert.equal(starterScope(page, "github").disabled, true);
+  starterBox(page, "github.repo").checked = true;
+  starterBox(page, "github.repo").dispatch("input");
+  starterScope(page, "github").value = "";
+  starterScope(page, "github").dispatch("input");
   assert.equal(page.el("capture-site-save").disabled, true);
 });
 
 test("canceling and switching tabs clear a review without changing capture", async () => {
   const page = await captureReview(GITHUB_URL);
-  page.el("capture-site-orgs").value = "sensitive-org";
+  starterScope(page, "github").value = "sensitive-org";
   page.el("capture-site-cancel").click();
   assert.equal(page.el("capture-site-review").hidden, true);
-  assert.equal(page.el("capture-site-orgs").value, "");
+  assert.equal(starterScope(page, "github"), null);
   assert.equal(updates(page).length, 0);
   page.el("capture-site").click();
   page.navigate(JIRA_URL, 2);
@@ -277,6 +283,103 @@ test("canceling and switching tabs clear a review without changing capture", asy
   assert.equal(updates(page).length, 0);
   page.navigate("chrome://extensions", 3);
   await until(() => page.el("capture-site-area").hidden, "non-web tab to hide capture setup");
+});
+
+test("each starter checkbox says whether it is certified", async () => {
+  const atlassian = await captureReview(JIRA_URL);
+  assert.equal(starterLabelText(atlassian, "jira.issue"), "Jira issues · certified");
+  assert.equal(starterLabelText(atlassian, "confluence.page"), "Confluence pages · not yet checked on a real account");
+  const github = await captureReview(GITHUB_URL);
+  assert.equal(starterLabelText(github, "github.repo"), "Repositories · certified");
+  assert.equal(starterLabelText(github, "github.pr"), "Pull requests · certified");
+  assert.equal(starterLabelText(github, "github.issue"), "Issues · certified");
+});
+
+test("closing a GitHub review leaves nothing for the next site", async () => {
+  const page = await captureReview(GITHUB_URL);
+  const orgsInput = starterScope(page, "github");
+  orgsInput.value = "sensitive-org";
+  page.el("capture-site-cancel").click();
+  const nextUrl = "https://acme.atlassian.net/browse/WORK-1";
+  page.navigate(nextUrl, 2);
+  await until(() => page.el("page-url").textContent === nextUrl, "the new page to render");
+  page.el("capture-site").click();
+  assert.equal(page.el("capture-site-review").hidden, false);
+  assert.equal(orgsInput.value, "");
+  assert.equal(starterScope(page, "github"), null);
+  assert.equal(starterGroup(page).dataset.family, "atlassian");
+});
+
+test("an unscoped starter shows its every-account notice", async (t) => {
+  const { setStarterFamiliesForTest } = await import("../../dist/starter-adapters.js");
+  const { EXAMPLE_UNSCOPED_FAMILY } = await import("../starter-fixtures.mjs");
+  setStarterFamiliesForTest([EXAMPLE_UNSCOPED_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  // The engine's SHARED_ORIGINS restriction means the fixture's own origin
+  // (never a hard-coded one) must be used here.
+  const url = `${EXAMPLE_UNSCOPED_FAMILY.origin.origin}/p/1`;
+  const page = await captureReview(url);
+  assert.match(starterGroup(page).textContent, /Records every Everyone page from every account in this Chrome profile\./);
+  assert.equal(starterScope(page, "everyone"), null);
+  assert.equal(page.el("capture-site-save").disabled, false);
+});
+
+test("a tenant_name starter renders its own field", async (t) => {
+  const { setStarterFamiliesForTest } = await import("../../dist/starter-adapters.js");
+  const { EXAMPLE_TENANT_FAMILY } = await import("../starter-fixtures.mjs");
+  setStarterFamiliesForTest([EXAMPLE_TENANT_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const url = "https://example.test/acme/item/1";
+  const page = await captureReview(url);
+  const scope = starterScope(page, "example");
+  const labels = descendants(starterGroup(page)).filter((node) => node.tagName === "LABEL");
+  assert.equal(labels.find((label) => label.htmlFor === "capture-site-starter-scope").textContent, "Workspaces");
+  assert.equal(scope.value, "");
+  // max: 4, each name capped at 100 characters plus its ", " separator (the
+  // `name` capture's bound, extension/starter-scopes.ts).
+  assert.equal(scope.maxLength, 4 * 102);
+  assert.equal(starterLabelText(page, "example.item"), "Example items · not yet checked on a real account");
+  assert.equal(starterLabelText(page, "example.note"), "Example notes · not yet checked on a real account");
+  scope.value = "acme";
+  scope.dispatch("input");
+  await until(() => !page.el("capture-site-save").disabled, "the tenant preflight");
+  assert.match(page.el("capture-site-preview").textContent, /Records Example items and Example notes only for: acme\./);
+});
+
+test("the records line reads the marked scope key, not the scope table's first key", async (t) => {
+  // Codex P2: the records line read Object.values(adapter.scope)[0], the
+  // scope table's first key in object order. A template with a fixed
+  // narrowing key (here, "category") declared ahead of its {"$scope": true}
+  // key ("workspace") showed that fixed value instead of what Save actually
+  // records.
+  const { setStarterFamiliesForTest } = await import("../../dist/starter-adapters.js");
+  const { EXAMPLE_TENANT_FAMILY } = await import("../starter-fixtures.mjs");
+  const family = {
+    ...EXAMPLE_TENANT_FAMILY,
+    types: [
+      {
+        ...EXAMPLE_TENANT_FAMILY.types[0],
+        adapter: {
+          ...EXAMPLE_TENANT_FAMILY.types[0].adapter,
+          // "category" is a required, non-"$scope" capture bound to one
+          // literal ("work") — a fixed narrowing key the engine accepts
+          // because it anchors a real path segment, not a placeholder.
+          match: [{ path: "/{category:(work)}/{workspace:name|lower}/item/{id:int}" }],
+          scope: { category: ["work"], workspace: { "$scope": true } },
+        },
+      },
+    ],
+  };
+  setStarterFamiliesForTest([family]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const url = "https://example.test/work/acme/item/1";
+  const page = await captureReview(url);
+  const scope = starterScope(page, "example");
+  scope.value = "acme";
+  scope.dispatch("input");
+  await until(() => !page.el("capture-site-save").disabled, "the tenant preflight");
+  assert.match(page.el("capture-site-preview").textContent, /Records Example items only for: acme\./);
+  assert.doesNotMatch(page.el("capture-site-preview").textContent, /only for: work/);
 });
 
 test("a same-URL tab switch and an SPA route change dismiss the review", async () => {
@@ -487,6 +590,6 @@ test("private tabs do not offer Capture Site and unknown origins never get the s
   assert.equal(page.el("capture-site-area").hidden, true);
   const unknown = await install({ tab: { id: 1, url: "https://unknown.example/items/1" } });
   await until(() => !unknown.el("capture-site-area").hidden, "the drafted flow to be offered");
-  assert.equal(unknown.el("capture-site-github").hidden, true);
+  assert.equal(starterGroup(unknown), null);
   assert.equal(unknown.el("capture-site-review").hidden, true);
 });

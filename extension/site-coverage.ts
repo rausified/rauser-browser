@@ -7,16 +7,9 @@
 import type { AdapterObject } from "./adapter-review.js";
 import { canonicalCapture, compileDocument, evaluate } from "./adapter-templates.js";
 import { canonicalJson } from "./capture-site-handoff.js";
-import { matchingStarter, starterRuleAddition, type AdapterRule } from "./starter-adapters.js";
-
-// The confirmation line names only what is actually checked, in this fixed
-// order, so the privacy-boundary scope line is never wider than the save.
-export const GITHUB_RECORD_LABELS: Readonly<Record<string, string>> = {
-  "github.repo": "repositories",
-  "github.pr": "pull requests",
-  "github.issue": "issues",
-};
-export const GITHUB_RECORD_ORDER: readonly string[] = ["github.repo", "github.pr", "github.issue"];
+import {
+  matchingStarter, recordLabel, recordOrder, starterRuleAddition, type AdapterRule,
+} from "./starter-adapters.js";
 
 /** "A", "A and B", or "A, B and C" — no Oxford comma, matching the panel's
  * existing list copy (e.g. the "Remember: X and Y" summary line). */
@@ -53,13 +46,11 @@ export function originAdapters(artifacts: readonly AdapterObject[], url: string)
   return artifacts.flatMap((adapter, index) => adapter.origin === parsed.origin ? [{ adapter, index }] : []);
 }
 
-/** The noun for one adapter: a GitHub record label, a starter's label, or the
- * adapter's own type. `null` for an adapter with no type. */
+/** The noun for one adapter: its starter's `record_label`, else its starter's
+ * label, else the adapter's own type. `null` for an adapter with no type. */
 export function typeNoun(adapter: AdapterObject): string | null {
   if (typeof adapter.type !== "string") return null;
-  const github = GITHUB_RECORD_LABELS[adapter.type];
-  if (github !== undefined) return github;
-  return matchingStarter(adapter)?.label ?? adapter.type;
+  return recordLabel(adapter.type) ?? matchingStarter(adapter)?.label ?? adapter.type;
 }
 
 function scopeTable(adapter: AdapterObject): Record<string, unknown> | null {
@@ -86,13 +77,13 @@ export function siteCoverage(artifacts: readonly AdapterObject[], url: string): 
   const parsed = pageOrigin(url);
   const adapters = originAdapters(artifacts, url).map((entry) => entry.adapter);
   if (!parsed || !adapters.length) return null;
-  // GitHub's record types read as one group, in record order, where the
-  // first of them sits in config order.
-  const github = GITHUB_RECORD_ORDER.filter((type) => adapters.some((adapter) => adapter.type === type));
+  // A family's record-labeled types (today, only GitHub's) read as one
+  // group, in record order, where the first of them sits in config order.
+  const grouped = recordOrder().filter((type) => adapters.some((adapter) => adapter.type === type));
   const types: string[] = [];
   for (const adapter of adapters) {
-    const nouns = typeof adapter.type === "string" && GITHUB_RECORD_LABELS[adapter.type] !== undefined
-      ? github.map((type) => GITHUB_RECORD_LABELS[type]!)
+    const nouns = typeof adapter.type === "string" && recordLabel(adapter.type) !== null
+      ? grouped.map((type) => recordLabel(type)!)
       : [typeNoun(adapter)];
     for (const noun of nouns) if (noun !== null && !types.includes(noun)) types.push(noun);
   }

@@ -1,5 +1,7 @@
 {
   "family": "atlassian",
+  "display_name": "Atlassian Cloud (Jira or Confluence)",
+  "review_prompt": "Choose the kinds of work to remember on this Atlassian site.",
   "origin": { "kind": "subdomain", "suffix": ".atlassian.net" },
   "scope": null,
   "types": [
@@ -9,6 +11,8 @@
       "label": "Jira issues",
       "label_variants": [],
       "description": "Issue pages and board modals become one artifact per Jira key.",
+      "record_label": null,
+      "example_path": null,
       "adapter": {
         "type": "jira.issue",
         "match": [
@@ -30,6 +34,8 @@
       "label": "Confluence pages",
       "label_variants": [],
       "description": "Each page becomes one artifact by its page ID, whether you view it, edit it, or open its version history.",
+      "record_label": null,
+      "example_path": null,
       "adapter": {
         "type": "confluence.page",
         "match": [
