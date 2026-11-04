@@ -68,6 +68,42 @@ test("worklog curation selects and copies checked work entirely by keyboard", as
   await audit(t, page, "panel/selected-work-all");
 });
 
+test("sharing a recorded focus session is named, keyboard operable and copies the exact preview", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  await page.locator('#worklog-choices input[type="checkbox"]').first().waitFor();
+  await page.locator("#worklog-share-scope").focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  // Use the native select's keyboard, and wait for the recorded catalog.
+  await page.locator("#worklog-focus-session:enabled").waitFor();
+  await page.getByLabel("Recorded focus session", { exact: true }).focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  const choice = page.locator('#worklog-choices input[type="checkbox"]').first();
+  await choice.waitFor();
+  await focused(page, "#worklog-focus-session");
+  // A second keyboard choice must work without focusing the select again.
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await page.getByText("Choose a session, then check entries to include.", { exact: true }).first().waitFor();
+  await focused(page, "#worklog-focus-session");
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await choice.waitFor();
+  await focused(page, "#worklog-focus-session");
+  await activate(page, choice, "Space");
+  const preview = await page.locator("#worklog-text").textContent();
+  assert.match(preview, /Focus session: Release/);
+  assert.doesNotMatch(preview, /Private research/);
+  await audit(t, page, "panel/share-focus-session");
+  await activate(page, "#copy-worklog", "Space");
+  await page.waitForFunction(() => fixture.actions.includes("copy"));
+  assert.equal(await page.evaluate(() => fixture.copied.at(-1)), preview);
+});
+
 test("the worklog period segments are one tab stop that arrows move, with a visible ring", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

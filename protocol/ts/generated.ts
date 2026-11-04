@@ -283,6 +283,33 @@ export interface ListArtifactsRequest {
   limit: number;
 }
 
+export interface WorklogFocusChoicesRequest {
+  type: "worklog_focus_choices";
+  protocol_version: 8;
+  request_id: string;
+  start_date: string;
+  end_date: string;
+  expected_revision: string;
+  focus_session_id: string | null;
+}
+
+export interface WorklogFocusChoicesResult {
+  type: "worklog_focus_choices_result";
+  protocol_version: 8;
+  request_id: string;
+  start_date: string;
+  end_date: string;
+  focus_session_id: string | null;
+  sessions: FocusSession[];
+  sessions_truncated: boolean;
+  selected_session: FocusSession | null;
+  name_changed: boolean;
+  choices: WorklogChoice[];
+  truncated: boolean;
+  gaps: OverflowMarker[];
+  gaps_truncated: boolean;
+}
+
 export interface WorklogChoicesRequest {
   expected_revision: string;
   type: "worklog_choices";
@@ -1056,6 +1083,6 @@ export interface SiteDraftChecked {
   preview: PreviewRowView[];
 }
 
-export type Request = GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
+export type Request = GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
 
-export type Response = AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;
+export type Response = AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;

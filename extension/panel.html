@@ -262,6 +262,16 @@
           <label class="check-label"><input id="worklog-curate" type="checkbox"> Choose work to share</label>
           <div id="worklog-choices-area" hidden>
             <p class="page-url">Selected work includes only checked entries. Container entries show direct activity, without work inside them. Choices last while this panel is open.</p>
+            <label for="worklog-share-scope">Choose from</label>
+            <select id="worklog-share-scope">
+              <option value="entries">All recorded work</option>
+              <option value="focus">One focus session</option>
+            </select>
+            <div id="worklog-focus-area" hidden>
+              <label for="worklog-focus-session">Recorded focus session</label>
+              <select id="worklog-focus-session"><option value="">Choose a session…</option></select>
+              <p id="worklog-focus-status" role="status"></p>
+            </div>
             <div class="note-header">
               <button id="worklog-select-all" type="button" class="secondary" disabled>Select all shown</button>
               <button id="worklog-clear" type="button" class="secondary" disabled>Clear</button>

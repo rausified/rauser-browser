@@ -88,6 +88,7 @@
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
         { "$ref": "#/$defs/WorklogReportRequest" },
         { "$ref": "#/$defs/WorklogChoicesRequest" },
+        { "$ref": "#/$defs/WorklogFocusChoicesRequest" },
         { "$ref": "#/$defs/CheckCaptureSiteRequest" },
         { "$ref": "#/$defs/GetSiteRestoreRequest" },
         { "$ref": "#/$defs/ForgetAdoptedContractsRequest" },
@@ -159,6 +160,7 @@
         { "$ref": "#/$defs/SiteDraftChecked" },
         { "$ref": "#/$defs/WorklogReported" },
         { "$ref": "#/$defs/WorklogChoicesResult" },
+        { "$ref": "#/$defs/WorklogFocusChoicesResult" },
         { "$ref": "#/$defs/CaptureSiteChecked" },
         { "$ref": "#/$defs/SiteRestoreLoaded" },
         { "$ref": "#/$defs/ServiceReady" },
@@ -1267,6 +1269,160 @@
         "artifact_type": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
         "title_query": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
         "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
+      }
+    },
+    "WorklogFocusChoicesRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read-only direct activity from one explicitly selected recorded focus session; null selection lists sessions only.",
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "start_date",
+        "end_date",
+        "expected_revision",
+        "focus_session_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "worklog_focus_choices"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "start_date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "end_date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "focus_session_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "WorklogFocusChoicesResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "start_date",
+        "end_date",
+        "focus_session_id",
+        "sessions",
+        "sessions_truncated",
+        "selected_session",
+        "name_changed",
+        "choices",
+        "truncated",
+        "gaps",
+        "gaps_truncated"
+      ],
+      "properties": {
+        "type": {
+          "const": "worklog_focus_choices_result"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "start_date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "end_date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "focus_session_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/FocusSession"
+          }
+        },
+        "sessions_truncated": {
+          "type": "boolean"
+        },
+        "selected_session": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FocusSession"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name_changed": {
+          "type": "boolean"
+        },
+        "choices": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/WorklogChoice"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "gaps": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/OverflowMarker"
+          }
+        },
+        "gaps_truncated": {
+          "type": "boolean"
+        }
       }
     },
     "WorklogChoicesRequest": {

@@ -114,6 +114,14 @@ Counts can span several dates and overlap; they are never added to work totals.
 the measured work; the notices remain visible for review. Copy uses the exact
 preview text. Rebuild the host and extension together for this review.
 
+To share just one deliberate work block, turn on **Choose work to share**,
+set **Choose from** to **One focus session**, and choose a recorded session.
+Check its entries (or **Select all shown**) and copy the preview. Only that
+session's measured activity and recorded page context are included, even when
+the same artifact was used in other sessions. Empty or shortened choices are
+labelled; capture-gap notices still concern the whole period. Rebuild both
+the host and extension to enable this selector.
+
 The side panel and settings headers show the extension's build commit, with `-dirty` when tracked files had uncommitted changes, and the host's commit once it answers; a host built from a different commit is flagged, so rebuild both after pulling.
 
 The artifact card's **Recorded navigation** lists up to five incoming

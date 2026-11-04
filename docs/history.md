@@ -1408,3 +1408,33 @@ persistence. Merged with `brwr-rx0s`: `BEGIN IMMEDIATE` keeps that one total
 deadline and timeout restore, and its exhaustion warning now reports the
 attempts made within it. Repeated Windows stress acceptance and the Windows
 root cause remain on `brwr-epl1`.
+
+## 2026-11-04 — Share one recorded focus session (brwr-1jeb)
+
+Recent's selected-work area now offers **One focus session** and a catalog of
+recorded sessions in the chosen local-date range. The additive protocol-v8
+`worklog_focus_choices` query refreshes and checks the configuration revision
+under its lock, then reads catalog, selected direct activity and period capture
+gaps in one index transaction. Session ID filtering precedes artifact-day
+aggregation: other sessions' seconds, titles, URLs, untagged visits, summaries
+and container copies cannot enter the selected rows. The existing bounded row
+formatter is shared, with separate catalog and entry omission flags. Renames
+use the highest recorded in-period revision; an omitted catalog entry does not
+prevent a directly requested session from being read.
+
+The panel preserves explicit unchecked entries and copies its exact preview.
+A policy-change signal invalidates sharing before the debounced config reload;
+a same-revision reload also restores the now-empty catalog. Session, period,
+scope, home and host changes invalidate pending replies. Existing note editing,
+copy-out recovery and capture replay boundaries are unchanged. The staged plan
+is `docs/superpowers/plans/2026-11-04-share-focus-session.md`; catalog paging is
+follow-up `brwr-t4gf`. Assigned Re-learn apply and panel work still await their
+existing recovery/history/downgrade decisions.
+
+Validation: the complete local gate reports 1,604 workspace Rust passes (+6
+new; 2 ignored, with existing sandbox IPC guards), 47 extension test files,
+45 focused worklog panel cases (+18 new), both Clippy configurations and all
+protocol/frontend checks green. Supplemental script, queue/current-state and
+10,696-rendering Markdown checks pass. Accessibility passes its two offline
+fixtures and explicitly skips 47 sandbox-blocked browser cases; the driver and
+CI must supply real browser/platform validation.

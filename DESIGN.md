@@ -667,7 +667,31 @@ visible beside the selection, and the copied entry count covers only selected
 rows. Known gaps come from the same index snapshot and concern the entire
 period; the existing explicit gap-inclusion choice also controls this preview.
 
-Selections live only in the open panel. A same-period delivery refresh retains
+**One focus session.** In the sharing area, **Choose from → One focus session**
+lists up to 64 recorded sessions in the period, newest activity first. Selecting
+one offers only its direct activity as unchecked artifact-day choices. Select
+individual entries or **Select all shown**, then copy the exact preview, whose
+heading names the session. Summary-only days, untagged work, global Why context
+and container copies do not contribute. The same artifact used in another
+session contributes neither time nor title/URL context to this selection.
+
+The additive protocol-v8 `worklog_focus_choices` query carries the same dates
+and locked configuration revision, plus a nullable canonical version-4 session
+UUID. A null selection returns only the catalog; an unknown or outside-period
+ID returns no choices. The host selects activity by session ID before grouping
+artifact-days, using each matching day's newest event title/URL. A renamed
+session retains its ID; its highest recorded revision in this period names it,
+with an explicit name-change notice. Catalog and entry truncation are separate;
+an explicitly requested session remains readable even if its catalog entry was
+omitted. Entries reuse the 200-row/96-KiB limits, and capture gaps still describe
+the whole period. A missing selection, empty period, unavailable session and
+omitted sessions each have explicit text. Older hosts receive no broader-query
+fallback: rebuild the host and extension together to use the selector.
+
+Selections live only in the open panel. Session, sharing scope, period,
+configuration revision, home and host-exit changes invalidate the preview;
+policy-change signals invalidate it before the debounced configuration reload.
+A same-period delivery refresh retains
 selected artifact/day identities still shown, while newly arrived or returning
 rows stay unchecked. A focused choice regains focus after the refresh only if
 the user has not moved focus to another control. A period change, home-folder change or host-port exit
