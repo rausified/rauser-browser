@@ -18,6 +18,50 @@ test("optional task notifications can be enabled and disabled by keyboard withou
   await audit(t, page, "settings/task-notifications");
 });
 
+test("saved task commands can be authored, removed and saved using the keyboard", async (t) => {
+  const page = await browserFixture(t, "options");
+  if (!page) return;
+  // Native replies arrive asynchronously. Keep this read pending long enough
+  // to exercise opening the editor after the activation key has returned.
+  await page.evaluate(() => {
+    for (const port of fixture.ports) {
+      const send = port.postMessage;
+      port.postMessage = (request) => request.type === "get_task_command_settings"
+        ? setTimeout(() => send(request), 100) : send(request);
+    }
+  });
+  await activate(page, "#commands-open");
+  await page.locator("#command-1-name:enabled").waitFor();
+  await focused(page, "#commands-editor-heading");
+  await page.keyboard.press("Tab");
+  await focused(page, "#command-1-name");
+  await page.keyboard.press("Tab");
+  await focused(page, "#command-1-description");
+  await page.keyboard.press("Tab");
+  await focused(page, "#command-1-prompt");
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("Find unresolved decisions.");
+  await activate(page, "#commands-add");
+  await focused(page, "#command-2-name");
+  await page.keyboard.type("review");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("Review the page");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("Describe the tradeoffs.");
+  await audit(t, page, "settings/command-editor");
+  await activate(page, "#commands-save");
+  await page.locator("#commands-status").filter({ hasText: "Commands saved." }).waitFor();
+  await focused(page, "#commands-save");
+  const saved = await page.evaluate(() => fixture.requests.find((r) => r.type === "save_task_commands"));
+  assert.match(saved.commands_toml, /Find unresolved decisions/);
+  assert.match(saved.commands_toml, /name = "review"/);
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
+  await activate(page, page.locator("#commands-rows fieldset").last().getByRole("button", { name: "Remove command" }));
+  await focused(page, "#command-1-name");
+  await activate(page, "#commands-cancel");
+  await focused(page, "#commands-open");
+});
+
 test("a task report saves to its source note by keyboard with focus and confirmation", async (t) => {
   const page = await browserFixture(t, "tasks");
   if (!page) return;

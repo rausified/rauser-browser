@@ -425,6 +425,16 @@
   planned; users currently author commands in config.toml.
 
 
+- **Brauser — edit saved task commands in Settings:** Users can create, edit
+  and remove repeatable literal task instructions without editing config.toml.
+  Revision-bound saves preserve unrelated raw settings and stale drafts;
+  unsupported command registries have an explicit TOML repair view with an exact
+  config backup. Saving starts nothing; Refresh commands and explicit Run retain
+  the existing task flow. This is a standalone Brauser capability with offline
+  host/UI coverage; deployment and browser/platform acceptance belong to the
+  external driver and CI (`brwr-kqt4`).
+
+
 - Brauser's Recent view can now find saved summaries by the agent's recorded
   reading coverage: limited, whole or unknown. It filters each day's latest
   displayed summary on the host before the result cap, making older limited

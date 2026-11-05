@@ -1620,6 +1620,26 @@ command table on unrelated settings saves. Built-in slash actions and a
 Settings command editor remain follow-up work.
 
 
+## 2026-11-05 — Create and repair saved commands in Settings
+
+Saved task commands now have a complete editor in Settings. Click **Edit saved
+commands**, add a name, description and literal instruction, and save the list.
+Rows can be edited or removed without opening config.toml. The task bar then
+lists the saved commands after Refresh commands; saving a command never starts
+a task. Unsupported existing command values stay visible in a separate TOML
+repair view, and a successful repair first keeps an exact backup of the original
+config beside it.
+
+Command saves replace only the command values under the full configuration
+revision check. They preserve other settings, including unsupported values that
+need their own repair. Another Settings page or a hand edit makes the draft
+stale without erasing it. **Review current commands** shows the current saved
+list before the user explicitly replaces it with the retained draft. Host tests
+exercise actual parsing, publication and backups; fake-DOM tests cover the
+editor and a browser keyboard/axe journey is ready for the external driver and
+CI. Templates, built-in actions and other outputs remain separate work.
+
+
 ## 2026-11-05 — Find summaries that need a fuller reading
 
 Recent now has a **Saved summary reading** selector alongside its existing

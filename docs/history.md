@@ -1528,6 +1528,29 @@ queue export, external approval and publication. Follow-up `brwr-a30j`
 proposes continuation beyond the first 32 matching rows.
 
 
+## 2026-11-05 — Saved task command Settings editor
+
+`brwr-kqt4` adds name/description/instruction rows and explicit complete-list
+Save to Settings, plus commands-only TOML repair for invalid registries.
+`get_task_command_settings` and `save_task_commands` are additive protocol-v8
+messages, separate from the descriptor-only task-bar catalogue. A save accepts
+only `commands`, validates the complete registry through `task_commands::parse`,
+checks the full config revision under lock, replaces the raw TOML value through
+the existing atomic publisher, and reloads disk state. Reconstructing config
+from its wire snapshot would discard unsupported values, so this path instead
+preserves the rest of the raw table. Invalid registries get an exact pre-repair
+config backup; syntax-invalid or oversized config refuses. Error messages do
+not echo parser diagnostics or instruction text.
+
+Settings retains drafts through config refresh and stale refusal. Explicit
+current-value review shows the saved list before allowing its replacement;
+Add/Remove never submits, and Save never starts a task. Dynamic rows have
+labels, fieldset legends and deterministic focus after add/remove. The existing
+Tasks report and explicit Insert/Run remain the execution path. The task-bar
+empty state points to Settings. No durable Re-learn application is enabled.
+
+Validation: 1,626 workspace Rust-reported passes (+6; 94 explicit IPC guards, two ignored), 47 extension files (+6 Settings regressions), both Clippy configurations, 12 script files, 252 Python tooling cases (92 platform skips), queue checks and 10,696 inert Markdown renderings. Accessibility has two offline fixture passes and 49 explicit browser sandbox skips, including the new keyboard journey. The full required gate passed again after the manual keyboard focus correction; fresh complete manual review and the independent offline pass are recorded in the Settings plan.
+
 ## 2026-11-05 — Notify when tasks finish outside the panel
 
 `brwr-8qm` adds default-off task completion notifications through Chrome's

@@ -149,6 +149,12 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       case "open_path": return { type: "path_opened" };
       case "list_task_commands": return { type: "task_commands_listed", revision: fixture.revision,
         commands: [{ name: "actions", description: "Extract action items" }], issue: null };
+      case "get_task_command_settings": return { type: "task_command_settings", revision: fixture.revision,
+        original_toml: '[[commands]]\nname = "actions"\ndescription = "Extract actions"\nprompt = "Return a checklist."\n',
+        commands: [{ name: "actions", description: "Extract actions", prompt: "Return a checklist." }], issue: null };
+      case "save_task_commands":
+        fixture.revision = String(Number(fixture.revision) + 1);
+        return { type: "config_updated", config: fixture.config, revision: fixture.revision };
       case "start_task":
       case "start_run": return { type: "error", code: "service_unavailable", message: "Fixture harness is offline." };
       case "update_config":

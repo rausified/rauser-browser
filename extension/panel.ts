@@ -1466,7 +1466,7 @@ async function loadTaskCommands(): Promise<void> {
       }
       taskCommand.value = "";
       taskCommandStatus.textContent = response.issue ?? (response.commands.length === 0
-        ? "No saved commands. Add [[commands]] in config.toml; see the README."
+        ? "No saved commands. Open Settings to add one under Saved task commands."
         : "Choose a command, insert it before your draft, then press Run. Use // for a literal leading slash.");
       taskCommand.disabled = taskStarting || response.commands.length === 0;
     } catch (error) {

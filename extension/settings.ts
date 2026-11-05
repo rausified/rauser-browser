@@ -268,6 +268,15 @@ export class ConfigSession {
     return this.acceptConfigUpdate(updated);
   }
 
+  async saveTaskCommands(commandsToml: string, expectedRevision: string): Promise<void> {
+    const updated = await this.host.call({
+      type: "save_task_commands", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      expected_revision: expectedRevision, commands_toml: commandsToml,
+    }, "config_updated");
+    // The commands save succeeded even if another part of config needs repair.
+    await this.acceptConfigUpdate(updated);
+  }
+
   private async acceptConfigUpdate(
     updated: ConfigUpdated,
     onCommitted?: () => void,
