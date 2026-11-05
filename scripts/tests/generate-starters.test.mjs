@@ -1160,3 +1160,32 @@ test("a subdomain family missing its suffix reports the validation line without 
   assert.doesNotMatch(result.stderr, /TypeError/);
   assert.doesNotMatch(result.stderr, /at originsCollide/);
 });
+
+// --- Task 5 review fix round 2 ---------------------------------------------
+
+test("a family with an unrelated validation problem still gets its origin-collision and shared-origin checks (re-review)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  // An unrelated top-level problem (an unknown field) that has nothing to
+  // do with origin or scope.
+  miro.bogus = "unrelated";
+  // An exact origin that collides with github.json's, and is also a
+  // shared origin (catalog.json shared_origins), while miro's scope stays
+  // null: this should still report the collision and the shared-origin
+  // scope message, not be silently skipped because of the unrelated
+  // problem above (fix round 1 over-corrected by excluding the whole file
+  // from every check once it had any problem at all).
+  miro.origin = { kind: "exact", origin: "https://github.com" };
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /protocol\/starters\/miro\.json: unknown field "bogus"/);
+  assert.match(output, /protocol\/starters\/miro\.json: origin overlaps protocol\/starters\/github\.json/);
+  assert.match(
+    output,
+    /protocol\/starters\/miro\.json: origin https:\/\/github\.com is a shared origin, so scope must not be null/,
+  );
+  assert.doesNotMatch(result.stderr, /TypeError/);
+});

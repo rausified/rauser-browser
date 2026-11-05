@@ -623,19 +623,21 @@ function checkDuplicate(problems, seen, kind, file, value) {
 
 /** `loadFamilyEntries`'s implementation, without the throw: every family
  * file's validation problems (unknown field, missing key, a duplicate type,
- * key, or vector id), the `{file, family}` entries (sorted by file name,
- * each family's `types` kept in source order), and `invalidFiles` (the
- * subset of those files that got at least one of the above problems). Open
- * decision 13: a file that is not valid JSON, or whose shape is not even a
- * plain object with a `types` array, is left out of `entries` entirely —
- * there is nothing further to check for it — but every other file still
- * appears there, even one with its own validation problems, so `main`'s
- * later checks keep seeing the rest of the repository in the same pass.
- * `invalidFiles` lets `main` hold `checkPolicy` and `checkRegistry` back
- * from a file whose own shape they cannot trust (Task 5 review, Important
- * 2): a family with a validation problem (for example a subdomain `origin`
- * missing `suffix`) still gets its validation line, but policy and registry
- * problems — which assume a validated shape — are not attempted for it. */
+ * key, or vector id), and the `{file, family}` entries (sorted by file name,
+ * each family's `types` kept in source order) that `checkPolicy` and
+ * `checkRegistry` read. Open decision 13: a file that is not valid JSON, or
+ * whose shape is not even a plain object with a `types` array, is left out
+ * of `entries` — there is nothing further to check for it — but every other
+ * file still appears there, even one with its own validation problems, so
+ * `main`'s later checks keep seeing the rest of the repository in the same
+ * pass. A family with an unrelated validation problem (an unknown field, a
+ * bad type) still has its own trustworthy fields read by `checkPolicy` and
+ * `checkRegistry` — see `originIsClean`/`scopeIsClean` below and
+ * `checkRegistry`'s own per-type guards (Task 5 re-review, fix round 2):
+ * excluding the whole file from every check once it has any problem at all
+ * would hide a real cross-file collision or a real stray doc behind an
+ * unrelated typo, exactly the masking risk Open decision 13 exists to
+ * avoid. */
 function loadFamilyEntriesLenient(root) {
   const dir = path.join(root, STARTERS_DIR);
   const files = readdirSync(dir)
@@ -643,7 +645,6 @@ function loadFamilyEntriesLenient(root) {
     .sort();
   const problems = [];
   const entries = [];
-  const invalidFiles = new Set();
   const seenTypes = new Map();
   const seenKeys = new Map();
   // Seeded with the legacy fixture's own case ids, so a family file's vector
@@ -659,7 +660,6 @@ function loadFamilyEntriesLenient(root) {
   }
   for (const name of files) {
     const file = path.posix.join(STARTERS_DIR, name);
-    const problemsBefore = problems.length;
     let data;
     try {
       data = JSON.parse(readFileSync(path.join(dir, name), "utf8"));
@@ -668,10 +668,7 @@ function loadFamilyEntriesLenient(root) {
       continue;
     }
     validateFamily(problems, file, data);
-    if (!isPlainObject(data) || !Array.isArray(data.types)) {
-      if (problems.length > problemsBefore) invalidFiles.add(file);
-      continue;
-    }
+    if (!isPlainObject(data) || !Array.isArray(data.types)) continue;
     for (const type of data.types) {
       if (!isPlainObject(type)) continue;
       if (typeof type.type === "string") checkDuplicate(problems, seenTypes, "type", file, type.type);
@@ -684,10 +681,9 @@ function loadFamilyEntriesLenient(root) {
         }
       }
     }
-    if (problems.length > problemsBefore) invalidFiles.add(file);
     entries.push({ file, family: data });
   }
-  return { entries, problems, invalidFiles };
+  return { entries, problems };
 }
 
 /** The `{file, family}` entries `loadFamilyEntriesLenient` finds, thrown as
@@ -932,24 +928,56 @@ function originsCollide(a, b) {
   return false;
 }
 
+/** Whether `family.origin` is present and, on its own, has no validation
+ * problem — independent of whatever else might be wrong elsewhere in
+ * `family` (Task 5 re-review, fix round 2). Probes `validateOrigin` into a
+ * throwaway array, so this never duplicates a problem `validateFamily`
+ * already reported; a family with an unrelated problem (an unknown
+ * top-level field, a bad type) still gets its origin read by `checkPolicy`
+ * as long as the origin itself validates cleanly. */
+function originIsClean(file, family) {
+  if (!isPlainObject(family) || !("origin" in family)) return false;
+  const probe = [];
+  validateOrigin(probe, file, family.origin, "origin");
+  return probe.length === 0;
+}
+
+/** Same idea as `originIsClean`, for `family.scope` (Task 5 re-review, fix
+ * round 2): the scope-dependent checks (7, gaps 1, 6 and 8) only read
+ * `family.scope` once it has validated cleanly on its own. */
+function scopeIsClean(file, family) {
+  if (!isPlainObject(family) || !("scope" in family)) return false;
+  const probe = [];
+  validateScope(probe, file, family.scope, "scope");
+  return probe.length === 0;
+}
+
 /** The shared-origin policy checks of spec §4 (checks 6 and 7) and the PR D
  * readiness gaps 1, 6 and 8 (protocol/starters/README.md "Registry and
  * policy checks"), over `entries` (`{file, family}` pairs, `loadFamilyEntries`
  * shape, but a caller may add synthetic entries whose `file` is not a real
  * path, such as a test fixture's `<fixture NAME>`) and the parsed
  * `protocol/capture-site/catalog.json`. Each problem reads `<file>:
- * <message>`. */
+ * <message>`. Every check below reads only the field it needs
+ * (`originIsClean`/`scopeIsClean`), not whether the family as a whole is
+ * free of every other problem (Task 5 re-review, fix round 2): a family
+ * with an unrelated problem elsewhere still gets its origin-collision and
+ * shared-origin checks, so a real collision is never hidden behind an
+ * unrelated typo. */
 export function checkPolicy(entries, catalog) {
   const problems = [];
   const sharedOrigins = isPlainObject(catalog?.shared_origins) ? catalog.shared_origins : {};
 
   // Check 6: two families whose origins overlap, reported on whichever file
-  // sorts later.
-  for (let i = 0; i < entries.length; i += 1) {
-    for (let j = i + 1; j < entries.length; j += 1) {
-      const left = entries[i];
-      const right = entries[j];
-      if (!isPlainObject(left.family) || !isPlainObject(right.family)) continue;
+  // sorts later. Only entries whose own `origin` validated cleanly
+  // participate — that is both what originsCollide needs to run safely
+  // (a subdomain origin missing `suffix` would crash it) and what makes a
+  // collision meaningful to report in the first place.
+  const originEntries = entries.filter((entry) => originIsClean(entry.file, entry.family));
+  for (let i = 0; i < originEntries.length; i += 1) {
+    for (let j = i + 1; j < originEntries.length; j += 1) {
+      const left = originEntries[i];
+      const right = originEntries[j];
       if (!originsCollide(left.family.origin, right.family.origin)) continue;
       const [earlier, later] = left.file < right.file ? [left, right] : [right, left];
       problems.push(`${later.file}: origin overlaps ${earlier.file}`);
@@ -957,10 +985,14 @@ export function checkPolicy(entries, catalog) {
   }
 
   for (const { file, family } of entries) {
-    if (!isPlainObject(family) || !isPlainObject(family.origin)) continue;
+    if (!originIsClean(file, family)) continue;
     const origin = family.origin;
     const exactOrigin = origin.kind === "exact" ? origin.origin : null;
     const shared = exactOrigin !== null ? sharedOrigins[exactOrigin] : undefined;
+
+    // Check 7, gaps 1, 6 and 8 all reason about `scope`; only run them once
+    // `scope` has validated cleanly on its own (Task 5 re-review).
+    if (!scopeIsClean(file, family)) continue;
     const scope = family.scope;
     const scopeKind = isPlainObject(scope) ? scope.kind : null;
 
@@ -1038,11 +1070,15 @@ export function checkRegistry(root, entries) {
   }
 
   // Check 2, reverse direction: every docs/adapters/*.md file (other than
-  // its README) must be some family type's own doc. `entries` (main's
-  // `cleanEntries`) can be missing a family file that failed to parse as
-  // JSON, or one `main` held back for a validation problem (Important 2
-  // above); either way, that family's own docs look orphaned here too,
-  // alongside the problem that actually explains it (Task 5 review, Minor
+  // its README) must be some family type's own doc. `checkRegistry` reads
+  // every entry `main` has, not just ones with clean validation (Task 5
+  // re-review, fix round 2) — `family.types` is always an array here
+  // (`loadFamilyEntriesLenient` drops a file that isn't), so an unrelated
+  // problem elsewhere in the family never hides one of its own docs or
+  // shape rows. Only a file that failed to parse as JSON, or whose shape
+  // was too broken to read a `types` array from, is entirely absent from
+  // `entries`; that family's own docs look orphaned here too, alongside
+  // the parse-error line that actually explains it (Task 5 review, Minor
   // 2 — informational noise, not a false claim, since the root cause is
   // always reported first).
   let docFiles = [];
@@ -1061,7 +1097,7 @@ export function checkRegistry(root, entries) {
   // Check 2, reverse direction: a hand-kept shapes.json row that names a
   // starter doc belongs in a family file's samples instead. (This check
   // does not depend on `entries` at all, so it is unaffected by a dropped
-  // or held-back family file.)
+  // family file.)
   const shapes = JSON.parse(readFileSync(path.join(root, SHAPES_JSON), "utf8"));
   for (const row of [...(shapes.accept ?? []), ...(shapes.reject ?? [])]) {
     if (isPlainObject(row) && typeof row.note === "string" && DOC_SUFFIX_RE.test(row.note)) {
@@ -1071,9 +1107,9 @@ export function checkRegistry(root, entries) {
 
   // Check 2, reverse direction: a hand-edited starter-shapes.json row must
   // still name a real family type (`knownTypes`, built above from
-  // `entries` — the same caveat about a dropped or held-back family file
-  // noted on the stray-doc check above applies here too). --check's own
-  // byte comparison already flags a hand edit there; this message names
+  // `entries` — the same caveat about a dropped family file noted on the
+  // stray-doc check above applies here too). --check's own byte
+  // comparison already flags a hand edit there; this message names
   // the row. A missing or unparsable file (a generated output someone
   // deleted to force a clean regeneration, or that a fresh scaffold has
   // not written yet) has no rows to check — `main`'s own `readNormalised`
@@ -1250,23 +1286,23 @@ function main(argv) {
   // skipped the files that follow it) is also too broken to generate from,
   // so a family validation problem stops generation the same way it always
   // did; policy and registry problems do not. `checkPolicy` and
-  // `checkRegistry` only read entries whose own validation was clean
-  // (Task 5 review, Important 2) — a family with a validation problem
-  // already reports it, and its shape cannot be trusted for the checks
-  // that assume a validated family (for example a subdomain `origin` with
-  // no `suffix`), so it is held back rather than risking a crash that
-  // would hide the validation line that explains it.
-  const { entries, problems: familyProblems, invalidFiles } = loadFamilyEntriesLenient(root);
+  // `checkRegistry` both read every entry, not just the ones with no
+  // validation problem at all (Task 5 re-review, fix round 2): each check
+  // decides for itself, field by field, whether a given entry's inputs are
+  // trustworthy enough to use (`originIsClean`/`scopeIsClean` inside
+  // checkPolicy; checkRegistry's own per-type guards), so a family with an
+  // unrelated problem (an unknown field, a bad type) does not also lose
+  // its origin-collision, shared-origin, or doc/status checks.
+  const { entries, problems: familyProblems } = loadFamilyEntriesLenient(root);
   const families = entries.map((entry) => entry.family);
-  const cleanEntries = entries.filter((entry) => !invalidFiles.has(entry.file));
 
   const catalogPath = path.join(root, CATALOG_JSON);
   const catalogSource = readFileSync(catalogPath, "utf8");
   const catalog = JSON.parse(catalogSource);
   const current = catalog.starter_types;
 
-  const policyProblems = checkPolicy(cleanEntries, catalog);
-  const registryProblems = checkRegistry(root, cleanEntries);
+  const policyProblems = checkPolicy(entries, catalog);
+  const registryProblems = checkRegistry(root, entries);
   const baseProblems = [...familyProblems, ...policyProblems, ...registryProblems];
 
   if (familyProblems.length) {
