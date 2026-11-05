@@ -5,7 +5,17 @@ import { activate, audit, browserFixture, enterPanelTab, focused, task } from ".
 test("saved task commands can be authored, removed and saved using the keyboard", async (t) => {
   const page = await browserFixture(t, "options");
   if (!page) return;
+  // Native replies arrive asynchronously. Keep this read pending long enough
+  // to exercise opening the editor after the activation key has returned.
+  await page.evaluate(() => {
+    for (const port of fixture.ports) {
+      const send = port.postMessage;
+      port.postMessage = (request) => request.type === "get_task_command_settings"
+        ? setTimeout(() => send(request), 100) : send(request);
+    }
+  });
   await activate(page, "#commands-open");
+  await page.locator("#command-1-name:enabled").waitFor();
   await focused(page, "#commands-editor-heading");
   await page.keyboard.press("Tab");
   await focused(page, "#command-1-name");
