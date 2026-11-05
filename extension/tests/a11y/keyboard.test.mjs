@@ -56,6 +56,29 @@ test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop
   assert.ok(await page.evaluate(() => fixture.actions.includes("settings")));
 });
 
+test("worklog pagination appends unchecked choices and keeps keyboard focus on the final page", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => { fixture.worklogPages = true; });
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  const choices = page.locator('#worklog-choices input[type="checkbox"]');
+  await choices.first().waitFor();
+  await activate(page, choices.first(), "Space");
+  await activate(page, "#worklog-more", "Enter");
+  await page.waitForFunction(() => document.querySelectorAll('#worklog-choices input').length === 3);
+  assert.equal(await choices.nth(2).evaluate((input) => input === document.activeElement), true);
+  assert.equal(await choices.first().isChecked(), true);
+  assert.equal(await choices.nth(2).isChecked(), false);
+  assert.doesNotMatch(await page.locator("#worklog-text").textContent(), /Later work/);
+  await page.keyboard.press("Space");
+  const preview = await page.locator("#worklog-text").textContent();
+  await activate(page, "#copy-worklog", "Space");
+  await page.waitForFunction(() => fixture.copied.length === 1);
+  assert.equal(await page.evaluate(() => fixture.copied[0]), preview);
+  await audit(t, page, "panel/selected-work-pages");
+});
+
 test("worklog curation selects and copies checked work entirely by keyboard", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

@@ -441,3 +441,19 @@
   profiles. Deploy the host and extension together, retaining the task-record
   rollback restriction. Desktop OS notification and Chrome gesture acceptance
   remain separate from the offline test coverage.
+
+
+- Brauser's selected-work sharing view now continues beyond its first bounded
+  response through explicit Load more work. Earlier selections remain visible,
+  appended entries start unchecked, and Copy remains the exact checked
+  preview. Snapshot-bound continuation rejects changed evidence; reload and
+  refresh make selection resets explicit. This makes busy-day status updates
+  possible without altering source logs or notes. Focus-session pagination
+  remains separate work; browser keyboard acceptance belongs to the external
+  gate when Chromium cannot start in the sandbox.
+
+- Recovered Brauser's quarantined selected-work pagination delivery and fixed
+  its final-page keyboard handoff: the checkbox fieldset is enabled before
+  focus moves from the disappearing Load more button. An offline regression
+  now models Chrome's inherited disabled-state behavior, while the original
+  browser assertion remains intact for the driver's acceptance gate.

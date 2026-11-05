@@ -1575,3 +1575,77 @@ test files, and the dev/queue Python suites (252 cases each, 92 platform
 skips), followed by queue consistency with 60 live issues. The single commit
 attempt hit read-only `.git/index.lock`; the driver has the complete reviewed
 tree and exact `.bosun_commit_msg`. No commit retry or remote action followed.
+
+
+## 2026-11-05 — Continue through selected work (`brwr-p71k`)
+
+All-work curation now requests opt-in pages from the existing worklog query.
+The host shares the direct-day renderer with unpaged and focus-session reads,
+then binds complete logical rows, dates, storage identity/adapters and all
+capture-gap notices to a versioned hash. Logical offsets include oversized
+rows; a normal row that would exceed the remaining byte budget starts the
+next page. Unpaged responses retain their former shape and truncation rules.
+There is no new cache version or authoritative-history write.
+
+The panel appends unchecked rows and preserves earlier checkbox identities,
+checked Copy text and permanent omission notices. Same-snapshot refresh keeps
+loaded pages; changed history drops later pages with a notice. A separate
+scope-bound validated snapshot survives overlapping pending refreshes, while
+errors and host/period/home changes invalidate it. Runtime validation checks
+all nested page fields before pagination logic uses them. The loading button
+uses guarded aria-disabled so Chrome can retain focus; its final page moves
+focus into new work. Toggling capture-gap inclusion cannot re-enable selection
+or Copy during loading. The independent review identified these refresh,
+validation and focus issues, which were corrected before the final gate.
+
+Assigned Re-learn apply remains gated by the open decisions in its staged
+plan; ordinary ID freezing is unchanged. Follow-ups: selected-session entry
+pages (`brwr-6ldz`), session catalog pages (`brwr-t4gf`), and explicitly saved
+sharing drafts (`brwr-1b6o`). Cookie leaves external acceptance/publication to
+the driver and does not use live services or APIs.
+
+
+Quarantined cycle 8 local validation passed: 1,634 workspace Rust-reported passes (seven
+new; 94 explicit IPC guards and two ignored), all 48 extension test files,
+62 focused worklog cases (14 new), both Clippy configurations, and a11y two
+fixture passes/51 explicit sandbox browser skips (one new keyboard journey).
+README extras passed: 10,696 inert Markdown renderings, 12 script test files,
+252 Python tooling cases (92 platform skips), and queue consistency. The
+previously errored Dolt fixture passed alone in 11.6 seconds, then in the full
+serial tooling run. A parallel attempt during heavy I/O was interrupted;
+no assertion or timeout was weakened. Final whole-diff manual review and one
+independent Codex pass are complete; all four review findings were corrected.
+Driver owns unsandboxed browser/IPC acceptance and publication.
+
+That cycle's single commit attempt hit read-only `.git/index.lock`; no retry
+followed. The driver then rejected its real-browser gate twice on final-page
+focus and quarantined the work. Those local results did not establish browser
+acceptance; the queue item is being repaired on the restored diff.
+
+## 2026-11-05 — Repair cycle 8's final-page focus
+
+Recovered the complete prescribed `08bc0d2e..b4484a59` quarantine patch.
+The browser failure was real: `appendWorklogChoices` tried to focus the
+first new checkbox while its ancestor fieldset was still disabled. The panel
+now enables the fieldset before appending/focusing new choices. Final cleanup
+still handles errors and late replies. The existing offline append/Copy test
+models inherited-disabled focus refusal through a test-scoped mock; it failed
+on the recovered implementation and passed after the repair. The existing
+real-browser assertion remains unchanged. No new product scope was added.
+
+All required local gate commands pass. Rust reports 1,634 passes including
+94 explicit IPC guards, with two ignored tests; all 48 extension files and
+62 focused worklog cases pass. Both Clippy builds pass. Required accessibility
+reports two fixture passes and 51 sandbox browser skips, which do not prove
+the repaired browser journey. Supplementary checks pass: 10,696 inert Markdown
+renderings, 12 script files and 252 Python tooling cases (92 platform skips).
+Current-state and whitespace checks pass. The full recovered/repaired diff
+was reviewed afresh without further code findings. The driver owns independent
+review, real Chromium/IPC acceptance, queue sync/export/consistency and release.
+
+Two quarantine follow-up IDs were absent from the current database; recreated
+their work as `brwr-6ldz` (session entries) and `brwr-1b6o` (sharing drafts)
+and updated the recovered references. `brwr-tcd5` records shared disabled-focus
+modeling, reinforcing the existing improvement-feed entry. The assigned
+Re-learn chain's open decisions remain unchanged, and the existing gate ask
+plus repair status were sent through the authorized Wardroom outbox.

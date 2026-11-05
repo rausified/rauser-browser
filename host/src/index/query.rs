@@ -561,7 +561,7 @@ pub(super) fn worklog_text(rows: BTreeMap<String, WorklogRow>) -> (String, usize
 }
 
 /// The most rows one worklog-choices answer lists.
-const MAX_WORKLOG_CHOICES: usize = 200;
+pub(super) const MAX_WORKLOG_CHOICES: usize = 200;
 
 /// Already scoped direct activity; shared by day and session choices.
 pub(super) struct ChoiceDay {
@@ -585,6 +585,15 @@ pub(super) fn worklog_choices(
     end: Date,
 ) -> Result<(Vec<WorklogChoice>, bool, Vec<OverflowMarker>, bool)> {
     let (gaps, gaps_truncated) = worklog_gaps(tx, start, end)?;
+    let (choices, truncated) = choice_rows(worklog_choice_days(tx, start, end)?)?;
+    Ok((choices, truncated, gaps, gaps_truncated))
+}
+
+pub(super) fn worklog_choice_days(
+    tx: &Transaction<'_>,
+    start: Date,
+    end: Date,
+) -> Result<BTreeMap<(String, String), ChoiceDay>> {
     // In `order_key` order, stably by instant: a full derive's visit order,
     // with durable append order for ties.
     let mut statement = tx.prepare_cached(
@@ -644,23 +653,15 @@ pub(super) fn worklog_choices(
         row.title = title;
         row.url = url;
     }
-    let (choices, truncated) = choice_rows(rows)?;
-    Ok((choices, truncated, gaps, gaps_truncated))
+    Ok(rows)
 }
 
-pub(super) fn choice_rows(
+pub(super) fn render_choices(
     rows: BTreeMap<(String, String), ChoiceDay>,
-) -> Result<(Vec<WorklogChoice>, bool)> {
+) -> impl Iterator<Item = WorklogChoice> {
     let mut ordered = rows.into_iter().collect::<Vec<_>>();
     ordered.sort_by(|a, b| b.0.0.cmp(&a.0.0).then(a.0.1.cmp(&b.0.1)));
-    let mut choices = Vec::new();
-    let mut bytes = 2usize; // JSON array brackets; count escaped fields too.
-    let mut truncated = false;
-    for ((local_date, artifact_id), row) in ordered {
-        if choices.len() == MAX_WORKLOG_CHOICES {
-            truncated = true;
-            break;
-        }
+    ordered.into_iter().map(|((local_date, artifact_id), row)| {
         let mut text = format!("{}: {}", artifact_id, plain_text(&row.title));
         if row.summary.is_none() || row.focused > 0 || row.background > 0 || row.opens > 0 {
             text.push_str(&format!(
@@ -675,18 +676,34 @@ pub(super) fn choice_rows(
                 crate::summary::importance_str(summary.importance)
             ));
         }
-        let choice = WorklogChoice {
+        WorklogChoice {
             artifact_id,
             local_date,
             text,
             url: row.url,
-        };
+        }
+    })
+}
+
+pub(super) fn choice_fits(choice: &WorklogChoice) -> bool {
+    choice.artifact_id.chars().count() <= 2048
+        && choice.text.chars().count() <= 8192
+        && choice.url.chars().count() <= 8192
+}
+
+pub(super) fn choice_rows(
+    rows: BTreeMap<(String, String), ChoiceDay>,
+) -> Result<(Vec<WorklogChoice>, bool)> {
+    let mut choices = Vec::new();
+    let mut bytes = 2usize; // JSON array brackets; count escaped fields too.
+    let mut truncated = false;
+    for choice in render_choices(rows) {
+        if choices.len() == MAX_WORKLOG_CHOICES {
+            truncated = true;
+            break;
+        }
         let size = serde_json::to_vec(&choice)?.len().saturating_add(1);
-        if choice.artifact_id.chars().count() > 2048
-            || choice.text.chars().count() > 8192
-            || choice.url.chars().count() > 8192
-            || bytes.saturating_add(size) > MAX_WORKLOG_BYTES
-        {
+        if !choice_fits(&choice) || bytes.saturating_add(size) > MAX_WORKLOG_BYTES {
             truncated = true;
             continue;
         }

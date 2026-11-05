@@ -1947,3 +1947,49 @@ catalogue replies even inside the sandbox; the keyboard journey opens Saved
 commands, chooses and inserts by keyboard, verifies preserved draft/focus, runs axe and
 requires Enter to submit. A sandbox skip does not prove Chromium acceptance;
 the driver and platform CI must run the journey in a real browser.
+
+
+## Selected-work pagination
+
+`brwr-p71k` adds opt-in `worklog_choices` pages. Focused checks after building:
+
+```sh
+cargo test --locked -p brauser worklog_page
+cargo test --locked -p brauser-protocol --test wire_artifacts
+node --test --test-isolation=none extension/tests/panel/recent-worklog.test.mjs
+BRAUSER_REQUIRE_A11Y_TESTS=1 npm run test:a11y
+```
+
+The index fixtures traverse 451 real logged artifact-days under both the
+200-row and escaped-byte limits, compare the complete deterministic order,
+and repeat the final continuation after cache-loss replay without modifying
+any source log. A smaller real-reindex fixture checks unchanged snapshot
+identity before testing stale history. These fixtures also cover
+inserted/deleted/edited history, date/storage/adapter scope,
+invalid cursors, capture gaps including notices beyond the display cap, and
+whole oversized-row omission with terminal progress. Native tests distinguish
+malformed cursors from stale snapshots and retain locked config validation;
+wire tests keep unpaged shapes and validate optional page metadata.
+
+Panel cases check unchecked append, unchanged earlier checkbox identity,
+exact selected Copy, accumulated omissions, same-snapshot refresh, changed
+history resets, failed continuation and explicit reload, and delayed replies
+after refresh, period, home-folder and disconnect boundaries. The browser
+keyboard journey reaches Load more with Tab/Enter, checks final-page focus,
+selects a new row and audits/copies the exact preview. The fixture's paged
+responses are wire-validated even when Chromium is sandbox-blocked; such a
+skip does not establish browser acceptance. The focus-session path retains
+its existing independent caps and tests. No real API or harness is used.
+
+Cycle 8's external gate caught a real focus-order defect that the minimal
+fake DOM missed: `focus()` has no effect on a checkbox inside a disabled
+fieldset. The append/Copy panel regression now models that inherited disabled
+state using a test-scoped focus mock. It must fail if the fieldset is enabled
+only after focusing the new row. Keep the existing real-browser focus
+assertion; the mock supplements it when Chromium cannot start in the sandbox.
+
+On a constrained worker VM, run the workspace Rust suite before the Dolt
+integration fixtures in `test:queue`/`test:dev-tools`. The 2026-11-05 parallel
+run encountered heavy I/O pressure and an error in the no-TTY contract fixture;
+the unchanged fixture passed alone in 11.6 seconds and the full serial tooling
+suite passed all 252 cases. Retain the existing deadlines and assertions.

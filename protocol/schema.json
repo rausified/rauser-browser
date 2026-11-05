@@ -1445,6 +1445,7 @@
         "expected_revision"
       ],
       "properties": {
+        "page": { "$ref": "#/$defs/WorklogChoicesPageRequest" },
         "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
         "type": {
           "const": "worklog_choices"
@@ -1467,6 +1468,60 @@
           "type": "string",
           "minLength": 10,
           "maxLength": 10
+        }
+      }
+    },
+    "WorklogChoicesPageRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opt-in paging. Positive offsets require the full prior snapshot; offsets count logical rows, including omitted oversized rows.",
+      "required": [
+        "offset"
+      ],
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "snapshot": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        }
+      }
+    },
+    "WorklogChoicesPageInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot",
+        "offset",
+        "next_offset",
+        "omitted"
+      ],
+      "properties": {
+        "snapshot": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "next_offset": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "omitted": {
+          "type": "boolean"
         }
       }
     },
@@ -1516,6 +1571,7 @@
         "gaps_truncated"
       ],
       "properties": {
+        "page": { "$ref": "#/$defs/WorklogChoicesPageInfo" },
         "type": {
           "const": "worklog_choices_result"
         },
