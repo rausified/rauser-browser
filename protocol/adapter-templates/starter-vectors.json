@@ -343,6 +343,65 @@
           "id": "google.formresponse:{host}/{id}"
         }
       ]
+    },
+    "starter:figma": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "figma.file",
+          "origin": "https://www.figma.com",
+          "match": [
+            {
+              "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{key:token(22,128)}"
+            },
+            {
+              "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{key:token(22,128)}/{_}"
+            },
+            {
+              "path": "/(proto|deck|presenter)/{key:token(22,128)}",
+              "mode": "view"
+            },
+            {
+              "path": "/(proto|deck|presenter)/{key:token(22,128)}/{_}",
+              "mode": "view"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "id": "figma.file:{host}/{key}",
+          "title": [
+            "{~} · {title} - Figma Slides",
+            "{title} – {~}",
+            "{title} - {~}"
+          ]
+        },
+        {
+          "type": "figma.branch",
+          "origin": "https://www.figma.com",
+          "match": [
+            {
+              "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{_}/branch/{branch:token(22,128)}"
+            },
+            {
+              "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{_}/branch/{branch:token(22,128)}/{_}"
+            },
+            {
+              "path": "/(proto|deck|presenter)/{_}/branch/{branch:token(22,128)}",
+              "mode": "view"
+            },
+            {
+              "path": "/(proto|deck|presenter)/{_}/branch/{branch:token(22,128)}/{_}",
+              "mode": "view"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "id": "figma.branch:{host}/{branch}",
+          "title": [
+            "{~} · {title} - Figma Slides",
+            "{title} – {~}",
+            "{title} - {~}"
+          ]
+        }
+      ]
     }
   },
   "cases": [
@@ -2199,6 +2258,1279 @@
         "reason": "no_rule"
       },
       "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+    },
+    {
+      "id": "validate.starter.figma",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:figma fixture (protocol/starters/figma.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.figma",
+      "kind": "overlap_report",
+      "why": "generated: figma's declared overlaps (protocol/starters/figma.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.figma.file.design_slug",
+      "kind": "evaluate",
+      "why": "design editor route with a slug",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.design_share_link_query",
+      "kind": "evaluate",
+      "why": "share-link query noise (node-id, t) is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?node-id=4185-3778&t=Xy12AbCdEfGh34Ij-0",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.design_dev_mode",
+      "kind": "evaluate",
+      "why": "Dev Mode (m=dev) is a query flag, not a separate rule",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?node-id=12-34&m=dev",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.design_no_slug_trailing_slash",
+      "kind": "evaluate",
+      "why": "trailing slash with the slug omitted (opaque_file_slug_in_url)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.design_no_slug_fragment",
+      "kind": "evaluate",
+      "why": "a fragment with no slug segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv#comments",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.legacy_file_route",
+      "kind": "evaluate",
+      "why": "the legacy /file/ route shares the design file's key space",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/file/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?type=design&mode=design",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.version_history",
+      "kind": "evaluate",
+      "why": "version-id and node-id query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?version-id=1234567890&node-id=0-1",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.title_with_en_dash_in_name",
+      "kind": "evaluate",
+      "why": "a file name containing its own en dash keeps the nearer one",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Q3 – Roadmap",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Q3-Roadmap",
+      "title": "Q3 – Roadmap – Figma"
+    },
+    {
+      "id": "eval.figma.file.loading",
+      "kind": "evaluate",
+      "why": "while a file loads the tab title is just Figma; no entry matches, so the whole title is recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Figma",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow",
+      "title": "Figma"
+    },
+    {
+      "id": "eval.figma.file.board_figjam",
+      "kind": "evaluate",
+      "why": "a FigJam board shares the file key space and the en-dash suffix entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "ZyXwVuTsRqPoNmLkJiHgFe"
+        },
+        "artifact_id": "figma.file:www.figma.com/ZyXwVuTsRqPoNmLkJiHgFe",
+        "mode": null,
+        "title": "Sprint Retro",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/board/ZyXwVuTsRqPoNmLkJiHgFe/Sprint-Retro?node-id=0-1&t=AbCd1234EfGh5678-0",
+      "title": "Sprint Retro – FigJam"
+    },
+    {
+      "id": "eval.figma.file.slides_editor",
+      "kind": "evaluate",
+      "why": "a Figma Slides editor title still ends with one en-dash suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "Sl1d3sK3yAbCdEfGhIjKlM"
+        },
+        "artifact_id": "figma.file:www.figma.com/Sl1d3sK3yAbCdEfGhIjKlM",
+        "mode": null,
+        "title": "QBR Deck",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/slides/Sl1d3sK3yAbCdEfGhIjKlM/QBR-Deck",
+      "title": "QBR Deck – Figma Slides"
+    },
+    {
+      "id": "eval.figma.file.slides_deck_audience",
+      "kind": "evaluate",
+      "why": "the Slides audience view uses the Presenter/Audience middle-dot title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "figma.file",
+        "captures": {
+          "key": "Sl1d3sK3yAbCdEfGhIjKlM"
+        },
+        "artifact_id": "figma.file:www.figma.com/Sl1d3sK3yAbCdEfGhIjKlM",
+        "mode": "view",
+        "title": "QBR Deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/deck/Sl1d3sK3yAbCdEfGhIjKlM/QBR-Deck?node-id=1-42",
+      "title": "Audience · QBR Deck - Figma Slides"
+    },
+    {
+      "id": "eval.figma.file.slides_presenter",
+      "kind": "evaluate",
+      "why": "the Slides presenter view uses the same middle-dot title shape",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "figma.file",
+        "captures": {
+          "key": "Sl1d3sK3yAbCdEfGhIjKlM"
+        },
+        "artifact_id": "figma.file:www.figma.com/Sl1d3sK3yAbCdEfGhIjKlM",
+        "mode": "view",
+        "title": "QBR Deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/presenter/Sl1d3sK3yAbCdEfGhIjKlM/QBR-Deck",
+      "title": "Presenter · QBR Deck - Figma Slides"
+    },
+    {
+      "id": "eval.figma.file.proto_single_page",
+      "kind": "evaluate",
+      "why": "a real prototype tab reads <file> - <page>, which the hyphen entry records as <file> (coordinator ruling)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?node-id=2654-15&starting-point-node-id=2654-15&scaling=scale-down",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.file.proto_multi_page_keeps_page",
+      "kind": "evaluate",
+      "why": "page-id query noise is ignored; the hyphen entry still records the file name",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?page-id=0%3A1",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.file.proto_no_slug",
+      "kind": "evaluate",
+      "why": "the bare proto route (no slug) still carries mode view and the hyphen title entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.file.site_figma_sites",
+      "kind": "evaluate",
+      "why": "Figma Sites shares the key space and the en-dash suffix entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "S1t3K3yAbCdEfGhIjKlMnO"
+        },
+        "artifact_id": "figma.file:www.figma.com/S1t3K3yAbCdEfGhIjKlMnO",
+        "mode": null,
+        "title": "Marketing Site",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/site/S1t3K3yAbCdEfGhIjKlMnO/Marketing-Site",
+      "title": "Marketing Site – Figma Sites"
+    },
+    {
+      "id": "eval.figma.file.make_figma_make",
+      "kind": "evaluate",
+      "why": "Figma Make shares the key space and the en-dash suffix entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "M4k3K3yAbCdEfGhIjKlMnO"
+        },
+        "artifact_id": "figma.file:www.figma.com/M4k3K3yAbCdEfGhIjKlMnO",
+        "mode": null,
+        "title": "Pricing Prototype",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/make/M4k3K3yAbCdEfGhIjKlMnO/Pricing-Prototype?fullscreen=1",
+      "title": "Pricing Prototype – Figma Make"
+    },
+    {
+      "id": "eval.figma.file.buzz_figma_buzz",
+      "kind": "evaluate",
+      "why": "Figma Buzz shares the key space and the en-dash suffix entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "Bu2zK3yAbCdEfGhIjKlMnO"
+        },
+        "artifact_id": "figma.file:www.figma.com/Bu2zK3yAbCdEfGhIjKlMnO",
+        "mode": null,
+        "title": "Launch Assets",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/buzz/Bu2zK3yAbCdEfGhIjKlMnO/Launch-Assets",
+      "title": "Launch Assets – Figma Buzz"
+    },
+    {
+      "id": "eval.figma.file.long_key",
+      "kind": "evaluate",
+      "why": "a key longer than 22 characters is still within the token's upper bound",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+        "mode": null,
+        "title": "Long Key",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/Long-Key",
+      "title": "Long Key – Figma"
+    },
+    {
+      "id": "eval.figma.file.hyphen_name",
+      "kind": "evaluate",
+      "why": "a file name containing a plain hyphen is kept when the en-dash entry fails and the hyphen entry catches the suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "A - B",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/A-B",
+      "title": "A - B – Figma"
+    },
+    {
+      "id": "eval.figma.file.root",
+      "kind": "evaluate",
+      "why": "the bare origin has no route word at all",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/"
+    },
+    {
+      "id": "eval.figma.file.file_browser_recents",
+      "kind": "evaluate",
+      "why": "the plural /files/ file-browser route is deliberately not /file/",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/files/recents-and-sharing?fuid=1234567890"
+    },
+    {
+      "id": "eval.figma.file.file_browser_project",
+      "kind": "evaluate",
+      "why": "a project folder is not a file",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/files/project/123456789/Design-System"
+    },
+    {
+      "id": "eval.figma.file.file_browser_team",
+      "kind": "evaluate",
+      "why": "a team's file list is not a file",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/files/team/123456789012345678/Acme"
+    },
+    {
+      "id": "eval.figma.file.create_design",
+      "kind": "evaluate",
+      "why": "/design/new is a create route, excluded by the 22-character key floor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/new"
+    },
+    {
+      "id": "eval.figma.file.create_board",
+      "kind": "evaluate",
+      "why": "/board/new is a create route",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/board/new"
+    },
+    {
+      "id": "eval.figma.file.create_slides",
+      "kind": "evaluate",
+      "why": "/slides/new is a create route, even with a query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/slides/new?localFileKey=abc"
+    },
+    {
+      "id": "eval.figma.file.create_make",
+      "kind": "evaluate",
+      "why": "/make/new is a create route",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/make/new"
+    },
+    {
+      "id": "eval.figma.file.marketing_design_landing",
+      "kind": "evaluate",
+      "why": "a marketing page reusing the design word has no key segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/"
+    },
+    {
+      "id": "eval.figma.file.marketing_figjam_landing",
+      "kind": "evaluate",
+      "why": "figjam is a marketing word, not a route in the match alternation",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/figjam/"
+    },
+    {
+      "id": "eval.figma.file.community_file",
+      "kind": "evaluate",
+      "why": "the community listing is a different, public ID space, not a user's own file",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/community/file/1234567890123456789/ui-kit"
+    },
+    {
+      "id": "eval.figma.file.embed_wrapper",
+      "kind": "evaluate",
+      "why": "the embed wrapper page carries the real URL inside a query value, which no rule reads",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/embed?embed_host=share&url=https%3A%2F%2Fwww.figma.com%2Fdesign%2FAbCdEfGhIjKlMnOpQrStUv"
+    },
+    {
+      "id": "eval.figma.file.image_asset_under_file",
+      "kind": "evaluate",
+      "why": "an image asset under a file has a rest segment no open rule has",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/image/0123456789abcdef0123456789abcdef01234567"
+    },
+    {
+      "id": "eval.figma.file.video_export",
+      "kind": "evaluate",
+      "why": "export is not one of the matched route words",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/export/AbCdEfGhIjKlMnOpQrStUv"
+    },
+    {
+      "id": "eval.figma.file.short_key",
+      "kind": "evaluate",
+      "why": "a 20-character key is below the 22-character floor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrSt/Too-Short"
+    },
+    {
+      "id": "eval.figma.file.key_with_illegal_char",
+      "kind": "evaluate",
+      "why": "a period is outside the token alphabet",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKl.nOpQrStUv/Bad"
+    },
+    {
+      "id": "eval.figma.file.settings",
+      "kind": "evaluate",
+      "why": "settings is not a route word",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/settings"
+    },
+    {
+      "id": "eval.figma.file.login",
+      "kind": "evaluate",
+      "why": "sign-in is not a route word",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/login?locale=en-us"
+    },
+    {
+      "id": "eval.figma.file.user_profile",
+      "kind": "evaluate",
+      "why": "a community profile handle is not a route word",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/@acmedesign"
+    },
+    {
+      "id": "eval.figma.file.double_slash",
+      "kind": "evaluate",
+      "why": "an empty path segment is rejected before any rule is tried",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://www.figma.com/design//AbCdEfGhIjKlMnOpQrStUv"
+    },
+    {
+      "id": "eval.figma.file.encoded_slash",
+      "kind": "evaluate",
+      "why": "an encoded slash inside a segment is rejected, not matched",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv%2FCheckout-Flow"
+    },
+    {
+      "id": "eval.figma.branch.design",
+      "kind": "evaluate",
+      "why": "a branch of a design file, keyed by the branch key alone",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow?node-id=1-2",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.design_no_slug",
+      "kind": "evaluate",
+      "why": "a branch URL with the slug omitted",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.design_trailing_slash_query",
+      "kind": "evaluate",
+      "why": "a trailing slash and query with the slug omitted",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/?m=dev&t=AbCd1234EfGh5678-0",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.legacy_file",
+      "kind": "evaluate",
+      "why": "a branch reached through the legacy /file/ route",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/file/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.board",
+      "kind": "evaluate",
+      "why": "a FigJam board branch",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYzYxWvUtSrQpOn"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYzYxWvUtSrQpOn",
+        "mode": null,
+        "title": "Sprint Retro",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/board/ZyXwVuTsRqPoNmLkJiHgFe/branch/BrAnChKeYzYxWvUtSrQpOn/Sprint-Retro",
+      "title": "Sprint Retro – FigJam"
+    },
+    {
+      "id": "eval.figma.branch.proto",
+      "kind": "evaluate",
+      "why": "a branch's prototype tab reads <file> - <page>, recorded as <file> (coordinator ruling)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 3,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow?node-id=3-4",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.branch.proto_no_slug",
+      "kind": "evaluate",
+      "why": "a branch's bare prototype route, no slug",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.branch.slides_deck",
+      "kind": "evaluate",
+      "why": "a Slides branch viewed in audience mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 3,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYsLiDeSaBcDeFg"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYsLiDeSaBcDeFg",
+        "mode": "view",
+        "title": "QBR Deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/deck/Sl1d3sK3yAbCdEfGhIjKlM/branch/BrAnChKeYsLiDeSaBcDeFg/QBR-Deck",
+      "title": "Audience · QBR Deck - Figma Slides"
+    },
+    {
+      "id": "eval.figma.branch.fragment",
+      "kind": "evaluate",
+      "why": "a fragment after the slug is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow#123",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.branch_short_key",
+      "kind": "evaluate",
+      "why": "a 5-character branch key is below the 22-character floor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/short/Checkout-Flow"
     }
   ]
 }

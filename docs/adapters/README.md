@@ -15,3 +15,5 @@
 | [google.slides](google.slides.md) | google-workspace | development | — | — | — |
 | [google.form](google.form.md) | google-workspace | development | — | — | — |
 | [google.formresponse](google.formresponse.md) | google-workspace | development | — | — | — |
+| [figma.file](figma.file.md) | figma | development | — | — | — |
+| [figma.branch](figma.branch.md) | figma | development | — | — | — |

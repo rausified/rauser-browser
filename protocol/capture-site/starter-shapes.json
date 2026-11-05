@@ -13,7 +13,8 @@
     "google.sheet",
     "google.slides",
     "google.form",
-    "google.formresponse"
+    "google.formresponse",
+    "figma.file"
   ],
   "accept": [
     {
@@ -120,6 +121,16 @@
       "note": "Google Forms responder link (docs/adapters/google.formresponse.md)",
       "url": "https://docs.google.com/forms/d/e/1DevFormresponseSample0000000000000000000000000000000000/viewform",
       "shape": "/forms/d/e/{id}/viewform"
+    },
+    {
+      "note": "Figma design file (docs/adapters/figma.file.md)",
+      "url": "https://www.figma.com/design/FigmaDevFileSample0000000000/Checkout-Flow",
+      "shape": "/design/{id}/{slug}"
+    },
+    {
+      "note": "Figma prototype (docs/adapters/figma.file.md)",
+      "url": "https://www.figma.com/proto/FigmaDevFileSample0000000000/Checkout-Flow?node-id=2654-15",
+      "shape": "/proto/{id}/{slug}?node-id={id}"
     }
   ],
   "reject": []

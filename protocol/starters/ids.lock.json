@@ -11,5 +11,7 @@
   "google.sheet": "google.sheet:{host}/{id}",
   "google.slides": "google.slides:{host}/{id}",
   "google.form": "google.form:{host}/{id}",
-  "google.formresponse": "google.formresponse:{host}/{id}"
+  "google.formresponse": "google.formresponse:{host}/{id}",
+  "figma.file": "figma.file:{host}/{key}",
+  "figma.branch": "figma.branch:{host}/{branch}"
 }
