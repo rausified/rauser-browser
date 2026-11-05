@@ -17,3 +17,6 @@
 | [google.formresponse](google.formresponse.md) | google-workspace | development | — | — | — |
 | [figma.file](figma.file.md) | figma | development | — | — | — |
 | [figma.branch](figma.branch.md) | figma | development | — | — | — |
+| [vidcast.video](vidcast.video.md) | vidcast | development | — | — | — |
+| [vidcast.playlist](vidcast.playlist.md) | vidcast | development | — | — | — |
+| [vidcast.page](vidcast.page.md) | vidcast | development | — | — | — |

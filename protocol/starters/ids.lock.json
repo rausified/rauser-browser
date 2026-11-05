@@ -13,5 +13,8 @@
   "google.form": "google.form:{host}/{id}",
   "google.formresponse": "google.formresponse:{host}/{id}",
   "figma.file": "figma.file:{host}/{key}",
-  "figma.branch": "figma.branch:{host}/{branch}"
+  "figma.branch": "figma.branch:{host}/{branch}",
+  "vidcast.video": "vidcast.video:{host}/{video}",
+  "vidcast.playlist": "vidcast.playlist:{host}/{playlist}",
+  "vidcast.page": "vidcast.page:{host}/{page}"
 }
