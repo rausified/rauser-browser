@@ -1618,3 +1618,27 @@ Unsupported templates, selective context and output destinations produce a
 separate repair message without blocking ordinary tasks or erasing the raw
 command table on unrelated settings saves. Built-in slash actions and a
 Settings command editor remain follow-up work.
+
+
+## 2026-11-05 — Find summaries that need a fuller reading
+
+Recent now has a **Saved summary reading** selector alongside its existing
+title and type filters. Choose **Limited reading** to find summaries whose
+agent read part of the artifact or only its browser page, **Whole artifact**
+to find whole readings, or **Unknown reading** to review saved summaries that
+predate recorded coverage. **All activity** keeps the original list, including
+days without summaries. The selector searches recorded history and starts no
+agent, so reviewing a limited reading never silently reruns a summary.
+
+The host classifies each artifact day's latest displayed summary before
+applying its response cap. This keeps older matching summaries discoverable
+behind many newer nonmatching days, while a newer full reading replaces an
+earlier limited claim for that day. Unknown never implies full reading and
+never includes unsummarized activity. Changing the selector clears old rows;
+late replies cannot restore results for a previous selection. The protocol
+field is optional, so All activity still works with older hosts; a filtered
+request gives rebuild guidance there. The implementation reuses the existing
+index and summary ordering with no cache or content migration. Offline checks
+cover ties, unreadable summary timestamps, replay, mixed history and stale
+panel replies; real-browser keyboard verification remains with the external
+gate because Chromium cannot start in this sandbox.

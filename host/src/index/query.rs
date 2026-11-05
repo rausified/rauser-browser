@@ -304,6 +304,7 @@ pub(super) fn recent(
     tx: &Transaction<'_>,
     artifact_type: Option<&str>,
     title_query: Option<&str>,
+    reading: Option<brauser_protocol::SummaryReadingFilter>,
     limit: usize,
 ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
     let types = tx
@@ -320,46 +321,77 @@ pub(super) fn recent(
          FROM brauser_artifact_days d JOIN artifacts a ON a.artifact_id = d.artifact_id
          WHERE (?1 IS NULL OR a.artifact_type = ?1)
            AND (?2 IS NULL OR instr(brauser_fold(a.title), ?2) > 0)
+           AND (?4 = 0 OR d.summaries > 0)
          ORDER BY d.local_date DESC, min(d.focused_secs, 4294967295) DESC, a.title, d.artifact_id
          LIMIT ?3",
     )?;
-    let rows = statement
-        .query_map(
-            rusqlite::params![
-                artifact_type,
-                query,
+    let rows = statement.query_map(
+        rusqlite::params![
+            artifact_type,
+            query,
+            if reading.is_some() {
+                -1
+            } else {
                 sql_count(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
-            ],
-            |row| {
-                Ok((
-                    ArtifactListItem {
-                        local_date: row.get(0)?,
-                        artifact_id: row.get(1)?,
-                        artifact_type: row.get(2)?,
-                        title: row.get(3)?,
-                        url: row.get(4)?,
-                        focused_seconds: saturating_u32(count(row.get(5)?)),
-                        background_seconds: saturating_u32(count(row.get(6)?)),
-                        opens: saturating_u32(count(row.get(7)?)),
-                        why: row.get(8)?,
-                        summary: None,
-                    },
-                    row.get::<_, i64>(9)? > 0,
-                ))
             },
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let truncated = rows.len() > limit;
-    let mut items = Vec::with_capacity(rows.len().min(limit));
-    for (mut item, summarized) in rows.into_iter().take(limit) {
+            i64::from(reading.is_some())
+        ],
+        |row| {
+            Ok((
+                ArtifactListItem {
+                    local_date: row.get(0)?,
+                    artifact_id: row.get(1)?,
+                    artifact_type: row.get(2)?,
+                    title: row.get(3)?,
+                    url: row.get(4)?,
+                    focused_seconds: saturating_u32(count(row.get(5)?)),
+                    background_seconds: saturating_u32(count(row.get(6)?)),
+                    opens: saturating_u32(count(row.get(7)?)),
+                    why: row.get(8)?,
+                    summary: None,
+                },
+                row.get::<_, i64>(9)? > 0,
+            ))
+        },
+    )?;
+    let mut items = Vec::new();
+    for row in rows {
+        let (mut item, summarized) = row?;
+        if reading.is_none() && items.len() == limit {
+            return Ok((items, types, true));
+        }
         // The day's latest summary that renders.
         if summarized {
             item.summary =
                 latest_summary_view(&summaries(tx, &item.artifact_id, Some(&item.local_date))?);
         }
+        if reading.is_some_and(|filter| !matches_reading(item.summary.as_ref(), filter)) {
+            continue;
+        }
+        // The extra matching row establishes truncation. Never limit the
+        // candidate rows first: an older matching summary must stay reachable.
+        if items.len() == limit {
+            return Ok((items, types, true));
+        }
         items.push(item);
     }
-    Ok((items, types, truncated))
+    Ok((items, types, false))
+}
+
+fn matches_reading(
+    summary: Option<&SummaryView>,
+    filter: brauser_protocol::SummaryReadingFilter,
+) -> bool {
+    use brauser_protocol::{AnswerReadScope, SummaryReadingFilter};
+    let Some(summary) = summary else { return false };
+    match filter {
+        SummaryReadingFilter::Limited => matches!(
+            summary.read_scope,
+            Some(AnswerReadScope::Partial | AnswerReadScope::PageOnly)
+        ),
+        SummaryReadingFilter::Whole => summary.read_scope == Some(AnswerReadScope::Whole),
+        SummaryReadingFilter::Unknown => summary.read_scope.is_none(),
+    }
 }
 
 #[derive(Default)]

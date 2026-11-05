@@ -74,6 +74,34 @@ fn artifact_queries_and_note_keys_have_complete_shapes() {
 }
 
 #[test]
+fn recent_reading_filter_is_optional_known_and_never_serializes_for_all_activity() {
+    let request = json!({"type":"list_artifacts", "protocol_version":8, "request_id":"reading",
+        "artifact_type":null, "title_query":null, "limit":32});
+    common::assert_request_round_trips("ListArtifactsRequest", &request);
+    for reading in ["limited", "whole", "unknown"] {
+        let mut filtered = request.clone();
+        filtered["summary_reading"] = json!(reading);
+        common::assert_request_round_trips("ListArtifactsRequest", &filtered);
+    }
+    for invalid in [
+        json!(null),
+        json!("partial"),
+        json!("page_only"),
+        json!("all"),
+        json!(true),
+    ] {
+        let mut filtered = request.clone();
+        filtered["summary_reading"] = invalid;
+        assert!(!schema_subset::valid("ListArtifactsRequest", &filtered));
+        // Serde treats optional null as absent; schema validation still refuses
+        // null on the wire, like the protocol's other additive enum fields.
+        if !filtered["summary_reading"].is_null() {
+            assert!(serde_json::from_value::<Request>(filtered).is_err());
+        }
+    }
+}
+
+#[test]
 fn worklog_choices_are_a_bounded_independent_read_only_query() {
     let request = json!({"type":"worklog_choices", "protocol_version":8, "request_id":"choose", "expected_revision":"sha256:config",
         "start_date":"2026-11-01", "end_date":"2026-11-02"});

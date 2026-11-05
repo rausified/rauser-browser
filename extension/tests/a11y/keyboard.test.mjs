@@ -131,6 +131,26 @@ test("the worklog period segments are one tab stop that arrows move, with a visi
   await audit(t, page, "panel/worklog-period");
 });
 
+test("Recent's saved-summary reading filter is named and keyboard operable", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await enterPanelTab(page, "tab-recent");
+  const selector = page.getByRole("combobox", { name: "Saved summary reading", exact: true });
+  await activate(page, selector, null);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => fixture.requests.some((request) => request.type === "list_artifacts" && request.summary_reading === "unknown"));
+  await focused(page, "#recent-reading");
+  await audit(t, page, "panel/summary-reading");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => {
+    const latest = fixture.requests.filter((request) => request.type === "list_artifacts").at(-1);
+    return latest && !Object.hasOwn(latest, "summary_reading");
+  });
+  await focused(page, "#recent-reading");
+});
+
 test("a summarized page's re-summarize icon sits in the Summary card, named and keyboard-operable", async (t) => {
   for (const colorScheme of ["light", "dark"]) {
     const page = await browserFixture(t, "panel", "configured", { colorScheme, summary: {
