@@ -145,6 +145,76 @@ test("Recent replaces its startup wait with setup guidance when no home folder i
   assert.equal(page.sent("worklog_report").length, 0);
 });
 
+test("Recent sends reading filters with title and type, clears old rows and ignores late results", async () => {
+  worklogOptions();
+  let releaseLimited;
+  const limited = new Promise((resolve) => { releaseLimited = resolve; });
+  const reply = (title, scope) => ({
+    type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
+    items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title,
+      url: "https://new.example/a", local_date: "2026-10-27", focused_seconds: 30,
+      background_seconds: 20, opens: 1, why: null, summary: {
+        summarized_at: "2026-10-27T12:00:00Z", document_type: "report", category: "work", importance: "high",
+        summary_path: "summaries/report.md", harness: "codex", ...(scope ? { read_scope: scope } : {}),
+      } }],
+  });
+  const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
+    if (request.type !== "list_artifacts") return null;
+    if (request.summary_reading === "limited") return limited;
+    return reply(request.summary_reading === "whole" ? "Whole report" : "All reports", "whole");
+  } });
+  await until(() => page.sent("load_note").length > 0, "startup");
+  page.el("tab-recent").click();
+  await until(() => page.el("recent-list").textContent.includes("All reports"), "unfiltered results");
+  assert.equal(Object.hasOwn(page.sent("list_artifacts")[0], "summary_reading"), false);
+  page.el("recent-type").value = "work.item";
+  page.el("recent-title").value = "report";
+  page.el("recent-reading").value = "limited";
+  page.el("recent-reading").dispatch("change");
+  assert.equal(page.el("recent-list").textContent, "");
+  await until(() => page.sent("list_artifacts").length === 2, "limited request");
+  assert.equal(page.sent("list_artifacts").at(-1).artifact_type, "work.item");
+  assert.equal(page.sent("list_artifacts").at(-1).title_query, "report");
+  assert.equal(page.sent("list_artifacts").at(-1).summary_reading, "limited");
+  page.el("recent-reading").value = "whole";
+  page.el("recent-reading").dispatch("change");
+  await until(() => page.el("recent-list").textContent.includes("Whole report"), "whole results");
+  releaseLimited(reply("Late partial report", "partial"));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(page.el("recent-list").textContent.includes("Late partial report"), false);
+  assert.equal(page.el("recent-type").value, "work.item");
+  assert.equal(page.sent("start_run").length + page.sent("start_task").length, 0);
+});
+
+test("Recent reading has a named selector, honest empty results and older-host guidance", async () => {
+  worklogOptions();
+  assert.match(PANEL_HTML, /<label for="recent-reading">Saved summary reading<\/label>/);
+  for (const value of ["limited", "whole", "unknown"]) assert.ok(PANEL_HTML.includes(`value="${value}"`));
+  const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
+    if (request.type !== "list_artifacts") return null;
+    if (request.summary_reading === "limited") return {
+      type: "error", code: "invalid_request", message: "unsupported request",
+    };
+    return { type: "artifact_list_result", artifact_types: [], items: [], truncated: false };
+  } });
+  await until(() => page.sent("load_note").length > 0, "startup");
+  page.el("tab-recent").click();
+  await until(() => page.el("recent-status").textContent.startsWith("0 artifact-day"), "all results");
+  page.el("recent-reading").value = "unknown";
+  page.el("recent-reading").dispatch("change");
+  await until(() => page.sent("list_artifacts").at(-1)?.summary_reading === "unknown" && page.el("recent-status").textContent.startsWith("0 artifact-day"), "unknown empty results");
+  assert.match(page.el("recent-list").textContent, /No matching saved summaries/);
+  page.el("recent-reading").value = "limited";
+  page.el("recent-reading").dispatch("change");
+  await until(() => page.el("recent-status").textContent.includes("Rebuild"), "old host guidance");
+  assert.match(page.el("recent-status").textContent, /choose All activity/);
+  assert.equal(page.el("recent-list").textContent, "");
+  page.el("recent-reading").value = "";
+  page.el("recent-reading").dispatch("change");
+  await until(() => page.el("recent-status").textContent.startsWith("0 artifact-day"), "all restored");
+  assert.equal(Object.hasOwn(page.sent("list_artifacts").at(-1), "summary_reading"), false);
+});
+
 /** Picks a worklog period the way a click on its segment does: the radio
  * becomes the checked one of its group and fires change. */
 function chooseWorklogPeriod(page, period) {

@@ -202,6 +202,7 @@ const pageView = element<HTMLDivElement>("page-view");
 const recentView = element<HTMLDivElement>("recent-view");
 const recentType = element<HTMLSelectElement>("recent-type");
 const recentTitle = element<HTMLInputElement>("recent-title");
+const recentReading = element<HTMLSelectElement>("recent-reading");
 const recentStatus = element<HTMLParagraphElement>("recent-status");
 const recentList = element<HTMLDivElement>("recent-list");
 /** The worklog period's segments: one native radio group, so arrows move
@@ -1950,13 +1951,18 @@ function renderRecent(items: readonly ArtifactListItem[]): void {
   }
   if (!items.length) {
     const empty = document.createElement("p");
-    empty.textContent = "No matching artifact activity yet.";
+    empty.textContent = recentReading.value
+      ? "No matching saved summaries. Try another reading filter or All activity."
+      : "No matching artifact activity yet.";
     recentList.append(empty);
   }
 }
 
 async function loadRecent(): Promise<void> {
   const seq = ++recentLoadSeq;
+  const reading = recentReading.value;
+  // The selector now describes a new result; do not leave old rows beneath it.
+  recentList.replaceChildren();
   if (!session.connected) {
     recentWaitingForHost = true;
     recentStatus.textContent = "Waiting for the host…";
@@ -1976,6 +1982,8 @@ async function loadRecent(): Promise<void> {
       request_id: newRequestId(),
       artifact_type: recentType.value || null,
       title_query: recentTitle.value.trim() || null,
+      ...(reading === "limited" || reading === "whole" || reading === "unknown"
+        ? { summary_reading: reading } : {}),
       limit: 32,
     }, "artifact_list_result");
     if (seq !== recentLoadSeq) return;
@@ -1987,8 +1995,10 @@ async function loadRecent(): Promise<void> {
     recentStatus.textContent = `${response.items.length} artifact-day entr${response.items.length === 1 ? "y" : "ies"}${response.truncated ? " · first 32 shown" : ""}`;
   } catch (error) {
     if (seq !== recentLoadSeq) return;
-    recentStatus.textContent = `Could not load Recent: ${describe(error)}`;
-    renderRecent([]);
+    recentStatus.textContent = reading && error instanceof HostError && error.code === "invalid_request"
+      ? `Rebuild the ${APP_NAME} host to filter saved summary reading, or choose All activity.`
+      : `Could not load Recent: ${describe(error)}`;
+    recentList.replaceChildren();
   }
 }
 
@@ -2360,6 +2370,7 @@ for (const tab of [pageTab, recentTab]) {
   });
 }
 recentType.addEventListener("change", () => void loadRecent());
+recentReading.addEventListener("change", () => void loadRecent());
 recentTitle.addEventListener("input", scheduleRecent);
 for (const radio of worklogPeriodRadios.values()) {
   radio.addEventListener("change", () => {

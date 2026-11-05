@@ -364,6 +364,207 @@ fn a_recent_row_carries_only_its_own_days_latest_summary() {
     );
 }
 
+#[test]
+fn recent_reading_filters_the_displayed_summary_before_counting_rows() {
+    use crate::answer::ReadScope;
+    use brauser_protocol::SummaryReadingFilter::{Limited, Unknown, Whole};
+
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    // A full native response of nonmatching newer days. The limited
+    // reading on an older day must remain discoverable even at limit one.
+    for day in 1..=31 {
+        for hour in [8, 9] {
+            let mut event = web_summary(
+                "https://example.com/whole",
+                &format!("2026-10-{day:02}T{hour:02}:00:00Z"),
+            );
+            event.read_scope = Some(ReadScope::Whole);
+            index.record_summary(&event).unwrap();
+        }
+    }
+    let mut partial = web_summary("https://example.com/partial", "2026-09-30T08:00:00Z");
+    partial.read_scope = Some(ReadScope::Partial);
+    partial.title = "Focused analysis".into();
+    let mut page_only = web_summary("https://example.com/page", "2026-09-29T08:00:00Z");
+    page_only.read_scope = Some(ReadScope::PageOnly);
+    let legacy = web_summary("https://example.com/legacy", "2026-09-28T08:00:00Z");
+    for event in [&partial, &page_only, &legacy] {
+        index.record_summary(event).unwrap();
+    }
+    index
+        .record_activity(
+            &activity(
+                "00000000-0000-4000-8000-000000001101",
+                "PROJ-1",
+                "No summary",
+                "2026-10-31T08:00:00Z",
+            ),
+            &[],
+        )
+        .unwrap();
+
+    let (limited, types, truncated) = index.recent_with_reading(None, None, Limited, 1).unwrap();
+    assert_eq!(
+        limited
+            .iter()
+            .map(|row| row.artifact_id.as_str())
+            .collect::<Vec<_>>(),
+        [partial.artifact_id.as_str()]
+    );
+    assert!(truncated);
+    assert!(types.contains(&"work.item".into())); // Type choices stay independent.
+    let (limited, _, truncated) = index.recent_with_reading(None, None, Limited, 2).unwrap();
+    assert_eq!(limited.len(), 2);
+    assert!(!truncated); // Exactly the limit is not truncated.
+    let (matching_title, _, truncated) = index
+        .recent_with_reading(Some("web.page"), Some("FOCUSED"), Limited, 1)
+        .unwrap();
+    assert_eq!(matching_title.len(), 1);
+    assert!(!truncated);
+    let (unknown, _, truncated) = index.recent_with_reading(None, None, Unknown, 32).unwrap();
+    assert_eq!(unknown.len(), 1); // Unsummarized activity is not unknown reading.
+    assert_eq!(unknown[0].summary, Some(expected_view(&legacy)));
+    assert!(!truncated);
+    assert_eq!(
+        index
+            .recent_with_reading(None, None, Whole, 32)
+            .unwrap()
+            .0
+            .len(),
+        31
+    );
+    assert!(
+        index
+            .recent_with_reading(Some("work.item"), None, Limited, 32)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    assert!(
+        index
+            .recent_with_reading(None, Some("No summary"), Unknown, 32)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+}
+
+#[test]
+fn recent_reading_uses_latest_renderable_scope_with_instant_and_log_order() {
+    use crate::answer::ReadScope;
+    use brauser_protocol::SummaryReadingFilter::{Limited, Unknown, Whole};
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let mut whole = web_summary("https://example.com/spec", "2026-10-16T09:00:00Z");
+    whole.read_scope = Some(ReadScope::Whole);
+    let mut partial = web_summary("https://example.com/spec", "2026-10-16T10:00:00+02:00");
+    partial.read_scope = Some(ReadScope::Partial);
+    index.record_summary(&whole).unwrap();
+    index.record_summary(&partial).unwrap(); // Recorded later but earlier instant.
+    assert!(
+        index
+            .recent_with_reading(None, None, Limited, 32)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    assert_eq!(
+        index.recent_with_reading(None, None, Whole, 32).unwrap().0[0].summary,
+        Some(expected_view(&whole))
+    );
+    partial.event_id = uuid::Uuid::new_v4().to_string();
+    partial.occurred_at = whole.occurred_at.clone();
+    index.record_summary(&partial).unwrap(); // Same instant; later log entry wins.
+    assert!(
+        index
+            .recent_with_reading(None, None, Whole, 32)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    assert_eq!(
+        index
+            .recent_with_reading(None, None, Limited, 32)
+            .unwrap()
+            .0[0]
+            .summary,
+        Some(expected_view(&partial))
+    );
+    assert!(
+        index
+            .recent_with_reading(None, None, Unknown, 32)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    let broken = web_summary(
+        "https://example.com/spec",
+        "2026-10-16T23:59:59 and later, in the evening, local",
+    );
+    index.record_summary(&broken).unwrap();
+    assert_eq!(
+        index
+            .recent_with_reading(None, None, Limited, 32)
+            .unwrap()
+            .0[0]
+            .summary,
+        Some(expected_view(&partial))
+    );
+    let only_broken = web_summary(
+        "https://example.com/broken",
+        "2026-10-17T23:59:59 and later, in the evening, local",
+    );
+    index.record_summary(&only_broken).unwrap();
+    assert!(
+        index
+            .recent_with_reading(None, None, Unknown, 32)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+}
+
+#[test]
+fn recent_reading_searches_a_year_of_summary_history_without_a_candidate_cap() {
+    use crate::answer::ReadScope;
+    use brauser_protocol::SummaryReadingFilter;
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let first_day = Date::from_calendar_date(2025, time::Month::November, 1).unwrap();
+    for n in 0..365 {
+        let day = first_day + time::Duration::days(n);
+        let mut event = web_summary(
+            "https://example.com/daily-report",
+            &format!("{day}T10:00:00Z"),
+        );
+        event.read_scope = Some(ReadScope::Whole);
+        index.record_summary(&event).unwrap();
+    }
+    let started = Instant::now();
+    let (rows, _, truncated) = index
+        .recent_with_reading(None, None, SummaryReadingFilter::Limited, 32)
+        .unwrap();
+    println!(
+        "365-day single-artifact no-match reading filter: {:?}",
+        started.elapsed()
+    );
+    assert!(rows.is_empty());
+    assert!(!truncated);
+    let mut older = web_summary("https://example.com/older-report", "2025-10-31T10:00:00Z");
+    older.read_scope = Some(ReadScope::Partial);
+    index.record_summary(&older).unwrap();
+    let (rows, _, truncated) = index
+        .recent_with_reading(None, None, SummaryReadingFilter::Limited, 32)
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].summary, Some(expected_view(&older)));
+    assert!(!truncated);
+}
+
 /// Two summaries of one record in the same second (the stamp has
 /// whole-second resolution) order by when they were recorded, as the
 /// summary file holds the later write, never by their random run IDs.
@@ -972,6 +1173,7 @@ fn reusing_a_summary_event_id_with_other_content_bails() {
 fn saved_scopes_survive_incremental_indexing_reopen_and_cold_replay() {
     use crate::answer::ReadScope;
     use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore};
+    use brauser_protocol::SummaryReadingFilter;
     for scope in [
         None,
         Some(ReadScope::Whole),
@@ -1011,6 +1213,15 @@ fn saved_scopes_survive_incremental_indexing_reopen_and_cold_replay() {
             let first = index(&root, &cache);
             first.record_summary(&event).unwrap();
             let expected = Some(expected_view(&event));
+            let reading = match scope {
+                None => SummaryReadingFilter::Unknown,
+                Some(ReadScope::Whole) => SummaryReadingFilter::Whole,
+                Some(ReadScope::Partial | ReadScope::PageOnly) => SummaryReadingFilter::Limited,
+            };
+            assert_eq!(
+                first.recent_with_reading(None, None, reading, 1).unwrap().0[0].summary,
+                expected
+            );
             assert_eq!(
                 first.artifact_with_summary(&event.artifact_id).unwrap().1,
                 expected
@@ -1035,6 +1246,10 @@ fn saved_scopes_survive_incremental_indexing_reopen_and_cold_replay() {
             let cold = index(&root, &cold_cache);
             cold.reindex().unwrap();
             assert_eq!(cold.summary_for(&event.artifact_id).unwrap(), expected);
+            assert_eq!(
+                cold.recent_with_reading(None, None, reading, 1).unwrap().0[0].summary,
+                expected
+            );
             let payload = serde_json::to_value(&event).unwrap();
             assert_eq!(payload.get("read_scope").is_some(), scope.is_some());
         }
