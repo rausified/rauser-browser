@@ -8,3 +8,5 @@ viewer-only or partial summary worth another read. Where: the host's Recent
 query and protocol filter, then `extension/panel.ts`. Filter before the result
 cap so older limited summaries remain discoverable; never infer whole reading
 from an absent field or start another summary without a user gesture.
+
+- Done 2026-11-05: `brwr-y1q2` implements host filtering before the cap and the Recent selector; legacy unknown reading remains separate from unsummarized days.

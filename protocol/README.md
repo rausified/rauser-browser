@@ -395,6 +395,12 @@ artifact-keyed note exists, publishing without clobber before removing the
 source. `get_artifact`, `list_artifacts`, and `worklog` expose bounded derived
 index views; `refresh_artifacts` runs the owned-file regeneration pass and
 returns bounded conflict paths for unrelated occupants it did not replace.
+`list_artifacts` accepts optional `summary_reading` (`limited`, `whole`, or
+`unknown`), applied before the response cap to the day's latest renderable
+summary. Limited combines `partial` and `page_only`; unknown requires a saved
+summary without recorded scope, excluding unsummarized days. Omission retains
+All activity and compatibility with older hosts. Results and event formats
+are unchanged; an older host refuses a filtered request as `invalid_request`.
 Both `ArtifactListItem` and `ArtifactResult` carry a required, nullable
 `summary` (`SummaryView`): on a list row, that local day's latest summary of
 the artifact; on `get_artifact`, the artifact's latest summary. An

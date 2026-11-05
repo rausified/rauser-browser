@@ -114,6 +114,15 @@ Counts can span several dates and overlap; they are never added to work totals.
 the measured work; the notices remain visible for review. Copy uses the exact
 preview text. Rebuild the host and extension together for this review.
 
+Recent's **Saved summary reading** filter helps find summaries worth revisiting.
+**Limited reading** finds summaries whose agent read part of the artifact or
+only its browser page; **Whole artifact** finds whole readings, and **Unknown
+reading** finds saved summaries with no recorded scope. The filter uses each
+day's latest displayed summary and works alongside title and type. **All
+activity** also includes days without summaries. This only searches recorded
+history; it starts no agent. Rebuild the host and extension for the filter;
+with an older host, All activity remains usable.
+
 To share just one deliberate work block, turn on **Choose work to share**,
 set **Choose from** to **One focus session**, and choose a recorded session.
 Check its entries (or **Select all shown**) and copy the preview. Only that

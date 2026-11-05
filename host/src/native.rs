@@ -3178,11 +3178,20 @@ fn list_artifacts(
     // Thirty-two maximal rows still fit comfortably below Chrome's native
     // messaging cap after JSON escaping.
     let limit = usize::try_from(value.limit.clamp(1, 32)).unwrap_or(32);
-    match index.recent(
-        value.artifact_type.as_deref(),
-        value.title_query.as_deref(),
-        limit,
-    ) {
+    let result = match value.summary_reading {
+        Some(reading) => index.recent_with_reading(
+            value.artifact_type.as_deref(),
+            value.title_query.as_deref(),
+            reading,
+            limit,
+        ),
+        None => index.recent(
+            value.artifact_type.as_deref(),
+            value.title_query.as_deref(),
+            limit,
+        ),
+    };
+    match result {
         Ok((items, artifact_types, truncated)) => {
             Response::ArtifactListResult(ArtifactListResult {
                 protocol_version: PROTOCOL_VERSION,
@@ -6961,6 +6970,7 @@ id = "work:{host}/{id}"
                 request_id: "recent".into(),
                 artifact_type: None,
                 title_query: None,
+                summary_reading: None,
                 limit: 32,
             },
             config,
@@ -7001,6 +7011,42 @@ id = "work:{host}/{id}"
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].artifact_type, "web.page");
         assert_eq!(items[0].summary, Some(expected_summary(&event)));
+    }
+
+    #[test]
+    fn recent_reading_filter_reaches_the_host_index_and_keeps_unknown_distinct() {
+        use brauser_protocol::SummaryReadingFilter::{Limited, Unknown, Whole};
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let event = record_page_summary(
+            &config,
+            url,
+            crate::vault::url_record_key(url).unwrap(),
+            crate::summary::WEB_PAGE_TYPE,
+        );
+        for (reading, count) in [(Unknown, 1), (Limited, 0), (Whole, 0)] {
+            let Response::ArtifactListResult(reply) = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "reading".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    summary_reading: Some(reading),
+                    limit: 1,
+                },
+                &mut config,
+            ) else {
+                panic!("expected Recent reply")
+            };
+            assert_eq!(reply.items.len(), count);
+            assert!(!reply.truncated);
+            if count == 1 {
+                assert_eq!(reply.items[0].summary, Some(expected_summary(&event)));
+            }
+        }
     }
 
     #[test]
@@ -8469,6 +8515,7 @@ id = "work:{host}/{id}"
                     request_id: "recent-unavailable".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -8500,6 +8547,7 @@ id = "work:{host}/{id}"
                     request_id: "recent-recovered".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -8633,6 +8681,7 @@ id = "work:{host}/{id}"
                         request_id: "recent".into(),
                         artifact_type: None,
                         title_query: None,
+                        summary_reading: None,
                         limit: 32,
                     },
                     &mut config,
@@ -8760,6 +8809,7 @@ id = "work:{host}/{id}"
                         request_id: "recent".into(),
                         artifact_type: None,
                         title_query: None,
+                        summary_reading: None,
                         limit: 32,
                     },
                     &mut config,
@@ -8813,6 +8863,7 @@ id = "work:{host}/{id}"
                     request_id: "recovered".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -8950,6 +9001,7 @@ id = "work:{host}/{id}"
                     request_id: "recent".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -9046,6 +9098,7 @@ id = "work:{host}/{id}"
                     request_id: "recent".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,

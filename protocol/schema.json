@@ -1273,8 +1273,13 @@
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "artifact_type": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
         "title_query": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
+        "summary_reading": { "$ref": "#/$defs/SummaryReadingFilter", "description": "Optional filter over each day's latest displayed summary, before limiting results. Unknown matches a saved summary without scope, never unsummarized activity. Omit for all activity." },
         "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
       }
+    },
+    "SummaryReadingFilter": {
+      "type": "string",
+      "enum": ["limited", "whole", "unknown"]
     },
     "WorklogFocusChoicesRequest": {
       "type": "object",

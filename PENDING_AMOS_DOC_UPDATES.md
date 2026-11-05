@@ -433,3 +433,12 @@
   the existing task flow. This is a standalone Brauser capability with offline
   host/UI coverage; deployment and browser/platform acceptance belong to the
   external driver and CI (`brwr-kqt4`).
+
+
+- Brauser's Recent view can now find saved summaries by the agent's recorded
+  reading coverage: limited, whole or unknown. It filters each day's latest
+  displayed summary on the host before the result cap, making older limited
+  readings easier to find without rerunning an agent. Unknown excludes days
+  without summaries; existing history and content stay unchanged. Deploy the
+  host and extension for the filter; All activity remains usable with older
+  hosts. This is a Brauser feature, with source documentation kept in its repo.
