@@ -154,16 +154,23 @@ export const EXAMPLE_STRICT_FAMILY = {
 };
 
 // Puts the test seam into "draft mode" at `origin`: whichever starter family
-// (today's shipped catalog, not a fixture) claims `origin` is removed from
-// `STARTER_FAMILIES` for the duration of the test, so a drafted-site test
-// that captures on a shared origin like docs.google.com stays drafted even
-// after a later starter family claims that origin. Restores the default
-// catalog via `t.after`, same as every other `setStarterFamiliesForTest` use.
+// claims `origin` right now — the real shipped catalog, or another test's
+// seam override already in effect — is removed from the *live* seam list for
+// the duration of the test, so a drafted-site test that captures on a shared
+// origin like docs.google.com stays drafted even after a later starter
+// family claims that origin. Matched by `family.family` (the id), not object
+// identity: `starterFamily` resolves `claimer` against the current seam
+// (`starterFamilies()`), and a fresh `import("../dist/starter-families.
+// generated.js")` would be a different array with different object
+// identities, so filtering a freshly re-imported `STARTER_FAMILIES` by `!==`
+// against `claimer` is a no-op whenever a seam is already active — the bug
+// this replaced, caught once a real family (google-workspace) claimed
+// docs.google.com for the first time. Restores the default catalog via
+// `t.after`, same as every other `setStarterFamiliesForTest` use.
 export async function draftModeAt(t, origin) {
-  const { setStarterFamiliesForTest, starterFamily } = await import("../dist/starter-adapters.js");
-  const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
+  const { setStarterFamiliesForTest, starterFamily, starterFamilies } = await import("../dist/starter-adapters.js");
   const claimer = starterFamily(origin);
-  setStarterFamiliesForTest(STARTER_FAMILIES.filter((family) => family !== claimer));
+  setStarterFamiliesForTest(starterFamilies().filter((family) => family.family !== claimer?.family));
   t.after(() => setStarterFamiliesForTest(null));
 }
 

@@ -952,6 +952,20 @@ test("draftModeAt removes whichever family claims the origin", async (t) => {
   assert.equal(starterKind("https://github.com"), "github");
 });
 
+test("draftModeAt removes the real google-workspace family now that it exists", async (t) => {
+  // No stand-in here: docs.google.com is claimed for real (PR D1's
+  // google-workspace family). draftModeAt must still remove it, and leave
+  // every other real family in place.
+  assert.equal(starterKind(DOCS), "google-workspace");
+  await draftModeAt(t, DOCS);
+  assert.equal(starterKind(DOCS), null);
+  assert.equal(starterKind("https://github.com"), "github");
+  assert.equal(
+    starterFamilies().some((family) => family.family === "google-workspace"),
+    false,
+  );
+});
+
 test("draftModeAt leaves the list alone for an unclaimed origin", async (t) => {
   await draftModeAt(t, "https://tools.example.com");
   assert.equal(starterFamilies().length, STARTER_FAMILIES.length);
