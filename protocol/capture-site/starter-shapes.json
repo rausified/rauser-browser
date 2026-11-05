@@ -8,7 +8,12 @@
     "sharepoint.doc",
     "github.pr",
     "github.issue",
-    "miro.board"
+    "miro.board",
+    "google.doc",
+    "google.sheet",
+    "google.slides",
+    "google.form",
+    "google.formresponse"
   ],
   "accept": [
     {
@@ -85,6 +90,36 @@
       "note": "Miro board (docs/adapters/miro.board.md)",
       "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
       "shape": "/app/board/{id}/"
+    },
+    {
+      "note": "Google Docs edit (docs/adapters/google.doc.md)",
+      "url": "https://docs.google.com/document/d/1DevDocSample0000000000000000000000000000000/edit",
+      "shape": "/document/d/{id}/edit"
+    },
+    {
+      "note": "Google Docs multi-account edit (docs/adapters/google.doc.md)",
+      "url": "https://docs.google.com/document/u/1/d/1DevDocSample0000000000000000000000000000000/edit",
+      "shape": "/document/u/{num}/d/{id}/edit"
+    },
+    {
+      "note": "Google Sheets edit (docs/adapters/google.sheet.md)",
+      "url": "https://docs.google.com/spreadsheets/d/1DevSheetSample00000000000000000000000000000/edit",
+      "shape": "/spreadsheets/d/{id}/edit"
+    },
+    {
+      "note": "Google Slides edit (docs/adapters/google.slides.md)",
+      "url": "https://docs.google.com/presentation/d/1DevSlidesSample0000000000000000000000000000/edit",
+      "shape": "/presentation/d/{id}/edit"
+    },
+    {
+      "note": "Google Forms edit (docs/adapters/google.form.md)",
+      "url": "https://docs.google.com/forms/d/1DevFormSample000000000000000000000000000000/edit",
+      "shape": "/forms/d/{id}/edit"
+    },
+    {
+      "note": "Google Forms responder link (docs/adapters/google.formresponse.md)",
+      "url": "https://docs.google.com/forms/d/e/1DevFormresponseSample0000000000000000000000000000000000/viewform",
+      "shape": "/forms/d/e/{id}/viewform"
     }
   ],
   "reject": []

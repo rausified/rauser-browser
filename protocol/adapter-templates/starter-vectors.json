@@ -191,6 +191,158 @@
           "title": "{title} - Miro"
         }
       ]
+    },
+    "starter:google-workspace": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "google.doc",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/document/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+            },
+            {
+              "path": "/document/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+            },
+            {
+              "path": "/a/{_}/document/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "modes": {
+            "edit": "edit",
+            "view": "view",
+            "preview": "view",
+            "mobilebasic": "view"
+          },
+          "id": "google.doc:{host}/{id}",
+          "title": [
+            "{title} - Google Docs",
+            "{title} – Google Docs"
+          ],
+          "refs": [
+            {
+              "type": "jira.issue",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "google.sheet",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+            },
+            {
+              "path": "/spreadsheets/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+            },
+            {
+              "path": "/a/{_}/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "modes": {
+            "edit": "edit",
+            "view": "view",
+            "preview": "view",
+            "htmlview": "view"
+          },
+          "id": "google.sheet:{host}/{id}",
+          "title": [
+            "{title} - Google Sheets",
+            "{title} – Google Sheets",
+            "{title} - Google Drive",
+            "{title} – Google Drive"
+          ],
+          "refs": [
+            {
+              "type": "jira.issue",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "google.slides",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/presentation/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+            },
+            {
+              "path": "/presentation/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+            },
+            {
+              "path": "/a/{_}/presentation/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "modes": {
+            "edit": "edit",
+            "view": "view",
+            "preview": "view",
+            "present": "view",
+            "embed": "view"
+          },
+          "id": "google.slides:{host}/{id}",
+          "title": [
+            "{title} - Google Slides",
+            "{title} – Google Slides"
+          ],
+          "refs": [
+            {
+              "type": "jira.issue",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "google.form",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/forms/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+            },
+            {
+              "path": "/forms/u/{_}/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+            },
+            {
+              "path": "/a/{_}/forms/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "modes": {
+            "edit": "edit",
+            "viewform": "view"
+          },
+          "id": "google.form:{host}/{id}",
+          "title": [
+            "{title} - Google Forms",
+            "{title} – Google Forms"
+          ]
+        },
+        {
+          "type": "google.formresponse",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+              "mode": "view"
+            },
+            {
+              "path": "/forms/u/{_}/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+              "mode": "view"
+            },
+            {
+              "path": "/a/{_}/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+              "mode": "view"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "id": "google.formresponse:{host}/{id}"
+        }
+      ]
     }
   },
   "cases": [
@@ -309,6 +461,1744 @@
       "expect": {
         "pairs": []
       }
+    },
+    {
+      "id": "validate.starter.google-workspace",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:google-workspace fixture (protocol/starters/google-workspace.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.google-workspace",
+      "kind": "overlap_report",
+      "why": "generated: google-workspace's declared overlaps (protocol/starters/google-workspace.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.google-workspace.doc.edit",
+      "kind": "evaluate",
+      "why": "edit route, title suffix stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": "Q4 Plan",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+      "title": "Q4 Plan - Google Docs"
+    },
+    {
+      "id": "eval.google-workspace.doc.endash",
+      "kind": "evaluate",
+      "why": "en dash title suffix (scorecard miss 3)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": "Team plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+      "title": "Team plan – Google Docs"
+    },
+    {
+      "id": "eval.google-workspace.doc.bare",
+      "kind": "evaluate",
+      "why": "bare doc path, no mode segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": null
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa"
+    },
+    {
+      "id": "eval.google-workspace.doc.trailing_slash",
+      "kind": "evaluate",
+      "why": "trailing slash, no mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": null
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/"
+    },
+    {
+      "id": "eval.google-workspace.doc.share_link",
+      "kind": "evaluate",
+      "why": "usp=sharing query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": "Design - Review",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=sharing",
+      "title": "Design - Review - Google Docs"
+    },
+    {
+      "id": "eval.google-workspace.doc.tab_query_fragment",
+      "kind": "evaluate",
+      "why": "tab query and heading fragment are ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?tab=t.0#heading=h.abc123"
+    },
+    {
+      "id": "eval.google-workspace.doc.view",
+      "kind": "evaluate",
+      "why": "view mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "view"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/view"
+    },
+    {
+      "id": "eval.google-workspace.doc.preview",
+      "kind": "evaluate",
+      "why": "preview mode maps to view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "preview"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/preview"
+    },
+    {
+      "id": "eval.google-workspace.doc.mobilebasic_title_no_suffix",
+      "kind": "evaluate",
+      "why": "mobilebasic has no title suffix; whole title recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "mobilebasic"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "view",
+        "title": "Q4 Plan",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/mobilebasic",
+      "title": "Q4 Plan"
+    },
+    {
+      "id": "eval.google-workspace.doc.account_index",
+      "kind": "evaluate",
+      "why": "/document/u/<n>/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/document/u/1/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=drive_web&ouid=123"
+    },
+    {
+      "id": "eval.google-workspace.doc.legacy_domain",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ Google Apps form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/a/example.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit"
+    },
+    {
+      "id": "eval.google-workspace.doc.drive_open_redirect_target",
+      "kind": "evaluate",
+      "why": "the /open?id= redirect's landing form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=drive_open"
+    },
+    {
+      "id": "eval.google-workspace.doc.ref_in_title",
+      "kind": "evaluate",
+      "why": "a Jira key in the title resolves as a ref",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": "PROJ-123 rollout notes",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": [
+          {
+            "type": "jira.issue",
+            "value": "PROJ-123"
+          }
+        ]
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+      "title": "PROJ-123 rollout notes - Google Docs"
+    },
+    {
+      "id": "eval.google-workspace.doc.home",
+      "kind": "evaluate",
+      "why": "Docs home list is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/u/0/"
+    },
+    {
+      "id": "eval.google-workspace.doc.create",
+      "kind": "evaluate",
+      "why": "create route, not an existing document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/create"
+    },
+    {
+      "id": "eval.google-workspace.doc.u_create",
+      "kind": "evaluate",
+      "why": "create route with an account index",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/u/0/create?usp=docs_home"
+    },
+    {
+      "id": "eval.google-workspace.doc.copy",
+      "kind": "evaluate",
+      "why": "copy action, not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/copy"
+    },
+    {
+      "id": "eval.google-workspace.doc.export",
+      "kind": "evaluate",
+      "why": "export download",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/export?format=pdf"
+    },
+    {
+      "id": "eval.google-workspace.doc.template_preview",
+      "kind": "evaluate",
+      "why": "template link (unverified route)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/template/preview"
+    },
+    {
+      "id": "eval.google-workspace.doc.published",
+      "kind": "evaluate",
+      "why": "published copy, a different ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/e/2PACX-1vSyntheticPublishedIdIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIi/pub"
+    },
+    {
+      "id": "eval.google-workspace.doc.short_id",
+      "kind": "evaluate",
+      "why": "ID shorter than the 20-character floor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/abc123/edit"
+    },
+    {
+      "id": "eval.google-workspace.doc.open_redirector",
+      "kind": "evaluate",
+      "why": "/open?id= redirector, not an open itself",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/open?id=1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa"
+    },
+    {
+      "id": "eval.google-workspace.doc.encoded_slash",
+      "kind": "evaluate",
+      "why": "an encoded slash is rejected, not matched",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa%2Fedit"
+    },
+    {
+      "id": "eval.google-workspace.doc.double_slash",
+      "kind": "evaluate",
+      "why": "an empty path segment is rejected",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://docs.google.com/document//d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit"
+    },
+    {
+      "id": "eval.google-workspace.doc.case_sensitive",
+      "kind": "evaluate",
+      "why": "paths are case-sensitive",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/Document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit"
+    },
+    {
+      "id": "eval.google-workspace.sheet.edit",
+      "kind": "evaluate",
+      "why": "edit route, title suffix stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit",
+        "title": "Budget 2027",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit",
+      "title": "Budget 2027 - Google Sheets"
+    },
+    {
+      "id": "eval.google-workspace.sheet.endash",
+      "kind": "evaluate",
+      "why": "en dash title suffix (scorecard miss 3)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit",
+        "title": "Team plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit",
+      "title": "Team plan – Google Sheets"
+    },
+    {
+      "id": "eval.google-workspace.sheet.gid",
+      "kind": "evaluate",
+      "why": "gid (sheet tab) is not part of the identity",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit?gid=1234567#gid=1234567"
+    },
+    {
+      "id": "eval.google-workspace.sheet.bare",
+      "kind": "evaluate",
+      "why": "bare sheet path, no mode segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": null
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b"
+    },
+    {
+      "id": "eval.google-workspace.sheet.trailing",
+      "kind": "evaluate",
+      "why": "trailing slash after edit",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit/"
+    },
+    {
+      "id": "eval.google-workspace.sheet.view",
+      "kind": "evaluate",
+      "why": "view mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "view"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "view",
+        "title": "Budget 2027",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/view",
+      "title": "Budget 2027 - Google Sheets"
+    },
+    {
+      "id": "eval.google-workspace.sheet.htmlview_drive_title",
+      "kind": "evaluate",
+      "why": "htmlview renders with the Google Drive title suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "htmlview"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "view",
+        "title": "Budget 2027",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/htmlview",
+      "title": "Budget 2027 - Google Drive"
+    },
+    {
+      "id": "eval.google-workspace.sheet.preview",
+      "kind": "evaluate",
+      "why": "preview also renders with the Google Drive title suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "preview"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "view",
+        "title": "Budget 2027",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/preview",
+      "title": "Budget 2027 - Google Drive"
+    },
+    {
+      "id": "eval.google-workspace.sheet.account_index",
+      "kind": "evaluate",
+      "why": "/spreadsheets/u/<n>/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/spreadsheets/u/0/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit?usp=sharing"
+    },
+    {
+      "id": "eval.google-workspace.sheet.legacy_domain",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ Google Apps form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/a/example.org/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit#gid=0"
+    },
+    {
+      "id": "eval.google-workspace.sheet.copy",
+      "kind": "evaluate",
+      "why": "copy action, not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/copy"
+    },
+    {
+      "id": "eval.google-workspace.sheet.home",
+      "kind": "evaluate",
+      "why": "Sheets home is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/spreadsheets/u/0/"
+    },
+    {
+      "id": "eval.google-workspace.sheet.published",
+      "kind": "evaluate",
+      "why": "published copy, a different ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vSyntheticPublishedIdJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJj/pubhtml"
+    },
+    {
+      "id": "eval.google-workspace.sheet.legacy_ccc",
+      "kind": "evaluate",
+      "why": "legacy /spreadsheet/ccc redirector",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/spreadsheet/ccc?key=1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b"
+    },
+    {
+      "id": "eval.google-workspace.slides.edit",
+      "kind": "evaluate",
+      "why": "edit route, title suffix stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit",
+        "title": "Kickoff deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit",
+      "title": "Kickoff deck - Google Slides"
+    },
+    {
+      "id": "eval.google-workspace.slides.endash",
+      "kind": "evaluate",
+      "why": "en dash title suffix (scorecard miss 3)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit",
+        "title": "Team plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit",
+      "title": "Team plan – Google Slides"
+    },
+    {
+      "id": "eval.google-workspace.slides.slide_fragment",
+      "kind": "evaluate",
+      "why": "#slide= fragment is a slide position, not identity",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit#slide=id.p1"
+    },
+    {
+      "id": "eval.google-workspace.slides.slide_query",
+      "kind": "evaluate",
+      "why": "?slide= query is a slide position, not identity",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit?slide=id.g2a3b4c5d6e_0_0"
+    },
+    {
+      "id": "eval.google-workspace.slides.present",
+      "kind": "evaluate",
+      "why": "present (slideshow) mode maps to view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "present"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "view",
+        "title": "Kickoff deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/present?slide=id.p",
+      "title": "Kickoff deck - Google Slides"
+    },
+    {
+      "id": "eval.google-workspace.slides.preview",
+      "kind": "evaluate",
+      "why": "preview mode maps to view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "preview"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/preview"
+    },
+    {
+      "id": "eval.google-workspace.slides.embed",
+      "kind": "evaluate",
+      "why": "embed mode maps to view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "embed"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/embed?start=false&loop=false"
+    },
+    {
+      "id": "eval.google-workspace.slides.view",
+      "kind": "evaluate",
+      "why": "view mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "view"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/view"
+    },
+    {
+      "id": "eval.google-workspace.slides.account_index",
+      "kind": "evaluate",
+      "why": "/presentation/u/<n>/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/presentation/u/2/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit?usp=sharing"
+    },
+    {
+      "id": "eval.google-workspace.slides.legacy_domain",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ Google Apps form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 2,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/a/example.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit"
+    },
+    {
+      "id": "eval.google-workspace.slides.bare_trailing",
+      "kind": "evaluate",
+      "why": "bare presentation path with a trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": null
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/"
+    },
+    {
+      "id": "eval.google-workspace.slides.export",
+      "kind": "evaluate",
+      "why": "export is not a recognised mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/export"
+    },
+    {
+      "id": "eval.google-workspace.slides.home",
+      "kind": "evaluate",
+      "why": "Slides home is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/presentation/u/0/?tgif=d"
+    },
+    {
+      "id": "eval.google-workspace.form.edit",
+      "kind": "evaluate",
+      "why": "edit route, title suffix stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit",
+        "title": "Team survey",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+      "title": "Team survey - Google Forms"
+    },
+    {
+      "id": "eval.google-workspace.form.endash",
+      "kind": "evaluate",
+      "why": "en dash title suffix (scorecard miss 3)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit",
+        "title": "Team plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+      "title": "Team plan – Google Forms"
+    },
+    {
+      "id": "eval.google-workspace.form.edit_responses_fragment",
+      "kind": "evaluate",
+      "why": "#responses fragment is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit#responses"
+    },
+    {
+      "id": "eval.google-workspace.form.bare",
+      "kind": "evaluate",
+      "why": "bare form path, no mode segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": null
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd"
+    },
+    {
+      "id": "eval.google-workspace.form.legacy_viewform",
+      "kind": "evaluate",
+      "why": "legacy respondent link built on formId, no title suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "viewform"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "view",
+        "title": "Team survey",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/viewform",
+      "title": "Team survey"
+    },
+    {
+      "id": "eval.google-workspace.form.account_index",
+      "kind": "evaluate",
+      "why": "/forms/u/<n>/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/forms/u/0/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit"
+    },
+    {
+      "id": "eval.google-workspace.form.legacy_domain",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ Google Apps form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/a/example.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit"
+    },
+    {
+      "id": "eval.google-workspace.form.trailing",
+      "kind": "evaluate",
+      "why": "trailing slash after edit",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit/"
+    },
+    {
+      "id": "eval.google-workspace.form.query_noise",
+      "kind": "evaluate",
+      "why": "query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit?usp=forms_home&ths=true"
+    },
+    {
+      "id": "eval.google-workspace.form.home",
+      "kind": "evaluate",
+      "why": "Forms home is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/forms/u/0/"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.viewform",
+      "kind": "evaluate",
+      "why": "responder viewform; first match wins in adapter order, proving google.form (adapter 3) never claims a responder link",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view",
+        "title": "Team survey",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform",
+      "title": "Team survey"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.share_link",
+      "kind": "evaluate",
+      "why": "share-link query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?usp=sf_link"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.embedded",
+      "kind": "evaluate",
+      "why": "embedded query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?embedded=true"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.prefilled",
+      "kind": "evaluate",
+      "why": "prefilled entry query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?usp=pp_url&entry.123456=Alice"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.formresponse",
+      "kind": "evaluate",
+      "why": "formResponse route after submitting",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/formResponse"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.closedform",
+      "kind": "evaluate",
+      "why": "closedform route, no longer accepting",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/closedform"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.account_index",
+      "kind": "evaluate",
+      "why": "/forms/u/<n>/d/e/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 1,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/u/1/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.legacy_domain_trailing",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ form with a trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 2,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/a/example.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform/"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.prefill",
+      "kind": "evaluate",
+      "why": "prefill builder is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/prefill"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.bare",
+      "kind": "evaluate",
+      "why": "no route word after the published ID (unverified)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
     }
   ]
 }

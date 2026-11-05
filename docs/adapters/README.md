@@ -10,3 +10,8 @@
 | [github.issue](github.issue.md) | github | certified | live | 2026-11-02 | John |
 | [github.repo](github.repo.md) | github | certified | live | 2026-11-02 | John |
 | [miro.board](miro.board.md) | miro | development | — | — | — |
+| [google.doc](google.doc.md) | google-workspace | development | — | — | — |
+| [google.sheet](google.sheet.md) | google-workspace | development | — | — | — |
+| [google.slides](google.slides.md) | google-workspace | development | — | — | — |
+| [google.form](google.form.md) | google-workspace | development | — | — | — |
+| [google.formresponse](google.formresponse.md) | google-workspace | development | — | — | — |
