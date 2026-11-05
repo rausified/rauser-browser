@@ -148,11 +148,13 @@ same pass as the family-file shape validation above: a family file's own
 validation problems are still reported, and every other file, and these
 checks, still run. A file is left out of the pass only when it is not valid
 JSON, or its shape is too broken to read further (not even a plain object
-with a `types` array); a file whose shape validates that far, but still has
-a validation problem elsewhere (for example a subdomain `origin` missing
-`suffix`), still gets its validation line, but the policy and registry
-checks below are not attempted for it, since those checks assume a
-validated shape.
+with a `types` array). A file whose shape validates that far still gets its
+policy and registry checks even if it has an unrelated validation problem
+elsewhere (for example an unknown top-level field): each check reads only
+the specific field it needs — the origin-collision and shared-origin
+checks below read a family's `origin` and `scope` once each has validated
+cleanly on its own, regardless of what else in the family might be wrong —
+so a real cross-file collision is never hidden behind an unrelated typo.
 
 **Shared-origin policy** (a family's `origin` against
 `protocol/capture-site/catalog.json`'s `shared_origins`):
