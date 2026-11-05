@@ -77,6 +77,30 @@ test("a type with no negative evaluate vector is named (check 4)", () => {
   assert.deepEqual(problems, ["miro.board: no negative evaluate vector"]);
 });
 
+test("a sibling type's positive vector on a shared origin is not counted as this type's negative (check 4, Minor 3)", () => {
+  // jira.issue and confluence.page share one origin (acme.atlassian.net).
+  // Removing every genuine no-match case on that origin leaves both types
+  // with only positives. Before Minor 3's fix, each type's positive cases
+  // counted as the *other* type's negative, so this family passed "no
+  // negative evaluate vector" for both types with zero real no-match
+  // vectors between them; both must now be reported.
+  const inputs = loadInputs();
+  inputs.vectors = structuredClone(inputs.vectors);
+  // new URL("blob:https://acme.atlassian.net/...").origin is also
+  // "https://acme.atlassian.net" (two legacy cases, eval.url.blob_*), so
+  // this filters by parsed origin, not a string prefix, to remove every
+  // genuine negative on this origin, blob URLs included.
+  const originOf = (url) => { try { return new URL(url).origin; } catch { return null; } };
+  inputs.vectors.cases = inputs.vectors.cases.filter((vectorCase) => !(
+    vectorCase.kind === "evaluate"
+    && vectorCase.doc?.["$fixture"] === "starters"
+    && vectorCase.expect?.match === false
+    && originOf(vectorCase.url) === "https://acme.atlassian.net"
+  ));
+  const problems = coverageProblems(inputs, engine);
+  assert.deepEqual(problems.sort(), ["confluence.page: no negative evaluate vector", "jira.issue: no negative evaluate vector"]);
+});
+
 test("a type with no sample whose title the title template accepts is named (check 4)", () => {
   const inputs = loadInputs();
   inputs.families = structuredClone(inputs.families);

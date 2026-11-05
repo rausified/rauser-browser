@@ -23,3 +23,5 @@ SUMMARY.md text eol=lf
 extension/starter-families.generated.ts text eol=lf
 protocol/starters/*.json text eol=lf
 protocol/capture-site/starter-shapes.json text eol=lf
+protocol/adapter-templates/starter-vectors.json text eol=lf
+docs/adapters/README.md text eol=lf

@@ -11,6 +11,7 @@ const {
   starterStatus,
   starterOffers,
   starterFamily,
+  starterFamilies,
   displayTypes,
   recordLabel,
   recordOrder,
@@ -95,7 +96,28 @@ test("displayTypes puts containers first", () => {
 test("record labels and order come from the family files", () => {
   assert.equal(recordLabel("github.pr"), "pull requests");
   assert.equal(recordLabel("jira.issue"), null);
-  assert.deepEqual(recordOrder(), ["github.repo", "github.pr", "github.issue"]);
+
+  // recordOrder()'s documented contract: starterFamilies() order, then each
+  // family's displayTypes() order, keeping only types with a non-null
+  // record_label. Reimplementing that contract from the family data (rather
+  // than pinning its current output) means a new family, or a new labelled
+  // type, cannot break this test the way it broke for every new family in
+  // the final review (Important 1) — only a real contract violation can.
+  const expected = [];
+  for (const family of starterFamilies()) {
+    for (const type of displayTypes(family)) {
+      if (type.record_label !== null) expected.push(type.type);
+    }
+  }
+  assert.deepEqual(recordOrder(), expected);
+
+  // Today, GitHub's three types are the only ones with a label; check that
+  // subset rather than the full list, so a future family with its own
+  // record_label does not break this pin.
+  assert.deepEqual(
+    expected.filter((type) => type.startsWith("github.")),
+    ["github.repo", "github.pr", "github.issue"],
+  );
 });
 
 test("isContainerType", () => {

@@ -173,6 +173,43 @@ const STATUS_STATES = ["certified", "development"];
 const STATUS_METHODS = ["live", "history", null];
 const SAMPLE_KEYS = ["url", "title", "shape", "note"];
 const OVERLAP_KEYS = ["a", "b", "expect"];
+// The engines' own vectors.rs run_case match arm names every kind they
+// accept; a vector naming any other kind fails inside the engine harness
+// with "unknown kind <k>", not a file-and-field generator message.
+const VECTOR_KINDS = [
+  "validate", "evaluate", "capture", "segments", "refs", "refs_resolve",
+  "meta_alias", "overlap", "overlap_report", "draft", "draft_rules",
+];
+const VECTOR_IMPLS = ["rust", "ts"];
+const VECTOR_REQUIRED_KEYS = ["id", "kind", "why", "impls", "expect"];
+const SUBDOMAIN_SUFFIX_RE = /^\.[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+/** Whether `suffix` is a syntactically valid subdomain-origin suffix: a
+ * leading "." and at least two dot-separated labels (so a bare
+ * `.service-now.com`-shaped family can never collide with
+ * `evilservice-now.com` or the label-less `https://service-now.com`, Minor
+ * 1). A single-label suffix such as `.com` would also match this shape but
+ * is refused elsewhere as a shared-origin collision; this check only
+ * catches the missing-leading-dot and too-short cases a caller would
+ * otherwise discover only indirectly, through `familyClaims`. */
+export function isValidSubdomainSuffix(suffix) {
+  return typeof suffix === "string" && SUBDOMAIN_SUFFIX_RE.test(suffix);
+}
+
+/** Whether `origin` is a canonical `https:` origin string: no path, query,
+ * fragment, credentials or trailing slash (`new URL(origin).origin ===
+ * origin`), so `https://docs.google.com/` (Minor 1) is refused here
+ * instead of surfacing later as an indirect "sample_origin is not on this
+ * family's origin" message. */
+export function isCanonicalHttpsOrigin(origin) {
+  if (typeof origin !== "string") return false;
+  try {
+    const url = new URL(origin);
+    return url.protocol === "https:" && url.origin === origin;
+  } catch {
+    return false;
+  }
+}
 
 /** Validates a family's `origin`: `kind` is `"exact"` or `"subdomain"`, with
  * the fields `ORIGIN_KEYS` allows for that kind. A subdomain origin's
@@ -195,6 +232,9 @@ function validateOrigin(problems, file, origin, where) {
   checkKeys(problems, file, origin, allowed, where);
   requireKeys(problems, file, origin, ORIGIN_REQUIRED[origin.kind], where);
   if (origin.kind === "subdomain") {
+    if ("suffix" in origin && !isValidSubdomainSuffix(origin.suffix)) {
+      fail(problems, file, `${at(where, "suffix")} must start with "." and have at least two labels (e.g. ".example.com")`);
+    }
     if ("labels" in origin && origin.labels !== 1) {
       fail(problems, file, `${at(where, "labels")} must be 1`);
     }
@@ -202,6 +242,9 @@ function validateOrigin(problems, file, origin, where) {
       const isValid = Array.isArray(origin.exclude) && origin.exclude.every((label) => typeof label === "string" && DNS_LABEL_RE.test(label));
       if (!isValid) fail(problems, file, `${at(where, "exclude")} must be a list of lowercase DNS labels`);
     }
+  }
+  if (origin.kind === "exact" && "origin" in origin && !isCanonicalHttpsOrigin(origin.origin)) {
+    fail(problems, file, `${at(where, "origin")} must be a canonical https origin (no path, query or trailing slash)`);
   }
 }
 
@@ -252,6 +295,19 @@ function hasScopeMarker(value) {
   return false;
 }
 
+/** Whether `scope` is a real scope *table* and not the marker itself: a
+ * plain object keyed by capture name (GitHub's `owner`), each value
+ * carrying the `{"$scope": true}` marker. `adapter.scope = {"$scope":
+ * true}` directly (no capture key) resolves at runtime to a bare array,
+ * not `{"<capture>": [...]}`, which `validateScopeUse`'s marker-anywhere
+ * check alone did not catch (final review, Minor 2). */
+function isScopeTable(scope) {
+  if (!isPlainObject(scope)) return false;
+  const entries = Object.entries(scope);
+  if (entries.length === 1 && entries[0][0] === "$scope" && entries[0][1] === true) return false;
+  return entries.some(([, value]) => hasScopeMarker(value));
+}
+
 /** Cross-checks a family's `scope` kind against how its types actually use
  * scope: a scoped family (`github_org` or `tenant_name`) needs a `$scope`
  * marker on every type's adapter; an unscoped family (`scope: null` or
@@ -269,6 +325,13 @@ function validateScopeUse(problems, file, family) {
     const marker = hasScopeMarker(type.adapter);
     if (scoped && !marker) {
       fail(problems, file, `${where}.adapter needs a {"$scope": true} marker for a scoped family`);
+    }
+    if (scoped && marker && !isScopeTable(type.adapter.scope)) {
+      fail(
+        problems,
+        file,
+        `${where}.adapter.scope must be an object whose values carry the {"$scope": true} marker (e.g. {"owner": {"$scope": true}}), not the marker itself`,
+      );
     }
     if (!scoped && marker) {
       fail(problems, file, `${where}.adapter has a {"$scope": true} marker but the family is unscoped`);
@@ -356,16 +419,21 @@ function validateStatus(problems, file, status, where) {
   }
 }
 
-/** A type's `samples` array (recorded `{url, title, shape, note}` rows, one
- * per URL form `renderStarterShapes` carries into
- * `protocol/capture-site/starter-shapes.json`) and its `samples_shape`
- * switch. A sample's `url` must sit on the family's own `origin` (Review
- * Focus 1): a typo, a sibling family's host, or an excluded subdomain label
- * is caught here, file and field named, the same way an adapter's `match` is
- * never checked against a URL that could not reach it. `samples_shape` tells
- * `renderStarterShapes` whether this type contributes rows at all: a type
- * with no doc page worth citing (today: `github.repo`) is declared empty and
- * `false`, instead of silently contributing nothing. */
+/** A type's `samples` array (recorded `{url, title, shape, note}` rows) and
+ * its `samples_shape` switch. A sample's `url` must sit on the family's own
+ * `origin` (Review Focus 1): a typo, a sibling family's host, or an
+ * excluded subdomain label is caught here, file and field named, the same
+ * way an adapter's `match` is never checked against a URL that could not
+ * reach it. `samples_shape` controls only whether `renderStarterShapes`
+ * carries this type's samples into `protocol/capture-site/starter-shapes.json`
+ * (and, through that file, into the structural one-adapter-per-kind test):
+ * `false` means the type's URL shape is not worth a shapes.json-style row
+ * (today: `github.repo`) or cannot be learned by the structural drafter
+ * (for example a query-routed type), not that the type has no samples at
+ * all. `samples` may be non-empty with `samples_shape: false` — those
+ * samples are still read by `coverageProblems`' title check (a type with a
+ * title template needs a titled sample whether or not its shape is
+ * emitted). Only `samples_shape: true` requires a non-empty `samples`. */
 function validateSamples(problems, file, type, where, origin) {
   if ("samples_shape" in type && typeof type.samples_shape !== "boolean") {
     fail(problems, file, `${at(where, "samples_shape")} must be a boolean`);
@@ -408,9 +476,6 @@ function validateSamples(problems, file, type, where, origin) {
       fail(problems, file, `${at(sampleWhere, "note")} must be a string`);
     }
   });
-  if (type.samples_shape === false && type.samples.length > 0) {
-    fail(problems, file, `${at(where, "samples")} must be empty when samples_shape is false`);
-  }
   if (type.samples_shape === true && type.samples.length === 0) {
     fail(problems, file, `${at(where, "samples")} must not be empty when samples_shape is true`);
   }
@@ -424,7 +489,18 @@ function validateSamples(problems, file, type, where, origin) {
  * `evaluate` case) must sit on the family's own `origin`, the same rule
  * `validateSamples` applies to recorded samples. Cross-file and
  * cross-vectors.json id duplicates are caught in `loadFamilies`, which
- * alone sees every family file and the legacy vectors file at once. */
+ * alone sees every family file and the legacy vectors file at once.
+ *
+ * `id`, `kind`, `why`, `impls` and `expect` are every `vectors.json` case's
+ * common keys (`adapter-templates.md` §12); a vector missing one, written
+ * by hand, otherwise serialises with the key simply absent (`undefined`
+ * drops from `JSON.stringify`) and the failure only surfaces once the
+ * engine harness runs it, far from the family file and field that caused
+ * it (deferred T2, final review). `kind` is checked against the engines'
+ * own `run_case` kinds, and `impls` against the two engine names, for the
+ * same reason; `expect`'s shape is kind-specific and is left to the
+ * conformance suites that already run every vector through both
+ * engines. */
 function validateVectors(problems, file, type, where, origin) {
   if (!("vectors" in type)) return;
   if (!Array.isArray(type.vectors)) {
@@ -436,6 +512,21 @@ function validateVectors(problems, file, type, where, origin) {
     if (!isPlainObject(vector)) {
       fail(problems, file, `${vectorWhere} must be an object`);
       return;
+    }
+    requireKeys(problems, file, vector, VECTOR_REQUIRED_KEYS, vectorWhere);
+    if ("id" in vector && typeof vector.id !== "string") {
+      fail(problems, file, `${at(vectorWhere, "id")} must be a string`);
+    }
+    if ("kind" in vector && !VECTOR_KINDS.includes(vector.kind)) {
+      fail(problems, file, `${at(vectorWhere, "kind")} must be one of ${VECTOR_KINDS.join(", ")}`);
+    }
+    if ("why" in vector && typeof vector.why !== "string") {
+      fail(problems, file, `${at(vectorWhere, "why")} must be a string`);
+    }
+    if ("impls" in vector) {
+      const isValid = Array.isArray(vector.impls) && vector.impls.length > 0
+        && vector.impls.every((impl) => VECTOR_IMPLS.includes(impl));
+      if (!isValid) fail(problems, file, `${at(vectorWhere, "impls")} must be a non-empty array of ${VECTOR_IMPLS.join(", ")}`);
     }
     if ("doc" in vector) {
       fail(problems, file, `${vectorWhere} must not carry "doc" (the family fixture is implied)`);
@@ -1083,6 +1174,16 @@ export function checkPolicy(entries, catalog) {
     const exactOrigin = origin.kind === "exact" ? origin.origin : null;
     const shared = exactOrigin !== null ? sharedOrigins[exactOrigin] : undefined;
 
+    // Minor 7: a subdomain family's suffix can also cover a shared origin
+    // outright (`.google.com` covers `docs.google.com`), not just a
+    // family's own exact origin. Every shared origin this family's
+    // `origin` actually claims (`familyClaims`) — one entry for an exact
+    // family whose own origin is shared, any number for a subdomain
+    // family — gets check 7 and gap 6's per-origin checks below; without
+    // this, such a family escaped them entirely, since `shared` above is
+    // always `undefined` for a subdomain origin.
+    const claimedSharedOrigins = Object.keys(sharedOrigins).filter((candidate) => familyClaims(origin, candidate));
+
     // Check 7, gaps 1, 6 and 8 all reason about `scope`; only run them once
     // `scope` has validated cleanly on its own (Task 5 re-review).
     if (!scopeIsClean(file, family)) continue;
@@ -1091,13 +1192,17 @@ export function checkPolicy(entries, catalog) {
 
     // Check 7: a shared origin is never recorded for every account at once
     // by accident; its family must declare a real scope.
-    if (shared !== undefined && scope === null) {
-      problems.push(`${file}: origin ${exactOrigin} is a shared origin, so scope must not be null`);
+    if (scope === null) {
+      for (const sharedOrigin of claimedSharedOrigins) {
+        problems.push(`${file}: origin ${sharedOrigin} is a shared origin, so scope must not be null`);
+      }
     }
 
     // Gap 1: "unscoped" only makes sense, and is only safe for the engine
     // (extension/adapter-templates.ts SHARED_ORIGINS), on an exact origin
-    // the catalog lists as shared.
+    // the catalog lists as shared — never a subdomain family, even one
+    // whose suffix happens to cover a shared origin (protocol/starters/
+    // README.md "Scope kinds").
     if (scopeKind === "unscoped" && shared === undefined) {
       problems.push(`${file}: scope "unscoped" needs an exact origin in protocol/capture-site/catalog.json shared_origins`);
     }
@@ -1110,18 +1215,22 @@ export function checkPolicy(entries, catalog) {
 
     // Gap 6: a tenant_name family must use the host's own tenant capture
     // (Task 3's taken_types computation reads it), and only makes sense on
-    // a shared origin whose URLs actually name a tenant.
-    if (scopeKind === "tenant_name" && shared !== undefined) {
-      if (shared.tenant === null) {
-        problems.push(`${file}: scope "tenant_name" cannot be used on ${exactOrigin}, whose URLs name no tenant`);
-      } else if (Array.isArray(family.types)) {
-        const capture = shared.tenant.capture;
-        family.types.forEach((type, index) => {
-          const keys = isPlainObject(type?.adapter?.scope) ? Object.keys(type.adapter.scope) : [];
-          if (keys.length !== 1 || keys[0] !== capture) {
-            problems.push(`${file}: types[${index}].adapter.scope must use "${capture}", the host's tenant capture for ${exactOrigin}`);
-          }
-        });
+    // a shared origin whose URLs actually name a tenant — for every shared
+    // origin this family claims (Minor 7).
+    if (scopeKind === "tenant_name") {
+      for (const sharedOrigin of claimedSharedOrigins) {
+        const sharedEntry = sharedOrigins[sharedOrigin];
+        if (sharedEntry.tenant === null) {
+          problems.push(`${file}: scope "tenant_name" cannot be used on ${sharedOrigin}, whose URLs name no tenant`);
+        } else if (Array.isArray(family.types)) {
+          const capture = sharedEntry.tenant.capture;
+          family.types.forEach((type, index) => {
+            const keys = isPlainObject(type?.adapter?.scope) ? Object.keys(type.adapter.scope) : [];
+            if (keys.length !== 1 || keys[0] !== capture) {
+              problems.push(`${file}: types[${index}].adapter.scope must use "${capture}", the host's tenant capture for ${sharedOrigin}`);
+            }
+          });
+        }
       }
     }
   }
@@ -1307,13 +1416,17 @@ export function checkRegistry(root, entries) {
  * asks whether the right *kind* of vector exists. A negative case is an
  * evaluate case on either fixture whose `url` sits on the type's own
  * adapter origin (an artifact sharing that origin in `fixtures.starters` may
- * belong to a sibling type on a shared origin such as github.com) but whose
- * `expect` is not a positive match for this type. For a family case, "the
- * type's own adapter origin" is just `family.sample_origin` (every type in
- * a family shares one origin), not every origin `familyClaims` would
- * accept — a subdomain family's negative vector on a second tenant host is
- * not counted, which can only under-count negatives, never hide a missing
- * one. The title check instead runs `engine.evaluate` against
+ * belong to a sibling type on a shared origin such as github.com) and whose
+ * `expect` is exactly `{match: false}` — a sibling type's *positive* vector
+ * on the same origin does not count (Minor 3): a multi-type family such as
+ * google-workspace, where every type shares `sample_origin`, must not pass
+ * "no negative evaluate vector" for a type with zero genuine no-match
+ * vectors just because its siblings have positives. For a family case,
+ * "the type's own adapter origin" is just `family.sample_origin` (every
+ * type in a family shares one origin), not every origin `familyClaims`
+ * would accept — a subdomain family's negative vector on a second tenant
+ * host is not counted, which can only under-count negatives, never hide a
+ * missing one. The title check instead runs `engine.evaluate` against
  * `synthesizeFixture(family)`: a type whose adapter has a `title` template
  * needs at least one non-null-titled sample the engine actually matches
  * with `title_entry !== null`; a type with no `title` template is exempt. */
@@ -1348,11 +1461,16 @@ export function coverageProblems({ families, vectors, starterVectors }, engine) 
         set.add(vectorCase.expect.rule);
         positiveRules.set(positiveType, set);
       }
+      // Only a genuine no-match case counts as a negative (Minor 3): a
+      // sibling type's positive on a shared origin is not a negative for
+      // this type, so a multi-type family can no longer pass "no negative
+      // evaluate vector" for every type on the strength of its siblings'
+      // positives alone.
+      if (vectorCase.expect?.match !== false) continue;
       const origin = originOf(vectorCase.url);
       if (origin === null) continue;
       for (const [type, origins] of originsByType) {
-        if (type === positiveType || !origins.has(origin)) continue;
-        negativeTypes.add(type);
+        if (origins.has(origin)) negativeTypes.add(type);
       }
     }
   };

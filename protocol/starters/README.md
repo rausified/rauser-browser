@@ -49,8 +49,11 @@ source of truth for the current shape.
       "title": "[PROJ-1] Fix the bug - Jira",     // the recorded page's raw <title>, or null
       "shape": "/browse/{key}"
     }],
-    "samples_shape": true,         // false (and samples: []) when the type has no URL shape
-                                    // worth a shapes.json-style row (today: github.repo)
+    "samples_shape": true,         // false when the type has no URL shape worth a
+                                    // shapes.json-style row (today: github.repo) or when
+                                    // the structural drafter cannot learn it; samples may
+                                    // still be non-empty (a titled sample is still needed
+                                    // for a type with an "adapter.title" template)
     "vectors": []                  // vectors.json cases for this type, each missing "doc"
   }]
 }
@@ -70,6 +73,27 @@ refuses one that doesn't, file and field named. `title` is the page's raw
 `<title>` at the time it was recorded, or `null` when the sample has none;
 every type whose adapter has a `title` template needs at least one sample
 with a non-null `title`.
+
+`samples_shape` controls only whether a type's samples are carried into
+`starter-shapes.json`, not whether the type may have samples. `false` means
+either the type's URL shape isn't worth a shapes.json-style row (today:
+`github.repo`) or the structural drafter cannot learn the shape at all (a
+query-routed type such as a `?sys_id=` form). Either way, `samples` may
+still be non-empty: those samples are read only by the registry's title
+check (a type with an `adapter.title` template still needs a sample with a
+non-null `title`, whether or not `samples_shape` is true). Only
+`samples_shape: true` requires a non-empty `samples`.
+
+A sample's `shape` must equal the in-page shaper's own output for its
+`url` (`site-patterns.test.mjs` and `shapes.rs` both pin this), so never
+hand-write one: after `npm run build:extension`, compute it from the built
+extension's own shaper —
+
+```sh
+node -e 'import("./extension/dist/site-patterns.js").then(({ inspectSitePatterns }) => console.log(inspectSitePatterns("<url>").current))'
+```
+
+— and copy its output into the sample.
 
 `adapter` is an adapter-template document (`adapter-templates.md` §3) with
 `origin` omitted: the generator and, at runtime, `starterOffers` fill it in
@@ -165,8 +189,10 @@ so a real cross-file collision is never hidden behind an unrelated typo.
   that family would claim it (`familyClaims`); a repeated exact origin
   always collides. The problem is reported on whichever file sorts later:
   `<file>: origin overlaps <other file>`.
-- **A shared origin always needs account values.** An exact origin listed in
-  `shared_origins` may not have `scope: null`
+- **A shared origin always needs account values.** Any `shared_origins` entry
+  this family's `origin` claims — its own exact origin, or, for a subdomain
+  family, any shared origin its suffix covers (`.google.com` covers
+  `docs.google.com`) — may not have `scope: null`
   (`<file>: origin <o> is a shared origin, so scope must not be null`).
 - **`unscoped` needs an exact origin `shared_origins` lists.** The engine
   (`extension/adapter-templates.ts` `SHARED_ORIGINS`) only allows the
@@ -175,9 +201,11 @@ so a real cross-file collision is never hidden behind an unrelated typo.
   protocol/capture-site/catalog.json shared_origins`).
 - **`github_org` is only for GitHub itself**
   (`<file>: scope "github_org" is only for https://github.com`).
-- **`tenant_name` must use the host's own tenant capture.** A shared origin
-  whose `tenant` is `null` (today: `docs.google.com`, `www.figma.com`) names
-  no tenant at all, so no family there may use `tenant_name`
+- **`tenant_name` must use the host's own tenant capture.** This check also
+  runs against every shared origin a subdomain family's suffix covers, not
+  only its own exact origin. A shared origin whose `tenant` is `null`
+  (today: `docs.google.com`, `www.figma.com`) names no tenant at all, so no
+  family there may use `tenant_name`
   (`<file>: scope "tenant_name" cannot be used on <o>, whose URLs name no
   tenant`). Otherwise every type's adapter `scope` table must use exactly
   the origin's `tenant.capture` as its one key — the same capture
@@ -211,9 +239,11 @@ so a real cross-file collision is never hidden behind an unrelated typo.
 
 Two checks need the built engine instead of the generator's own JSON
 validation, so they live in `extension/tests/starter-registry.test.mjs`:
-spec §4 check 4 (every match rule has a positive and a negative evaluate
-vector, and a sample whose title the title template accepts) and check 8
-(`node scripts/generate-starters.mjs --check` is clean).
+spec §4 check 4 (every match rule has a positive evaluate vector, every
+*type* has at least one negative evaluate vector — a sibling type's
+positive on a shared origin does not count as this type's negative — and a
+sample whose title the title template accepts) and check 8 (`node
+scripts/generate-starters.mjs --check` is clean).
 
 ## Adding a type
 

@@ -33,6 +33,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
+import { isCanonicalHttpsOrigin, isValidSubdomainSuffix } from "./generate-starters.mjs";
+
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const STARTERS_DIR = "protocol/starters";
 const DOCS_ADAPTERS_DIR = "docs/adapters";
@@ -107,15 +109,47 @@ function defaultKey(type, originKind) {
 }
 
 /** The adapter-level markers a scoped or unscoped family's type needs
- * (protocol/starters/README.md "Scope kinds"): a `{"$scope": true}`
- * placeholder for `github_org`/`tenant_name` (the generator's checkPolicy
- * then names the real capture key to use, for a shared tenant origin), or
- * `unscoped: "acknowledged"` for `unscoped`. A `scope: null` family's type
- * gets neither. */
-function scopeMarkers(scopeKind) {
-  if (scopeKind === "github_org" || scopeKind === "tenant_name") return { scope: { "$scope": true } };
+ * (protocol/starters/README.md "Scope kinds"): `{"<key>": {"$scope":
+ * true}}` for `github_org`/`tenant_name` — a real scoped adapter's `scope`
+ * is a capture-keyed table, not the bare marker (final review, Minor 2) —
+ * or `unscoped: "acknowledged"` for `unscoped`. A `scope: null` family's
+ * type gets neither. */
+function scopeMarkers(scopeKind, key) {
+  if (scopeKind === "github_org" || scopeKind === "tenant_name") return { scope: { [key]: { "$scope": true } } };
   if (scopeKind === "unscoped") return { unscoped: "acknowledged" };
   return {};
+}
+
+/** The capture key a new scoped type's `adapter.scope` marker should use
+ * (Minor 2): the key an existing type in this family already marks (adding
+ * a type to, say, GitHub reuses `owner`); otherwise, for a brand-new
+ * `tenant_name` family on a catalog shared origin, that origin's own
+ * `tenant.capture` (the key `host/src/capture_site.rs`'s `taken_types`
+ * reads); otherwise `"github_org"`'s one real family's key, `"owner"`; and
+ * failing all of that, `"TODO"`, since nothing here can safely guess at a
+ * brand-new tenant-scoped origin's capture name. */
+function scopeMarkerKey(root, existingFamily, scopeKind, origin) {
+  if (existingFamily !== null) {
+    for (const type of existingFamily.types ?? []) {
+      const scope = type?.adapter?.scope;
+      if (isPlainObject(scope)) {
+        const keys = Object.keys(scope);
+        if (keys.length === 1) return keys[0];
+      }
+    }
+  }
+  if (scopeKind === "tenant_name" && origin.kind === "exact") {
+    try {
+      const catalog = JSON.parse(readFileSync(path.join(root, "protocol", "capture-site", "catalog.json"), "utf8"));
+      const capture = catalog?.shared_origins?.[origin.origin]?.tenant?.capture;
+      if (typeof capture === "string") return capture;
+    } catch {
+      // Falls through to "TODO"; the generator's gap 1/7 checks still
+      // refuse a tenant_name family that isn't on a real shared origin.
+    }
+  }
+  if (scopeKind === "github_org") return "owner";
+  return "TODO";
 }
 
 /** A brand-new type object, every free string a literal `"TODO"`
@@ -123,7 +157,7 @@ function scopeMarkers(scopeKind) {
  * a real rule is written, and one placeholder recorded sample so
  * `samples_shape: true`'s "must not be empty" check does not itself hide
  * the sample fields that still need filling in. */
-function newType(type, originKind, scopeKind) {
+function newType(type, originKind, scopeKind, scopeKey) {
   return {
     type,
     key: defaultKey(type, originKind),
@@ -132,7 +166,7 @@ function newType(type, originKind, scopeKind) {
     description: "TODO",
     record_label: "TODO",
     example_path: null,
-    adapter: { type, match: [], ...scopeMarkers(scopeKind), id: "TODO" },
+    adapter: { type, match: [], ...scopeMarkers(scopeKind, scopeKey), id: "TODO" },
     history: [],
     status: { state: "development", method: null, checked_on: null, checked_by: null },
     docs: `${DOCS_ADAPTERS_DIR}/${type}.md`,
@@ -248,6 +282,12 @@ function main(argv) {
     if (values.exact !== undefined && values.subdomain !== undefined) {
       refuse("pass at most one of --exact or --subdomain");
     }
+    if (values.exact !== undefined && !isCanonicalHttpsOrigin(values.exact)) {
+      refuse(`--exact "${values.exact}" must be a canonical https origin (no path, query or trailing slash)`);
+    }
+    if (values.subdomain !== undefined && !isValidSubdomainSuffix(values.subdomain)) {
+      refuse(`--subdomain "${values.subdomain}" must start with "." and have at least two labels (e.g. ".example.com")`);
+    }
     if (knownTypes(root).has(type)) refuse(`type "${type}" already exists`);
     const docPath = path.join(root, DOCS_ADAPTERS_DIR, `${type}.md`);
     const docRelPath = path.posix.join(DOCS_ADAPTERS_DIR, `${type}.md`);
@@ -282,7 +322,8 @@ function main(argv) {
       scopeKind = isPlainObject(existingFamily.scope) ? existingFamily.scope.kind : undefined;
     }
 
-    const type_ = newType(type, origin.kind, scopeKind);
+    const scopeKey = scopeMarkerKey(root, existingFamily, scopeKind, origin);
+    const type_ = newType(type, origin.kind, scopeKind, scopeKey);
     const familyPath = path.join(root, STARTERS_DIR, `${family}.json`);
     const familyJson = existingFamily === null
       ? newFamily(family, type_, origin, scopeKind)
@@ -308,7 +349,7 @@ function main(argv) {
     // has filled it in.
     console.log("");
     console.log("Also fill in (check 4, extension/tests/starter-registry.test.mjs, not covered by --check above):");
-    console.log("  - vectors: at least one positive and one negative evaluate vector per adapter.match rule");
+    console.log("  - vectors: at least one positive evaluate vector per adapter.match rule, and at least one negative evaluate vector for the type (a sibling type's positive on a shared origin does not count)");
     console.log("  - samples: a sample with a non-null title, if the adapter uses a title template");
 
     console.log("");

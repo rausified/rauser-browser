@@ -96,6 +96,22 @@ test("scaffolds a family file and doc, nothing else", async (t) => {
   assert.deepEqual(gitStatus(root), ["docs/adapters/aha.feature.md", "protocol/starters/aha.json"]);
 });
 
+test("a new type on a scoped family gets the family's own scope marker key (Minor 2)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const result = runScaffold(["github", "github.discussion", "--root", root]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  // Not "adapter.scope must be an object whose values carry the {\"$scope\":
+  // true} marker": the old scaffolder wrote the bare marker directly as
+  // adapter.scope, which resolves at runtime to an array, not a
+  // capture-keyed object (final review, Minor 2). The fix infers "owner"
+  // from GitHub's other types instead of writing the marker itself.
+  assert.doesNotMatch(result.stdout + result.stderr, /adapter\.scope must be an object/);
+  const github = readFamily(root, "github");
+  const discussion = github.types.find((type) => type.type === "github.discussion");
+  assert.deepEqual(discussion.adapter.scope, { owner: { "$scope": true } });
+});
+
 test("acceptance: a filled-in family changes only its file, its doc and generated files (spec task 10)", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
@@ -262,6 +278,24 @@ test("scaffolder misuse: --scope unscoped with --subdomain", async (t) => {
   const result = runScaffold(["newfam2", "newfam2.item", "--subdomain", ".newfam2.test", "--scope", "unscoped", "--root", root]);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /unscoped.*--exact/);
+  assert.deepEqual(gitStatus(root), []);
+});
+
+test("scaffolder misuse: a dotless --subdomain", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const result = runScaffold(["servicenow", "servicenow.incident", "--subdomain", "service-now.com", "--root", root]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--subdomain "service-now\.com" must start with "\." and have at least two labels/);
+  assert.deepEqual(gitStatus(root), []);
+});
+
+test("scaffolder misuse: a non-canonical --exact origin (trailing slash)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const result = runScaffold(["docsgoogle", "docsgoogle.doc", "--exact", "https://docs.google.com/", "--root", root]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--exact "https:\/\/docs\.google\.com\/" must be a canonical https origin/);
   assert.deepEqual(gitStatus(root), []);
 });
 

@@ -236,8 +236,13 @@ test("--check tolerates a CRLF checkout of the generated outputs", async (t) => 
   const root = tmpRoot(t);
   const tsPath = path.join(root, GENERATED_TS);
   const catalogPath = path.join(root, CATALOG_JSON);
+  // protocol/adapter-templates/starter-vectors.json shares readNormalised
+  // with these two, but had no CRLF case of its own until .gitattributes
+  // pinned it to LF alongside them (Minor 4).
+  const starterVectorsPath = path.join(root, STARTER_VECTORS_JSON);
   writeFileSync(tsPath, readFileSync(tsPath, "utf8").replace(/\n/g, "\r\n"));
   writeFileSync(catalogPath, readFileSync(catalogPath, "utf8").replace(/\n/g, "\r\n"));
+  writeFileSync(starterVectorsPath, readFileSync(starterVectorsPath, "utf8").replace(/\n/g, "\r\n"));
   const result = run(["--check", "--root", root]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.stdout.trim(), "");
@@ -337,6 +342,25 @@ test('a scoped family requires a {"$scope": true} marker on every type', async (
     /protocol\/starters\/github\.json: types\[0\]\.adapter needs a \{"\$scope": true\} marker for a scoped family/);
 });
 
+test("a scoped family's adapter.scope must be a capture-keyed table, not the bare marker (Minor 2)", async (t) => {
+  // A bare adapter.scope = {"$scope": true} (the old scaffolder's output
+  // for a new type on a scoped family) carries the marker "somewhere in
+  // the adapter", so the marker-anywhere check alone missed it; at
+  // runtime it resolves to an array, not {"<capture>": [...]} (final
+  // review, Minor 2).
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const github = readFamily(root, "github");
+  github.types[0].adapter.scope = { "$scope": true };
+  writeFamily(root, "github", github);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/github\.json: types\[0\]\.adapter\.scope must be an object whose values carry the \{"\$scope": true\} marker/,
+  );
+});
+
 test('example_path must start with "/"', async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
@@ -372,17 +396,32 @@ test("a sample URL off the family's origin is refused", (t) => {
   );
 });
 
-test("samples must be empty when samples_shape is false", (t) => {
+test("samples_shape false may still carry a titled sample, but renderStarterShapes leaves it out", (t) => {
+  // samples_shape controls only whether renderStarterShapes carries a type's
+  // samples into starter-shapes.json, not whether the type may have samples
+  // at all. A type the structural drafter cannot learn (a query-routed
+  // ServiceNow-style incident form, reproduced here) still needs a titled
+  // sample for coverageProblems' title check (Task 5 re-review, Important 2).
   const root = tmpRoot(t);
   const github = readFamily(root, "github");
-  github.types[2].samples.push({ url: "https://github.com/acme/widget", title: null, shape: "/acme/widget", note: "x" });
+  github.types[2].samples.push({
+    url: "https://github.com/acme/widget",
+    title: "acme/widget - GitHub",
+    shape: "/acme/widget",
+    note: "x",
+  });
   writeFamily(root, "github", github);
   const result = run(["--check", "--root", root]);
-  assert.equal(result.status, 1);
-  assert.match(
-    result.stdout + result.stderr,
-    /protocol\/starters\/github\.json: types\[2\]\.samples must be empty when samples_shape is false/,
-  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const families = loadFamilies(root);
+  const github2 = families.find((family) => family.family === "github");
+  assert.equal(github2.types[2].samples_shape, false);
+  assert.equal(github2.types[2].samples.length, 1);
+
+  const starterShapes = JSON.parse(readFileSync(path.join(root, STARTER_SHAPES_JSON), "utf8"));
+  assert.ok(!starterShapes.types.includes("github.repo"));
+  assert.ok(!starterShapes.accept.some((row) => row.url === "https://github.com/acme/widget"));
 });
 
 test("samples must not be empty when samples_shape is true", (t) => {
@@ -546,6 +585,40 @@ test("origin.exclude must be a list of lowercase DNS labels", (t) => {
   );
 });
 
+test("origin.suffix without a leading dot is refused (Minor 1)", (t) => {
+  // Without this check, a dotless suffix such as "service-now.com" claims
+  // "evilservice-now.com" and the bare "service-now.com" through
+  // familyClaims's suffix-match, and refuses "acme.service-now.com", the
+  // one host a ServiceNow-style family actually wants (final review,
+  // Minor 1).
+  const root = tmpRoot(t);
+  const atlassian = readFamily(root, "atlassian");
+  atlassian.origin.suffix = "atlassian.net";
+  writeFamily(root, "atlassian", atlassian);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/atlassian\.json: origin\.suffix must start with "\." and have at least two labels/,
+  );
+});
+
+test("origin.origin must be a canonical https origin (Minor 1)", (t) => {
+  // A trailing slash (or any path/query/credentials) otherwise surfaces
+  // only indirectly, as "sample_origin is not on this family's origin",
+  // which points at the wrong field (final review, Minor 1).
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.origin.origin = "https://miro.com/";
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/miro\.json: origin\.origin must be a canonical https origin/,
+  );
+});
+
 test('origin unknown field "labels" on an exact origin', (t) => {
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
@@ -671,6 +744,38 @@ test("a vector URL off the family's origin is refused", (t) => {
     result.stdout + result.stderr,
     /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.url is not on this family's origin/,
   );
+});
+
+test("a vector missing id, kind, impls or expect is reported, field by field (deferred T2)", (t) => {
+  // PR D authors write vectors by hand; a missing key otherwise serialises
+  // with the key simply absent (undefined drops from JSON.stringify) and
+  // the failure only surfaces inside the engine harness, far from the
+  // family file (final review, deferred T2).
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.types[0].vectors.push({ why: "missing everything else", url: "https://miro.com/app/board/x=/" });
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.id is required/);
+  assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.kind is required/);
+  assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.impls is required/);
+  assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.expect is required/);
+});
+
+test("a vector's kind and impls must be from the engines' own known values (deferred T2)", (t) => {
+  const root = tmpRoot(t);
+  const miro = readFamily(root, "miro");
+  miro.types[0].vectors.push({
+    id: "eval.miro.extra", kind: "bogus-kind", why: "x", impls: ["php"], expect: { match: true },
+  });
+  writeFamily(root, "miro", miro);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.kind must be one of validate, evaluate/);
+  assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.impls must be a non-empty array of rust, ts/);
 });
 
 test("a vector id duplicating a legacy vectors.json case is caught", (t) => {
@@ -925,6 +1030,34 @@ test("a shared origin always needs account values (check 7)", (t) => {
   );
 });
 
+test("a subdomain family whose suffix covers a shared origin still gets check 7 (Minor 7)", (t) => {
+  // .google.com claims docs.google.com (a real shared_origins entry) just
+  // as readily as it claims mail.google.com. Before Minor 7's fix, check 7
+  // only ever looked at shared_origins[exactOrigin], which is always
+  // undefined for a subdomain family, so this family's scope: null
+  // silently escaped the "a shared origin always needs account values"
+  // rule entirely.
+  const root = tmpRoot(t);
+  const allgoogle = {
+    family: "allgoogle",
+    display_name: "All Google",
+    review_prompt: null,
+    origin: { kind: "subdomain", suffix: ".google.com" },
+    scope: null,
+    sample_origin: "https://mail.google.com",
+    sample_scope: [],
+    overlaps: [],
+    types: [],
+  };
+  writeFamily(root, "allgoogle", allgoogle);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/starters\/allgoogle\.json: origin https:\/\/docs\.google\.com is a shared origin, so scope must not be null/,
+  );
+});
+
 // --- Task 5: registry cross-checks (spec §4 check 2 reverse, check 3) -----
 
 test("a stray docs/adapters/*.md file names no family type (check 2 reverse)", (t) => {
@@ -1051,17 +1184,27 @@ test("validation, policy and registry problems are all reported in one pass", (t
 
 // --- Task 5: fixtures do not collide with real families (gap 5) -----------
 
+/** Whether `value` is shaped enough like a `StarterFamilyData` to feed to
+ * `checkPolicy` (a `family` name and an `origin` object) — not every
+ * `starter-fixtures.mjs` export necessarily is one, but every one checked
+ * for collisions here must be, or `originsCollide` would crash on it. */
+function looksLikeFamily(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && typeof value.family === "string"
+    && typeof value.origin === "object" && value.origin !== null;
+}
+
 test("fixtures do not collide with real families (gap 5)", async () => {
-  const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY, EXAMPLE_STRICT_FAMILY: strictFixture } =
-    await import("../../extension/tests/starter-fixtures.mjs");
+  // Iterates every starter-fixtures.mjs export, rather than naming four by
+  // hand, so a fixture added later is covered automatically instead of
+  // silently skipping this check (final review, Minor 5).
+  const fixtures = await import("../../extension/tests/starter-fixtures.mjs");
   const catalog = JSON.parse(readFileSync(path.join(REPO, CATALOG_JSON), "utf8"));
   const realEntries = loadFamilyEntries(REPO);
-  const fixtureEntries = [
-    { file: "<fixture EXAMPLE_TENANT_FAMILY>", family: EXAMPLE_TENANT_FAMILY },
-    { file: "<fixture EXAMPLE_UNSCOPED_FAMILY>", family: EXAMPLE_UNSCOPED_FAMILY },
-    { file: "<fixture EXAMPLE_UNSCOPED_PAIR_FAMILY>", family: EXAMPLE_UNSCOPED_PAIR_FAMILY },
-    { file: "<fixture EXAMPLE_STRICT_FAMILY>", family: strictFixture },
-  ];
+  const fixtureEntries = Object.entries(fixtures)
+    .filter(([, value]) => looksLikeFamily(value))
+    .map(([name, family]) => ({ file: `<fixture ${name}>`, family }));
+  assert.ok(fixtureEntries.length >= 4, `expected at least today's 4 family fixtures, got ${fixtureEntries.length}`);
   assert.deepEqual(checkPolicy([...realEntries, ...fixtureEntries], catalog), []);
 });
 
