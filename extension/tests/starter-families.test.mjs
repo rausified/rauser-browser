@@ -207,9 +207,15 @@ test("the test seam swaps and restores the family list", () => {
  * `starterOffers` to build a matching adapter: today, only `github_org`
  * families have titled samples, and GitHub's path-captured `owner` is
  * lower-cased (`{owner:name|lower}`), so the org list must hold the
- * lower-cased first path segment. */
+ * lower-cased first path segment. A `tenant_name` family has no path to
+ * derive a value from the same way; it supplies its own fixed tenant list
+ * through `sample_scope` (the same field `synthesizeFixture` uses to build
+ * its `starter:<family>` fixture), so a valid `tenant_name` family with a
+ * titled sample can resolve its adapter here too (Codex P2 round). */
 function scopeOrganizationsFor(family, url) {
-  if (family.scope?.kind !== "github_org") return [];
+  const kind = family.scope?.kind;
+  if (kind === "tenant_name") return family.sample_scope;
+  if (kind !== "github_org") return [];
   const owner = new URL(url).pathname.split("/").filter(Boolean)[0] ?? "";
   return [owner.toLowerCase()];
 }
@@ -224,8 +230,12 @@ test("every titled sample's recorded title agrees with its own URL's captures (a
   // title to a template entry. A template whose same-named capture (for
   // example `{key}`, `{owner}`, `{number}`) disagrees with the URL's own
   // capture does not match at all (§9.1), so `title_entry !== null` is
-  // exactly the check: a recorded sample whose title names a different key,
-  // owner/repo or number than its own URL would fail this.
+  // exactly the check for a type whose adapter declares a `title`
+  // template. A type with no `title` template (today: `sharepoint.doc`,
+  // `github.repo`) can still legitimately carry a non-null raw `title` on
+  // a sample — recorded for documentation, not matched against anything —
+  // so `title_entry` stays `null` there and that is not a failure (Codex
+  // P2 round).
   const families = loadFamilies(REPO);
   let titledSamples = 0;
   for (const family of families) {
@@ -242,15 +252,94 @@ test("every titled sample's recorded title agrees with its own URL's captures (a
         assert.ok(compiled.ok, `${type.type}: ${sample.note}'s adapter compiles: ${JSON.stringify(compiled.error)}`);
         const result = evaluate(compiled.doc, sample.url, sample.title);
         assert.equal(result.match, true, `${sample.note}: ${sample.url} must match its own type's adapter`);
-        assert.notEqual(
-          result.title_entry,
-          null,
-          `${sample.note}: title "${sample.title}" must match a title template entry for ${sample.url}`,
-        );
+        if ("title" in type.adapter) {
+          assert.notEqual(
+            result.title_entry,
+            null,
+            `${sample.note}: title "${sample.title}" must match a title template entry for ${sample.url}`,
+          );
+        }
       }
     }
   }
   assert.ok(titledSamples >= 5, `expected at least 5 titled samples, saw ${titledSamples}`);
+});
+
+test("a titled sample on a type with no title template is not required to match a title entry (Codex P2 round)", (t) => {
+  // sharepoint.doc and github.repo have no title template today, and the
+  // README allows a non-null raw title on such a type regardless (it is
+  // simply not used for matching). A synthetic stand-in proves the title
+  // check above does not wrongly require title_entry !== null there.
+  const NO_TEMPLATE_FAMILY = {
+    family: "notemplate",
+    display_name: "No Template",
+    review_prompt: null,
+    origin: { kind: "exact", origin: "https://notemplate.test" },
+    scope: null,
+    sample_origin: "https://notemplate.test",
+    sample_scope: [],
+    overlaps: [],
+    types: [{
+      type: "notemplate.doc",
+      key: "notemplate.doc",
+      label: "No-template docs",
+      label_variants: [],
+      description: "A type with no title template.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "notemplate.doc",
+        match: [{ path: "/doc/{id:int}" }],
+        id: "notemplate.doc:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/notemplate.doc.md",
+      samples: [{ note: "No-template doc", url: "https://notemplate.test/doc/1", title: "Plan.docx", shape: "/doc/{id}" }],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+  setStarterFamiliesForTest([NO_TEMPLATE_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+
+  const type = NO_TEMPLATE_FAMILY.types[0];
+  const sample = type.samples[0];
+  assert.ok(!("title" in type.adapter));
+  const offer = starterOffers("https://notemplate.test", []).find((o) => o.artifact_type === type.type);
+  const compiled = compileDocument({ format: 1, artifacts: [offer.adapter] });
+  assert.ok(compiled.ok);
+  const result = evaluate(compiled.doc, sample.url, sample.title);
+  assert.equal(result.match, true);
+  assert.equal(result.title_entry, null, "a template-less adapter never sets title_entry");
+});
+
+test("a tenant_name family's titled sample resolves its scope from sample_scope (Codex P2 round)", (t) => {
+  // Before this fix, scopeOrganizationsFor returned [] for a tenant_name
+  // family, so starterOffers left its adapter unresolved (adapter: null)
+  // and a titled sample on such a family could never be checked at all.
+  const TENANT_TITLED_FAMILY = {
+    ...EXAMPLE_TENANT_FAMILY,
+    types: [{
+      ...EXAMPLE_TENANT_FAMILY.types[0],
+      adapter: { ...EXAMPLE_TENANT_FAMILY.types[0].adapter, title: "{title} - Item {id:int}" },
+      samples: [{ note: "Example item", url: "https://example.test/acme/item/42", title: "Ship login fix - Item 42", shape: "/{workspace}/item/{id}" }],
+    }],
+  };
+  setStarterFamiliesForTest([TENANT_TITLED_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+
+  const type = TENANT_TITLED_FAMILY.types[0];
+  const sample = type.samples[0];
+  const organizations = scopeOrganizationsFor(TENANT_TITLED_FAMILY, sample.url);
+  assert.deepEqual(organizations, TENANT_TITLED_FAMILY.sample_scope);
+  const offer = starterOffers("https://example.test", organizations).find((o) => o.artifact_type === type.type);
+  assert.ok(offer.adapter, "expected a resolved adapter, not null, once scope is supplied");
+  const compiled = compileDocument({ format: 1, artifacts: [offer.adapter] });
+  assert.ok(compiled.ok, JSON.stringify(compiled.ok ? null : compiled.error));
+  const result = evaluate(compiled.doc, sample.url, sample.title);
+  assert.equal(result.match, true);
+  assert.notEqual(result.title_entry, null);
 });
 
 test("starter-vectors fixtures are the runtime offers", () => {

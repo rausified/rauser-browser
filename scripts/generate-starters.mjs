@@ -1286,8 +1286,18 @@ function docTodoSections(docText) {
 /** The registry checks that read files outside `protocol/starters/` (spec
  * §4 check 2's reverse direction, and check 3), over `entries`
  * (`loadFamilyEntries` shape) and `<root>`. Each problem reads `<file>:
- * <message>`, `<file>` the doc or shapes file the problem is about. */
-export function checkRegistry(root, entries) {
+ * <message>`, `<file>` the doc or shapes file the problem is about.
+ *
+ * `starterShapesText`, when given, is validated instead of the on-disk
+ * `starter-shapes.json` for the "row names no family type" check below.
+ * Write mode passes its freshly rendered content: the file on disk can
+ * still carry a stale row for a type just removed (with its doc) from its
+ * family file, and validating that stale content would refuse to run the
+ * very regeneration that clears it (Codex P2 round). `--check` always
+ * passes nothing, so it keeps validating the committed file (its own
+ * byte-exact out-of-date comparison, done separately in `main`, already
+ * flags a hand edit; this check additionally names the row). */
+export function checkRegistry(root, entries, starterShapesText) {
   const problems = [];
   const knownTypes = new Set();
   const claimedDocs = new Set();
@@ -1348,10 +1358,14 @@ export function checkRegistry(root, entries) {
   // should still be able to regenerate it rather than crash (Task 5
   // review, Important 1).
   let starterShapes;
-  try {
-    starterShapes = JSON.parse(readFileSync(path.join(root, STARTER_SHAPES), "utf8"));
-  } catch {
-    starterShapes = { accept: [] };
+  if (starterShapesText !== undefined) {
+    starterShapes = JSON.parse(starterShapesText);
+  } else {
+    try {
+      starterShapes = JSON.parse(readFileSync(path.join(root, STARTER_SHAPES), "utf8"));
+    } catch {
+      starterShapes = { accept: [] };
+    }
   }
   for (const row of starterShapes.accept ?? []) {
     if (!isPlainObject(row) || typeof row.note !== "string") continue;
@@ -1547,11 +1561,13 @@ function main(argv) {
   const current = catalog.starter_types;
 
   const policyProblems = checkPolicy(entries, catalog);
-  const registryProblems = checkRegistry(root, entries);
-  const baseProblems = [...familyProblems, ...policyProblems, ...registryProblems];
 
   if (familyProblems.length) {
-    for (const problem of baseProblems) console.log(problem);
+    // Generation itself is unsafe here (a family validation problem stops
+    // it, same as always), so there is no freshly rendered content to
+    // offer checkRegistry yet; it falls back to the on-disk
+    // starter-shapes.json, same as before this task's write-mode fix.
+    for (const problem of [...familyProblems, ...policyProblems, ...checkRegistry(root, entries)]) console.log(problem);
     return 1;
   }
 
@@ -1572,6 +1588,14 @@ function main(argv) {
 
   const adaptersIndex = renderAdaptersIndex(families, catalogOrder);
   const adaptersIndexPath = path.join(root, DOCS_ADAPTERS_README);
+
+  // Codex P2 round: --check keeps validating the on-disk starter-shapes.json
+  // (so a hand-edited stale row is still caught); write mode validates the
+  // content it is about to write instead, so a type just removed (with its
+  // doc) from its family file does not leave write mode permanently
+  // refusing to clear the stale row that removal left behind.
+  const registryProblems = checkRegistry(root, entries, values.check ? undefined : starterShapes);
+  const baseProblems = [...policyProblems, ...registryProblems];
 
   // Windows can still check this out as CRLF (.gitattributes `text eol=lf`
   // keeps the committed blob LF, but a worktree written by a test fixture,

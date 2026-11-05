@@ -90,10 +90,14 @@ function filledDocText(type, bodies) {
 test("scaffolds a family file and doc, nothing else", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
-  const result = runScaffold(["aha", "aha.feature", "--subdomain", ".aha.io", "--root", root]);
+  // "acmetrack", not a real tool's name (Codex P2 round): the shipped
+  // registry can gain a real family of almost any plausible name (PR D),
+  // and this test must not start colliding with it and refusing with
+  // "already exists" for an unrelated reason.
+  const result = runScaffold(["acmetrack", "acmetrack.ticket", "--subdomain", ".acmetrack.io", "--root", root]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /types\[0\]\.adapter\.match must be a non-empty array/);
-  assert.deepEqual(gitStatus(root), ["docs/adapters/aha.feature.md", "protocol/starters/aha.json"]);
+  assert.deepEqual(gitStatus(root), ["docs/adapters/acmetrack.ticket.md", "protocol/starters/acmetrack.json"]);
 });
 
 test("a new type on a scoped family gets the family's own scope marker key (Minor 2)", async (t) => {
@@ -116,100 +120,109 @@ test("acceptance: a filled-in family changes only its file, its doc and generate
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const baselineLock = readLock(root);
-  assert.equal(Object.keys(baselineLock).length, 8, "today's lock has 8 entries; this test pins the append as a pure extension of them");
+  // Derived from the copied registry, not a literal count (Codex P2
+  // round): the shipped ids.lock.json gains entries over time (PR D and
+  // later), so pinning "8" here would break on every such PR without this
+  // test itself being wrong.
+  const baselineCount = Object.keys(baselineLock).length;
+  assert.ok(baselineCount > 0, "expected at least one existing lock entry to extend");
 
-  const scaffold = runScaffold(["aha", "aha.feature", "--subdomain", ".aha.io", "--root", root]);
+  // "acmetrack"/"acmetrack.ticket", not a real tool's name (Codex P2
+  // round): the shipped registry can gain a real family of almost any
+  // plausible name (PR D), and this test must not start colliding with it
+  // and refusing with "already exists" for an unrelated reason.
+  const scaffold = runScaffold(["acmetrack", "acmetrack.ticket", "--subdomain", ".acmetrack.io", "--root", root]);
   assert.equal(scaffold.status, 0, scaffold.stdout + scaffold.stderr);
 
   // Before any doc section is filled in, --check names every one of them
   // (Task 6 review, Important 2): the "one pass" list must cover what the
   // scaffolder itself just wrote as a placeholder, not only what a human
   // edits later.
-  const docPath = path.join(root, "docs", "adapters", "aha.feature.md");
+  const docPath = path.join(root, "docs", "adapters", "acmetrack.ticket.md");
   const beforeDocFill = runGenerator(["--check", "--root", root]);
   assert.equal(beforeDocFill.status, 1);
   for (const heading of DOC_HEADINGS) {
-    assert.match(beforeDocFill.stdout, new RegExp(`docs/adapters/aha\\.feature\\.md: section "${heading}" is still a placeholder`));
+    assert.match(beforeDocFill.stdout, new RegExp(`docs/adapters/acmetrack\\.ticket\\.md: section "${heading}" is still a placeholder`));
   }
 
   // The family is scope: null throughout (gap 1: a subdomain family can
   // never be unscoped, whatever the spec's "Aha! (subdomain, unscoped)"
   // example says), so review_prompt stays null and sample_scope stays [].
-  const aha = readFamily(root, "aha");
-  assert.equal(aha.scope, null);
-  aha.display_name = "Aha!";
-  aha.sample_origin = "https://acme.aha.io";
-  const type = aha.types[0];
-  type.label = "Aha! features";
-  type.description = "Aha! feature pages become one artifact per feature key.";
-  type.record_label = "features";
+  const acmetrack = readFamily(root, "acmetrack");
+  assert.equal(acmetrack.scope, null);
+  acmetrack.display_name = "AcmeTrack";
+  acmetrack.sample_origin = "https://acme.acmetrack.io";
+  const type = acmetrack.types[0];
+  type.label = "AcmeTrack tickets";
+  type.description = "AcmeTrack ticket pages become one artifact per ticket key.";
+  type.record_label = "tickets";
   type.adapter = {
-    type: "aha.feature",
-    match: [{ path: "/features/{key:jira_key}" }],
-    id: "aha.feature:{host}/{key}",
-    title: "{title} | Aha!",
+    type: "acmetrack.ticket",
+    match: [{ path: "/tickets/{key:jira_key}" }],
+    id: "acmetrack.ticket:{host}/{key}",
+    title: "{title} | AcmeTrack",
   };
   type.samples = [{
-    url: "https://acme.aha.io/features/ENG-42",
-    title: "Ticket name | Aha!",
-    shape: "/features/{key}",
-    note: "Aha! feature",
+    url: "https://acme.acmetrack.io/tickets/ENG-42",
+    title: "Ticket name | AcmeTrack",
+    shape: "/tickets/{key}",
+    note: "AcmeTrack ticket",
   }];
   type.vectors = [
     {
-      id: "eval.aha.feature.positive",
+      id: "eval.acmetrack.ticket.positive",
       kind: "evaluate",
-      why: "the /features/<key> rule matches a feature page",
+      why: "the /tickets/<key> rule matches a ticket page",
       impls: ["rust", "ts"],
-      url: "https://acme.aha.io/features/ENG-42",
+      url: "https://acme.acmetrack.io/tickets/ENG-42",
       expect: {
-        match: true, adapter: 0, rule: 0, type: "aha.feature",
-        captures: { key: "ENG-42" }, artifact_id: "aha.feature:acme.aha.io/ENG-42", mode: null,
+        match: true, adapter: 0, rule: 0, type: "acmetrack.ticket",
+        captures: { key: "ENG-42" }, artifact_id: "acmetrack.ticket:acme.acmetrack.io/ENG-42", mode: null,
       },
     },
     {
-      id: "eval.aha.feature.negative",
+      id: "eval.acmetrack.ticket.negative",
       kind: "evaluate",
-      why: "the ideas route is not a feature page",
+      why: "the projects route is not a ticket page",
       impls: ["rust", "ts"],
-      url: "https://acme.aha.io/ideas/ENG-42",
+      url: "https://acme.acmetrack.io/projects/ENG-42",
       expect: { match: false, reason: "no_rule" },
     },
   ];
-  writeFamily(root, "aha", aha);
+  writeFamily(root, "acmetrack", acmetrack);
 
   // Fill in the doc's six sections too, not only its already-valid
   // Status: line (Task 6 review, Important 2).
-  writeFileSync(docPath, filledDocText("aha.feature", [
-    "1. **Feature page**, `/features/<key>`. The key is the ticket's dashed reference.",
-    "Feature tab titles read <ticket name> | Aha!.",
-    "Synthetic equivalent of the recorded shape, on acme.aha.io: /features/ENG-42, tab title \"Ticket name | Aha!\", records ENG-42.",
-    "The Aha! root, search and settings routes are not feature pages.",
+  writeFileSync(docPath, filledDocText("acmetrack.ticket", [
+    "1. **Ticket page**, `/tickets/<key>`. The key is the ticket's dashed reference.",
+    "Ticket tab titles read <ticket name> | AcmeTrack.",
+    "Synthetic equivalent of the recorded shape, on acme.acmetrack.io: /tickets/ENG-42, tab title \"Ticket name | AcmeTrack\", records ENG-42.",
+    "The AcmeTrack root, search and settings routes are not ticket pages.",
     "Multi-segment dashed keys (such as PRJ-E-12) are not yet supported.",
-    "Before this page's status line changes to release-certified, check on macOS with real Chrome and a real Aha! account.",
+    "Before this page's status line changes to release-certified, check on macOS with real Chrome and a real AcmeTrack account.",
   ]));
 
   const result = runGenerator(["--root", root]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /appended lock entry aha\.feature → aha\.feature:\{host\}\/\{key\}/);
+  assert.match(result.stdout, /appended lock entry acmetrack\.ticket → acmetrack\.ticket:\{host\}\/\{key\}/);
   assert.doesNotMatch(result.stdout, /is still a placeholder/);
 
   assert.deepEqual(gitStatus(root), [
     "docs/adapters/README.md",
-    "docs/adapters/aha.feature.md",
+    "docs/adapters/acmetrack.ticket.md",
     "extension/starter-families.generated.ts",
     "protocol/adapter-templates/starter-vectors.json",
     "protocol/capture-site/catalog.json",
     "protocol/capture-site/starter-shapes.json",
-    "protocol/starters/aha.json",
+    "protocol/starters/acmetrack.json",
     "protocol/starters/ids.lock.json",
   ]);
 
   // Open decision 1 / risk 3: the lock append is a pure extension of the
-  // 8 entries that existed before this run, not a rewrite of them.
+  // entries that existed before this run, not a rewrite of them.
   const finalLock = readLock(root);
-  assert.deepEqual(Object.entries(finalLock).slice(0, 8), Object.entries(baselineLock));
-  assert.equal(finalLock["aha.feature"], "aha.feature:{host}/{key}");
+  assert.deepEqual(Object.entries(finalLock).slice(0, baselineCount), Object.entries(baselineLock));
+  assert.equal(finalLock["acmetrack.ticket"], "acmetrack.ticket:{host}/{key}");
 
   let engine;
   try {

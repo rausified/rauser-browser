@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { coverageProblems, loadFamilies } from "../../scripts/generate-starters.mjs";
+import { ipcDenied } from "../../scripts/tests/ipc-guard.mjs";
 
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
 
@@ -36,7 +37,8 @@ test("every starter rule has positive and negative vectors and a title sample", 
   assert.deepEqual(problems, []);
 });
 
-test("the generator check is clean", () => {
+test("the generator check is clean", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const result = spawnSync(process.execPath, [SCRIPT, "--check"], { cwd: REPO, encoding: "utf8" });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.stdout.trim(), "");

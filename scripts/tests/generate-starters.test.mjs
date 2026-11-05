@@ -1278,6 +1278,74 @@ test("a missing starter-shapes.json regenerates in write mode instead of crashin
   assert.equal(recheck.status, 0, recheck.stdout + recheck.stderr);
 });
 
+test("write mode clears a stale starter-shapes.json row left by a removed type (Codex P2 round)", async (t) => {
+  // Before this fix, checkRegistry validated the on-disk starter-shapes.json
+  // even in write mode: removing a type (and its doc) left a stale row
+  // there that write mode refused to run past, so it could never write the
+  // very regeneration that would have cleared the row — a deadlock.
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const docPath = path.join(root, "docs", "adapters", "miro.extra.md");
+
+  // Add a second miro type with a sample, so it gets a starter-shapes.json row.
+  const miro = readFamily(root, "miro");
+  miro.review_prompt = "Choose what to remember on this Miro board.";
+  miro.overlaps = [{ a: "miro.board", b: "miro.extra", expect: "disjoint" }];
+  miro.types.push({
+    type: "miro.extra", key: "miro.extra", label: "Extra", label_variants: [],
+    description: "An extra Miro type, test-only.", record_label: null, example_path: null,
+    adapter: { type: "miro.extra", match: [{ path: "/extra/{id:token(8)}" }], id: "miro.extra:{host}/{id}" },
+    history: [], status: { state: "development", method: null, checked_on: null, checked_by: null },
+    docs: "docs/adapters/miro.extra.md",
+    samples: [{ note: "Miro extra", url: "https://miro.com/extra/abc12345", title: null, shape: "/extra/{id}" }],
+    samples_shape: true,
+    vectors: [],
+  });
+  writeFamily(root, "miro", miro);
+  writeFileSync(docPath, "# miro.extra starter draft\n\nStatus: development draft.\n");
+
+  const added = run(["--root", root]);
+  assert.equal(added.status, 0, added.stdout + added.stderr);
+  const starterShapesPath = path.join(root, STARTER_SHAPES_JSON);
+  const afterAdd = JSON.parse(readFileSync(starterShapesPath, "utf8"));
+  assert.ok(afterAdd.accept.some((row) => row.url.includes("/extra/")), "expected the new row after adding the type");
+
+  // Remove the type (and its doc), as an unmerged type would be dropped.
+  const miro2 = readFamily(root, "miro");
+  miro2.review_prompt = null;
+  miro2.overlaps = [];
+  miro2.types = miro2.types.filter((type) => type.type !== "miro.extra");
+  writeFamily(root, "miro", miro2);
+  rmSync(docPath);
+
+  const removed = run(["--root", root]);
+  assert.equal(removed.status, 0, removed.stdout + removed.stderr);
+  const afterRemove = JSON.parse(readFileSync(starterShapesPath, "utf8"));
+  assert.ok(!afterRemove.accept.some((row) => row.url.includes("/extra/")), "expected the stale row to be gone");
+
+  // --check still passes against the now-clean, regenerated file.
+  const checked = run(["--check", "--root", root]);
+  assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+});
+
+test("--check still catches a hand-edited stale starter-shapes.json row (Codex P2 round)", async (t) => {
+  // The write-mode fix above must not weaken --check's own ability to
+  // catch a real hand edit to the committed generated file.
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const starterShapesPath = path.join(root, STARTER_SHAPES_JSON);
+  const starterShapes = JSON.parse(readFileSync(starterShapesPath, "utf8"));
+  starterShapes.types.push("bogus.type");
+  starterShapes.accept.push({ note: "Bogus row (docs/adapters/bogus.type.md)", url: "https://example.test/x", shape: "/x" });
+  writeFileSync(starterShapesPath, `${JSON.stringify(starterShapes, null, 2)}\n`);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /protocol\/capture-site\/starter-shapes\.json: row "Bogus row \(docs\/adapters\/bogus\.type\.md\)" names no family type/,
+  );
+});
+
 test("an unparsable starter-shapes.json is treated as no rows, not a crash (Important 1)", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
