@@ -1669,3 +1669,44 @@ start-request correlation. Older services cannot read those new task records
 on rollback; keep the existing no-active-task rollback rule. Automated tests
 use fake Chrome APIs and harnesses. Real desktop notification presentation and
 Chrome's click gesture still need the separate acceptance checks in TESTING.md.
+
+
+## 2026-11-05 — Continue through all captured work before sharing
+
+Recent's **Choose work to share** now offers **Load more work**, so a busy
+single day no longer hides everything beyond the first response. Each click
+adds another bounded page to the choices already shown. Earlier checkboxes
+stay in place, newly loaded work stays unchecked, and Copy still copies
+exactly the selected preview. Oversized entries keep a separate visible
+omission notice rather than being confused with work that can be loaded.
+
+Every continuation is bound to the complete ordered result, date range,
+home-folder identity, adapter scope and capture-gap notices. If capture or
+recorded evidence changes that sharing result between pages, the host refuses
+continuation and the panel offers Reload choices with Copy disabled. A routine refresh
+keeps all loaded pages when that complete snapshot still matches. Otherwise
+it drops later pages, retains only checked identities in the refreshed first
+page, and explains the reset. Period, home-folder and host-lifecycle changes
+still clear the sharing scope; a late response cannot put old work back.
+
+The final Load more button hands keyboard focus to the first new checkbox
+when it disappears. The existing unpaged protocol response stays available
+for older extensions, while a paged request to an older host gives rebuild
+guidance. No content or cache migration is needed. The separate focus-session
+catalog and entry caps remain in place. Offline tests cover bounded busy-day
+traversal, escaped text, rebuilds, changed history, omitted rows, stale replies,
+and exact checked Copy; the added browser keyboard journey still needs the
+external gate when Chromium is blocked by the sandbox.
+
+## 2026-11-05 — Repair keyboard focus after loading the last work page
+
+The driver's real-browser gate caught a problem in the selected-work
+pagination delivery: when the last Load more button disappeared, keyboard
+focus did not reach the first new checkbox. Brauser tried to focus that
+checkbox before enabling its containing fieldset, and Chrome ignored the
+request. This repair recovers the quarantined delivery and enables the choices
+before handing over focus, so keyboard users can continue selecting work.
+The existing offline append-and-Copy test now reproduces Chrome's refusal to
+focus a control inside a disabled fieldset; it failed before the fix and passes
+afterward. The real-browser assertion remains unchanged and must still pass
+in the driver's external gate. No new feature scope was added this cycle.

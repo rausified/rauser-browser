@@ -529,7 +529,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&
         typeof value.text === "string" && isUnsignedInteger(value.artifact_count);
     case "worklog_choices_result":
-      return typeof value.start_date === "string" && typeof value.end_date === "string" &&
+      return (!Object.hasOwn(value, "page") || isWorklogChoicesPage(value.page)) &&
+        typeof value.start_date === "string" && typeof value.end_date === "string" &&
         Array.isArray(value.choices) && value.choices.length <= 200 && value.choices.every(isWorklogChoice) &&
         typeof value.truncated === "boolean" && typeof value.gaps_truncated === "boolean" &&
         Array.isArray(value.gaps) && value.gaps.length <= 32 && value.gaps.every(isOverflowMarker);
@@ -609,6 +610,16 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     default:
       return false;
   }
+}
+
+function isWorklogChoicesPage(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const page = value as Record<string, unknown>;
+  const offset = (value: unknown): boolean => isUnsignedInteger(value) && (value as number) <= 0xffffffff;
+  return hasExactKeys(page, ["snapshot", "offset", "next_offset", "omitted"]) &&
+    typeof page.snapshot === "string" && /^[a-f0-9]{64}$/.test(page.snapshot) && offset(page.offset) &&
+    (page.next_offset === null || offset(page.next_offset) && (page.next_offset as number) > 0) &&
+    typeof page.omitted === "boolean";
 }
 
 function isWorklogChoice(value: unknown): boolean {
