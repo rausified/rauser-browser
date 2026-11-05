@@ -386,7 +386,12 @@ function validateSamples(problems, file, type, where, origin) {
     if ("url" in sample) {
       if (typeof sample.url !== "string") {
         fail(problems, file, `${at(sampleWhere, "url")} must be a string`);
-      } else {
+      } else if (sample.url !== "TODO") {
+        // A literal "TODO" placeholder (npm run new:starter) already gets
+        // its own "is still a placeholder" problem (checkPlaceholders);
+        // this origin check would otherwise also fail it, for the
+        // unhelpful reason that "TODO" parses as no URL at all (Task 6
+        // review, Minor 2).
         const sampleOrigin = originOf(sample.url);
         if (sampleOrigin === null || !familyClaims(origin, sampleOrigin)) {
           fail(problems, file, `${at(sampleWhere, "url")} is not on this family's origin`);
@@ -438,7 +443,7 @@ function validateVectors(problems, file, type, where, origin) {
     if ("url" in vector) {
       if (typeof vector.url !== "string") {
         fail(problems, file, `${at(vectorWhere, "url")} must be a string`);
-      } else {
+      } else if (vector.url !== "TODO") {
         const vectorOrigin = originOf(vector.url);
         if (vectorOrigin === null || !familyClaims(origin, vectorOrigin)) {
           fail(problems, file, `${at(vectorWhere, "url")} is not on this family's origin`);
@@ -504,7 +509,7 @@ function validateSampleScope(problems, file, family) {
   if ("sample_origin" in family) {
     if (typeof family.sample_origin !== "string") {
       fail(problems, file, "sample_origin must be a string");
-    } else if (!familyClaims(family.origin, family.sample_origin)) {
+    } else if (family.sample_origin !== "TODO" && !familyClaims(family.origin, family.sample_origin)) {
       fail(problems, file, "sample_origin is not on this family's origin");
     }
   }
@@ -1140,6 +1145,35 @@ function statusOpening(status) {
   return `Status: certified ${status.checked_on} from real browsing history.`;
 }
 
+/** The `## <heading>` section titles of `docText` whose body (everything up
+ * to the next `## ` heading or the end of the file, trimmed) is exactly
+ * `"TODO"` — `npm run new:starter`'s placeholder for all six headings spec
+ * §4 names (Task 6 review, Important 2: the "one pass" fill-in list must
+ * also name an unfilled doc section, not just the `Status:` line check 3
+ * already covers). A real doc page that happens to use the word "TODO" as
+ * part of a longer sentence is unaffected: only a section whose entire body
+ * is that one word, alone, counts. */
+function docTodoSections(docText) {
+  const sections = [];
+  let heading = null;
+  let body = [];
+  const flush = () => {
+    if (heading !== null && body.join("\n").trim() === "TODO") sections.push(heading);
+  };
+  for (const line of docText.split(/\r?\n/)) {
+    const match = /^##\s+(.+?)\s*$/.exec(line);
+    if (match) {
+      flush();
+      heading = match[1];
+      body = [];
+    } else if (heading !== null) {
+      body.push(line);
+    }
+  }
+  flush();
+  return sections;
+}
+
 /** The registry checks that read files outside `protocol/starters/` (spec
  * §4 check 2's reverse direction, and check 3), over `entries`
  * (`loadFamilyEntries` shape) and `<root>`. Each problem reads `<file>:
@@ -1218,8 +1252,10 @@ export function checkRegistry(root, entries) {
     }
   }
 
-  // Check 3: every type's doc page exists, and its first "Status:" line
-  // matches its `status` (Open decision 6).
+  // Check 3: every type's doc page exists, its first "Status:" line matches
+  // its `status` (Open decision 6), and none of its six spec §4 sections is
+  // still the scaffolder's unfilled "TODO" body (Task 6 review, Important
+  // 2).
   for (const { file, family } of entries) {
     if (!isPlainObject(family) || !Array.isArray(family.types)) continue;
     family.types.forEach((type, index) => {
@@ -1230,6 +1266,9 @@ export function checkRegistry(root, entries) {
       } catch {
         problems.push(`${file}: types[${index}].docs ${type.docs} is missing`);
         return;
+      }
+      for (const heading of docTodoSections(docText)) {
+        problems.push(`${type.docs}: section "${heading}" is still a placeholder`);
       }
       if (!isPlainObject(type.status)) return;
       const expected = statusOpening(type.status);

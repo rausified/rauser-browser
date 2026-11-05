@@ -20,6 +20,18 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 const SCAFFOLDER = path.join(REPO, "scripts", "new-starter.mjs");
 const GENERATOR = path.join(REPO, "scripts", "generate-starters.mjs");
 const GENERATED_TS = "extension/starter-families.generated.ts";
+const LOCK_FILE = "protocol/starters/ids.lock.json";
+
+// The six section headings scripts/new-starter.mjs writes (spec §4
+// "Scaffolder"), each starting as a lone "TODO" body.
+const DOC_HEADINGS = [
+  "What each rule covers",
+  "Titles",
+  "Recorded samples",
+  "What the draft does not record",
+  "Known limits",
+  "Live check still needed",
+];
 
 function git(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8" });
@@ -62,6 +74,19 @@ function writeFamily(root, name, data) {
   writeFileSync(path.join(root, "protocol", "starters", `${name}.json`), `${JSON.stringify(data, null, 2)}\n`);
 }
 
+function readLock(root) {
+  return JSON.parse(readFileSync(path.join(root, LOCK_FILE), "utf8"));
+}
+
+/** `docs/adapters/<type>.md`'s text with every section's "TODO" body
+ * replaced by `bodies[i]`, same heading order as `DOC_HEADINGS` — the
+ * acceptance test's way of actually filling in the doc, not just its
+ * `Status:` line. */
+function filledDocText(type, bodies) {
+  const sections = DOC_HEADINGS.map((heading, index) => `## ${heading}\n\n${bodies[index]}\n`).join("\n");
+  return `# ${type} starter draft\n\nStatus: development draft.\n\n${sections}`;
+}
+
 test("scaffolds a family file and doc, nothing else", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
@@ -74,8 +99,22 @@ test("scaffolds a family file and doc, nothing else", async (t) => {
 test("acceptance: a filled-in family changes only its file, its doc and generated files (spec task 10)", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
+  const baselineLock = readLock(root);
+  assert.equal(Object.keys(baselineLock).length, 8, "today's lock has 8 entries; this test pins the append as a pure extension of them");
+
   const scaffold = runScaffold(["aha", "aha.feature", "--subdomain", ".aha.io", "--root", root]);
   assert.equal(scaffold.status, 0, scaffold.stdout + scaffold.stderr);
+
+  // Before any doc section is filled in, --check names every one of them
+  // (Task 6 review, Important 2): the "one pass" list must cover what the
+  // scaffolder itself just wrote as a placeholder, not only what a human
+  // edits later.
+  const docPath = path.join(root, "docs", "adapters", "aha.feature.md");
+  const beforeDocFill = runGenerator(["--check", "--root", root]);
+  assert.equal(beforeDocFill.status, 1);
+  for (const heading of DOC_HEADINGS) {
+    assert.match(beforeDocFill.stdout, new RegExp(`docs/adapters/aha\\.feature\\.md: section "${heading}" is still a placeholder`));
+  }
 
   // The family is scope: null throughout (gap 1: a subdomain family can
   // never be unscoped, whatever the spec's "Aha! (subdomain, unscoped)"
@@ -123,32 +162,38 @@ test("acceptance: a filled-in family changes only its file, its doc and generate
   ];
   writeFamily(root, "aha", aha);
 
-  // The doc's Status: line is already valid (the scaffolder wrote
-  // "Status: development draft." and status.state is still "development").
-  const docPath = path.join(root, "docs", "adapters", "aha.feature.md");
-  assert.match(readFileSync(docPath, "utf8"), /^# aha\.feature starter draft\n\nStatus: development draft\.\n/);
+  // Fill in the doc's six sections too, not only its already-valid
+  // Status: line (Task 6 review, Important 2).
+  writeFileSync(docPath, filledDocText("aha.feature", [
+    "1. **Feature page**, `/features/<key>`. The key is the ticket's dashed reference.",
+    "Feature tab titles read <ticket name> | Aha!.",
+    "Synthetic equivalent of the recorded shape, on acme.aha.io: /features/ENG-42, tab title \"Ticket name | Aha!\", records ENG-42.",
+    "The Aha! root, search and settings routes are not feature pages.",
+    "Multi-segment dashed keys (such as PRJ-E-12) are not yet supported.",
+    "Before this page's status line changes to release-certified, check on macOS with real Chrome and a real Aha! account.",
+  ]));
 
   const result = runGenerator(["--root", root]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /appended lock entry aha\.feature → aha\.feature:\{host\}\/\{key\}/);
+  assert.doesNotMatch(result.stdout, /is still a placeholder/);
 
   assert.deepEqual(gitStatus(root), [
-    "aha.feature.md",
-    "aha.json",
-    "catalog.json",
-    "ids.lock.json",
-    "starter-families.generated.ts",
-    "starter-shapes.json",
-    "starter-vectors.json",
-  ].map((name) => {
-    if (name === "aha.feature.md") return "docs/adapters/aha.feature.md";
-    if (name === "aha.json") return "protocol/starters/aha.json";
-    if (name === "catalog.json") return "protocol/capture-site/catalog.json";
-    if (name === "ids.lock.json") return "protocol/starters/ids.lock.json";
-    if (name === "starter-families.generated.ts") return GENERATED_TS;
-    if (name === "starter-shapes.json") return "protocol/capture-site/starter-shapes.json";
-    return "protocol/adapter-templates/starter-vectors.json";
-  }).concat(["docs/adapters/README.md"]).sort());
+    "docs/adapters/README.md",
+    "docs/adapters/aha.feature.md",
+    "extension/starter-families.generated.ts",
+    "protocol/adapter-templates/starter-vectors.json",
+    "protocol/capture-site/catalog.json",
+    "protocol/capture-site/starter-shapes.json",
+    "protocol/starters/aha.json",
+    "protocol/starters/ids.lock.json",
+  ]);
+
+  // Open decision 1 / risk 3: the lock append is a pure extension of the
+  // 8 entries that existed before this run, not a rewrite of them.
+  const finalLock = readLock(root);
+  assert.deepEqual(Object.entries(finalLock).slice(0, 8), Object.entries(baselineLock));
+  assert.equal(finalLock["aha.feature"], "aha.feature:{host}/{key}");
 
   let engine;
   try {
@@ -183,6 +228,16 @@ test("scaffolder misuse: origin flags on an existing family", async (t) => {
   assert.deepEqual(gitStatus(root), []);
 });
 
+test("scaffolder misuse: --scope on an existing family", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  // No --exact/--subdomain at all: isolates --scope as the only offending flag.
+  const result = runScaffold(["atlassian", "atlassian.newtype2", "--scope", "unscoped", "--root", root]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /atlassian.*already exists/);
+  assert.deepEqual(gitStatus(root), []);
+});
+
 test("scaffolder misuse: a new family with no origin flag", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
@@ -208,4 +263,16 @@ test("scaffolder misuse: --scope unscoped with --subdomain", async (t) => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /unscoped.*--exact/);
   assert.deepEqual(gitStatus(root), []);
+});
+
+test("scaffolder misuse: the doc page already exists", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const docPath = path.join(root, "docs", "adapters", "box.feature.md");
+  writeFileSync(docPath, "precious hand-started notes\n");
+  const result = runScaffold(["box", "box.feature", "--exact", "https://app.box.com", "--root", root]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /docs\/adapters\/box\.feature\.md already exists/);
+  assert.deepEqual(gitStatus(root), ["docs/adapters/box.feature.md"]);
+  assert.equal(readFileSync(docPath, "utf8"), "precious hand-started notes\n");
 });

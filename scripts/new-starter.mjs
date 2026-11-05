@@ -186,6 +186,37 @@ function createBeadCommand(type) {
   );
 }
 
+/** Prints the generator's `--check` output (Task 6 review):
+ *  - Minor 1: a crash (`result.error`) or an exit code other than 0/1 is
+ *    reported, not silently swallowed into an empty list; exit 0 says so
+ *    plainly instead of leaving the "Fill these in" header dangling over
+ *    nothing.
+ *  - Minor 2: the lines naming `targets` (the family file and doc page this
+ *    run just wrote or extended) print first, ahead of every other family's
+ *    unrelated, already-present problems, so the one list this run cares
+ *    about isn't buried in a repo-wide one. */
+function printGeneratorOutput(result, targets) {
+  if (result.error) {
+    console.error(`could not run the generator: ${result.error.message}`);
+  } else if (result.status === 0) {
+    console.log("Nothing left for npm run gen:starters --check to flag; run npm run gen:starters.");
+  } else if (result.status === 1) {
+    const lines = result.stdout.split("\n").filter((line) => line.trim() !== "");
+    const isTarget = (line) => targets.some((target) => line.startsWith(`${target}:`));
+    const targetLines = lines.filter(isTarget);
+    const otherLines = lines.filter((line) => !isTarget(line));
+    console.log("Fill these in, then run npm run gen:starters:");
+    for (const line of targetLines) console.log(`  ${line}`);
+    if (otherLines.length > 0) {
+      console.log("  (already-present problems elsewhere in the registry, unrelated to this change):");
+      for (const line of otherLines) console.log(`    ${line}`);
+    }
+  } else {
+    console.error(`the generator exited ${result.status} unexpectedly`);
+  }
+  if (typeof result.stderr === "string" && result.stderr.trim() !== "") console.error(result.stderr.trim());
+}
+
 function main(argv) {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -218,6 +249,14 @@ function main(argv) {
       refuse("pass at most one of --exact or --subdomain");
     }
     if (knownTypes(root).has(type)) refuse(`type "${type}" already exists`);
+    const docPath = path.join(root, DOCS_ADAPTERS_DIR, `${type}.md`);
+    const docRelPath = path.posix.join(DOCS_ADAPTERS_DIR, `${type}.md`);
+    if (existsSync(docPath)) {
+      // An orphan doc, a hand-started one, or the doc of a type whose
+      // family file doesn't currently parse (so knownTypes above missed
+      // it): never overwritten (Task 6 review, Important 1).
+      refuse(`${docRelPath} already exists`);
+    }
 
     const existingFamily = readFamily(root, family);
     let origin;
@@ -234,8 +273,10 @@ function main(argv) {
         ? { kind: "exact", origin: values.exact }
         : { kind: "subdomain", suffix: values.subdomain, labels: 1, exclude: ["www"] };
     } else {
-      if (values.exact !== undefined || values.subdomain !== undefined) {
-        refuse(`family "${family}" already exists; --exact/--subdomain only apply to a new family`);
+      if (values.exact !== undefined || values.subdomain !== undefined || values.scope !== undefined) {
+        // The family's origin and scope are already set; --scope is as
+        // meaningless here as --exact/--subdomain (Task 6 review, Minor 6).
+        refuse(`family "${family}" already exists; --exact/--subdomain/--scope only apply to a new family`);
       }
       origin = existingFamily.origin;
       scopeKind = isPlainObject(existingFamily.scope) ? existingFamily.scope.kind : undefined;
@@ -248,19 +289,28 @@ function main(argv) {
       : { ...existingFamily, types: [...existingFamily.types, type_] };
     writeFileSync(familyPath, `${JSON.stringify(familyJson, null, 2)}\n`);
 
-    const docPath = path.join(root, DOCS_ADAPTERS_DIR, `${type}.md`);
     mkdirSync(path.dirname(docPath), { recursive: true });
     writeFileSync(docPath, docText(type));
 
-    console.log(`wrote ${path.posix.join(STARTERS_DIR, `${family}.json`)}`);
-    console.log(`wrote ${path.posix.join(DOCS_ADAPTERS_DIR, `${type}.md`)}`);
+    const familyRelPath = path.posix.join(STARTERS_DIR, `${family}.json`);
+    console.log(`wrote ${familyRelPath}`);
+    console.log(`wrote ${docRelPath}`);
     console.log("");
 
     const result = spawnSync(process.execPath, [GENERATOR, "--check", "--root", root], { encoding: "utf8" });
-    console.log("Fill these in, then run npm run gen:starters:");
-    for (const line of result.stdout.split("\n")) {
-      if (line.trim() !== "") console.log(`  ${line}`);
-    }
+    printGeneratorOutput(result, [familyRelPath, docRelPath]);
+
+    // check 4 (extension/tests/starter-registry.test.mjs: a positive and a
+    // negative evaluate vector per match rule, and a titled sample) needs
+    // the built engine, so --check above can never see it (Task 6 review,
+    // Important 2). This block is fixed, not computed from the still-empty
+    // `match: []`, since the real rule count only exists once the author
+    // has filled it in.
+    console.log("");
+    console.log("Also fill in (check 4, extension/tests/starter-registry.test.mjs, not covered by --check above):");
+    console.log("  - vectors: at least one positive and one negative evaluate vector per adapter.match rule");
+    console.log("  - samples: a sample with a non-null title, if the adapter uses a title template");
+
     console.log("");
     console.log("Then file its bead:");
     console.log(`  ${createBeadCommand(type)}`);

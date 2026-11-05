@@ -45,10 +45,12 @@ export const NODE_MAJOR = 24;
 
 /**
  * Paths an adapter or starter change may touch. Docs and beads config
- * (root Markdown, docs/**, .beads/**) are allowed too, through
- * scripts/ci-changes.mjs's isDocsOrQueuePath, so the two classifiers agree
- * on what counts as docs. Anything else needs the full README gate.
- * `exact` matches one path, `prefix` a directory, `pattern` a RegExp.
+ * (root Markdown, docs/** except docs/adapters/, .beads/**) are allowed
+ * too, through scripts/ci-changes.mjs's isDocsOrQueuePath, so the two
+ * classifiers agree on what counts as docs; docs/adapters/ is code there
+ * (Open decision 7), so it has its own entry below instead. Anything else
+ * needs the full README gate. `exact` matches one path, `prefix` a
+ * directory, `pattern` a RegExp.
  */
 export const ALLOWLIST = [
   // The starter table: one entry per starter site and its fixtures.

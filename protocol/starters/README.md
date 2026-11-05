@@ -205,6 +205,9 @@ so a real cross-file collision is never hidden behind an unrelated typo.
   (certified, history method), or `Status: development draft.` (not yet
   certified) — otherwise `docs/adapters/<type>.md: first Status line does
   not match status (expected "<opening>")`.
+- None of the doc's six `## `-headed sections (`npm run new:starter`'s
+  placeholders, "Adding a type" below) may still be exactly `TODO`
+  (`docs/adapters/<type>.md: section "<heading>" is still a placeholder`).
 
 Two checks need the built engine instead of the generator's own JSON
 validation, so they live in `extension/tests/starter-registry.test.mjs`:
@@ -243,7 +246,10 @@ listed may change, because a saved adapter's `id` is how a user's artifact
 stays matched to its starter (`extension/starter-adapters.ts` `matchingStarter`).
 `scripts/generate-starters.mjs --check` fails with `id template changed for
 <type>` if a type's `adapter.id` (or a container's `within.id`) no longer
-matches its lock entry.
+matches its lock entry. Before your PR merges, you may still delete your
+own type's unmerged entry from `ids.lock.json` and run `npm run gen:starters`
+again to freeze a corrected `adapter.id` (Open decision 1); once merged,
+that entry is permanent like every other.
 
 ## Generating
 
