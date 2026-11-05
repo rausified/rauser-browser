@@ -42,11 +42,13 @@ for (const name of ["manifest.json", "options.html", "panel.html", "tasks.html"]
   await writeFile(join(outputDir, name), fillPlaceholders(source, placeholders, name));
 }
 await copyFile(join(extensionDir, "panel.css"), join(outputDir, "panel.css"));
+await copyFile(join(extensionDir, "task-notification.png"), join(outputDir, "task-notification.png"));
 await mkdir(join(outputDir, "vendor"));
 await writeFile(join(outputDir, "vendor", "readability.js"), readability);
 await copyFile(join(readabilityDir, "LICENSE.md"), join(outputDir, "vendor", "readability.LICENSE.md"));
 for (const name of [
   "adapter-repair-settings.js",
+  "task-notifications.js", "task-notification-settings.js",
   "capture-site.js", "capture-site-handoff.js", "capture-site-panel.js", "activity.js", "adapter-review.js", "adopted-state-settings.js", "artifact-refresh.js", "auto-summary.js", "adapter-templates.js", "agent.js", "brand.js", "build-info.js", "build-update.js", "coordination.js", "diag.js", "extract.js",
   "focus-session.js", "model.js", "native.js", "note-editor.js", "note-recovery.js", "options.js", "panel.js", "panel-look.js", "protocol-shape.js",
   "run-card.js", "settings.js", "site-patterns.js", "site-pattern-panel.js", "site-pattern-settings.js", "site-coverage.js", "starter-adapters.js", "starter-choice-view.js", "starter-families.generated.js", "starter-scopes.js", "summarize.js", "summary-text.js", "task-commands.js", "task-handoff.js", "task-history.js", "task-recall.js", "task-tracker.js", "task.js", "tasks.js", "worker.js",

@@ -3602,6 +3602,7 @@ mod tests {
 
     fn sentinel_task() -> TaskStatus {
         TaskStatus {
+            start_request_id: None,
             no_page: false,
             instruction: "Do it".into(),
             protected: Vec::new(),
@@ -5462,6 +5463,7 @@ mod tests {
                 incoming: Vec::new(),
                 kind: RunKind::Task,
                 task: Some(TaskStatus {
+                    start_request_id: None,
                     no_page: false,
                     instruction: instruction.to_string(),
                     protected: self.protected(),
@@ -5635,6 +5637,7 @@ mod tests {
         assert_eq!(
             status.task,
             Some(TaskStatus {
+                start_request_id: None,
                 no_page: false,
                 instruction: INSTRUCTION.to_string(),
                 protected: fixture.protected(),
@@ -5991,6 +5994,7 @@ mod tests {
                 RunState::Queued,
                 "2026-10-26T09:00:00.000000000Z",
                 Some(TaskStatus {
+                    start_request_id: None,
                     no_page: false,
                     instruction: INSTRUCTION.to_string(),
                     protected: vec![cwd.join("home/notes").display().to_string()],

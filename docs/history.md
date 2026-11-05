@@ -1526,3 +1526,52 @@ Manual full-diff review and one independent in-session reviewer found no
 findings. The README script and Markdown checks pass. The driver retains
 queue export, external approval and publication. Follow-up `brwr-a30j`
 proposes continuation beyond the first 32 matching rows.
+
+
+## 2026-11-05 — Notify when tasks finish outside the panel
+
+`brwr-8qm` adds default-off task completion notifications through Chrome's
+optional permission and a Settings control. The worker persists an exact
+start-request intent before `start_task`, discovers its run through paginated
+history, and retains watched IDs across worker/browser restarts. The service
+keeps the original forwarded request ID in `TaskStatus.start_request_id` and
+optional protocol-v8 `RunView.start_request_id`. Matching is exact across
+windows and profiles; timestamps never establish ownership. Legacy records
+omit the field and never become discovery candidates. Both components must
+deploy together; older extensions reject the new task view and older services
+cannot read correlated task records, so the existing task rollback boundary
+still applies. Ordinary task execution remains panel-to-host; the worker
+never forwards `start_task` or gains authority over instructions or identity.
+
+Terminal outcomes defer while a panel is open. Its observed-finish signal
+suppresses a notification even during slow host polling. Handling is durable
+before the generic Chrome toast: an interruption in that small gap may lose
+the toast but retains the unread badge and cannot duplicate delivery. A single
+badge owner keeps capture pressure ahead of unread task counts. Click routing
+opens the originating panel synchronously within the gesture and opens or
+selects its Tasks report; optional API click listeners also install when
+permission becomes available. Monitoring holds only IDs, outcomes and times,
+and its diagnostics contain no instruction/report. It uses an independent
+chain and does not poll an idle service merely because permission is enabled.
+
+A fresh manual diff review and one independent local reviewer pass identified
+the original timestamp attribution bug. A failing regression reproduced wrong
+window and cross-profile attribution, then exact request correlation fixed it.
+Tests also cover lost start replies, pagination, worker restart, permission
+refusal/revocation, optional bindings, acknowledgements and capture-pressure
+precedence. The final required gate passes with 1,627 Rust-reported passes
+(+2; 94 explicit IPC guards, two ignored), all 48 extension test files, both
+Clippy configurations and 27 added regression cases. Accessibility reports
+two fixture passes and 50 sandbox browser skips; one of those is the added
+keyboard case. Real OS toast presentation and Chrome gesture acceptance remain
+separate desktop work in TESTING.md. No live service, harness, API, credential
+or deployed path was used. Assigned Re-learn work remains blocked on its
+explicit open decisions. Follow-ups: acknowledge visibly read reports in
+Tasks (`brwr-8v4w`) and refresh notification Settings after external permission
+changes (`brwr-2d4n`). Driver owns external approval and publication.
+
+The README extras also pass: 10,696 inert Markdown renderings, 12 script
+test files, and the dev/queue Python suites (252 cases each, 92 platform
+skips), followed by queue consistency with 60 live issues. The single commit
+attempt hit read-only `.git/index.lock`; the driver has the complete reviewed
+tree and exact `.bosun_commit_msg`. No commit retry or remote action followed.

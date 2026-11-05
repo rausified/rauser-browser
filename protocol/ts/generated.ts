@@ -712,6 +712,7 @@ export type AnswerReadScope = "whole" | "partial" | "page_only";
 export type AnswerAccess = "ok" | "sign_in" | "denied" | "not_found";
 
 export interface RunView {
+  start_request_id?: string;
   no_page?: boolean;
   run_id: string;
   state: RunState;

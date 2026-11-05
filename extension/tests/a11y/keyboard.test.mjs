@@ -2,6 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { activate, audit, browserFixture, enterPanelTab, focused, task } from "./fixture.mjs";
 
+test("optional task notifications can be enabled and disabled by keyboard without losing focus", async (t) => {
+  const page = await browserFixture(t, "options");
+  if (!page) return;
+  const button = page.locator("#task-notifications-toggle");
+  await page.locator("#task-notifications-state").filter({ hasText: "Off." }).waitFor();
+  await activate(page, button, "Space");
+  await page.locator("#task-notifications-state").filter({ hasText: "On." }).waitFor();
+  await focused(page, "#task-notifications-toggle");
+  await activate(page, button, "Enter");
+  await page.locator("#task-notifications-state").filter({ hasText: "Off." }).waitFor();
+  await focused(page, "#task-notifications-toggle");
+  assert.deepEqual(await page.evaluate(() => fixture.actions.filter((action) => action.endsWith("task-notifications"))),
+    ["enable-task-notifications", "disable-task-notifications"]);
+  await audit(t, page, "settings/task-notifications");
+});
+
 test("a task report saves to its source note by keyboard with focus and confirmation", async (t) => {
   const page = await browserFixture(t, "tasks");
   if (!page) return;

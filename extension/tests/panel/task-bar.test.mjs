@@ -978,6 +978,19 @@ test("a task finishing is announced in #task-announce", async () => {
   assert.equal(page.el("task-announce").textContent, `Task done: ${instruction.slice(0, 60)}…`);
   assert.doesNotMatch(page.el("task-run-area").textContent, /Three open questions\./);
   assert.equal(taskCards(page).length, 0);
+  assert.ok(page.state.workerRequests.some((message) => message.kind === "task_notice_seen" && message.run_id === done.run_id));
+  assert.ok(page.state.workerRequests.some((message) => message.kind === "task_notice_opened"));
+});
+
+test("the task bar awaits the worker's durable notification handoff before starting", async () => {
+  const gate = held();
+  const page = await taskPanel({ workerReply: async (request) => request.kind === "task_notice_arm" ? gate.promise : undefined });
+  type(page, "Work while I leave the panel");
+  enter(page);
+  await until(() => page.state.workerRequests.some((request) => request.kind === "task_notice_arm"), "completion handoff");
+  assert.equal(page.sent("start_task").length, 0);
+  gate.release({ ok: true, value: null });
+  await until(() => page.sent("start_task").length === 1, "task after handoff");
 });
 
 const MAY_HAVE_STARTED = "The task may have started — check Tasks before running it again.";

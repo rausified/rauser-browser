@@ -23,6 +23,11 @@ import {
   type WorkerStatus,
 } from "./model.js";
 import { isFocusSession, sameFocus } from "./focus-session.js";
+import { listAllTasks } from "./task-history.js";
+import { openTasksPage } from "./task-handoff.js";
+import {
+  TASK_NOTICE_ALARM, TaskNotifications, listenForTaskNoticeClicks, parseTaskNoticeId, taskBadge, unreadTaskCount,
+} from "./task-notifications.js";
 import { APP_NAME, BINARY_NAME, storageKey } from "./brand.js";
 import { diag, initDiag } from "./diag.js";
 import { evaluate, type EvaluateResult } from "./adapter-templates.js";
@@ -118,6 +123,61 @@ let sequence: Promise<unknown> = Promise.resolve();
 // received lease shows what the host config holds.
 let receivedLease: PolicyLease | null = null;
 const policyLeases = new PolicyLeaseCache();
+
+const taskNotifications = new TaskNotifications({
+  storage: chrome.storage.local,
+  enabled: () => chrome.permissions.contains({ permissions: ["notifications"] }),
+  now: Date.now,
+  list: async () => {
+    const host = new HostClient();
+    try { return await listAllTasks(host); } finally { host.disconnect(); }
+  },
+  get: async (runId) => {
+    const host = new HostClient();
+    try {
+      return (await host.call({ type: "get_run", protocol_version: PROTOCOL_VERSION,
+        request_id: newRequestId(), run_id: runId, since_offset: 0 }, "run_fetched")).run;
+    } catch (error) {
+      if (error instanceof HostError && error.code === "invalid_request") return null;
+      throw error;
+    } finally { host.disconnect(); }
+  },
+  panelOpen: async () => (await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] })).length > 0,
+  schedule: async (needed) => {
+    if (needed) {
+      if (!await chrome.alarms.get(TASK_NOTICE_ALARM)) {
+        await chrome.alarms.create(TASK_NOTICE_ALARM, { delayInMinutes: 1, periodInMinutes: 1 });
+      }
+    } else await chrome.alarms.clear(TASK_NOTICE_ALARM);
+  },
+  badge: () => updatePressureBadge(),
+  create: (id, message) => chrome.notifications.create(id, {
+    type: "basic", iconUrl: chrome.runtime.getURL("task-notification.png"), title: APP_NAME,
+    message: `${message}. Click to open its report.`,
+  }).then(() => undefined),
+  clear: (id) => chrome.notifications.clear(id),
+});
+
+function taskNotificationFailure(): void {
+  // Never copy host/agent text into diagnostics on this path.
+  diag.warn("task completion monitoring unavailable");
+}
+
+listenForTaskNoticeClicks(chrome, (id) => {
+  const task = parseTaskNoticeId(id);
+  if (task === null) return;
+  // Chrome's user activation ends at the first await. Decode the window
+  // synchronously, including on a cold worker, and open before any storage I/O.
+  void chrome.sidePanel.open({ windowId: task.window_id }).catch(() => undefined);
+  void openTasksPage(chrome, task.run_id).catch(taskNotificationFailure);
+  void taskNotifications.observed(task.run_id).catch(taskNotificationFailure);
+});
+
+chrome.permissions.onRemoved?.addListener((removed) => {
+  if (removed.permissions?.includes("notifications")) void taskNotifications.reset().catch(taskNotificationFailure);
+});
+
+void taskNotifications.resume().catch(taskNotificationFailure);
 
 // These bounded shapes stay in trusted extension storage, wholly separate
 // from activity and delivery. Sampling failures must not interrupt capture.
@@ -459,7 +519,7 @@ function ensureTrustedStorage(): Promise<void> {
     chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
     chrome.storage.session.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }),
   ]).then(async () => {
-    await updatePressureBadge(await readQueue());
+    await updatePressureBadge();
   });
   return storageReady;
 }
@@ -571,7 +631,7 @@ async function readQueue(): Promise<QueueState> {
 
 async function writeQueue(state: QueueState): Promise<void> {
   await chrome.storage.local.set({ [QUEUE_KEY]: state });
-  await updatePressureBadge(state);
+  await updatePressureBadge();
 }
 
 function queueBytes(state: QueueState): number {
@@ -583,10 +643,17 @@ function underPressure(state: QueueState): boolean {
     queueBytes(state) >= Math.ceil(MAX_QUEUE_BYTES * 0.8);
 }
 
-async function updatePressureBadge(state: QueueState): Promise<void> {
-  const warning = underPressure(state) || state.overflow_count > 0;
-  await chrome.action.setBadgeBackgroundColor({ color: "#b45309" });
-  await chrome.action.setBadgeText({ text: warning ? "!" : "" });
+let badgeSequence: Promise<unknown> = Promise.resolve();
+function updatePressureBadge(): Promise<void> {
+  const next = badgeSequence.then(async () => {
+    const state = await readQueue();
+    const badge = taskBadge(underPressure(state) || state.overflow_count > 0,
+      await unreadTaskCount(chrome.storage.local));
+    await chrome.action.setBadgeBackgroundColor({ color: badge.color });
+    await chrome.action.setBadgeText({ text: badge.text });
+  });
+  badgeSequence = next.catch(() => undefined);
+  return next;
 }
 
 /** Fold a duplicate, not-yet-dispatched hourly total instead of consuming a
@@ -671,7 +738,7 @@ async function freezeActivity(
     [QUEUE_KEY]: queue,
   });
   await activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: activityContext(activity) });
-  await updatePressureBadge(queue);
+  await updatePressureBadge();
   return accepted;
 }
 
@@ -1535,6 +1602,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, value: null, error: "Unknown worker request" } satisfies WorkerReply<null>);
     return false;
   }
+  if (message.kind === "task_notice_arm" || message.kind === "task_notice_seen" ||
+      message.kind === "task_notice_opened" || message.kind === "task_notice_reset") {
+    const work = message.kind === "task_notice_arm" ? taskNotifications.arm(message.window_id, message.request_id)
+      : message.kind === "task_notice_seen" ? taskNotifications.observed(message.run_id)
+      : message.kind === "task_notice_opened" ? taskNotifications.opened() : taskNotifications.reset();
+    void work.then(() => sendResponse({ ok: true, value: null, error: null }), () => {
+      taskNotificationFailure();
+      sendResponse({ ok: false, value: null, error: "Task completion monitoring is unavailable. Disable and re-enable it in settings." });
+    });
+    return true;
+  }
   // A sync waits on the host and the config lock, so it must not hold the
   // serialized chain that other messages and navigation capture share.
   const before = message.kind === "sync_now" ? syncWithHost() : Promise.resolve();
@@ -1666,6 +1744,7 @@ function pruneCaptureSiteDrafts(): void {
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === TASK_NOTICE_ALARM) void taskNotifications.poll().catch(taskNotificationFailure);
   if (alarm.name === AUTO_SUMMARY_ALARM) void runAutoDrain();
   if (alarm.name === SYNC_ALARM || alarm.name === DELIVER_ALARM) {
     void syncWithHost();

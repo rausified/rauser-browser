@@ -137,7 +137,7 @@ const RUN_VIEW_KEYS: readonly string[] = [
 ];
 /** The additive v7 and v8 `RunView` keys an older service's view omits.
  * `instruction` and `task_report` belong to task views only. */
-const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page"];
+const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page", "start_request_id"];
 const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft", "task"]);
 
 /** A task view carries its instruction as a string, and its report as a
@@ -198,6 +198,8 @@ export function isRunView(value: unknown): boolean {
   if (Object.hasOwn(run, "kind") && !(typeof run.kind === "string" && RUN_KINDS.has(run.kind))) return false;
   if (!taskKeysFit(run)) return false;
   if (Object.hasOwn(run, "no_page") && (run.kind !== "task" || typeof run.no_page !== "boolean")) return false;
+  if (Object.hasOwn(run, "start_request_id") && (run.kind !== "task" ||
+      typeof run.start_request_id !== "string" || run.start_request_id.length === 0 || Array.from(run.start_request_id).length > 128)) return false;
   if (Object.hasOwn(run, "site_draft") && run.site_draft !== null && !isSiteDraftAnswer(run.site_draft)) {
     return false;
   }

@@ -432,3 +432,12 @@
   without summaries; existing history and content stay unchanged. Deploy the
   host and extension for the filter; All activity remains usable with older
   hosts. This is a Brauser feature, with source documentation kept in its repo.
+
+- Brauser now offers optional task completion notifications in Settings, so a
+  task can finish while its panel is closed and bring the person back to its
+  report. Generic alerts and unread badges reveal no instruction or report;
+  capture warnings retain priority. Exact persisted start-request correlation
+  handles panel closure, lost replies and worker restart without mixing browser
+  profiles. Deploy the host and extension together, retaining the task-record
+  rollback restriction. Desktop OS notification and Chrome gesture acceptance
+  remain separate from the offline test coverage.

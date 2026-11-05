@@ -107,6 +107,7 @@ interface ChromeApi {
   alarms: {
     create(name: string, info: { delayInMinutes?: number; periodInMinutes?: number }): Promise<void>;
     get(name: string): Promise<{ name: string } | undefined>;
+    clear(name: string): Promise<boolean>;
     onAlarm: { addListener(listener: (alarm: { name: string }) => void): void };
   };
   scripting: {
@@ -146,8 +147,15 @@ interface ChromeApi {
   };
   permissions: {
     contains(permissions: ChromePermissionSet): Promise<boolean>;
+    request(permissions: ChromePermissionSet): Promise<boolean>;
+    remove(permissions: ChromePermissionSet): Promise<boolean>;
     onRemoved: { addListener(listener: (permissions: ChromePermissionSet) => void): void };
     onAdded: { addListener(listener: (permissions: ChromePermissionSet) => void): void };
+  };
+  notifications: {
+    create(id: string, options: { type: "basic"; iconUrl: string; title: string; message: string }): Promise<string>;
+    clear(id: string): Promise<boolean>;
+    onClicked: { addListener(listener: (id: string) => void): void };
   };
   storage: {
     local: ChromeStorageArea & {

@@ -110,6 +110,7 @@ function install({
     }
   };
   for (const [id, tag] of [
+    ["task-notifications-toggle", "button"], ["task-notifications-state", "p"],
     ["status", "div"], ["folder-path", "output"], ["choose-folder", "button"], ["site-origin", "input"],
     ["pause-capture", "button"], ["resume-capture", "button"], ["sites-list", "ul"],
     ["starter-gallery", "div"], ["adapter-overlaps", "div"], ["strip-conflicts", "div"], ["adapter-list", "div"], ["new-adapter", "button"],
@@ -249,7 +250,8 @@ function install({
     permissions: {
       // Brauser's site access is granted at install, so the settings page
       // never asks Chrome about, for, or to give back a permission.
-      async contains() {
+      async contains(permission) {
+        if (JSON.stringify(permission) === '{"permissions":["notifications"]}') return false;
         state.permissionCalls.push("contains");
         throw new Error("chrome.permissions.contains must not be called");
       },
