@@ -142,6 +142,19 @@ export const STEPS = [
   // and the catalog's starter_types line (scripts/generate-starters.mjs); run
   // first so a stale generated file is reported before anything else runs.
   { name: "starter sources", cmd: ["npm", "run", "-s", "gen:starters", "--", "--check"], when: STARTER_INPUTS },
+  // The generator's own tests (scripts/tests/generate-starters.test.mjs,
+  // scripts/tests/new-starter.test.mjs) catch regressions --check above
+  // cannot: an assumption one of those tests bakes in about today's family
+  // list or type count, that a new family then silently breaks. Before this
+  // step existed, a starter-input change ran gen:starters --check but never
+  // these tests, so PR #323 (the google-workspace/figma/vidcast starters)
+  // reached CI with three tests pinning the pre-D1 family list, broken by
+  // its own change, and nothing in this gate caught it locally first.
+  {
+    name: "starter generator tests",
+    cmd: ["node", "--test", "scripts/tests/generate-starters.test.mjs", "scripts/tests/new-starter.test.mjs"],
+    when: STARTER_INPUTS,
+  },
   // README/status consistency; cheap, and README.md changes with most starters.
   // It also fails a change that commits the work queue, which lives in bd's
   // Dolt database (bd edits, scripts/dev/queue sync publishes them).
