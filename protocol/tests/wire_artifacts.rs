@@ -122,3 +122,30 @@ fn worklog_choices_are_a_bounded_independent_read_only_query() {
     invalid["selected"] = json!(["doc:example/1"]);
     assert!(serde_json::from_value::<Request>(invalid).is_err());
 }
+
+#[test]
+fn worklog_choices_paging_is_opt_in_and_has_bounded_snapshot_metadata() {
+    let request = json!({"type":"worklog_choices", "protocol_version":8, "request_id":"page", "expected_revision":"revision",
+        "start_date":"2026-11-01", "end_date":"2026-11-01", "page":{"offset":0}});
+    common::assert_request_round_trips("WorklogChoicesRequest", &request);
+    let mut next = request.clone();
+    next["page"] = json!({"offset":200,"snapshot":"a".repeat(64)});
+    common::assert_request_round_trips("WorklogChoicesRequest", &next);
+    for invalid in [
+        json!({"offset":-1}),
+        json!({"offset":0,"snapshot":"short"}),
+        json!({"offset":0,"snapshot":"a".repeat(65)}),
+        json!({"offset":0,"path":"/home"}),
+    ] {
+        next["page"] = invalid;
+        assert!(!schema_subset::valid("WorklogChoicesRequest", &next));
+    }
+    let mut response = json!({"type":"worklog_choices_result", "protocol_version":8, "request_id":"page",
+        "start_date":"2026-11-01", "end_date":"2026-11-01", "choices":[], "truncated":true,
+        "gaps":[], "gaps_truncated":false, "page":{"snapshot":"a".repeat(64),"offset":0,"next_offset":200,"omitted":false}});
+    common::assert_response_round_trips("WorklogChoicesResult", &response);
+    response["page"]["next_offset"] = json!(null);
+    common::assert_response_round_trips("WorklogChoicesResult", &response);
+    response["page"]["next_offset"] = json!(0);
+    assert!(!schema_subset::valid("WorklogChoicesResult", &response));
+}

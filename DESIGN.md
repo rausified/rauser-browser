@@ -662,10 +662,34 @@ Container choices describe their own direct activity, without rolled-up child
 copies, so excluding children also excludes their measures. Summary-only days
 remain selectable without inventing opens or time. Choices sort by newest local
 day then artifact ID, with at most 200 rows and 96 KiB of serialized row data;
-oversized rows are omitted whole, never with a clipped URL. Truncation stays
-visible beside the selection, and the copied entry count covers only selected
-rows. Known gaps come from the same index snapshot and concern the entire
+oversized rows are omitted whole, never with a clipped URL. **Load more work**
+appends further all-work choices under the same per-response bounds. New rows
+start unchecked; existing checkboxes and selected text remain intact. The
+copied entry count covers only selected rows. A separate omission notice stays
+visible for oversized rows, including omissions on earlier loaded pages.
+Known gaps come from the same index snapshot and concern the entire
 period; the existing explicit gap-inclusion choice also controls this preview.
+
+Paging is opt-in through an optional `page` object on `worklog_choices`.
+It carries a logical-row offset and, on continuation, the prior snapshot hash.
+The optional response `page` echoes the offset and supplies the snapshot,
+nullable `next_offset`, and permanent-omission flag. Offsets include omitted
+rows; an ordinary row that exceeds the remaining page bytes begins the next
+page. The hash binds a versioned, framed serialization of all ordered logical
+choices before omission, date scope, storage configuration/identity, adapters,
+and capture gaps (including notices beyond their display cap), from one read
+transaction. A mismatched snapshot or unavailable offset refuses continuation.
+Unpaged requests keep their original response shape and truncation behavior.
+Older hosts refuse paged requests with rebuild guidance; an older extension's
+unpaged request remains usable with a newer host. No cache migration is needed.
+
+Same-scope refresh retains loaded later pages only when the full snapshot
+matches. Changed history drops those pages, prunes selection to refreshed rows,
+and explains the reset. Loading disables selection and Copy; a failed
+continuation clears the stale preview and offers **Reload choices**. Late
+replies cannot cross refresh, period, home/config or host-lifecycle boundaries.
+On the final page, keyboard focus moves from the disappearing Load more button
+to the first new checkbox. Focus-session choices keep their separate bounds.
 
 **One focus session.** In the sharing area, **Choose from → One focus session**
 lists up to 64 recorded sessions in the period, newest activity first. Selecting

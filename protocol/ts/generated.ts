@@ -314,12 +314,25 @@ export interface WorklogFocusChoicesResult {
 }
 
 export interface WorklogChoicesRequest {
+  page?: WorklogChoicesPageRequest;
   expected_revision: string;
   type: "worklog_choices";
   protocol_version: 8;
   request_id: string;
   start_date: string;
   end_date: string;
+}
+
+export interface WorklogChoicesPageRequest {
+  offset: number;
+  snapshot?: string;
+}
+
+export interface WorklogChoicesPageInfo {
+  snapshot: string;
+  offset: number;
+  next_offset: number | null;
+  omitted: boolean;
 }
 
 export interface WorklogChoice {
@@ -330,6 +343,7 @@ export interface WorklogChoice {
 }
 
 export interface WorklogChoicesResult {
+  page?: WorklogChoicesPageInfo;
   type: "worklog_choices_result";
   protocol_version: 8;
   request_id: string;

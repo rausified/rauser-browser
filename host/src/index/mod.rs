@@ -50,6 +50,7 @@ use crate::vault::{
 };
 
 mod catchup;
+mod choice_page;
 mod db;
 mod focus;
 mod fold;
@@ -64,6 +65,7 @@ mod scan;
 mod store;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) use choice_page::{StaleWorklogPage, valid_page_request};
 pub(crate) use db::BUSY_MESSAGE;
 /// Busy accounting for host-level tests (7vf).
 #[cfg(test)]
@@ -1035,6 +1037,21 @@ impl ArtifactIndex {
         end: Date,
     ) -> Result<(Vec<WorklogChoice>, bool, Vec<OverflowMarker>, bool)> {
         self.read(|tx| query::worklog_choices(tx, start, end))
+    }
+
+    /// Stateless pages bound to all choices and the same storage/date scope.
+    pub(crate) fn worklog_choices_page(
+        &self,
+        start: Date,
+        end: Date,
+        page: &brauser_protocol::WorklogChoicesPageRequest,
+    ) -> Result<choice_page::ChoicesPage> {
+        let scope = serde_json::to_vec(&(
+            &self.storage,
+            &self.root_identity,
+            self.adapters_fingerprint(),
+        ))?;
+        self.read(|tx| choice_page::query(tx, start, end, &scope, page))
     }
 
     /// A bounded session catalog and only the selected session's direct
