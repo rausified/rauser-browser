@@ -1948,6 +1948,15 @@ commands, chooses and inserts by keyboard, verifies preserved draft/focus, runs 
 requires Enter to submit. A sandbox skip does not prove Chromium acceptance;
 the driver and platform CI must run the journey in a real browser.
 
+The Settings command editor is exercised in `extension/tests/options.test.mjs`:
+create/edit/remove, literal quoting, duplicate-name and unsupported-value
+refusals, stale saves, explicit current-value review, and draft retention after
+policy refresh. Native `task_command_settings_*` tests use the real TOML parser
+and config publication path to verify persistence, whole-file size bounds,
+unrelated invalid-value preservation, exact repair backups and stale refusal.
+They run before any service connection and require no IPC. The keyboard suite
+adds a labeled-field editing/removal/save journey with axe and focus checks;
+its fixture verifies requests and focus, while native tests prove persistence.
 
 ## Selected-work pagination
 

@@ -384,3 +384,40 @@ fn task_command_catalogues_expose_descriptors_and_revision_without_prompts() {
     assert!(serde_json::from_value::<Request>(invocation.clone()).is_err());
     assert!(!schema_subset::valid("StartTaskRequest", &invocation));
 }
+
+#[test]
+fn task_command_settings_are_revision_bound_and_carry_only_the_registry() {
+    assert_request_round_trips(
+        "GetTaskCommandSettingsRequest",
+        &json!({
+            "type":"get_task_command_settings", "protocol_version":8,
+            "request_id":"settings", "expected_revision":"current",
+        }),
+    );
+    let save = json!({
+        "type":"save_task_commands", "protocol_version":8,
+        "request_id":"settings", "expected_revision":"current", "commands_toml":"commands = []",
+    });
+    assert_request_round_trips("SaveTaskCommandsRequest", &save);
+    for (key, value) in [("config", json!({})), ("cwd", json!("/tmp"))] {
+        let mut forged = save.clone();
+        forged[key] = value;
+        assert!(serde_json::from_value::<Request>(forged.clone()).is_err());
+        assert!(!schema_subset::valid("SaveTaskCommandsRequest", &forged));
+    }
+    let mut missing = save.clone();
+    missing.as_object_mut().unwrap().remove("expected_revision");
+    assert!(serde_json::from_value::<Request>(missing.clone()).is_err());
+    assert!(!schema_subset::valid("SaveTaskCommandsRequest", &missing));
+    let mut oversized = save;
+    oversized["commands_toml"] = json!("x".repeat(65537));
+    assert!(!schema_subset::valid("SaveTaskCommandsRequest", &oversized));
+    assert_response_round_trips(
+        "TaskCommandSettings",
+        &json!({
+            "type":"task_command_settings", "protocol_version":8, "request_id":"settings",
+            "revision":"current", "original_toml":"commands = []", "issue":null,
+            "commands":[{"name":"actions", "description":"Extract actions", "prompt":"Return a checklist."}],
+        }),
+    );
+}

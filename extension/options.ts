@@ -19,6 +19,7 @@ import { APP_NAME } from "./brand.js";
 import { sitePatternControls } from "./site-pattern-settings.js";
 import { AdoptedStateControls } from "./adopted-state-settings.js";
 import { AdapterRepairControls } from "./adapter-repair-settings.js";
+import { TaskCommandSettingsControls } from "./task-command-settings.js";
 import { hostBuildText } from "./build-info.js";
 import { DIAG_STORAGE_KEY, diag, diagnosticsText, initDiag } from "./diag.js";
 import {
@@ -170,6 +171,11 @@ adapterRepair = new AdapterRepairControls(session, show, () => busy, (value) => 
   busy = value;
   updateControls();
 });
+let commandSettings: TaskCommandSettingsControls | null = null;
+commandSettings = new TaskCommandSettingsControls(session, () => busy, (value) => {
+  busy = value;
+  updateControls();
+});
 
 // The header names the host process that answered. Another one, possibly
 // from a rebuilt binary, starts on the next call after it exits.
@@ -287,6 +293,7 @@ function updateControls(): void {
     input.disabled = !idle || input.dataset.ready !== "true";
   }
   adapterRepair?.render();
+  commandSettings?.render();
 }
 
 /** A harness the service found and can use. */

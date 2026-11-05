@@ -11,3 +11,5 @@ timed out waiting for `start_auto_summary` on PR #258, which changes no
 extension code; it passes 3 of 3 locally. Where: `scripts/smoke-macos.mjs`
 waits, `extension/tests/auto-summary.test.mjs`, and a rerun-once-on-known-flake
 step in `.github/workflows/build-os.yml` as a stopgap.
+
+- +1 2026-11-05: PR #318's new saved-command keyboard test asserted focus immediately after an asynchronous host read, without waiting for the editor's fields. Extend the offline browser fixture with selectable per-request delays to expose similar missing readiness waits; the repair adds a delayed command-settings reply and waits for the first enabled field. Chromium is sandbox-blocked locally, so the browser result still needs the unsandboxed commit gate.

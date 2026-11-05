@@ -130,6 +130,11 @@ function install({
     ["agent-env-names", "p"], ["reveal-agent-env", "button"],
     ["vocab-types", "textarea"], ["vocab-categories", "textarea"], ["save-vocabulary", "button"],
     ["auto-summary-enabled", "input"], ["auto-summary-dwell", "input"], ["save-auto-summary", "button"],
+    ["commands-open", "button"], ["commands-editor", "div"], ["commands-editor-heading", "h3"],
+    ["commands-rows", "div"], ["commands-add", "button"], ["commands-repair", "div"],
+    ["commands-original", "textarea"], ["commands-toml", "textarea"], ["commands-status", "p"],
+    ["commands-save", "button"], ["commands-review", "button"], ["commands-current", "textarea"],
+    ["commands-current-label", "label"], ["commands-cancel", "button"],
     ["build-id", "span"], ["host-build", "span"],
     ["adopted-state", "div"], ["adopted-issue", "p"], ["adopted-warnings", "ul"],
     ["forget-adopted", "button"], ["forget-adopted-confirm", "div"],
@@ -140,6 +145,7 @@ function install({
   }
   elements.get("adapter-editor").hidden = true;
   elements.get("adapter-repair").hidden = true;
+  elements.get("commands-editor").hidden = true;
   for (const id of ["adopted-state", "forget-adopted", "forget-adopted-confirm"]) elements.get(id).hidden = true;
   elements.get("status").textContent = "Connecting to native host…";
   elements.get("build-id").textContent = "abc1234def56";
@@ -352,6 +358,143 @@ async function openSettings({ connected = true } = {}) {
   // A connected page then reads the agent.env names without holding the page busy.
   if (connected) await until(() => env.elements.get("agent-env-names").textContent !== "", "the agent.env names");
 }
+
+const commandDefinition = { name: "actions", description: "Extract actions", prompt: "Return a checklist." };
+const commandSettings = (revision = "1", overrides = {}) => ({
+  type: "task_command_settings", revision, original_toml: "", commands: [commandDefinition], issue: null, ...overrides,
+});
+const commandFields = (index = 0) => env.elements.get("commands-rows").children[index].children
+  .filter((node) => ["INPUT", "TEXTAREA"].includes(node.tagName));
+async function editCommands() {
+  env.elements.get("commands-open").click();
+  await until(() => !env.elements.get("commands-save").disabled, "command editor");
+}
+
+test("Settings creates, edits and removes complete saved command lists without starting a task", async () => {
+  install({ host: {
+    get_task_command_settings: (_r, state) => commandSettings(String(state.revision)),
+    save_task_commands: (_r, state) => {
+      state.revision++;
+      return { type: "config_updated", config: state.config, revision: String(state.revision) };
+    },
+  } });
+  await openSettings();
+  assert.equal(env.requests.some((r) => r.type === "get_task_command_settings"), false);
+  await editCommands();
+  assert.equal(commandFields()[0].value, "actions");
+  commandFields()[2].value = 'Quote "text" at C:\\work\\file\n\t🔎 café {literal} </textarea>';
+  const literal = commandFields()[2].value;
+  env.elements.get("commands-add").click();
+  commandFields(1)[0].value = "review";
+  commandFields(1)[1].value = "Review a page";
+  commandFields(1)[2].value = "Find open questions.";
+  env.elements.get("commands-save").click();
+  await until(() => env.elements.get("commands-status").textContent.startsWith("Commands saved"), "saved commands");
+  assert.equal(FakeElement.focused, env.elements.get("commands-save"));
+  let saved = env.requests.filter((r) => r.type === "save_task_commands");
+  assert.equal(saved[0].expected_revision, "1");
+  assert.ok(saved[0].commands_toml.includes(`prompt = ${JSON.stringify(literal)}`));
+  assert.ok(saved[0].commands_toml.includes('name = "review"'));
+  assert.equal(env.requests.some((r) => r.type === "start_task"), false);
+  for (const row of [...env.elements.get("commands-rows").children]) row.querySelectorAll("button")[0].click();
+  env.elements.get("commands-save").click();
+  await until(() => env.requests.filter((r) => r.type === "save_task_commands").length === 2 && idle(), "empty list save");
+  saved = env.requests.filter((r) => r.type === "save_task_commands");
+  assert.equal(saved[1].commands_toml, "commands = []\n");
+  assert.equal(saved[1].expected_revision, "2");
+  env.elements.get("commands-cancel").click();
+  assert.equal(env.elements.get("commands-open").disabled, false);
+  assert.equal(FakeElement.focused, env.elements.get("commands-open"));
+});
+
+test("Settings keeps command drafts across stale saves and explicitly reviews current values", async () => {
+  let reads = 0;
+  install({ host: {
+    get_task_command_settings: (_r, state) => {
+      reads++;
+      return commandSettings(String(state.revision), { original_toml: reads === 1 ? "# old" : '# new list kept in config' });
+    },
+    save_task_commands: (_r, state) => {
+      state.revision = 2;
+      return { type: "error", code: "conflict", message: "Settings changed." };
+    },
+  } });
+  await openSettings();
+  await editCommands();
+  commandFields()[2].value = "My unsaved draft";
+  env.elements.get("commands-save").click();
+  await until(() => idle() && env.elements.get("commands-save").disabled, "stale command save");
+  assert.equal(commandFields()[2].value, "My unsaved draft");
+  assert.equal(env.elements.get("commands-review").hidden, false);
+  assert.equal(FakeElement.focused, env.elements.get("commands-review"));
+  assert.equal(reads, 1, "conflicts refresh config but never replace the command draft");
+  env.elements.get("commands-review").click();
+  await until(() => !env.elements.get("commands-save").disabled, "explicit current review");
+  assert.equal(env.elements.get("commands-current").value, '# new list kept in config');
+  assert.equal(FakeElement.focused, env.elements.get("commands-current"));
+  assert.equal(commandFields()[2].value, "My unsaved draft");
+  assert.equal(env.requests.filter((r) => r.type === "save_task_commands").length, 1);
+});
+
+test("duplicate command names are submitted as a complete registry and retained after host refusal", async () => {
+  install({ host: {
+    get_task_command_settings: () => commandSettings(),
+    save_task_commands: () => ({ type: "error", code: "invalid_config", message: "Use unique lowercase names." }),
+  } });
+  await openSettings();
+  await editCommands();
+  env.elements.get("commands-add").click();
+  for (const [field, value] of commandFields(1).map((field, index) => [field, Object.values(commandDefinition)[index]])) field.value = value;
+  env.elements.get("commands-save").click();
+  await until(() => idle() && env.elements.get("commands-status").textContent.includes("unique"), "duplicate refusal");
+  assert.equal(env.elements.get("commands-rows").children.length, 2);
+  assert.equal(commandFields(1)[0].value, "actions");
+  assert.equal(env.requests.find((r) => r.type === "save_task_commands").commands_toml.match(/name = "actions"/g).length, 2);
+});
+
+test("Settings preserves unsupported saved commands for explicit repair and retains validation failures", async () => {
+  const original = '[[commands]]\nname = "actions"\nprompt = "literal"\noutput = "clipboard"';
+  install({ host: {
+    get_task_command_settings: () => commandSettings("1", { commands: [], issue: "Unsupported output", original_toml: original }),
+    save_task_commands: () => ({ type: "error", code: "invalid_config", message: "Invalid registry" }),
+  } });
+  await openSettings();
+  await editCommands();
+  assert.equal(env.elements.get("commands-repair").hidden, false);
+  assert.equal(env.elements.get("commands-add").hidden, true);
+  assert.equal(env.elements.get("commands-original").value, original);
+  assert.equal(env.elements.get("commands-toml").value, original);
+  env.elements.get("commands-toml").value = original.replace("clipboard", "sidebar");
+  env.elements.get("commands-save").click();
+  await until(() => env.elements.get("commands-status").textContent.includes("Invalid registry"), "registry refusal");
+  assert.equal(env.elements.get("commands-original").value, original);
+  assert.equal(env.elements.get("commands-toml").value, original.replace("clipboard", "sidebar"));
+  assert.equal(env.requests.find((r) => r.type === "save_task_commands").commands_toml, env.elements.get("commands-toml").value);
+});
+
+test("a policy refresh keeps all command row text and requires reviewing the newer config", async () => {
+  install({ host: { get_task_command_settings: () => commandSettings() } });
+  await openSettings();
+  await editCommands();
+  commandFields()[0].value = "renamed";
+  commandFields()[1].value = "My description";
+  commandFields()[2].value = "My draft";
+  env.revision++;
+  env.firePolicyChange();
+  await until(() => env.elements.get("commands-save").disabled && idle(), "command revision refresh");
+  assert.deepEqual(commandFields().map((field) => field.value), ["renamed", "My description", "My draft"]);
+  assert.equal(env.requests.some((r) => r.type === "save_task_commands"), false);
+});
+
+test("saved command response validation rejects prompt injection fields and counts Unicode characters", async () => {
+  const { isResponseShape } = await import("../dist/protocol-shape.js");
+  const response = { ...commandSettings(), protocol_version: PROTOCOL_VERSION, request_id: "settings" };
+  response.commands = [{ name: "review", description: "🔎".repeat(256), prompt: "🔎".repeat(4096) }];
+  assert.equal(isResponseShape(response), true);
+  assert.equal(isResponseShape({ ...response, commands: [{ ...response.commands[0], cwd: "/tmp" }] }), false);
+  assert.equal(isResponseShape({ ...response, commands: [{ ...response.commands[0], prompt: "🔎".repeat(4097) }] }), false);
+  assert.equal(isResponseShape({ ...response, commands: "wrong" }), false);
+});
 
 function typeSite(url) {
   env.elements.get("site-origin").value = url;

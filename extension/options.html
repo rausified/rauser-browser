@@ -199,6 +199,31 @@
         </div>
       </section>
 
+      <section aria-labelledby="commands-heading">
+        <h2 id="commands-heading">Saved task commands</h2>
+        <p>Keep repeatable instructions here, then insert a command from the task bar. Saving never starts a task. Instructions are literal text; template variables and outputs other than the Tasks report are not supported.</p>
+        <button id="commands-open" type="button" class="secondary" disabled>Edit saved commands…</button>
+        <div id="commands-editor" hidden>
+          <h3 id="commands-editor-heading" tabindex="-1">Edit commands</h3>
+          <p>Names start with a lowercase letter and contain up to 32 lowercase letters, digits, hyphens or underscores. The names summarize, note, save, related and log are reserved. Descriptions allow 256 characters; instructions allow 4096. Save applies the complete list.</p>
+          <div id="commands-rows"></div>
+          <button id="commands-add" type="button" class="secondary">Add command</button>
+          <div id="commands-repair" hidden>
+            <p>These saved values need repair. Edit the commands-only TOML below. The original config is backed up beside config.toml when the repair is saved. Use <code>commands = []</code> to explicitly remove all commands.</p>
+            <label for="commands-original">Preserved command values (TOML)</label>
+            <textarea id="commands-original" rows="6" readonly spellcheck="false"></textarea>
+            <label for="commands-toml">Repaired command values (TOML)</label>
+            <textarea id="commands-toml" rows="12" spellcheck="false"></textarea>
+          </div>
+          <p id="commands-status" role="status" aria-live="polite"></p>
+          <button id="commands-save" type="button">Save commands</button>
+          <button id="commands-review" type="button" class="secondary" hidden>Review current commands (keeps draft)</button>
+          <label for="commands-current" id="commands-current-label" hidden>Current saved command values (TOML)</label>
+          <textarea id="commands-current" rows="6" readonly spellcheck="false" hidden></textarea>
+          <button id="commands-cancel" type="button" class="secondary">Close without saving</button>
+        </div>
+      </section>
+
       <section aria-labelledby="diagnostics-heading">
         <h2 id="diagnostics-heading">Diagnostics</h2>
         <p>{{APP_NAME}} keeps a short local log of its own requests and problems, up to 500 entries, to help diagnose them. It holds no page text, titles, notes, prompts, or answers, and addresses only as their site. Nothing leaves this computer unless you copy it. A native request's ID also appears in the host's own logs, so the two can be read together.</p>
