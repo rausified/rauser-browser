@@ -163,6 +163,10 @@ with real Chrome and a real Figma account:
 8. Check that `/files/…`, `/files/project/<id>` and the community pages are
    not recorded, and that file keys seen are 22 characters.
 9. Repeat titles with the UI language set to something other than English.
+10. On a Capture Site review on a Figma file page with no saved rules,
+    Brauser offers Figma files and Figma branches with the every-account
+    statement and the development-draft source line; saving one turns the
+    page card's status to "● Artifact recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `figma.file`'s `status`

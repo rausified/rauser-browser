@@ -116,6 +116,10 @@ with real Chrome and a real Vidcast account:
    share ID. Record both titles.
 5. Rename the playlist and confirm the tab title and the recorded title
    follow, while the share ID stays the same.
+6. On a Capture Site review on a playlist page with no saved rules, Brauser
+   offers all three Vidcast types with the every-account statement in each
+   type's own description and the development-draft source line; saving
+   one turns the page card's status to "● Artifact recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `vidcast.playlist`'s

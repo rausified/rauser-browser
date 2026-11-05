@@ -96,6 +96,10 @@ rules was a scored miss.
 - **Gmail is not covered.** See `docs/adapters/google.doc.md` "Known
   limits": Gmail is fragment-routed and the message permalink is a possible
   future type, not a rule here.
+- **Loading and interstitial titles are recorded as given.** See
+  `docs/adapters/google.doc.md` "Known limits": a tab still loading may
+  read the bare product name, and a Workspace-blocked or no-access
+  interstitial records that string as the title.
 - **Drive and Calendar wait** for the shared-origin migration, as for
   `google.doc`.
 - The ID template is frozen once shipped (adapter-templates.md §8.2).
@@ -117,7 +121,10 @@ with real Chrome and a real Google account:
 4. `/prefill` and the bare published-ID path each stay "○ Not an artifact",
    and the sibling `google.form` type never claims a responder link (see
    "What each rule covers").
-5. On a Capture Site review on a responder page with no saved rules, Brauser
+5. Record the tab title while the responder page is loading, as an account
+   without access, and on a Workspace account where the app is disabled;
+   note whether the worker's title hold hides the loading title.
+6. On a Capture Site review on a responder page with no saved rules, Brauser
    offers all five Google Workspace types with the every-account statement
    and the development-draft source line; saving one turns the page card's
    status to "● Artifact recognized".

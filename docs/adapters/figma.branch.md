@@ -131,6 +131,10 @@ plan:
    route and confirm it lands on the same branch key.
 5. Open the branch in FigJam and in Slides (presenter and audience view) and
    confirm each still reads only the branch key, never the main file's.
+6. On a Capture Site review on a Figma branch page with no saved rules,
+   Brauser offers Figma files and Figma branches with the every-account
+   statement and the development-draft source line; saving one turns the
+   page card's status to "● Artifact recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `figma.branch`'s

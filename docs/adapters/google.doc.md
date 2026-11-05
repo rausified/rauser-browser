@@ -102,6 +102,11 @@ by listing both dashes for every suffix template.
   view, `mail.google.com/mail/u/<n>/?ik=…&view=pt&permmsgid=msg-f:…`, use the
   query string instead and are a possible future type (scorecard miss 2),
   not a rule in this draft.
+- **Loading and interstitial titles are recorded as given.** A tab still
+  loading may read `Google Docs` (or the product name) before the real
+  title loads, and a Workspace-blocked or no-access page (`Service Not
+  Allowed`, a sign-in or request-access page on the same URL) records that
+  string as the title (scorecard "Predicted limits").
 - **Drive and Calendar wait.** `drive.google.com` and `calendar.google.com`
   are just as multi-account as `docs.google.com` but are not on Brauser's
   shared-origin list, so neither can carry the `unscoped` acknowledgment
@@ -130,7 +135,10 @@ with real Chrome and a real Google account:
    document's bare name.
 4. The home list, `/document/create`, `/copy`, `/export` and a published
    `/pub` link each stay "○ Not an artifact".
-5. On a Capture Site review on a document page with no saved rules, Brauser
+5. Record the tab title while the document is loading, as an account
+   without access, and on a Workspace account where the app is disabled;
+   note whether the worker's title hold hides the loading title.
+6. On a Capture Site review on a document page with no saved rules, Brauser
    offers all five Google Workspace types with the every-account statement
    and the development-draft source line; saving one turns the page card's
    status to "● Artifact recognized".

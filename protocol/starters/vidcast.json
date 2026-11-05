@@ -397,7 +397,7 @@
       "key": "vidcast.playlist:{origin}",
       "label": "Vidcast playlists",
       "label_variants": [],
-      "description": "Each playlist becomes one artifact, however it was opened. Records videos from every Vidcast account signed in to this Chrome profile.",
+      "description": "Each playlist becomes one artifact, however it was opened. Records playlists from every Vidcast account signed in to this Chrome profile.",
       "record_label": "playlists",
       "example_path": null,
       "adapter": {
@@ -593,7 +593,7 @@
       "key": "vidcast.page:{origin}",
       "label": "Vidcast pages",
       "label_variants": [],
-      "description": "Each page becomes one artifact, however it was opened or edited. Records videos from every Vidcast account signed in to this Chrome profile.",
+      "description": "Each page becomes one artifact, however it was opened or edited. Records pages from every Vidcast account signed in to this Chrome profile.",
       "record_label": "pages",
       "example_path": null,
       "adapter": {

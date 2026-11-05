@@ -159,6 +159,10 @@ with real Chrome and a real Vidcast account:
    being recorded.
 6. Confirm the loading-state title (`Vidcast - <share id>`, if real) and
    whether the worker's title hold hides it in practice.
+7. On a Capture Site review on a video page with no saved rules, Brauser
+   offers all three Vidcast types with the every-account statement in each
+   type's own description and the development-draft source line; saving
+   one turns the page card's status to "● Artifact recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `vidcast.video`'s

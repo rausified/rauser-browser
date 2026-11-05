@@ -96,6 +96,10 @@ observed; nothing about this type's rules was a scored miss.
 - **Gmail is not covered.** See `docs/adapters/google.doc.md` "Known
   limits": Gmail is fragment-routed and the message permalink is a possible
   future type, not a rule here.
+- **Loading and interstitial titles are recorded as given.** See
+  `docs/adapters/google.doc.md` "Known limits": a tab still loading may
+  read the bare product name, and a Workspace-blocked or no-access
+  interstitial records that string as the title.
 - **Drive and Calendar wait** for the shared-origin migration, as for
   `google.doc`.
 - The ID template is frozen once shipped (adapter-templates.md §8.2).
@@ -111,14 +115,17 @@ with real Chrome and a real Google account:
    from a "Copy link" share link. Record the final URL and the real tab
    title; confirm it against the `- Google Forms` prediction above and add
    or correct the title entry if it differs.
-2. Repeat signed in to a second account to confirm the `/u/0/` form lands on
+2. Repeat signed in to a second account to confirm the `/u/1/` form lands on
    the same artifact.
 3. Open the legacy `/forms/d/<formId>/viewform` link (the respondent view
    built on the editor's own ID) and confirm it records view mode with the
    bare form title.
 4. The home list stays "○ Not an artifact", and a published responder link
    on the same form lands on `google.formresponse`, never on this type.
-5. On a Capture Site review on a form editor page with no saved rules,
+5. Record the tab title while the form editor is loading, as an account
+   without access, and on a Workspace account where the app is disabled;
+   note whether the worker's title hold hides the loading title.
+6. On a Capture Site review on a form editor page with no saved rules,
    Brauser offers all five Google Workspace types with the every-account
    statement and the development-draft source line; saving one turns the
    page card's status to "● Artifact recognized".
