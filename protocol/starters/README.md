@@ -214,10 +214,25 @@ vector, and a sample whose title the title template accepts) and check 8
 
 ## Adding a type
 
+`npm run new:starter -- <family> <type> [--exact <origin> | --subdomain <suffix>] [--scope <kind>]`
+(`scripts/new-starter.mjs`) scaffolds this for you: it writes the family
+file (a new one, or a new `types[]` entry on an existing family) and
+`docs/adapters/<type>.md`, each with `"TODO"` placeholders and `match: []`,
+then runs the generator in `--check` mode and prints every problem under
+"Fill these in, then run `npm run gen:starters`" — the record of what is
+still missing, in one pass, so there is nothing else to separately track.
+By hand, the steps it automates are:
+
 1. Add a `types[]` entry to the family's JSON file (or a new family file, named `<family>.json`, for a tool with no existing entry) following the shape above.
-2. Add the type's `adapter.id` template (and any `within.id`) to `ids.lock.json`; `generate-starters.mjs` fails closed with "no lock entry for `<type>`" until it is there.
-3. Run `npm run gen:starters` and commit the regenerated `extension/starter-families.generated.ts`, `protocol/capture-site/catalog.json`, (when the type's `samples_shape` is true) `protocol/capture-site/starter-shapes.json`, and `protocol/adapter-templates/starter-vectors.json` alongside the source change.
-4. Add the type's doc page, `docs/adapters/<type>.md` (`adapter-templates.md` §11.1), and its test vectors to the type's `vectors` ("Test vectors and overlaps" above).
+2. Add the type's doc page, `docs/adapters/<type>.md` (`adapter-templates.md` §11.1), and its test vectors to the type's `vectors` ("Test vectors and overlaps" above).
+3. Run `npm run gen:starters`. Write mode appends an `ids.lock.json` entry for a type missing one, keyed to the `adapter.id` (and any `within.id`) the family file currently declares, and prints `appended lock entry <type> → <id>`; `--check` still fails closed with "no lock entry for `<type>`" until that has happened. An entry that already exists but no longer matches still fails either way ("id template changed for `<type>`").
+4. Commit the regenerated `extension/starter-families.generated.ts`, `protocol/capture-site/catalog.json`, (when the type's `samples_shape` is true) `protocol/capture-site/starter-shapes.json`, `protocol/adapter-templates/starter-vectors.json`, `docs/adapters/README.md` and the `ids.lock.json` append, alongside the source change.
+
+A type's `record_label` (the noun a "Remember: A and B" summary uses when a
+site offers more than one starter) is worth getting right the first time:
+`npm run new:starter` leaves it `"TODO"` rather than `null`, even though
+`null` validates, so a fresh scaffold's "fill these in" list never lets it
+pass unnoticed.
 
 ## Frozen IDs
 
@@ -236,8 +251,10 @@ matches its lock entry.
 npm run gen:starters          # write extension/starter-families.generated.ts,
                                # the starter_types line of
                                # protocol/capture-site/catalog.json,
-                               # protocol/capture-site/starter-shapes.json, and
-                               # protocol/adapter-templates/starter-vectors.json
+                               # protocol/capture-site/starter-shapes.json,
+                               # protocol/adapter-templates/starter-vectors.json,
+                               # docs/adapters/README.md (the status index),
+                               # and append any missing ids.lock.json entry
 node scripts/generate-starters.mjs --check   # fail if any is out of date,
                                               # or a lock problem exists
 ```

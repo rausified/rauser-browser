@@ -105,6 +105,9 @@ test("engine, host code, the panel script, protocol schema and tooling need the 
 
 test("the Confluence change runs every extension, engine and host check plus a11y for its HTML", () => {
   assert.deepEqual(names(CONFLUENCE), [
+    // docs/adapters/confluence.page.md is in CONFLUENCE, which now also
+    // triggers STARTER_INPUTS (Open decision 7).
+    "starter sources",
     "status docs",
     "typecheck",
     "lint",
@@ -125,9 +128,21 @@ test("the Miro change skips a11y (no page markup changed)", () => {
 });
 
 test("a docs-only change runs only the cheap docs checks", () => {
-  assert.deepEqual(names(["docs/adapters/miro.board.md", "README.md"]), ["status docs"]);
+  assert.deepEqual(names(["README.md"]), ["status docs"]);
   // status docs also refuses a committed queue file (check_current_state.py).
   assert.deepEqual(names([".beads/issues.jsonl"]), ["status docs"]);
+});
+
+test("a starter doc change runs the generator check and the extension group (Open decision 7)", () => {
+  // docs/adapters/ is no longer exempted through ci-changes.mjs's docs-only
+  // path (that change now counts as code there too), so it joins
+  // STARTER_INPUTS (the generator reads a doc's Status: line) and
+  // EXTENSION_INPUTS (the registry test reads it).
+  assert.ok(isInScope("docs/adapters/jira.issue.md"));
+  const steps = names(["docs/adapters/jira.issue.md"]);
+  assert.ok(steps.includes("starter sources"));
+  assert.ok(steps.includes("test:extension"));
+  assert.deepEqual(steps, ["starter sources", "status docs", "typecheck", "lint", "build:extension", "test:extension"]);
 });
 
 test("a vectors-only change skips the host and Rust lints", () => {

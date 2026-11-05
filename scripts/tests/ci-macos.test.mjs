@@ -90,7 +90,12 @@ test("toolchain, manifests, the native port, smoke, macOS dev tools and CI need 
   }
   for (const file of ["extension/starter-adapters.ts", "extension/panel.ts", "extension/panel.html", "extension/worker.ts",
     "extension/build.mjs", "protocol/schema.json", "protocol/adapter-templates/vectors.json", "protocol/capture-site/catalog.json",
-    "adapter-templates/src/lib.rs", "package.json", "package-lock.json", "scripts/gate-adapter.mjs", "scripts/dev/pr-watch.mjs"]) {
+    "adapter-templates/src/lib.rs", "package.json", "package-lock.json", "scripts/gate-adapter.mjs", "scripts/dev/pr-watch.mjs",
+    // Starter families PR C, Task 6: the scaffolder and the generated files
+    // it and the generator write are cross-platform Node/JSON/Markdown,
+    // same as every other starter source.
+    "protocol/starters/aha.json", "protocol/capture-site/starter-shapes.json", "protocol/adapter-templates/starter-vectors.json",
+    "docs/adapters/README.md", "scripts/new-starter.mjs"]) {
     assert.equal(needs([file]), false, file);
   }
   assert.equal(needs([]), true, "an empty or failed diff runs macOS");
