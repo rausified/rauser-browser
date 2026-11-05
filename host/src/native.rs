@@ -12315,6 +12315,7 @@ id = "gdoc:{host}/{id}"
             crate::service::record::LIST_INSTRUCTION_CHARS + 1
         );
         let view = brauser_protocol::RunView {
+            start_request_id: None,
             no_page: None,
             run_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
             state: RunState::Succeeded,

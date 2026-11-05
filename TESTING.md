@@ -1900,6 +1900,31 @@ and wire tests cover every scope with and without an overview, literal text,
 legacy absence and clearing on navigation. These fixtures do not certify the
 agent's actual reading or a live browser deployment.
 
+## Optional task completion notifications
+
+Task completion notifications have offline coverage in
+`extension/tests/task-notifications.test.mjs`: pre-start discovery, fast
+finishes and lost answers, exact request correlation across overlapping windows
+and browser profiles, MV3 restart, pagination, permission refusal and
+revocation, deferred/acknowledged finishes, storage failure, no duplicate
+delivery after a Chrome API failure, and capture-badge precedence. The worker
+test drives an actual alarm through a fake native port and checks synchronous
+panel opening before any await. Panel/task tests pin the awaited pre-start
+handoff and observed-finish acknowledgement. The accessibility keyboard suite
+exercises the optional Settings permission control with a fake Chrome API.
+
+Real desktop acceptance remains separate: enable notifications in Settings,
+start a task, close the panel before the start reply and wait for its finish;
+check one generic alert and the unread badge, click to open the panel and the
+selected Tasks report, then repeat with the panel left open (no alert), a
+failed/canceled task, permission refusal/revocation, and a closed source
+window. Check OS-level notification permission/Do Not Disturb separately;
+headless mocks cannot prove OS toast presentation or Chrome's gesture grant.
+Use only fake harnesses in automated tests. No test invokes the real OS
+notification center. `wire_tasks` pins the optional task-view correlation field;
+the service record test proves its persistence and legacy omission, and fake
+service/harness tests check that it is the original forwarded request ID.
+
 ## Reusable sidebar task commands
 
 `host/src/task_commands.rs` tests registry limits, duplicate/reserved names,

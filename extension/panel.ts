@@ -28,6 +28,7 @@ import {
 } from "./task.js";
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
+import { armTaskNotifications, taskNoticeSignal } from "./task-notifications.js";
 import { TaskRecall } from "./task-recall.js";
 import { literalTaskInstruction } from "./task-commands.js";
 import { readScopeText, recentSummaryText, summaryLine } from "./summary-text.js";
@@ -292,6 +293,7 @@ let lastStartedRunId: string | null = null;
 // Chrome that cannot answer, which then claims any window's Reuse value.
 const panelWindowId: Promise<number | null> = chrome.windows.getCurrent()
   .then((current) => current.id ?? null, () => null);
+taskNoticeSignal("task_notice_opened");
 let captureSite: CaptureSitePanel | null = null;
 // Suppress note loads only while capture policy can change their identity.
 // Once the post-save reload starts, tab events must reach NoteEditor's token
@@ -1569,6 +1571,10 @@ async function runTask(): Promise<void> {
       instruction,
       { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
       commandRevision ?? undefined,
+      async (requestId) => {
+        const windowId = await panelWindowId;
+        if (windowId !== null) await armTaskNotifications(windowId, requestId);
+      },
     );
     if (runLines.get(taskRunArea)?.tabId === tabId) clearRunLine(taskRunArea);
     if (run !== null) {
@@ -1608,6 +1614,7 @@ let announceTimer: ReturnType<typeof setTimeout> | null = null;
  * region. The region is emptied first and written on the next tick, so a
  * screen reader announces a text identical to the last one again. */
 function announceTask(run: RunView): void {
+  taskNoticeSignal("task_notice_seen", run.run_id);
   const chars = Array.from(run.instruction ?? "");
   const shown = chars.length > 60 ? `${chars.slice(0, 60).join("")}…` : chars.join("");
   const outcome = run.state === "succeeded" ? "done" : run.state === "canceled" ? "canceled" : "failed";
@@ -2481,6 +2488,7 @@ taskOpenButton.addEventListener("click", openTasks);
 // catches up at once.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") return;
+  taskNoticeSignal("task_notice_opened");
   if (tracker !== null) void refreshTasks();
   void checkForUpdate();
 });

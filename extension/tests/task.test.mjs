@@ -66,10 +66,16 @@ const byteLength = (value) => new TextEncoder().encode(JSON.stringify(value)).le
 test("host task views accept only boolean no-page scope on task runs", async () => {
   const { isRunView } = await import("../dist/protocol-shape.js");
   assert.equal(isRunView({ ...RUN, no_page: true }), true);
+  assert.equal(isRunView({ ...RUN, start_request_id: "start-attempt" }), true);
+  assert.equal(isRunView({ ...RUN, start_request_id: "😀".repeat(128) }), true);
+  for (const start_request_id of [null, "", 42, "x".repeat(129)]) {
+    assert.equal(isRunView({ ...RUN, start_request_id }), false);
+  }
   assert.equal(isRunView({ ...RUN, no_page: false }), true);
   assert.equal(isRunView({ ...RUN, no_page: "true" }), false);
   const { instruction: _instruction, task_report: _report, ...summary } = RUN;
   assert.equal(isRunView({ ...summary, kind: "summary", no_page: true }), false);
+  assert.equal(isRunView({ ...summary, kind: "summary", start_request_id: "task-only" }), false);
 });
 
 test("startTask without a page skips extraction and sends only the typed instruction", async () => {
@@ -164,6 +170,21 @@ test("startTask marks runs may exist before and after start_task", async () => {
   const refused = taskDeps({ answer: () => { throw new HostError("conflict", "Four tasks are already waiting or running. Wait for one to finish."); } });
   await assert.rejects(startTask(TAB, "Do it", refused.deps), (error) => error.code === "conflict");
   assert.deepEqual(refused.events, [mark, "readability", "extract", "call:start_task"]);
+});
+
+test("task completion monitoring is armed after reading but before native dispatch", async () => {
+  const { deps, events, requests } = taskDeps();
+  let armedRequest;
+  await startTask(TAB, "Do it", deps, undefined, async (requestId) => { armedRequest = requestId; events.push("monitor-armed"); });
+  assert.ok(events.indexOf("extract") < events.indexOf("monitor-armed"));
+  assert.ok(events.indexOf("monitor-armed") < events.indexOf("call:start_task"));
+  const refused = taskDeps();
+  await assert.rejects(startTask(TAB, "Do it", refused.deps, undefined, async () => {
+    throw new Error("monitoring unavailable");
+  }), /monitoring unavailable/);
+  assert.equal(refused.requests.length, 0);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].request.request_id, armedRequest);
 });
 
 test("startTask refuses an unreadable or moved page without sending anything", async () => {
