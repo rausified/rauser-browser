@@ -88,3 +88,20 @@ test("a type with no sample whose title the title template accepts is named (che
   const problems = coverageProblems(inputs, engine);
   assert.deepEqual(problems, ["miro.board: no sample whose title the title template accepts"]);
 });
+
+test("a family whose synthesized fixture fails to compile is named, not silently skipped (check 4, Important 3)", () => {
+  // Before the fix, `coverageProblems`'s title check did
+  // `if (!compiled.ok) continue;`: a family whose synthesized fixture
+  // doesn't compile reported nothing at all, which is exactly the vacuous
+  // pass this check exists to prevent (CODING.md "no silent fallbacks").
+  const inputs = loadInputs();
+  inputs.families = structuredClone(inputs.families);
+  const miro = inputs.families.find((family) => family.family === "miro");
+  assert.ok(miro, "expected a miro family");
+  // An adapter must declare at least one match rule (adapter-templates.ts
+  // `no_rules`); emptying it makes compileDocument(synthesizeFixture(miro))
+  // fail for the whole family.
+  miro.types[0].adapter.match = [];
+  const problems = coverageProblems(inputs, engine);
+  assert.deepEqual(problems, ["miro: synthesized fixture does not compile (no_rules)"]);
+});

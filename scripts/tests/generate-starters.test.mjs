@@ -1088,3 +1088,75 @@ test("an unmoved www.figma.com fixture would have collided with a Figma starter 
     "protocol/starters/figma.json: origin overlaps <fixture EXAMPLE_UNSCOPED_FAMILY>",
   ]);
 });
+
+// --- Task 5 review fix round 1 ---------------------------------------------
+
+test("a starter-shapes.json row naming no family type is caught (check 2 reverse, Minor 1)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const starterShapesPath = path.join(root, STARTER_SHAPES_JSON);
+  const starterShapes = JSON.parse(readFileSync(starterShapesPath, "utf8"));
+  starterShapes.accept.push({
+    note: "Nonexistent sample (docs/adapters/nosuch.type.md)",
+    url: "https://example.test/x",
+    shape: "/x",
+  });
+  writeFileSync(starterShapesPath, `${JSON.stringify(starterShapes, null, 2)}\n`);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  const output = result.stdout + result.stderr;
+  assert.match(
+    output,
+    /protocol\/capture-site\/starter-shapes\.json: row "Nonexistent sample \(docs\/adapters\/nosuch\.type\.md\)" names no family type/,
+  );
+  assert.match(output, new RegExp(`out of date: ${STARTER_SHAPES_JSON}`));
+});
+
+test("a missing starter-shapes.json regenerates in write mode instead of crashing (Important 1)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const starterShapesPath = path.join(root, STARTER_SHAPES_JSON);
+  rmSync(starterShapesPath);
+
+  // --check still reports it as out of date (main's own readNormalised
+  // already treats a missing generated file that way).
+  const checked = run(["--check", "--root", root]);
+  assert.equal(checked.status, 1);
+  assert.match(checked.stdout + checked.stderr, new RegExp(`out of date: ${STARTER_SHAPES_JSON}`));
+
+  // Write mode regenerates it cleanly rather than crashing on the missing
+  // file (the review's exact regression: base regenerates it, head threw
+  // ENOENT).
+  const written = run(["--root", root]);
+  assert.equal(written.status, 0, written.stdout + written.stderr);
+  const regenerated = readFileSync(starterShapesPath, "utf8");
+  assert.ok(regenerated.length > 0);
+  const recheck = run(["--check", "--root", root]);
+  assert.equal(recheck.status, 0, recheck.stdout + recheck.stderr);
+});
+
+test("an unparsable starter-shapes.json is treated as no rows, not a crash (Important 1)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const starterShapesPath = path.join(root, STARTER_SHAPES_JSON);
+  writeFileSync(starterShapesPath, "not json");
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  const output = result.stdout + result.stderr;
+  assert.match(output, new RegExp(`out of date: ${STARTER_SHAPES_JSON}`));
+  assert.doesNotMatch(output, /SyntaxError/);
+});
+
+test("a subdomain family missing its suffix reports the validation line without crashing (Important 2)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const sharepoint = readFamily(root, "sharepoint");
+  delete sharepoint.origin.suffix;
+  writeFamily(root, "sharepoint", sharepoint);
+  const result = run(["--check", "--root", root]);
+  assert.equal(result.status, 1);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /protocol\/starters\/sharepoint\.json: origin\.suffix is required/);
+  assert.doesNotMatch(result.stderr, /TypeError/);
+  assert.doesNotMatch(result.stderr, /at originsCollide/);
+});

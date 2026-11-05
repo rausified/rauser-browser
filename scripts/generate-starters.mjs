@@ -623,14 +623,19 @@ function checkDuplicate(problems, seen, kind, file, value) {
 
 /** `loadFamilyEntries`'s implementation, without the throw: every family
  * file's validation problems (unknown field, missing key, a duplicate type,
- * key, or vector id), and the `{file, family}` entries (sorted by file name,
- * each family's `types` kept in source order) that `checkPolicy` and
- * `checkRegistry` read. Open decision 13: a file that is not valid JSON, or
- * whose shape is not even a plain object with a `types` array, is left out
- * of `entries` — there is nothing further to check for it — but every other
- * file still appears there, even one with its own validation problems, so
- * `main`'s later checks keep seeing the rest of the repository in the same
- * pass. */
+ * key, or vector id), the `{file, family}` entries (sorted by file name,
+ * each family's `types` kept in source order), and `invalidFiles` (the
+ * subset of those files that got at least one of the above problems). Open
+ * decision 13: a file that is not valid JSON, or whose shape is not even a
+ * plain object with a `types` array, is left out of `entries` entirely —
+ * there is nothing further to check for it — but every other file still
+ * appears there, even one with its own validation problems, so `main`'s
+ * later checks keep seeing the rest of the repository in the same pass.
+ * `invalidFiles` lets `main` hold `checkPolicy` and `checkRegistry` back
+ * from a file whose own shape they cannot trust (Task 5 review, Important
+ * 2): a family with a validation problem (for example a subdomain `origin`
+ * missing `suffix`) still gets its validation line, but policy and registry
+ * problems — which assume a validated shape — are not attempted for it. */
 function loadFamilyEntriesLenient(root) {
   const dir = path.join(root, STARTERS_DIR);
   const files = readdirSync(dir)
@@ -638,6 +643,7 @@ function loadFamilyEntriesLenient(root) {
     .sort();
   const problems = [];
   const entries = [];
+  const invalidFiles = new Set();
   const seenTypes = new Map();
   const seenKeys = new Map();
   // Seeded with the legacy fixture's own case ids, so a family file's vector
@@ -653,6 +659,7 @@ function loadFamilyEntriesLenient(root) {
   }
   for (const name of files) {
     const file = path.posix.join(STARTERS_DIR, name);
+    const problemsBefore = problems.length;
     let data;
     try {
       data = JSON.parse(readFileSync(path.join(dir, name), "utf8"));
@@ -661,7 +668,10 @@ function loadFamilyEntriesLenient(root) {
       continue;
     }
     validateFamily(problems, file, data);
-    if (!isPlainObject(data) || !Array.isArray(data.types)) continue;
+    if (!isPlainObject(data) || !Array.isArray(data.types)) {
+      if (problems.length > problemsBefore) invalidFiles.add(file);
+      continue;
+    }
     for (const type of data.types) {
       if (!isPlainObject(type)) continue;
       if (typeof type.type === "string") checkDuplicate(problems, seenTypes, "type", file, type.type);
@@ -674,9 +684,10 @@ function loadFamilyEntriesLenient(root) {
         }
       }
     }
+    if (problems.length > problemsBefore) invalidFiles.add(file);
     entries.push({ file, family: data });
   }
-  return { entries, problems };
+  return { entries, problems, invalidFiles };
 }
 
 /** The `{file, family}` entries `loadFamilyEntriesLenient` finds, thrown as
@@ -1027,7 +1038,13 @@ export function checkRegistry(root, entries) {
   }
 
   // Check 2, reverse direction: every docs/adapters/*.md file (other than
-  // its README) must be some family type's own doc.
+  // its README) must be some family type's own doc. `entries` (main's
+  // `cleanEntries`) can be missing a family file that failed to parse as
+  // JSON, or one `main` held back for a validation problem (Important 2
+  // above); either way, that family's own docs look orphaned here too,
+  // alongside the problem that actually explains it (Task 5 review, Minor
+  // 2 — informational noise, not a false claim, since the root cause is
+  // always reported first).
   let docFiles = [];
   try {
     docFiles = readdirSync(path.join(root, DOCS_ADAPTERS_DIR))
@@ -1042,7 +1059,9 @@ export function checkRegistry(root, entries) {
   }
 
   // Check 2, reverse direction: a hand-kept shapes.json row that names a
-  // starter doc belongs in a family file's samples instead.
+  // starter doc belongs in a family file's samples instead. (This check
+  // does not depend on `entries` at all, so it is unaffected by a dropped
+  // or held-back family file.)
   const shapes = JSON.parse(readFileSync(path.join(root, SHAPES_JSON), "utf8"));
   for (const row of [...(shapes.accept ?? []), ...(shapes.reject ?? [])]) {
     if (isPlainObject(row) && typeof row.note === "string" && DOC_SUFFIX_RE.test(row.note)) {
@@ -1051,9 +1070,22 @@ export function checkRegistry(root, entries) {
   }
 
   // Check 2, reverse direction: a hand-edited starter-shapes.json row must
-  // still name a real family type. --check's own byte comparison already
-  // flags a hand edit there; this message names the row.
-  const starterShapes = JSON.parse(readFileSync(path.join(root, STARTER_SHAPES), "utf8"));
+  // still name a real family type (`knownTypes`, built above from
+  // `entries` — the same caveat about a dropped or held-back family file
+  // noted on the stray-doc check above applies here too). --check's own
+  // byte comparison already flags a hand edit there; this message names
+  // the row. A missing or unparsable file (a generated output someone
+  // deleted to force a clean regeneration, or that a fresh scaffold has
+  // not written yet) has no rows to check — `main`'s own `readNormalised`
+  // already reports it as "out of date" for --check, and write mode
+  // should still be able to regenerate it rather than crash (Task 5
+  // review, Important 1).
+  let starterShapes;
+  try {
+    starterShapes = JSON.parse(readFileSync(path.join(root, STARTER_SHAPES), "utf8"));
+  } catch {
+    starterShapes = { accept: [] };
+  }
   for (const row of starterShapes.accept ?? []) {
     if (!isPlainObject(row) || typeof row.note !== "string") continue;
     const match = row.note.match(DOC_SUFFIX_RE);
@@ -1095,21 +1127,33 @@ export function checkRegistry(root, entries) {
  * given `engine` (`extension/tests/starter-registry.test.mjs` passes the
  * built `dist/adapter-templates.js`) against already-loaded data, and
  * `main` never calls it, since it needs the built engine. Each problem
- * reads `<type>: <message>`.
+ * reads `<type>: <message>`, except the one compile-failure problem below,
+ * which reads `<family>: synthesized fixture does not compile (<code>)`,
+ * since a document that doesn't compile has no per-type title result to
+ * report yet.
  *
  * Counting: "legacy cases count through fixtures.starters, mapping each
  * artifact index to its type; family cases count through starter:<family>,
  * where the index is the type's position" (task-5-brief.md). A positive
  * case for rule `i` is an evaluate case on one of those two fixtures whose
- * `expect` is exactly `{match: true, type, rule: i}`. A negative case is an
+ * `expect` is exactly `{match: true, type, rule: i}` — read from the
+ * vector's own declared `expect`, not from re-running the matcher, since
+ * the conformance suites (`adapter-templates/tests`, `extension/tests/
+ * adapter-templates.test.mjs`) already run every vector through the engine
+ * and would fail first if a declared `expect` were wrong; this check only
+ * asks whether the right *kind* of vector exists. A negative case is an
  * evaluate case on either fixture whose `url` sits on the type's own
  * adapter origin (an artifact sharing that origin in `fixtures.starters` may
  * belong to a sibling type on a shared origin such as github.com) but whose
- * `expect` is not a positive match for this type. The title check instead
- * runs `engine.evaluate` against `synthesizeFixture(family)`: a type whose
- * adapter has a `title` template needs at least one non-null-titled sample
- * the engine actually matches with `title_entry !== null`; a type with no
- * `title` template is exempt. */
+ * `expect` is not a positive match for this type. For a family case, "the
+ * type's own adapter origin" is just `family.sample_origin` (every type in
+ * a family shares one origin), not every origin `familyClaims` would
+ * accept — a subdomain family's negative vector on a second tenant host is
+ * not counted, which can only under-count negatives, never hide a missing
+ * one. The title check instead runs `engine.evaluate` against
+ * `synthesizeFixture(family)`: a type whose adapter has a `title` template
+ * needs at least one non-null-titled sample the engine actually matches
+ * with `title_entry !== null`; a type with no `title` template is exempt. */
 export function coverageProblems({ families, vectors, starterVectors }, engine) {
   const problems = [];
   const ruleCounts = new Map();
@@ -1167,7 +1211,15 @@ export function coverageProblems({ families, vectors, starterVectors }, engine) 
 
   for (const family of families) {
     const compiled = engine.compileDocument(synthesizeFixture(family));
-    if (!compiled.ok) continue;
+    if (!compiled.ok) {
+      // A fixture that doesn't compile can prove nothing about title
+      // coverage; reporting it, instead of silently skipping the family
+      // (CODING.md §5, no silent fallbacks), is itself the title check's
+      // job here, since nothing else in this function compiles the
+      // synthesized fixture (Task 5 review, Important 3).
+      problems.push(`${family.family}: synthesized fixture does not compile (${compiled.error.code})`);
+      continue;
+    }
     for (const type of family.types) {
       if (!titledTypes.has(type.type)) continue;
       const accepted = type.samples.some((sample) => {
@@ -1197,17 +1249,24 @@ function main(argv) {
   // broken to validate (loadFamilyEntriesLenient already dropped it, or
   // skipped the files that follow it) is also too broken to generate from,
   // so a family validation problem stops generation the same way it always
-  // did; policy and registry problems do not.
-  const { entries, problems: familyProblems } = loadFamilyEntriesLenient(root);
+  // did; policy and registry problems do not. `checkPolicy` and
+  // `checkRegistry` only read entries whose own validation was clean
+  // (Task 5 review, Important 2) — a family with a validation problem
+  // already reports it, and its shape cannot be trusted for the checks
+  // that assume a validated family (for example a subdomain `origin` with
+  // no `suffix`), so it is held back rather than risking a crash that
+  // would hide the validation line that explains it.
+  const { entries, problems: familyProblems, invalidFiles } = loadFamilyEntriesLenient(root);
   const families = entries.map((entry) => entry.family);
+  const cleanEntries = entries.filter((entry) => !invalidFiles.has(entry.file));
 
   const catalogPath = path.join(root, CATALOG_JSON);
   const catalogSource = readFileSync(catalogPath, "utf8");
   const catalog = JSON.parse(catalogSource);
   const current = catalog.starter_types;
 
-  const policyProblems = checkPolicy(entries, catalog);
-  const registryProblems = checkRegistry(root, entries);
+  const policyProblems = checkPolicy(cleanEntries, catalog);
+  const registryProblems = checkRegistry(root, cleanEntries);
   const baseProblems = [...familyProblems, ...policyProblems, ...registryProblems];
 
   if (familyProblems.length) {

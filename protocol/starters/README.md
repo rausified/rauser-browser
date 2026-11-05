@@ -144,11 +144,15 @@ field named.
 `scripts/generate-starters.mjs`'s validation (plain generation and
 `--check`) also runs the pure registry checks of
 `docs/superpowers/specs/2026-11-03-starter-families-design.md` §4, in the
-same pass as the family-file shape validation above (Open decision 13): a
-family file's own validation problems are still reported, and every other
-file, and these checks, still run. A file is left out of the pass only when
-it is not valid JSON, or its shape is too broken to read further (not even
-a plain object with a `types` array).
+same pass as the family-file shape validation above: a family file's own
+validation problems are still reported, and every other file, and these
+checks, still run. A file is left out of the pass only when it is not valid
+JSON, or its shape is too broken to read further (not even a plain object
+with a `types` array); a file whose shape validates that far, but still has
+a validation problem elsewhere (for example a subdomain `origin` missing
+`suffix`), still gets its validation line, but the policy and registry
+checks below are not attempted for it, since those checks assume a
+validated shape.
 
 **Shared-origin policy** (a family's `origin` against
 `protocol/capture-site/catalog.json`'s `shared_origins`):
@@ -174,8 +178,8 @@ a plain object with a `types` array).
   no tenant at all, so no family there may use `tenant_name`
   (`<file>: scope "tenant_name" cannot be used on <o>, whose URLs name no
   tenant`). Otherwise every type's adapter `scope` table must use exactly
-  the origin's `tenant.capture` as its one key — the same capture Task 3's
-  host `taken_types` computation reads
+  the origin's `tenant.capture` as its one key — the same capture
+  `host/src/capture_site.rs`'s `taken_types` reads
   (`<file>: types[N].adapter.scope must use "<capture>", the host's tenant
   capture for <o>`).
 
@@ -193,8 +197,8 @@ a plain object with a `types` array).
   hand edit there, but this message names the row.
 - Every type's `docs` file must exist
   (`<file>: types[N].docs docs/adapters/<type>.md is missing`), and its
-  first `Status:` line must open with the text its `status` implies (Open
-  decision 6): `Status: release-certified <checked_on>.` (certified, live
+  first `Status:` line must open with the text its `status` implies, one of
+  three exact openings: `Status: release-certified <checked_on>.` (certified, live
   method), `Status: certified <checked_on> from real browsing history.`
   (certified, history method), or `Status: development draft.` (not yet
   certified) — otherwise `docs/adapters/<type>.md: first Status line does
