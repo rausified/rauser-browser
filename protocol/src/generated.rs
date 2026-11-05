@@ -376,7 +376,17 @@ pub struct ListArtifactsRequest {
     pub artifact_type: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub title_query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_reading: Option<SummaryReadingFilter>,
     pub limit: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryReadingFilter {
+    Limited,
+    Whole,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

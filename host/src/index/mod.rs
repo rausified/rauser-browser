@@ -996,7 +996,19 @@ impl ArtifactIndex {
         title_query: Option<&str>,
         limit: usize,
     ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
-        self.read(|tx| query::recent(tx, artifact_type, title_query, limit))
+        self.read(|tx| query::recent(tx, artifact_type, title_query, None, limit))
+    }
+
+    /// Filter by the day's displayed saved summary before applying the cap.
+    /// Unknown scope is distinct from a day without a summary.
+    pub fn recent_with_reading(
+        &self,
+        artifact_type: Option<&str>,
+        title_query: Option<&str>,
+        reading: brauser_protocol::SummaryReadingFilter,
+        limit: usize,
+    ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
+        self.read(|tx| query::recent(tx, artifact_type, title_query, Some(reading), limit))
     }
 
     /// Render a measured, agent-free summary for an inclusive range of local

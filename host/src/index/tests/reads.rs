@@ -117,7 +117,7 @@ fn a_busy_catch_up_serves_the_committed_snapshot() {
     // answers from what is committed instead of failing.
     let titles = index
         .read_with(busy, |tx| {
-            Ok(query::recent(tx, None, None, 10)?
+            Ok(query::recent(tx, None, None, None, 10)?
                 .0
                 .into_iter()
                 .map(|item| item.title)

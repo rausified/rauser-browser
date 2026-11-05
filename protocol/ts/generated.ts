@@ -280,8 +280,11 @@ export interface ListArtifactsRequest {
   request_id: string;
   artifact_type: string | null;
   title_query: string | null;
+  summary_reading?: SummaryReadingFilter;
   limit: number;
 }
+
+export type SummaryReadingFilter = "limited" | "whole" | "unknown";
 
 export interface WorklogFocusChoicesRequest {
   type: "worklog_focus_choices";

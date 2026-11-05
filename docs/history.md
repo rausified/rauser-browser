@@ -1497,3 +1497,32 @@ Markdown renderings. Accessibility reports two offline fixture passes and
 48 explicit sandbox browser skips. Fresh complete manual diff review and one
 independent in-session Codex pass found no actionable issues; the external
 driver owns real browser/platform validation, approval and publication.
+
+
+## 2026-11-05 — Find saved summaries by recorded reading coverage
+
+`brwr-y1q2` adds Recent's Saved summary reading selector: All activity,
+Limited reading, Whole artifact and Unknown reading. An optional
+`list_artifacts.summary_reading` enum selects the host query before its
+32-row response cap. The existing latest renderable summary resolver supplies
+the displayed scope per artifact and local day, preserving instant ordering,
+recorded-order ties and fallback past unrenderable events. Unknown requires
+a displayed saved summary with absent scope; it excludes days without one.
+Title/type filters continue to intersect the reading filter. Responses and
+event formats are unchanged, and All activity omits the field for older hosts.
+The panel clears obsolete rows while loading, ignores late replies and gives
+rebuild guidance when an older host refuses the filter.
+
+This changes no content or cache format and starts no agent. Filtering streams
+candidate rows until the bounded result and one extra match establish
+truncation. A no-match scan over 365 summarized days of one artifact measured
+133 ms on the worker VM; no timing threshold is asserted. Tests also recover
+a matching older day beyond those 365 nonmatches. The full required gate
+passes with 1,625 Rust-reported passes (+5; 94 explicit sandbox IPC guards,
+two ignored), all 47 extension test files and both Clippy configurations.
+Accessibility has two fixture passes and 49 explicit sandbox browser skips,
+including the new keyboard case; external Chrome execution remains pending.
+Manual full-diff review and one independent in-session reviewer found no
+findings. The README script and Markdown checks pass. The driver retains
+queue export, external approval and publication. Follow-up `brwr-a30j`
+proposes continuation beyond the first 32 matching rows.
