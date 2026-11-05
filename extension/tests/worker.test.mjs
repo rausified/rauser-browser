@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { finishHostPause, withLatestHostState } = await import("../dist/coordination.js");
-const { MAX_QUEUE_BYTES, PolicyLeaseCache, localTimestamp } = await import("../dist/model.js");
+const { MAX_QUEUE_BYTES, PolicyLeaseCache, emptyQueue, localTimestamp } = await import("../dist/model.js");
 const { compileDocument } = await import("../dist/adapter-templates.js");
 const { storageKey } = await import("../dist/brand.js");
 const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
@@ -50,6 +50,10 @@ let badgeText = "";
 let rejectLocalSet = null;
 // When true, a storage.local.remove rejects.
 let rejectLocalRemove = false;
+let taskNotificationPermission = false;
+let onNotificationClicked;
+const taskNotificationsShown = [];
+const taskReportTabs = [];
 
 function storageArea(entries) {
   return {
@@ -105,6 +109,7 @@ globalThis.chrome = {
   runtime: {
     id: "test-extension",
     getURL: (path) => `chrome-extension://test-extension/${path}`,
+    async getContexts() { return []; },
     onMessage: { addListener(listener) { onMessage = listener; } },
     onInstalled: { addListener(listener) { onInstalled = listener; } },
     onStartup: { addListener(listener) { onStartup = listener; } },
@@ -120,7 +125,13 @@ globalThis.chrome = {
   alarms: {
     async create(name, info) { alarms.set(name, { name, ...info }); },
     async get(name) { return alarms.get(name); },
+    async clear(name) { return alarms.delete(name); },
     onAlarm: { addListener(listener) { onAlarm = listener; } },
+  },
+  notifications: {
+    async create(id, options) { taskNotificationsShown.push({ id, options }); return id; },
+    async clear() { return true; },
+    onClicked: { addListener(listener) { onNotificationClicked = listener; } },
   },
   contextMenus: {
     create(properties) { menus.push(properties); },
@@ -135,9 +146,13 @@ globalThis.chrome = {
   // about a permission or listens for permission changes; only a summary of
   // a tab with no address asks (a test replaces this for it).
   permissions: {
-    async contains() { throw new Error("the worker must not check Chrome permissions"); },
+    async contains(permission) {
+      if (JSON.stringify(permission) === '{"permissions":["notifications"]}') return taskNotificationPermission;
+      throw new Error("capture must not check Chrome site permissions");
+    },
   },
   tabs: {
+    async create(options) { taskReportTabs.push(options); return { id: 999, incognito: false }; },
     async get(tabId) {
       tabReads += 1;
       if (!tabs.has(tabId)) throw new Error("No tab");
@@ -2953,6 +2968,62 @@ for (const [name, oldTitle, newTitle, oldRefs, newRefs, expected] of [
     assert.deepEqual(merged.refs, expected);
   });
 }
+
+test("task notices persist before start, poll independently, and open the panel synchronously on cold click", async () => {
+  const { TASK_NOTICE_KEY, TASK_NOTICE_ALARM, taskNoticeId } = await import("../dist/task-notifications.js");
+  taskNotificationPermission = true;
+  const priorQueue = values.get(storageKey("queue_v1"));
+  values.set(storageKey("queue_v1"), { ...emptyQueue(), overflow_count: 1 });
+  const contains = chrome.permissions.contains;
+  chrome.permissions.contains = async (permission) => {
+    assert.deepEqual(permission, { permissions: ["notifications"] });
+    return taskNotificationPermission;
+  };
+  taskNotificationsShown.length = 0;
+  panelOpens.length = 0;
+  taskReportTabs.length = 0;
+  try {
+    await send({ kind: "task_notice_arm", window_id: 7, request_id: "00000000-0000-4000-8000-000000000071" });
+    assert.equal(values.get(TASK_NOTICE_KEY).intents[0].window_id, 7);
+    assert.equal(alarms.get(TASK_NOTICE_ALARM).periodInMinutes, 1);
+    const before = ports.length;
+    onAlarm({ name: TASK_NOTICE_ALARM });
+    const port = await until(() => ports.slice(before).find((p) => p.sent.some((r) => r.type === "list_runs")), "task notice polling");
+    const request = port.sent.find((r) => r.type === "list_runs");
+    const run = { ...SUMMARY_RUN, kind: "task", start_request_id: "00000000-0000-4000-8000-000000000071", instruction: "PRIVATE instruction", task_report: "PRIVATE report",
+      state: "succeeded", created_at: new Date(Date.now()).toISOString(), finished_at: new Date().toISOString() };
+    port.reply({ type: "runs_listed", protocol_version: PROTOCOL_VERSION, request_id: request.request_id, runs: [run], more: false });
+    await until(() => taskNotificationsShown.length === 1, "task completion notification");
+    assert.equal(taskNotificationsShown[0].options.message, "Task finished. Click to open its report.");
+    assert.equal(badgeText, "!", "capture pressure wins over the unread completion");
+    assert.doesNotMatch(JSON.stringify(values.get(TASK_NOTICE_KEY)), /PRIVATE/);
+    const nativeCount = ports.length;
+    onNotificationClicked(taskNoticeId(run.run_id, 7));
+    assert.deepEqual(panelOpens, [{ windowId: 7 }], "no await before sidePanel.open");
+    await until(() => taskReportTabs.length === 1, "selected task report");
+    assert.match(taskReportTabs[0].url, new RegExp(`#run=${run.run_id}$`));
+    await until(() => values.get(TASK_NOTICE_KEY).unread.length === 0, "acknowledged completion");
+    assert.equal(badgeText, "!", "acknowledgement preserves the capture warning");
+    assert.equal(ports.length, nativeCount, "click does not start a host");
+    await assert.rejects(send({ kind: "task_notice_arm", window_id: -1 }), /monitoring/);
+  } finally {
+    await send({ kind: "task_notice_reset" });
+    chrome.permissions.contains = contains;
+    taskNotificationPermission = false;
+    values.delete(TASK_NOTICE_KEY);
+    if (priorQueue === undefined) values.delete(storageKey("queue_v1"));
+    else values.set(storageKey("queue_v1"), priorQueue);
+  }
+});
+
+test("a page cannot arm task monitoring through the trusted worker endpoint", async () => {
+  let answered = false;
+  const accepted = onMessage({ kind: "task_notice_arm", window_id: 1 }, {
+    id: chrome.runtime.id, url: "https://page.example/",
+  }, () => { answered = true; });
+  assert.equal(accepted, false);
+  assert.equal(answered, false);
+});
 
 // --- Auto-summary (plan 2026-11-02-auto-summary, Task 5) ---------------------
 

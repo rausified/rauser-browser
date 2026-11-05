@@ -17,6 +17,8 @@ test("the offline host fixture emits valid wire replies for every exercised requ
     { type: "get_site_restore", origin: "https://acme.atlassian.net" }, { type: "check_capture_site" },
     { type: "get_agent_env" }, { type: "list_artifacts" },
     { type: "worklog_choices", expected_revision: "1", start_date: "2026-11-02", end_date: "2026-11-02" },
+    ...[0, 2].map((offset) => ({ type: "worklog_choices", expected_revision: "1", start_date: "2026-11-02", end_date: "2026-11-02",
+      page: { offset, ...(offset ? { snapshot: "a".repeat(64) } : {}) } })),
     ...[null, "10000000-0000-4000-8000-000000000001"].map((focus_session_id) => ({
       type: "worklog_focus_choices", expected_revision: "1", start_date: "2026-11-02", end_date: "2026-11-02", focus_session_id,
     })),

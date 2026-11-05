@@ -2,6 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { activate, audit, browserFixture, enterPanelTab, focused, task } from "./fixture.mjs";
 
+test("optional task notifications can be enabled and disabled by keyboard without losing focus", async (t) => {
+  const page = await browserFixture(t, "options");
+  if (!page) return;
+  const button = page.locator("#task-notifications-toggle");
+  await page.locator("#task-notifications-state").filter({ hasText: "Off." }).waitFor();
+  await activate(page, button, "Space");
+  await page.locator("#task-notifications-state").filter({ hasText: "On." }).waitFor();
+  await focused(page, "#task-notifications-toggle");
+  await activate(page, button, "Enter");
+  await page.locator("#task-notifications-state").filter({ hasText: "Off." }).waitFor();
+  await focused(page, "#task-notifications-toggle");
+  assert.deepEqual(await page.evaluate(() => fixture.actions.filter((action) => action.endsWith("task-notifications"))),
+    ["enable-task-notifications", "disable-task-notifications"]);
+  await audit(t, page, "settings/task-notifications");
+});
+
 test("saved task commands can be authored, removed and saved using the keyboard", async (t) => {
   const page = await browserFixture(t, "options");
   if (!page) return;
@@ -82,6 +98,29 @@ test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop
   await page.waitForFunction(() => fixture.actions.includes("copy"));
   await activate(page, "#open-settings");
   assert.ok(await page.evaluate(() => fixture.actions.includes("settings")));
+});
+
+test("worklog pagination appends unchecked choices and keeps keyboard focus on the final page", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => { fixture.worklogPages = true; });
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  const choices = page.locator('#worklog-choices input[type="checkbox"]');
+  await choices.first().waitFor();
+  await activate(page, choices.first(), "Space");
+  await activate(page, "#worklog-more", "Enter");
+  await page.waitForFunction(() => document.querySelectorAll('#worklog-choices input').length === 3);
+  assert.equal(await choices.nth(2).evaluate((input) => input === document.activeElement), true);
+  assert.equal(await choices.first().isChecked(), true);
+  assert.equal(await choices.nth(2).isChecked(), false);
+  assert.doesNotMatch(await page.locator("#worklog-text").textContent(), /Later work/);
+  await page.keyboard.press("Space");
+  const preview = await page.locator("#worklog-text").textContent();
+  await activate(page, "#copy-worklog", "Space");
+  await page.waitForFunction(() => fixture.copied.length === 1);
+  assert.equal(await page.evaluate(() => fixture.copied[0]), preview);
+  await audit(t, page, "panel/selected-work-pages");
 });
 
 test("worklog curation selects and copies checked work entirely by keyboard", async (t) => {

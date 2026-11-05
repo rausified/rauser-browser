@@ -127,6 +127,10 @@ export interface WorkerStatus {
 }
 
 export type WorkerRequest =
+  | { kind: "task_notice_arm"; window_id: number; request_id: string }
+  | { kind: "task_notice_seen"; run_id: string }
+  | { kind: "task_notice_opened" }
+  | { kind: "task_notice_reset" }
   | { kind: "install_policy"; lease: PolicyLease; resume_after_confirmation: boolean; resume_after_pause_token: string | null }
   | { kind: "suspend_policy" }
   | { kind: "pause_capture" }

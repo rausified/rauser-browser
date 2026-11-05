@@ -2,6 +2,7 @@
 // the fake DOM, Chrome, host and shared helpers are in ./harness.mjs.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import {
   CONFIG, FakeElement, PANEL_HTML, PROTOCOL_VERSION, hostReply, install, isResponseShape,
   statusFor, until,
@@ -340,7 +341,10 @@ function choicesReply(request, ids = ["A", "PRIVATE"], extra = {}) {
     type: "worklog_choices_result", start_date: request.start_date, end_date: request.end_date,
     choices: ids.map((id) => ({ artifact_id: `doc:${id}`, local_date: request.start_date,
       text: `${id} <script> — focused 2 min · opened 1×`, url: `https://work.example/${id}?view=full` })),
-    truncated: false, gaps: [], gaps_truncated: false, ...extra,
+    truncated: false, gaps: [], gaps_truncated: false,
+    ...(request.page ? { page: { snapshot: createHash("sha256").update(JSON.stringify([ids, extra])).digest("hex"),
+      offset: request.page.offset, next_offset: null, omitted: extra.truncated ?? false } } : {}),
+    ...extra,
   };
 }
 async function curation(intercept = (request) => choicesReply(request)) {
@@ -380,6 +384,172 @@ test("selected work copies exactly checked day rows, measured text, links and th
   assert.ok(choiceRows(page).every((row) => !row.checked));
   assert.equal(page.sent("save_note").length + page.sent("update_config").length, 0);
 });
+
+function pagedReply(request, ids, { snapshot = "a".repeat(64), next = null, omitted = false } = {}) {
+  return choicesReply(request, ids, { truncated: next !== null || omitted,
+    page: { snapshot, offset: request.page.offset, next_offset: next, omitted } });
+}
+
+test("overlapping same-snapshot refreshes retain checked later-page work", async () => {
+  let delay = false;
+  const waiting = [];
+  const page = await curation((request) => {
+    if (delay && request.page.offset === 0) return new Promise((resolve) => waiting.push({ request, resolve }));
+    return request.page.offset === 0 ? pagedReply(request, ["A"], { next: 1 }) : pagedReply(request, ["LATER"]);
+  });
+  checkChoice(choiceRows(page)[0]);
+  page.el("worklog-more").click();
+  await until(() => choiceRows(page).length === 2, "later page");
+  checkChoice(choiceRows(page)[1]);
+  delay = true;
+  page.el("tab-recent").click();
+  page.el("tab-recent").click();
+  await until(() => waiting.length === 2, "overlapping refreshes");
+  waiting[1].resolve(pagedReply(waiting[1].request, ["A"], { next: 1 }));
+  await until(() => choiceRows(page).length > 0, "winning refresh");
+  waiting[0].resolve(pagedReply(waiting[0].request, ["A"], { next: 1 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(choiceRows(page).length, 2);
+  assert.ok(choiceRows(page).every((row) => row.checked));
+  assert.match(page.el("worklog-text").textContent, /LATER/);
+});
+
+test("runtime response validation rejects malformed pagination metadata", () => {
+  const request = { start_date: "2026-11-05", end_date: "2026-11-05", page: { offset: 0 } };
+  const valid = pagedReply(request, ["A"], { next: 1 });
+  assert.equal(isResponseShape(valid), true);
+  for (const mutate of [
+    (page) => { delete page.next_offset; }, (page) => { delete page.omitted; },
+    (page) => { page.next_offset = "1"; }, (page) => { page.next_offset = 1.5; },
+    (page) => { page.next_offset = -1; }, (page) => { page.offset = "0"; },
+    (page) => { page.omitted = "false"; }, (page) => { page.snapshot = "bad"; },
+    (page) => { page.extra = true; },
+  ]) {
+    const reply = structuredClone(valid);
+    mutate(reply.page);
+    assert.equal(isResponseShape(reply), false, JSON.stringify(reply.page));
+  }
+  assert.equal(isResponseShape({ ...valid, page: null }), false);
+});
+
+test("loading more appends unchecked work and Copy stays exactly the checked preview", async (t) => {
+  const page = await curation((request) => ({ ...(request.page.offset === 0
+    ? pagedReply(request, ["A", "PRIVATE"], { next: 2 }) : pagedReply(request, ["LATER", "OTHER"])), gaps: [WORKLOG_GAP] }));
+  // Chrome ignores focus() on controls inside a disabled fieldset. The
+  // minimal shared DOM does not model inherited disabled state.
+  const focus = FakeElement.prototype.focus;
+  t.mock.method(FakeElement.prototype, "focus", function () {
+    const fieldset = page.el("worklog-choices");
+    if (fieldset.disabled && fieldset.contains(this)) return;
+    focus.call(this);
+  });
+  const original = choiceRows(page)[0];
+  checkChoice(original);
+  assert.equal(page.el("worklog-more").hidden, false);
+  document.activeElement = page.el("worklog-more");
+  page.el("worklog-more").click();
+  assert.equal(page.el("copy-worklog").disabled, true);
+  assert.equal(page.el("worklog-more").disabled, false, "native disabling would drop Chrome focus");
+  assert.equal(page.el("worklog-more").getAttribute("aria-disabled"), "true");
+  page.el("worklog-include-gaps").dispatch("change");
+  assert.equal(page.el("worklog-select-all").disabled, true);
+  assert.equal(page.el("worklog-clear").disabled, true);
+  assert.equal(page.el("copy-worklog").disabled, true);
+  assert.equal(page.el("worklog-more").textContent, "Loading…");
+  page.el("worklog-more").click();
+  await until(() => choiceRows(page).length === 4, "appended page");
+  assert.equal(choiceRows(page)[0], original, "old checkboxes keep their identity");
+  assert.deepEqual(choiceRows(page).map((row) => row.checked), [true, false, false, false]);
+  assert.equal(choiceRows(page)[2].focused, true, "final-page button hands focus to new work");
+  assert.equal(page.el("worklog-more").hidden, true);
+  assert.equal(page.sent("worklog_choices").length, 2, "loading guard suppresses duplicate requests");
+  assert.doesNotMatch(page.el("worklog-text").textContent, /PRIVATE|LATER|OTHER/);
+  checkChoice(choiceRows(page)[2]);
+  const preview = page.el("worklog-text").textContent;
+  page.el("copy-worklog").click();
+  await until(() => page.state.copied.length === 1, "paged Copy");
+  assert.equal(page.state.copied[0], preview);
+  assert.match(preview, /LATER/);
+  assert.doesNotMatch(preview, /PRIVATE|OTHER/);
+  assert.deepEqual(page.sent("worklog_choices").at(-1).page, { offset: 2, snapshot: "a".repeat(64) });
+  assert.equal(page.sent("save_note").length + page.sent("update_config").length, 0);
+});
+
+test("refresh retains loaded pages only for the same complete snapshot and keeps omission notices", async () => {
+  let snapshot = "a".repeat(64);
+  const page = await curation((request) => request.page.offset === 0
+    ? pagedReply(request, ["A", "PRIVATE"], { snapshot, next: 3, omitted: true })
+    : pagedReply(request, ["LATER"], { snapshot }));
+  checkChoice(choiceRows(page)[0]);
+  page.el("worklog-more").click();
+  await until(() => choiceRows(page).length === 3, "second page");
+  checkChoice(choiceRows(page)[2]);
+  assert.match(page.el("worklog-selection-status").textContent, /exceed the display limits/);
+  page.el("tab-recent").click();
+  await until(() => choiceRows(page).length === 3, "same snapshot refresh");
+  assert.deepEqual(choiceRows(page).map((row) => row.checked), [true, false, true]);
+  assert.match(page.el("worklog-selection-status").textContent, /exceed the display limits/);
+  snapshot = "b".repeat(64);
+  page.el("tab-recent").click();
+  await until(() => choiceRows(page).length === 2, "changed snapshot refresh");
+  assert.deepEqual(choiceRows(page).map((row) => row.checked), [true, false]);
+  assert.match(page.el("worklog-selection-status").textContent, /History changed.*Later pages were cleared/);
+  assert.doesNotMatch(page.el("worklog-text").textContent, /LATER/);
+});
+
+for (const failure of ["snapshot", "offset", "nonadvancing", "duplicate", "period", "conflict"]) {
+  test(`continuation refuses ${failure} and offers an explicit reload with Copy disabled`, async () => {
+    const page = await curation((request) => {
+      if (request.page.offset === 0) return pagedReply(request, ["A"], { next: 1 });
+      if (failure === "conflict") return { type: "error", code: "conflict", message: "History changed; reload choices" };
+      const reply = pagedReply(request, [failure === "duplicate" ? "A" : "LATER"]);
+      if (failure === "snapshot") reply.page.snapshot = "b".repeat(64);
+      if (failure === "offset") reply.page.offset = 0;
+      if (failure === "nonadvancing") { reply.page.next_offset = 1; reply.truncated = true; }
+      if (failure === "period") reply.end_date = "1900-01-01";
+      return reply;
+    });
+    checkChoice(choiceRows(page)[0]);
+    page.el("worklog-more").click();
+    await until(() => /Could not load more work/.test(page.el("worklog-text").textContent), "refused continuation");
+    assert.equal(page.el("copy-worklog").disabled, true);
+    assert.equal(choiceRows(page).length, 0);
+    assert.equal(page.el("worklog-more").textContent, "Reload choices");
+    assert.equal(page.el("worklog-select-all").disabled, true);
+    page.el("worklog-more").click();
+    await until(() => choiceRows(page).length === 1, "reloaded choices");
+    assert.equal(choiceRows(page)[0].checked, false);
+  });
+}
+
+for (const boundary of ["period", "refresh", "home", "disconnect"]) {
+  test(`a delayed continuation cannot restore choices after ${boundary}`, async () => {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    let request;
+    const page = await curation((message) => {
+      if (message.page.offset === 0) return pagedReply(message, ["A"], { next: 1 });
+      request = message;
+      return pending;
+    });
+    checkChoice(choiceRows(page)[0]);
+    page.el("worklog-more").click();
+    await until(() => request, "in-flight page");
+    if (boundary === "period") chooseWorklogPeriod(page, "yesterday");
+    if (boundary === "refresh") page.el("tab-recent").click();
+    if (boundary === "home") {
+      page.state.config.storage.root = "/other-home";
+      page.state.revision = "2";
+      page.policyChanged();
+    }
+    if (boundary === "disconnect") { page.state.hostDead = true; page.hostExits(); }
+    else await until(() => choiceRows(page).length === 1, "replacement snapshot");
+    release(pagedReply(request, ["LATE"]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.doesNotMatch(page.el("worklog-choices").textContent, /LATE/);
+    if (boundary !== "refresh") assert.equal(page.el("copy-worklog").disabled, true);
+  });
+}
 
 test("same-period refresh keeps stable selections, drops removed ones and leaves arriving work unchecked", async () => {
   let ids = ["A", "PRIVATE"];

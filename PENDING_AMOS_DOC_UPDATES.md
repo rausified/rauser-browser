@@ -442,3 +442,28 @@
   without summaries; existing history and content stay unchanged. Deploy the
   host and extension for the filter; All activity remains usable with older
   hosts. This is a Brauser feature, with source documentation kept in its repo.
+
+- Brauser now offers optional task completion notifications in Settings, so a
+  task can finish while its panel is closed and bring the person back to its
+  report. Generic alerts and unread badges reveal no instruction or report;
+  capture warnings retain priority. Exact persisted start-request correlation
+  handles panel closure, lost replies and worker restart without mixing browser
+  profiles. Deploy the host and extension together, retaining the task-record
+  rollback restriction. Desktop OS notification and Chrome gesture acceptance
+  remain separate from the offline test coverage.
+
+
+- Brauser's selected-work sharing view now continues beyond its first bounded
+  response through explicit Load more work. Earlier selections remain visible,
+  appended entries start unchecked, and Copy remains the exact checked
+  preview. Snapshot-bound continuation rejects changed evidence; reload and
+  refresh make selection resets explicit. This makes busy-day status updates
+  possible without altering source logs or notes. Focus-session pagination
+  remains separate work; browser keyboard acceptance belongs to the external
+  gate when Chromium cannot start in the sandbox.
+
+- Recovered Brauser's quarantined selected-work pagination delivery and fixed
+  its final-page keyboard handoff: the checkbox fieldset is enabled before
+  focus moves from the disappearing Load more button. An offline regression
+  now models Chrome's inherited disabled-state behavior, while the original
+  browser assertion remains intact for the driver's acceptance gate.

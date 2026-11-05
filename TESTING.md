@@ -1900,6 +1900,31 @@ and wire tests cover every scope with and without an overview, literal text,
 legacy absence and clearing on navigation. These fixtures do not certify the
 agent's actual reading or a live browser deployment.
 
+## Optional task completion notifications
+
+Task completion notifications have offline coverage in
+`extension/tests/task-notifications.test.mjs`: pre-start discovery, fast
+finishes and lost answers, exact request correlation across overlapping windows
+and browser profiles, MV3 restart, pagination, permission refusal and
+revocation, deferred/acknowledged finishes, storage failure, no duplicate
+delivery after a Chrome API failure, and capture-badge precedence. The worker
+test drives an actual alarm through a fake native port and checks synchronous
+panel opening before any await. Panel/task tests pin the awaited pre-start
+handoff and observed-finish acknowledgement. The accessibility keyboard suite
+exercises the optional Settings permission control with a fake Chrome API.
+
+Real desktop acceptance remains separate: enable notifications in Settings,
+start a task, close the panel before the start reply and wait for its finish;
+check one generic alert and the unread badge, click to open the panel and the
+selected Tasks report, then repeat with the panel left open (no alert), a
+failed/canceled task, permission refusal/revocation, and a closed source
+window. Check OS-level notification permission/Do Not Disturb separately;
+headless mocks cannot prove OS toast presentation or Chrome's gesture grant.
+Use only fake harnesses in automated tests. No test invokes the real OS
+notification center. `wire_tasks` pins the optional task-view correlation field;
+the service record test proves its persistence and legacy omission, and fake
+service/harness tests check that it is the original forwarded request ID.
+
 ## Reusable sidebar task commands
 
 `host/src/task_commands.rs` tests registry limits, duplicate/reserved names,
@@ -1932,3 +1957,48 @@ unrelated invalid-value preservation, exact repair backups and stale refusal.
 They run before any service connection and require no IPC. The keyboard suite
 adds a labeled-field editing/removal/save journey with axe and focus checks;
 its fixture verifies requests and focus, while native tests prove persistence.
+
+## Selected-work pagination
+
+`brwr-p71k` adds opt-in `worklog_choices` pages. Focused checks after building:
+
+```sh
+cargo test --locked -p brauser worklog_page
+cargo test --locked -p brauser-protocol --test wire_artifacts
+node --test --test-isolation=none extension/tests/panel/recent-worklog.test.mjs
+BRAUSER_REQUIRE_A11Y_TESTS=1 npm run test:a11y
+```
+
+The index fixtures traverse 451 real logged artifact-days under both the
+200-row and escaped-byte limits, compare the complete deterministic order,
+and repeat the final continuation after cache-loss replay without modifying
+any source log. A smaller real-reindex fixture checks unchanged snapshot
+identity before testing stale history. These fixtures also cover
+inserted/deleted/edited history, date/storage/adapter scope,
+invalid cursors, capture gaps including notices beyond the display cap, and
+whole oversized-row omission with terminal progress. Native tests distinguish
+malformed cursors from stale snapshots and retain locked config validation;
+wire tests keep unpaged shapes and validate optional page metadata.
+
+Panel cases check unchecked append, unchanged earlier checkbox identity,
+exact selected Copy, accumulated omissions, same-snapshot refresh, changed
+history resets, failed continuation and explicit reload, and delayed replies
+after refresh, period, home-folder and disconnect boundaries. The browser
+keyboard journey reaches Load more with Tab/Enter, checks final-page focus,
+selects a new row and audits/copies the exact preview. The fixture's paged
+responses are wire-validated even when Chromium is sandbox-blocked; such a
+skip does not establish browser acceptance. The focus-session path retains
+its existing independent caps and tests. No real API or harness is used.
+
+Cycle 8's external gate caught a real focus-order defect that the minimal
+fake DOM missed: `focus()` has no effect on a checkbox inside a disabled
+fieldset. The append/Copy panel regression now models that inherited disabled
+state using a test-scoped focus mock. It must fail if the fieldset is enabled
+only after focusing the new row. Keep the existing real-browser focus
+assertion; the mock supplements it when Chromium cannot start in the sandbox.
+
+On a constrained worker VM, run the workspace Rust suite before the Dolt
+integration fixtures in `test:queue`/`test:dev-tools`. The 2026-11-05 parallel
+run encountered heavy I/O pressure and an error in the no-TTY contract fixture;
+the unchanged fixture passed alone in 11.6 seconds and the full serial tooling
+suite passed all 252 cases. Retain the existing deadlines and assertions.

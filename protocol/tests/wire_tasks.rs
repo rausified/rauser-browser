@@ -82,6 +82,25 @@ fn task_view() -> Value {
 }
 
 #[test]
+fn task_start_request_correlation_round_trips_in_list_and_fetch_views() {
+    let mut view = task_view();
+    view["start_request_id"] = json!("00000000-0000-4000-8000-000000000071");
+    assert_response_round_trips("RunFetched", &run_fetched(view.clone()));
+    assert_response_round_trips(
+        "RunsListed",
+        &json!({
+            "type": "runs_listed", "protocol_version": 8, "request_id": "list",
+            "runs": [view], "more": false,
+        }),
+    );
+    for invalid in [json!(null), json!(42), json!(""), json!("x".repeat(129))] {
+        let mut bad = task_view();
+        bad["start_request_id"] = invalid;
+        assert!(!schema_subset::valid("RunView", &bad));
+    }
+}
+
+#[test]
 fn tasks_without_a_page_round_trip_without_changing_legacy_tasks() {
     let mut value = start_task();
     for key in ["url", "title", "content"] {

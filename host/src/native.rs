@@ -976,7 +976,7 @@ fn dispatch(
                 end_date: value.end_date,
             },
             config,
-            WorklogMode::Choices(value.expected_revision),
+            WorklogMode::Choices(value.expected_revision, value.page),
         ),
         Request::WorklogFocusChoices(value) => worklog_response(
             brauser_protocol::WorklogRequest {
@@ -3216,7 +3216,7 @@ fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) ->
 enum WorklogMode {
     Text,
     Report,
-    Choices(String),
+    Choices(String, Option<brauser_protocol::WorklogChoicesPageRequest>),
     FocusChoices(String, Option<String>),
 }
 
@@ -3263,6 +3263,15 @@ fn worklog_response(
             "worklog range must be one to seven inclusive local dates",
         );
     }
+    if let WorklogMode::Choices(_, Some(page)) = &mode
+        && !crate::index::valid_page_request(page)
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "worklog page needs a valid snapshot for continuation",
+        );
+    }
     if let WorklogMode::FocusChoices(_, Some(id)) = &mode
         && !uuid::Uuid::parse_str(id).is_ok_and(|uuid| {
             uuid.get_version_num() == 4
@@ -3276,7 +3285,7 @@ fn worklog_response(
             "focus_session_id must be a canonical version-4 UUID",
         );
     }
-    if let WorklogMode::Choices(expected_revision)
+    if let WorklogMode::Choices(expected_revision, _)
     | WorklogMode::FocusChoices(expected_revision, _) = &mode
     {
         if config.refresh().is_err() {
@@ -3324,20 +3333,43 @@ fn worklog_response(
             ),
         };
     }
-    if matches!(mode, WorklogMode::Choices(_)) {
-        return match index.worklog_choices(start, end) {
-            Ok((choices, truncated, gaps, gaps_truncated)) => {
+    if let WorklogMode::Choices(_, page) = &mode {
+        let result = match page {
+            Some(page) => index.worklog_choices_page(start, end, page).map(|result| {
+                let truncated = result.page.next_offset.is_some() || result.page.omitted;
+                (
+                    result.choices,
+                    truncated,
+                    result.gaps,
+                    result.gaps_truncated,
+                    Some(result.page),
+                )
+            }),
+            None => index.worklog_choices(start, end).map(
+                |(choices, truncated, gaps, gaps_truncated)| {
+                    (choices, truncated, gaps, gaps_truncated, None)
+                },
+            ),
+        };
+        return match result {
+            Ok((choices, truncated, gaps, gaps_truncated, page)) => {
                 Response::WorklogChoicesResult(brauser_protocol::WorklogChoicesResult {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: value.request_id,
                     start_date: value.start_date,
                     end_date: value.end_date,
                     choices,
+                    page,
                     truncated,
                     gaps,
                     gaps_truncated,
                 })
             }
+            Err(error_value) if error_value.is::<crate::index::StaleWorklogPage>() => error(
+                &value.request_id,
+                ErrorCode::Conflict,
+                "work to share changed or this page is unavailable; reload choices",
+            ),
             Err(_) => error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -10037,7 +10069,7 @@ id = "work:{host}/{id}"
             let Response::Error(result) = worklog_response(
                 request(start, end),
                 &mut config,
-                WorklogMode::Choices(revision.clone()),
+                WorklogMode::Choices(revision.clone(), None),
             ) else {
                 panic!("invalid dates must fail before loading history");
             };
@@ -10046,14 +10078,14 @@ id = "work:{host}/{id}"
         let Response::WorklogChoicesResult(result) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::Choices(revision.clone()),
+            WorklogMode::Choices(revision.clone(), None),
         ) else {
             panic!("expected choices for a valid seven-day range");
         };
         let Response::Error(stale) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::Choices("stale".into()),
+            WorklogMode::Choices("stale".into(), None),
         ) else {
             panic!("stale sharing scope must refuse");
         };
@@ -10070,7 +10102,7 @@ id = "work:{host}/{id}"
         let Response::Error(changed) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::Choices(revision),
+            WorklogMode::Choices(revision, None),
         ) else {
             panic!("external config change must refuse old sharing scope");
         };
@@ -10078,8 +10110,53 @@ id = "work:{host}/{id}"
         assert!(result.choices.is_empty());
         assert!(!result.truncated);
         assert!(result.gaps.is_empty());
+        assert!(result.page.is_none());
         assert!(!root.join("notes").exists());
         assert!(!root.join("logs").exists());
+    }
+
+    #[test]
+    fn worklog_page_validation_and_snapshot_conflicts_reach_the_native_boundary() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, _) = adapter_only_config(&folder);
+        let revision = config.revision().to_owned();
+        let request = || brauser_protocol::WorklogRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "work-page".into(),
+            start_date: "2026-11-01".into(),
+            end_date: "2026-11-01".into(),
+        };
+        let page = |offset, snapshot| {
+            Some(brauser_protocol::WorklogChoicesPageRequest { offset, snapshot })
+        };
+        let Response::WorklogChoicesResult(first) = worklog_response(
+            request(),
+            &mut config,
+            WorklogMode::Choices(revision.clone(), page(0, None)),
+        ) else {
+            panic!("first page");
+        };
+        assert_eq!(first.page.unwrap().offset, 0);
+        for (expected_revision, cursor, code) in [
+            (revision.clone(), page(1, None), ErrorCode::InvalidRequest),
+            (
+                revision.clone(),
+                page(0, Some("bad".into())),
+                ErrorCode::InvalidRequest,
+            ),
+            (revision, page(0, Some("a".repeat(64))), ErrorCode::Conflict),
+            ("old-settings".into(), page(0, None), ErrorCode::Conflict),
+        ] {
+            let Response::Error(result) = worklog_response(
+                request(),
+                &mut config,
+                WorklogMode::Choices(expected_revision, cursor),
+            ) else {
+                panic!("invalid page must refuse");
+            };
+            assert_eq!(result.code, code);
+            assert_eq!(result.request_id, "work-page");
+        }
     }
 
     #[test]
@@ -12624,6 +12701,7 @@ id = "gdoc:{host}/{id}"
             crate::service::record::LIST_INSTRUCTION_CHARS + 1
         );
         let view = brauser_protocol::RunView {
+            start_request_id: None,
             no_page: None,
             run_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
             state: RunState::Succeeded,

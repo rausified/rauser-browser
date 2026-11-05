@@ -102,10 +102,12 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       case "list_artifacts": return { type: "artifact_list_result", items: [], artifact_types: [], truncated: false };
       case "worklog_choices": return {
         type: "worklog_choices_result", start_date: request.start_date, end_date: request.end_date,
-        choices: ["Release update", "Private research"].map((title, n) => ({
-          artifact_id: `doc:${n}`, local_date: request.start_date,
+        choices: (request.page?.offset ? ["Later work"] : ["Release update", "Private research"]).map((title, n) => ({
+          artifact_id: `doc:${(request.page?.offset ?? 0) + n}`, local_date: request.start_date,
           text: `${title} — focused 2 min · opened 1×`, url: `https://work.example/${n}`,
-        })), truncated: false, gaps: [], gaps_truncated: false,
+        })), truncated: Boolean(fixture.worklogPages && request.page?.offset === 0), gaps: [], gaps_truncated: false,
+        ...(request.page ? { page: { snapshot: "a".repeat(64), offset: request.page.offset,
+          next_offset: fixture.worklogPages && request.page.offset === 0 ? 2 : null, omitted: false } } : {}),
       };
       case "worklog_focus_choices": {
         const session = { id: "10000000-0000-4000-8000-000000000001", name: "Release", revision: 1 };
@@ -204,7 +206,12 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       },
     },
     storage: { local: area("local"), session: area("session"), onChanged: storageChanged },
-    permissions: { contains: async () => true, onAdded: event(), onRemoved: event() },
+    permissions: {
+      contains: async (permission) => permission.permissions?.includes("notifications") ? fixture.taskNotificationsEnabled === true : true,
+      request: async () => { fixture.taskNotificationsEnabled = true; fixture.actions.push("enable-task-notifications"); return true; },
+      remove: async () => { fixture.taskNotificationsEnabled = false; fixture.actions.push("disable-task-notifications"); return true; },
+      onAdded: event(), onRemoved: event(),
+    },
     tabs: {
       query: async () => [{ id: 1, incognito: false, url: pageUrl, title: "Work item" }],
       create: async (properties) => { fixture.actions.push(properties.url); return { id: 2 }; },

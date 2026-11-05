@@ -424,11 +424,31 @@ pub struct WorklogFocusChoicesResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorklogChoicesRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<WorklogChoicesPageRequest>,
     pub expected_revision: String,
     pub protocol_version: u32,
     pub request_id: String,
     pub start_date: String,
     pub end_date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogChoicesPageRequest {
+    pub offset: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogChoicesPageInfo {
+    pub snapshot: String,
+    pub offset: u32,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub next_offset: Option<u32>,
+    pub omitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -443,6 +463,8 @@ pub struct WorklogChoice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorklogChoicesResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<WorklogChoicesPageInfo>,
     pub protocol_version: u32,
     pub request_id: String,
     pub start_date: String,
@@ -990,6 +1012,8 @@ pub enum AnswerAccess {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_request_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_page: Option<bool>,
     pub run_id: String,

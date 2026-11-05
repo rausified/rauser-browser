@@ -662,10 +662,34 @@ Container choices describe their own direct activity, without rolled-up child
 copies, so excluding children also excludes their measures. Summary-only days
 remain selectable without inventing opens or time. Choices sort by newest local
 day then artifact ID, with at most 200 rows and 96 KiB of serialized row data;
-oversized rows are omitted whole, never with a clipped URL. Truncation stays
-visible beside the selection, and the copied entry count covers only selected
-rows. Known gaps come from the same index snapshot and concern the entire
+oversized rows are omitted whole, never with a clipped URL. **Load more work**
+appends further all-work choices under the same per-response bounds. New rows
+start unchecked; existing checkboxes and selected text remain intact. The
+copied entry count covers only selected rows. A separate omission notice stays
+visible for oversized rows, including omissions on earlier loaded pages.
+Known gaps come from the same index snapshot and concern the entire
 period; the existing explicit gap-inclusion choice also controls this preview.
+
+Paging is opt-in through an optional `page` object on `worklog_choices`.
+It carries a logical-row offset and, on continuation, the prior snapshot hash.
+The optional response `page` echoes the offset and supplies the snapshot,
+nullable `next_offset`, and permanent-omission flag. Offsets include omitted
+rows; an ordinary row that exceeds the remaining page bytes begins the next
+page. The hash binds a versioned, framed serialization of all ordered logical
+choices before omission, date scope, storage configuration/identity, adapters,
+and capture gaps (including notices beyond their display cap), from one read
+transaction. A mismatched snapshot or unavailable offset refuses continuation.
+Unpaged requests keep their original response shape and truncation behavior.
+Older hosts refuse paged requests with rebuild guidance; an older extension's
+unpaged request remains usable with a newer host. No cache migration is needed.
+
+Same-scope refresh retains loaded later pages only when the full snapshot
+matches. Changed history drops those pages, prunes selection to refreshed rows,
+and explains the reset. Loading disables selection and Copy; a failed
+continuation clears the stale preview and offers **Reload choices**. Late
+replies cannot cross refresh, period, home/config or host-lifecycle boundaries.
+On the final page, keyboard focus moves from the disappearing Load more button
+to the first new checkbox. Focus-session choices keep their separate bounds.
 
 **One focus session.** In the sharing area, **Choose from → One focus session**
 lists up to 64 recorded sessions in the period, newest activity first. Selecting
@@ -1180,6 +1204,47 @@ Milestones fill the layout in: the page area, My note, and the capture strip fir
 The host waits for the service without holding a config lock, then locks and refreshes config and checks that revision, so changing the home folder or capture identity requires reloading Tasks before saving. It uses the same location-aware note resolver, ownership checks and version-checked atomic save as the editor. Existing note text, title, creation time and physical ownership remain; URL notes and artifact notes retain their ordinary separation. Simultaneous report appends serialize and each sees the latest note. An external edit during the append refuses through the note version check. A panel already editing an older note gets its ordinary conflict and recovery-copy behavior on its next save; no report save imports recovered text into an editor. The instruction uses `markdown::inline` and the report uses the shared scanner's `neutralize_note_append`, also rendering square brackets literally so report reference definitions cannot activate an earlier image or change a link in the user's note. Readable Markdown remains, with HTML, remote embeds and plugin code neutralized. An append over the existing note limit refuses whole, retaining the report for Copy.
 
 A retry after a lost answer recognizes the entire exact host-rendered report section already in the current note and acknowledges it without rewriting or duplicating it, including when the user has added text since. A run-ID comment alone is insufficient. If the user edits or removes that section, another explicit click may append it again. Errors keep the report visible and offer the same explicit action; there is no automatic retry. Save confirmation is a status message and keyboard focus returns to the action. The note persists independently of service-run retention; no task daily-log event or automatic note save is added.
+
+#### Task completion notifications
+
+Task notifications are optional and off by default. An explicit Settings
+button requests Chrome's optional `notifications` permission; turning it off
+clears monitoring and unread UI. It applies to tasks started afterward in this
+browser profile, including saved commands and tasks without a page. Summary
+and site-draft runs never produce these alerts.
+
+After page extraction and before `start_task`, the panel waits for the worker
+to persist a two-minute discovery intent and arm a one-minute alarm. This
+covers panel closure during the request, fast completions and a lost start
+answer. The existing start request UUID is generated before this handoff. The service
+retains it in the task status and optional `RunView.start_request_id`; discovery
+accepts only the matching request ID, never a timestamp-based guess. Tasks
+from another browser profile or concurrent window stay separate. The worker
+walks paginated task history for outstanding intents, retains watched run IDs, and then uses `get_run` for unfinished tasks after discovery
+expires. A failed or incomplete discovery retains the intent for retry. This
+independent chain never holds capture's serialized queue. Worker and browser
+restarts resume the local ledger; permission alone never polls the service.
+
+While any side panel is open, terminal outcomes wait for its observed-finish
+acknowledgement or closure. The panel's existing live announcement acknowledges
+a finish; an acknowledgement received during a slow poll suppresses delivery.
+A closed-panel finish raises one generic **Task finished**, **Task failed** or
+**Task canceled** notification, with no instruction, title or report. The
+ledger stores only IDs, outcomes, times and window IDs. Handling is persisted
+before Chrome creates the notification: interruption in that gap can lose a
+toast but retains its unread badge, and never repeats the toast on retry.
+
+Unread task completions appear as a blue action badge; capture pressure's
+amber **!** takes precedence. Opening the panel clears unread notifications.
+Clicking a notification synchronously opens a panel using its originating
+window, then opens or selects the report in Tasks (which also works if that
+window closed). The notification ID encodes only the window and run UUID, so
+Chrome's click gesture is used before any asynchronous storage lookup. No
+notification starts a task or saves a report. Instruction and report text
+never enter monitoring state or its diagnostics. Deploy the host and extension
+together: older extensions reject correlated task views, and older services
+cannot read correlated task status records. Roll back only with no active
+tasks, retaining the task-record downgrade rules above.
 
 ## 6. Data Format
 
@@ -1901,7 +1966,7 @@ M1 validation status and the dated M1 smoke and acceptance records: (history: [d
    2. **PR 2, the service skeleton: built on `feat/agent-service-pr2`.** **[human]** checks still to run: register the dev build and close Chrome; run `start_run` from the panel console; confirm `launchctl print gui/$UID/com.rauser.brauser.service` shows the service and that it exits after 10 idle minutes; confirm `agent.env` values reach a run; confirm a rebuild plus a request restarts the service. The `agent.env` check needs a run that actually starts, which PR 3's real runners now provide. (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
    3. **PR 3, real runners, extraction, and the run card: merged (#98).** **[human]** checks still to run: a real Codex and a real Claude Code summary from the dev build, and **Open in Codex** opening the thread in Codex Desktop (TESTING.md "Real-UI acceptance"). (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
    4. **PR 4, the summary file, the `summary` log event, and index integration: built on `feat/summary-outputs-pr4`.** Its planned **[human]** check of the neutralized constructs in Obsidian and VS Code preview was dropped by John on 2026-11-02 (§5.2 step 6). (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
-11. **The task bar (2026-10-28): built on `feat/task-bar`** (plan `docs/superpowers/plans/2026-10-28-task-bar.md`; §4.5, §5.6, §5.7). The free-text row of the Omnibar runs a task through the service, with its own run cards. **[human]** checks still to run: a real Codex and a real Claude Code task, Cancel mid-run, the hostile-page and spoofed-heading canaries, and a look at the logs (TESTING.md "Real-UI acceptance"). Next: completion notifications while the panel is closed (the `notifications` permission and a worker alarm), then built-in slash actions and richer custom commands; literal sidebar `[[commands]]` are built (§5.6). Keyboard/context-menu entry and instruction recall are built (§5.7).
+11. **The task bar (2026-10-28): built on `feat/task-bar`** (plan `docs/superpowers/plans/2026-10-28-task-bar.md`; §4.5, §5.6, §5.7). The free-text row of the Omnibar runs a task through the service, with its own run cards. **[human]** checks still to run: a real Codex and a real Claude Code task, Cancel mid-run, the hostile-page and spoofed-heading canaries, and a look at the logs (TESTING.md "Real-UI acceptance"). Optional completion notifications while the panel is closed are built (§5.7). Next: built-in slash actions and richer custom commands; literal sidebar `[[commands]]` are built (§5.6). Keyboard/context-menu entry and instruction recall are built (§5.7).
 
 ## 13. Platforms and License
 
@@ -1951,7 +2016,7 @@ Task bar decisions (2026-10-28, decided autonomously by the orchestrating agent 
 - **The user's request is the directive; the page is untrusted context** (§4.5): fenced request, page by path only, page steps only when the request asks, protected Brauser locations named in the prompt and failing closed when unknown, prompt-level only.
 - **One task slot, four active, no joining**, so a long task never starves summaries.
 - **Free-text report, nothing written**, with a task-specific repair turn and no Codex `outputSchema`.
-- **Placement and gestures** (§5.7): the bar sits under the page area on both tabs, Enter submits, there are no Chrome notifications in this cut, and the bar is never pre-filled from page or agent text.
+- **Placement and gestures** (§5.7): the bar sits under the page area on both tabs, Enter submits, Chrome notifications are optional and off by default (§5.7 Task completion notifications), and the bar is never pre-filled from page or agent text.
 - **Diagnostics never carry the instruction or the report** (§15).
 
 The 2026-10-27 home folder decision (one home folder, fixed layout, moved once), now stated in §6.1: (history: [docs/history.md §14](docs/history.md#14-open-questions--history))

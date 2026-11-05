@@ -137,7 +137,7 @@ const RUN_VIEW_KEYS: readonly string[] = [
 ];
 /** The additive v7 and v8 `RunView` keys an older service's view omits.
  * `instruction` and `task_report` belong to task views only. */
-const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page"];
+const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page", "start_request_id"];
 const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft", "task"]);
 
 /** A task view carries its instruction as a string, and its report as a
@@ -198,6 +198,8 @@ export function isRunView(value: unknown): boolean {
   if (Object.hasOwn(run, "kind") && !(typeof run.kind === "string" && RUN_KINDS.has(run.kind))) return false;
   if (!taskKeysFit(run)) return false;
   if (Object.hasOwn(run, "no_page") && (run.kind !== "task" || typeof run.no_page !== "boolean")) return false;
+  if (Object.hasOwn(run, "start_request_id") && (run.kind !== "task" ||
+      typeof run.start_request_id !== "string" || run.start_request_id.length === 0 || Array.from(run.start_request_id).length > 128)) return false;
   if (Object.hasOwn(run, "site_draft") && run.site_draft !== null && !isSiteDraftAnswer(run.site_draft)) {
     return false;
   }
@@ -527,7 +529,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&
         typeof value.text === "string" && isUnsignedInteger(value.artifact_count);
     case "worklog_choices_result":
-      return typeof value.start_date === "string" && typeof value.end_date === "string" &&
+      return (!Object.hasOwn(value, "page") || isWorklogChoicesPage(value.page)) &&
+        typeof value.start_date === "string" && typeof value.end_date === "string" &&
         Array.isArray(value.choices) && value.choices.length <= 200 && value.choices.every(isWorklogChoice) &&
         typeof value.truncated === "boolean" && typeof value.gaps_truncated === "boolean" &&
         Array.isArray(value.gaps) && value.gaps.length <= 32 && value.gaps.every(isOverflowMarker);
@@ -616,6 +619,16 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     default:
       return false;
   }
+}
+
+function isWorklogChoicesPage(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const page = value as Record<string, unknown>;
+  const offset = (value: unknown): boolean => isUnsignedInteger(value) && (value as number) <= 0xffffffff;
+  return hasExactKeys(page, ["snapshot", "offset", "next_offset", "omitted"]) &&
+    typeof page.snapshot === "string" && /^[a-f0-9]{64}$/.test(page.snapshot) && offset(page.offset) &&
+    (page.next_offset === null || offset(page.next_offset) && (page.next_offset as number) > 0) &&
+    typeof page.omitted === "boolean";
 }
 
 function isWorklogChoice(value: unknown): boolean {
