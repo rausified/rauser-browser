@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use adapter_templates::{Document as AdapterTemplates, NoMatch, Value as AdapterValue};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use brauser_protocol::{
     AdapterDocument, AdapterWarning, AgentConfig, AgentState, AgentStatus, AutoSummaryConfig,
     ConfigSnapshot, HarnessId, StorageConfig, SummaryVocabulary,
@@ -667,6 +667,80 @@ impl ConfigStore {
     /// Commands remain separate from the wire configuration and general health.
     pub(crate) fn task_commands(&self) -> Result<Vec<crate::task_commands::Command>, &'static str> {
         crate::task_commands::parse(self.commands.as_ref())
+    }
+
+    /// Read raw values rather than the snapshot, which may omit unsupported
+    /// settings. Caller holds the config lock. Never expose the whole config.
+    pub(crate) fn task_command_settings(&self) -> Result<(String, toml::Table)> {
+        let table = self.task_command_table()?;
+        let mut commands = toml::Table::new();
+        if let Some(value) = table.get("commands") {
+            commands.insert("commands".into(), value.clone());
+        }
+        Ok((toml::to_string_pretty(&commands)?, commands))
+    }
+
+    fn task_command_table(&self) -> Result<toml::Table> {
+        if self.revision == MISSING_REVISION {
+            ensure!(!self.path.exists(), "configuration changed");
+            return Ok(toml::Table::new());
+        }
+        let mut bytes = Vec::new();
+        File::open(&self.path)?
+            .take(MAX_CONFIG_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(
+            bytes.len() <= MAX_CONFIG_BYTES && revision_for(&bytes) == self.revision,
+            "configuration changed or exceeds the size limit"
+        );
+        toml::from_str(std::str::from_utf8(&bytes)?).context("configuration needs TOML repair")
+    }
+
+    /// A narrow authoring boundary: neither paths, harnesses nor adapters can
+    /// be supplied here. Preserve every unrelated raw value, even when invalid.
+    pub(crate) fn save_task_commands(
+        &mut self,
+        text: &str,
+        expected_revision: &str,
+    ) -> Result<Option<String>> {
+        ensure!(
+            text.len() <= MAX_CONFIG_BYTES,
+            "saved commands exceed the size limit"
+        );
+        // Do not quote parser diagnostics: they may contain instruction text.
+        let mut replacement: toml::Table =
+            toml::from_str(text).map_err(|_| anyhow::anyhow!("Enter valid commands-only TOML."))?;
+        ensure!(
+            replacement.len() == 1 && replacement.contains_key("commands"),
+            "Only the commands setting may be replaced. Use commands = [] to remove all commands."
+        );
+        crate::task_commands::parse(replacement.get("commands")).map_err(anyhow::Error::msg)?;
+        let _lock = self.lock_current()?;
+        self.adopt(read_disk_state(&self.path)?);
+        if self.revision != expected_revision {
+            return Ok(None);
+        }
+        let mut table = self.task_command_table()?;
+        let repair = crate::task_commands::parse(table.get("commands")).is_err();
+        table.insert("commands".into(), replacement.remove("commands").unwrap());
+        let serialized = toml::to_string_pretty(&table)?;
+        ensure!(
+            serialized.len() <= MAX_CONFIG_BYTES,
+            "configuration exceeds the size limit"
+        );
+        let parent = self.path.parent().context("config path has no parent")?;
+        if repair {
+            backup_invalid(parent, &self.path, &self.revision)?;
+        }
+        // Local editors need not honor our lock, including during backup.
+        let current = read_disk_state(&self.path)?;
+        if current.revision != self.revision {
+            self.adopt(current);
+            return Ok(None);
+        }
+        let revision = publish_config(parent, &self.path, &serialized)?;
+        self.adopt(read_disk_state(&self.path)?);
+        Ok(Some(revision))
     }
 
     /// The folder the summary agent reads: the chosen knowledge base folder,

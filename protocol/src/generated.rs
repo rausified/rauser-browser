@@ -1272,6 +1272,43 @@ pub struct AutoSummarySkippedResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TaskCommandDefinition {
+    pub name: String,
+    pub description: String,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GetTaskCommandSettingsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaveTaskCommandsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub commands_toml: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskCommandSettings {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub revision: String,
+    pub original_toml: String,
+    pub commands: Vec<TaskCommandDefinition>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskCommand {
     pub name: String,
     pub description: String,
@@ -1610,6 +1647,8 @@ pub enum Request {
     StartSiteDraft(StartSiteDraftRequest),
     StartTask(StartTaskRequest),
     ListTaskCommands(ListTaskCommandsRequest),
+    GetTaskCommandSettings(GetTaskCommandSettingsRequest),
+    SaveTaskCommands(SaveTaskCommandsRequest),
     SaveTaskNote(SaveTaskNoteRequest),
     StartAutoSummary(StartAutoSummaryRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
@@ -1659,6 +1698,8 @@ impl Request {
             Self::StartSiteDraft(value) => value.protocol_version,
             Self::StartTask(value) => value.protocol_version,
             Self::ListTaskCommands(value) => value.protocol_version,
+            Self::GetTaskCommandSettings(value) => value.protocol_version,
+            Self::SaveTaskCommands(value) => value.protocol_version,
             Self::SaveTaskNote(value) => value.protocol_version,
             Self::StartAutoSummary(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
@@ -1708,6 +1749,8 @@ impl Request {
             Self::StartSiteDraft(value) => &value.request_id,
             Self::StartTask(value) => &value.request_id,
             Self::ListTaskCommands(value) => &value.request_id,
+            Self::GetTaskCommandSettings(value) => &value.request_id,
+            Self::SaveTaskCommands(value) => &value.request_id,
             Self::SaveTaskNote(value) => &value.request_id,
             Self::StartAutoSummary(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
@@ -1727,6 +1770,7 @@ impl Request {
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
     TaskCommandsListed(TaskCommandsListed),
+    TaskCommandSettings(TaskCommandSettings),
     AdapterRepairLoaded(AdapterRepairLoaded),
     PreservedNotesListed(PreservedNotesListed),
     HelloResult(HelloResult),
@@ -1769,6 +1813,7 @@ impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
             Self::TaskCommandsListed(value) => value.protocol_version,
+            Self::TaskCommandSettings(value) => value.protocol_version,
             Self::AdapterRepairLoaded(value) => value.protocol_version,
             Self::PreservedNotesListed(value) => value.protocol_version,
             Self::HelloResult(value) => value.protocol_version,
@@ -1811,6 +1856,7 @@ impl Response {
     pub fn request_id(&self) -> &str {
         match self {
             Self::TaskCommandsListed(value) => &value.request_id,
+            Self::TaskCommandSettings(value) => &value.request_id,
             Self::AdapterRepairLoaded(value) => &value.request_id,
             Self::PreservedNotesListed(value) => &value.request_id,
             Self::HelloResult(value) => &value.request_id,

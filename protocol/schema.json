@@ -84,6 +84,8 @@
         { "$ref": "#/$defs/StartSiteDraftRequest" },
         { "$ref": "#/$defs/StartTaskRequest" },
         { "$ref": "#/$defs/ListTaskCommandsRequest" },
+        { "$ref": "#/$defs/GetTaskCommandSettingsRequest" },
+        { "$ref": "#/$defs/SaveTaskCommandsRequest" },
         { "$ref": "#/$defs/SaveTaskNoteRequest" },
         { "$ref": "#/$defs/StartAutoSummaryRequest" },
         { "$ref": "#/$defs/CheckSiteDraftRequest" },
@@ -99,6 +101,7 @@
     "Response": {
       "oneOf": [
         { "$ref": "#/$defs/TaskCommandsListed" },
+        { "$ref": "#/$defs/TaskCommandSettings" },
         { "$ref": "#/$defs/AdapterRepairLoaded" },
         { "$ref": "#/$defs/PreservedNotesListed" },
         {
@@ -2797,6 +2800,146 @@
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "reason": { "$ref": "#/$defs/AutoSummarySkipReason" }
       }
+    },
+    "TaskCommandDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "prompt"
+      ]
+    },
+    "GetTaskCommandSettingsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "get_task_command_settings"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision"
+      ]
+    },
+    "SaveTaskCommandsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "save_task_commands"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "commands_toml": {
+          "type": "string",
+          "maxLength": 65536
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "commands_toml"
+      ]
+    },
+    "TaskCommandSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "task_command_settings"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "original_toml": {
+          "type": "string",
+          "maxLength": 262144
+        },
+        "commands": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/TaskCommandDefinition"
+          }
+        },
+        "issue": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "revision",
+        "original_toml",
+        "commands",
+        "issue"
+      ]
     },
     "TaskCommand": {
       "type": "object", "additionalProperties": false,

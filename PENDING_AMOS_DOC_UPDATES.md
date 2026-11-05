@@ -423,3 +423,13 @@
   untrusted, stale choices preserve the draft, and Reuse keeps the instruction
   that actually ran. Built-in actions, templates and other outputs remain
   planned; users currently author commands in config.toml.
+
+
+- **Brauser — edit saved task commands in Settings:** Users can create, edit
+  and remove repeatable literal task instructions without editing config.toml.
+  Revision-bound saves preserve unrelated raw settings and stale drafts;
+  unsupported command registries have an explicit TOML repair view with an exact
+  config backup. Saving starts nothing; Refresh commands and explicit Run retain
+  the existing task flow. This is a standalone Brauser capability with offline
+  host/UI coverage; deployment and browser/platform acceptance belong to the
+  external driver and CI (`brwr-kqt4`).

@@ -21,6 +21,14 @@ pub(crate) struct Command {
 }
 
 impl Command {
+    pub fn definition(&self) -> brauser_protocol::TaskCommandDefinition {
+        brauser_protocol::TaskCommandDefinition {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            prompt: self.prompt.clone(),
+        }
+    }
+
     pub fn descriptor(&self) -> TaskCommand {
         TaskCommand {
             name: self.name.clone(),

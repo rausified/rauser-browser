@@ -363,6 +363,8 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::StartSiteDraft(_) => "start_site_draft",
         Request::StartTask(_) => "start_task",
         Request::ListTaskCommands(_) => "list_task_commands",
+        Request::GetTaskCommandSettings(_) => "get_task_command_settings",
+        Request::SaveTaskCommands(_) => "save_task_commands",
         Request::SaveTaskNote(_) => "save_task_note",
         Request::CheckSiteDraft(_) => "check_site_draft",
         Request::WorklogReport(_) => "worklog_report",
@@ -803,6 +805,75 @@ fn dispatch(
                         "could not save configuration",
                     ),
                 },
+            }
+        }
+        Request::GetTaskCommandSettings(value) => {
+            let Ok(_lock) = config.lock_current() else {
+                return error(
+                    &value.request_id,
+                    ErrorCode::Internal,
+                    "configuration is unavailable",
+                );
+            };
+            if config.refresh().is_err() {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    "configuration is unavailable",
+                );
+            }
+            if config.revision() != value.expected_revision {
+                return error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "Settings changed; reopen saved commands.",
+                );
+            }
+            let Ok((original_toml, table)) = config.task_command_settings() else {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    "Repair config.toml before editing saved commands.",
+                );
+            };
+            let (commands, issue) = match crate::task_commands::parse(table.get("commands")) {
+                Ok(commands) => (
+                    commands
+                        .iter()
+                        .map(crate::task_commands::Command::definition)
+                        .collect(),
+                    None,
+                ),
+                Err(issue) => (Vec::new(), Some(issue.to_owned())),
+            };
+            Response::TaskCommandSettings(brauser_protocol::TaskCommandSettings {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                revision: config.revision().to_owned(),
+                original_toml,
+                commands,
+                issue,
+            })
+        }
+        Request::SaveTaskCommands(value) => {
+            match config.save_task_commands(&value.commands_toml, &value.expected_revision) {
+                Ok(Some(revision)) => Response::ConfigUpdated(ConfigUpdated {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id,
+                    config: config.snapshot().clone(),
+                    revision,
+                }),
+                Ok(None) => error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "Settings changed. Your command draft is kept; review current commands before saving again.",
+                ),
+                // Fixed messages only: parser/serialization errors can quote a prompt.
+                Err(_) => error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    "Could not save commands. Use unique lowercase names, descriptions and literal instructions (up to 4096 characters), with sidebar output only. Check the TOML and the 64 KiB config limit; other settings cannot be changed here.",
+                ),
             }
         }
         Request::ListTaskCommands(value) => {
@@ -10456,6 +10527,244 @@ title = "{title} - Jira"
             }
             assert_eq!(catalogue.revision, loaded(&path).revision());
         }
+    }
+
+    fn command_settings_call(path: &std::path::Path, mut value: serde_json::Value) -> Response {
+        value["protocol_version"] = serde_json::json!(PROTOCOL_VERSION);
+        value["request_id"] = serde_json::json!("command-settings");
+        served(&[value.to_string()], ConfigStore::for_test(path.to_owned())).remove(0)
+    }
+
+    const COMMAND_TOML: &str = "[[commands]]\nname = \"actions\"\ndescription = \"Extract actions\"\nprompt = \"Return a checklist.\"\noutput = \"sidebar\"\n";
+
+    #[test]
+    fn task_command_settings_create_edit_remove_and_catalogue_without_service_access() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("config.toml");
+        // Authoring works before a home folder or harness is selected.
+        let mut revision = loaded(&path).revision().to_owned();
+        for text in [
+            COMMAND_TOML,
+            &COMMAND_TOML.replace("checklist", "plan"),
+            "commands = []",
+        ] {
+            let response = command_settings_call(
+                &path,
+                serde_json::json!({
+                    "type":"save_task_commands", "expected_revision":revision, "commands_toml":text,
+                }),
+            );
+            let Response::ConfigUpdated(updated) = response else {
+                panic!("{response:?}")
+            };
+            revision = updated.revision;
+            let response = command_settings_call(
+                &path,
+                serde_json::json!({
+                    "type":"get_task_command_settings", "expected_revision":revision,
+                }),
+            );
+            let Response::TaskCommandSettings(settings) = response else {
+                panic!("{response:?}")
+            };
+            assert!(settings.issue.is_none());
+            assert_eq!(settings.commands.is_empty(), text == "commands = []");
+            if !settings.commands.is_empty() {
+                assert_eq!(settings.commands[0].name, "actions");
+                assert!(
+                    settings
+                        .original_toml
+                        .contains(&settings.commands[0].prompt)
+                );
+            }
+            let response =
+                command_settings_call(&path, serde_json::json!({"type":"list_task_commands"}));
+            let Response::TaskCommandsListed(catalogue) = response else {
+                panic!("{response:?}")
+            };
+            assert_eq!(catalogue.commands.len(), settings.commands.len());
+            assert!(
+                !serde_json::to_string(&catalogue)
+                    .unwrap()
+                    .contains("Return a")
+            );
+        }
+        assert!(!home.path().join("runs").exists());
+    }
+
+    #[test]
+    fn task_command_settings_repair_preserves_raw_values_and_exact_backup() {
+        let home = tempfile::tempdir().unwrap();
+        let _config = configured_store(home.path());
+        let path = home.path().join("config.toml");
+        let mut table: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        table.insert(
+            "commands".into(),
+            toml::from_str::<toml::Table>(&COMMAND_TOML.replace("sidebar", "clipboard"))
+                .unwrap()
+                .remove("commands")
+                .unwrap(),
+        );
+        // Unsupported root and harness values survive command-only repair;
+        // normal snapshot reconstruction would discard these.
+        table.insert("future".into(), toml::Value::String("keep me".into()));
+        table.insert(
+            "summarizer".into(),
+            toml::Value::String("unsupported harness".into()),
+        );
+        table
+            .get_mut("adapters")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .insert("future".into(), toml::Value::Boolean(true));
+        let original = format!(
+            "# exact original comments\n{}",
+            toml::to_string(&table).unwrap()
+        );
+        std::fs::write(&path, &original).unwrap();
+        let revision = loaded(&path).revision().to_owned();
+        let response = command_settings_call(
+            &path,
+            serde_json::json!({"type":"get_task_command_settings", "expected_revision":revision}),
+        );
+        let Response::TaskCommandSettings(settings) = response else {
+            panic!("{response:?}")
+        };
+        assert!(settings.issue.is_some());
+        assert!(settings.commands.is_empty());
+        assert!(settings.original_toml.contains("clipboard"));
+        assert!(!settings.original_toml.contains("keep me"));
+        let response = command_settings_call(
+            &path,
+            serde_json::json!({"type":"save_task_commands", "expected_revision":revision, "commands_toml":COMMAND_TOML}),
+        );
+        assert!(
+            matches!(response, Response::ConfigUpdated(_)),
+            "{response:?}"
+        );
+        let mut after: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        after.remove("commands");
+        table.remove("commands");
+        assert_eq!(table, after);
+        assert!(loaded(&path).config_issue().is_some());
+        let backups: Vec<_> = std::fs::read_dir(home.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("config-invalid-")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(backups[0].path()).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn task_command_settings_refuse_stale_invalid_and_unrelated_replacements() {
+        let home = tempfile::tempdir().unwrap();
+        let _config = configured_store(home.path());
+        let path = home.path().join("config.toml");
+        let bytes = std::fs::read(&path).unwrap();
+        let revision = loaded(&path).revision().to_owned();
+        for text in [
+            "[",
+            "",
+            "capture_enabled = false\ncommands = []",
+            "commands = 'bad'",
+            &COMMAND_TOML.repeat(2),
+            &COMMAND_TOML.replace("sidebar", "clipboard"),
+            &COMMAND_TOML.replace("Return a checklist.", "{page.content}"),
+            &COMMAND_TOML.replace("actions", "summarize"),
+            &COMMAND_TOML.replace("Return a checklist.", &"x".repeat(4097)),
+            &format!("commands = []\n#{}", "x".repeat(65536)),
+        ] {
+            let response = command_settings_call(
+                &path,
+                serde_json::json!({"type":"save_task_commands", "expected_revision":revision, "commands_toml":text}),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::InvalidConfig);
+            assert!(!refused(&response).1.contains("{page.content}"));
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        std::fs::write(&path, [bytes.as_slice(), b"\n# another editor\n"].concat()).unwrap();
+        let changed = std::fs::read(&path).unwrap();
+        for kind in ["get_task_command_settings", "save_task_commands"] {
+            let mut request = serde_json::json!({"type":kind, "expected_revision":revision});
+            if kind == "save_task_commands" {
+                request["commands_toml"] = serde_json::json!(COMMAND_TOML);
+            }
+            assert_eq!(
+                refused(&command_settings_call(&path, request)).0,
+                ErrorCode::Conflict
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), changed);
+        }
+    }
+
+    #[test]
+    fn task_command_settings_refuse_invalid_config_syntax_and_whole_file_growth() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("config.toml");
+        for original in [
+            "[broken".to_owned(),
+            format!("future = \"{}\"\n", "x".repeat(63_000)),
+        ] {
+            std::fs::write(&path, &original).unwrap();
+            let revision = loaded(&path).revision().to_owned();
+            let text = COMMAND_TOML.replace("Return a checklist.", &"x".repeat(4096));
+            let response = command_settings_call(
+                &path,
+                serde_json::json!({"type":"save_task_commands", "expected_revision":revision, "commands_toml":text}),
+            );
+            assert_eq!(refused(&response).0, ErrorCode::InvalidConfig);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn task_command_settings_parse_browser_quoted_strings_literally() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("config.toml");
+        let prompt = "Quote \"text\" at C:\\work\\file\n\t🔎 café {literal} </textarea>";
+        // serde_json and JSON.stringify both quote these as JSON strings;
+        // exercise the same payload through the native TOML parser.
+        let text = format!(
+            "[[commands]]\nname = \"actions\"\ndescription = {}\nprompt = {}\n",
+            serde_json::to_string(&"🔎".repeat(256)).unwrap(),
+            serde_json::to_string(prompt).unwrap()
+        );
+        let response = command_settings_call(
+            &path,
+            serde_json::json!({"type":"save_task_commands", "expected_revision":"missing", "commands_toml":text}),
+        );
+        assert!(
+            matches!(response, Response::ConfigUpdated(_)),
+            "{response:?}"
+        );
+        let revision = loaded(&path).revision().to_owned();
+        let response = command_settings_call(
+            &path,
+            serde_json::json!({"type":"get_task_command_settings", "expected_revision":revision}),
+        );
+        let Response::TaskCommandSettings(settings) = response else {
+            panic!("{response:?}")
+        };
+        assert_eq!(settings.commands[0].prompt, prompt);
+        let bytes = std::fs::read(&path).unwrap();
+        let response = command_settings_call(
+            &path,
+            serde_json::json!({"type":"save_task_commands", "expected_revision":revision, "commands_toml":text.replace("actions", r"\ud800")}),
+        );
+        assert_eq!(refused(&response).0, ErrorCode::InvalidConfig);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 
     /// The run proxy against a fake service on a short `/tmp` socket. No
