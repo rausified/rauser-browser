@@ -110,6 +110,13 @@ drafter, are what Brauser actually ships.
   public sources alone, whether a branch's tab title uses the branch's own
   name or the main file's name (research.md "Known limits and open
   questions" item 9).
+- **Entry 3 splits at the title's last ` - `, the same risk as `figma.file`.**
+  A branch's prototype tab, `<name> - <page>`, is split correctly: only
+  `<name>` is recorded. But a branch or main-file name that itself contains
+  a plain ` - ` and carries no en-dash product suffix would lose its own
+  trailing segment the same way (probe: `Q3 - Roadmap` → `Q3`). See
+  `docs/adapters/figma.file.md` "Known limits" for the full detail; this is
+  believed rare for the same reason given there.
 - **Title is set client-side**, the same `Figma`-while-loading limit as
   `figma.file`.
 - The ID template is frozen once shipped (adapter-templates.md §8.2).
@@ -131,7 +138,11 @@ plan:
    route and confirm it lands on the same branch key.
 5. Open the branch in FigJam and in Slides (presenter and audience view) and
    confirm each still reads only the branch key, never the main file's.
-6. On a Capture Site review on a Figma branch page with no saved rules,
+6. Check a branch (or its main file) whose own name contains a plain ` - `
+   (not the en-dash ` – `), such as `Q3 - Roadmap`; confirm whether its
+   title gets mis-split at the last ` - ` the same way `figma.file`'s step 8
+   checks (Known limits).
+7. On a Capture Site review on a Figma branch page with no saved rules,
    Brauser offers Figma files and Figma branches with the every-account
    statement and the development-draft source line; saving one turns the
    page card's status to "● Artifact recognized".

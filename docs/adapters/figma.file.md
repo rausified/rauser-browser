@@ -130,10 +130,16 @@ reads `<file> - <page>`.
 - **Multi-page prototypes.** A prototype's page name is part of the recorded
   shape (`<file> - <page>`) but the hyphen entry strips it, so only the file
   name is recorded; the page name itself is never kept anywhere.
-- **A design file whose own name starts with `▶ ` or ends in a plain hyphen
-  with nothing meaningful after it** could, in principle, be mis-split by
-  entry 3; this is believed rare and is a trade-off, not a bug, per the
-  Global Constraints.
+- **Entry 3 splits at the title's last ` - `.** A prototype tab,
+  `<file> - <page>`, is split correctly: the text after the last ` - ` is
+  discarded as the page name and only `<file>` is recorded. But any other
+  tab title that lacks an en-dash product suffix (so entry 2 never fires)
+  and still contains a plain ` - ` is split the same way: a design file
+  literally named `Q3 - Roadmap` would record as just `Q3`, losing
+  ` - Roadmap` from its own name, not a prototype's page name at all
+  (probe: `Q3 - Roadmap` → `Q3`). This is believed rare — a real editor
+  title always carries the en-dash suffix entry 2 strips first — and is a
+  trade-off, not a bug, per the Global Constraints.
 - **Branch titles use the same three entries**, but whether a branch's
   `<name>` is the branch's own name or the main file's name is unconfirmed
   (see `docs/adapters/figma.branch.md`).
@@ -160,10 +166,13 @@ with real Chrome and a real Figma account:
 6. Confirm whether `opaque_file_slug_in_url` is on (URLs with no slug) in the
    account.
 7. Check a file whose name starts with an emoji and one containing ` – `.
-8. Check that `/files/…`, `/files/project/<id>` and the community pages are
+8. Check a non-prototype file whose own name contains a plain ` - ` (not
+   the en-dash ` – `), such as `Q3 - Roadmap`; confirm whether its title
+   gets mis-split at the last ` - ` as entry 3 predicts (Known limits).
+9. Check that `/files/…`, `/files/project/<id>` and the community pages are
    not recorded, and that file keys seen are 22 characters.
-9. Repeat titles with the UI language set to something other than English.
-10. On a Capture Site review on a Figma file page with no saved rules,
+10. Repeat titles with the UI language set to something other than English.
+11. On a Capture Site review on a Figma file page with no saved rules,
     Brauser offers Figma files and Figma branches with the every-account
     statement and the development-draft source line; saving one turns the
     page card's status to "● Artifact recognized".
