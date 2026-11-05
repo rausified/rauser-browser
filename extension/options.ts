@@ -2,6 +2,7 @@ import type {
   AdapterDocument, FolderPurpose, HarnessFound, HarnessId, RuleProvenance, ScopeChoiceView, StorageConfig,
 } from "../protocol/ts/generated.js";
 import { HOME_LAYOUT, isHttpUrl, type WorkerStatus } from "./model.js";
+import { taskNotificationSettings } from "./task-notification-settings.js";
 import {
   ConfigSession,
   capturePaused,
@@ -66,6 +67,8 @@ import { checkReason, type DraftChecked } from "./capture-site.js";
 import { canonicalJson, takeDraftHandoff, type DraftHandoff } from "./capture-site-handoff.js";
 
 initDiag("options");
+taskNotificationSettings(chrome, element<HTMLButtonElement>("task-notifications-toggle"),
+  element<HTMLElement>("task-notifications-state"));
 
 const status = element<HTMLDivElement>("status");
 const buildId = element<HTMLSpanElement>("build-id");

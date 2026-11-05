@@ -198,7 +198,12 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       },
     },
     storage: { local: area("local"), session: area("session"), onChanged: storageChanged },
-    permissions: { contains: async () => true, onAdded: event(), onRemoved: event() },
+    permissions: {
+      contains: async (permission) => permission.permissions?.includes("notifications") ? fixture.taskNotificationsEnabled === true : true,
+      request: async () => { fixture.taskNotificationsEnabled = true; fixture.actions.push("enable-task-notifications"); return true; },
+      remove: async () => { fixture.taskNotificationsEnabled = false; fixture.actions.push("disable-task-notifications"); return true; },
+      onAdded: event(), onRemoved: event(),
+    },
     tabs: {
       query: async () => [{ id: 1, incognito: false, url: pageUrl, title: "Work item" }],
       create: async (properties) => { fixture.actions.push(properties.url); return { id: 2 }; },

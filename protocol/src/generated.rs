@@ -991,6 +991,8 @@ pub enum AnswerAccess {
 #[serde(deny_unknown_fields)]
 pub struct RunView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_page: Option<bool>,
     pub run_id: String,
     pub state: RunState,

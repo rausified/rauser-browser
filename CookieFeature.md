@@ -1642,3 +1642,30 @@ index and summary ordering with no cache or content migration. Offline checks
 cover ties, unreadable summary timestamps, replay, mixed history and stale
 panel replies; real-browser keyboard verification remains with the external
 gate because Chromium cannot start in this sandbox.
+
+
+## 2026-11-05 — Notify when tasks finish outside the panel
+
+Task notifications can now be enabled in Settings, so you can leave an agent
+working and return when it finishes. Chrome asks for an optional notification
+permission; it stays off until you choose to enable it. With the panel closed,
+a task produces a generic finished, failed or canceled alert and an unread
+count on Brauser's toolbar badge. Clicking the alert opens the panel and the
+selected report in Tasks. Capture warnings keep priority over the unread
+count, and reopening the panel clears the alerts.
+
+The worker records a start intent before the task request leaves the panel.
+The service retains that request's ID, so monitoring can find the exact run
+even if the panel closes during startup or its answer is lost. This also
+keeps concurrent windows and browser profiles from picking up each other's
+tasks. Monitoring survives worker restarts, stops polling once its work is
+done, and suppresses finishes the panel already announced. Notification state
+and text contain no instruction or report. A worker interruption immediately
+before Chrome creates an alert can lose that toast, but keeps its unread badge
+and cannot repeatedly alert for the same result.
+
+The host and extension must deploy together because task history now carries
+start-request correlation. Older services cannot read those new task records
+on rollback; keep the existing no-active-task rollback rule. Automated tests
+use fake Chrome APIs and harnesses. Real desktop notification presentation and
+Chrome's click gesture still need the separate acceptance checks in TESTING.md.
