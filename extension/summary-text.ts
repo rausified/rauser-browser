@@ -25,8 +25,10 @@ export function summaryLine(s: SummaryView): string {
 
 /** A summarized Recent row's line: "Summarized · Type, Importance importance". */
 export function recentSummaryText(s: SummaryView): string {
-  if (s.overview) return `Summarized · ${summaryLine(s)}`;
-  return `Summarized · ${s.document_type}, ${s.importance} importance`;
+  const line = s.overview ? `Summarized · ${summaryLine(s)}`
+    : `Summarized · ${s.document_type}, ${s.importance} importance`;
+  const scope = readScopeText(s.read_scope);
+  return scope === null ? line : `${line} · ${scope}`;
 }
 
 /** Why a summary run saved nothing: the agent met a sign-in, no-access or

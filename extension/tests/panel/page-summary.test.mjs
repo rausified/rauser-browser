@@ -32,6 +32,46 @@ const opensSummary = (request) => request.type === "open_summary"
   ? { type: "summary_opened", relative_path: SUMMARY.summary_path }
   : null;
 
+test("saved reading scope appears in This page and Recent independently of the overview", async () => {
+  for (const [read_scope, label] of [
+    [undefined, null], ["whole", "Agent read: whole artifact"],
+    ["partial", "Agent read: part of the artifact"], ["page_only", "Agent read: browser page only"],
+  ]) {
+    for (const overview of [undefined, "<img src=x> Release tradeoffs."]) {
+      const summary = { ...SUMMARY, ...(read_scope ? { read_scope } : {}), ...(overview ? { overview } : {}) };
+      const page = await install({
+        tab: { id: 1, url: ARTICLE_URL, title: "Article" },
+        intercept: (request) => {
+          if (request.type === "get_artifact") return {
+            type: "artifact_result", recognized: false, artifact: null, summary: request.url === ARTICLE_URL ? summary : null,
+          };
+          if (request.type === "list_artifacts") return {
+            type: "artifact_list_result", artifact_types: ["web.page"], truncated: false,
+            items: [{ local_date: "2026-10-27", artifact_id: "web:a", artifact_type: "web.page", title: "Article",
+              url: ARTICLE_URL, focused_seconds: 0, background_seconds: 0, opens: 0, why: null, summary }],
+          };
+          return opensSummary(request);
+        },
+      });
+      await until(() => !page.el("page-summary").hidden, "the saved summary");
+      const chips = page.el("page-summary-chips").children.map((chip) => chip.textContent);
+      assert.equal(chips.includes(label), label !== null);
+      assert.equal(chips.some((text) => text.startsWith("Agent read:")), label !== null);
+      assert.equal(page.el("page-summary-text").textContent, overview ?? "specification · technical specification · high importance");
+      page.el("tab-recent").click();
+      await until(() => page.el("recent-list").textContent.includes("Summarized"), "Recent");
+      const recent = page.el("recent-list").textContent;
+      assert.equal(recent.includes("Agent read:"), label !== null);
+      if (label) assert.ok(recent.includes(label));
+      assert.ok(descendants(page.el("recent-list")).every((node) => node.tagName !== "IMG"));
+      assert.equal(page.el("page-summary-text").children.length, 0);
+      page.followLink("https://read.example/plain", "Plain");
+      await until(() => page.el("page-summary").hidden, "clear the previous summary");
+      assert.equal(page.el("page-summary-chips").children.length, 0);
+    }
+  }
+});
+
 test("page and Recent show the overview and type as literal text", async () => {
   const overview = '<img src="https://remote.example/pixel"> A decision on the launch.';
   const summary = { ...SUMMARY, overview };

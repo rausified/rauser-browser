@@ -5,6 +5,102 @@ use super::*;
 const MAX_SESSIONS: usize = 64;
 const MAX_ROWS: usize = 200;
 
+pub(crate) struct FocusChoices {
+    pub sessions: Vec<brauser_protocol::FocusSession>,
+    pub sessions_truncated: bool,
+    pub selected_session: Option<brauser_protocol::FocusSession>,
+    pub name_changed: bool,
+    pub choices: Vec<WorklogChoice>,
+    pub truncated: bool,
+    pub gaps: Vec<OverflowMarker>,
+    pub gaps_truncated: bool,
+}
+
+/// Select before grouping: artifact-day choices have already combined every
+/// session's measures and context and cannot safely be filtered afterwards.
+pub(super) fn choices(
+    tx: &rusqlite::Transaction<'_>,
+    start: Date,
+    end: Date,
+    session_id: Option<&str>,
+) -> Result<FocusChoices> {
+    let (gaps, gaps_truncated) = query::worklog_gaps(tx, start, end)?;
+    let mut result = FocusChoices {
+        sessions: Vec::new(),
+        sessions_truncated: false,
+        selected_session: None,
+        name_changed: false,
+        choices: Vec::new(),
+        truncated: false,
+        gaps,
+        gaps_truncated,
+    };
+    let mut days = BTreeMap::<(String, String), query::ChoiceDay>::new();
+    // `visits` holds direct activity only. Use its resolved ID, but the
+    // selected event's own title/URL, never global artifact metadata.
+    // Newest first also determines the bounded catalog's stable order.
+    let mut statement = tx.prepare_cached(
+        "SELECT v.local_date, v.artifact_id, e.body
+         FROM visits v JOIN brauser_events e ON e.event_id = v.event_id
+         WHERE v.local_date BETWEEN ?1 AND ?2 AND e.kind = 'activity'
+         ORDER BY e.order_key DESC",
+    )?;
+    let mut rows = statement.query([start.to_string(), end.to_string()])?;
+    while let Some(row) = rows.next()? {
+        let EventData::Activity(event) =
+            serde_json::from_str::<CachedEvent>(&row.get::<_, String>(2)?)?.data
+        else {
+            continue;
+        };
+        let Some(session) = event
+            .focus_session
+            .as_ref()
+            .filter(|session| crate::capture::focus_session_is_valid(session))
+        else {
+            continue;
+        };
+        if let Some(known) = result.sessions.iter_mut().find(|s| s.id == session.id) {
+            newest_name(known, session);
+        } else if result.sessions.len() < MAX_SESSIONS {
+            result.sessions.push(session.clone());
+        } else {
+            result.sessions_truncated = true;
+        }
+        if session_id != Some(session.id.as_str()) {
+            continue;
+        }
+        if let Some(known) = &mut result.selected_session {
+            result.name_changed |= known.name != session.name;
+            newest_name(known, session);
+        } else {
+            result.selected_session = Some(session.clone());
+        }
+        let day = days
+            .entry((row.get(0)?, row.get(1)?))
+            .or_insert_with(|| query::ChoiceDay {
+                focused: 0,
+                background: 0,
+                opens: 0,
+                summary: None,
+                title: event.title.clone().unwrap_or_else(|| "Untitled".into()),
+                url: event.url.clone(),
+            });
+        day.focused = day.focused.saturating_add(event.focused_seconds.into());
+        day.background = day
+            .background
+            .saturating_add(event.background_seconds.into());
+        day.opens = day.opens.saturating_add(event.opens.into());
+    }
+    (result.choices, result.truncated) = query::choice_rows(days)?;
+    Ok(result)
+}
+
+fn newest_name(known: &mut brauser_protocol::FocusSession, fresh: &brauser_protocol::FocusSession) {
+    if (fresh.revision, &fresh.name) > (known.revision, &known.name) {
+        known.clone_from(fresh);
+    }
+}
+
 #[derive(Default)]
 pub(super) struct FocusGroups {
     groups: BTreeMap<String, Group>,

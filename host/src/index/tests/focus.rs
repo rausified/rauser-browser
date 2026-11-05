@@ -141,3 +141,188 @@ fn a_full_base_worklog_still_reports_an_omitted_focus_breakdown() {
     assert!(text.len() <= MAX_WORKLOG_BYTES);
     assert!(text.contains("Focus-session breakdown shortened."));
 }
+
+#[test]
+fn selected_session_filters_before_aggregating_time_titles_urls_and_summaries() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let mut public = tagged(1, "A", 1, "Release", 1);
+    public.title = Some("Public update".into());
+    public.url.push_str("?view=public");
+    let mut private = tagged(2, "A", 2, "Private", 1);
+    private.title = Some("Private topic".into());
+    private.url.push_str("?view=private");
+    private.focused_seconds = 600;
+    private.occurred_at = "2026-11-03T11:00:00Z".into();
+    let mut untagged = private.clone();
+    untagged.event_id = Uuid::new_v4().to_string();
+    untagged.focus_session = None;
+    untagged.title = Some("Unrelated work".into());
+    let mut renamed = tagged(3, "A", 1, "Ship it", 2);
+    renamed.title = Some("Public wrap-up".into());
+    renamed.url.push_str("?view=wrap-up");
+    renamed.occurred_at = "2026-11-03T12:00:00Z".into();
+    // Reuse the same name for another ID; names are never selection keys.
+    private.focus_session.as_mut().unwrap().name = "Ship it".into();
+    write_log(
+        root.path(),
+        "2026-11-03.md",
+        &[&public, &private, &untagged, &renamed],
+    );
+    let index = index(&root, &cache);
+    let day = parse_date("2026-11-03").unwrap();
+    let id = &public.focus_session.as_ref().unwrap().id;
+    let list = index.worklog_focus_choices(day, day, None).unwrap();
+    assert_eq!(list.sessions.len(), 2);
+    assert!(list.choices.is_empty());
+    assert!(list.selected_session.is_none());
+    let selected = index.worklog_focus_choices(day, day, Some(id)).unwrap();
+    assert_eq!(selected.selected_session.as_ref().unwrap().name, "Ship it");
+    assert!(selected.name_changed);
+    assert_eq!(selected.choices.len(), 1);
+    let choice = &selected.choices[0];
+    assert_eq!(choice.artifact_id, "work:example.com/A");
+    assert!(
+        choice.text.contains("Public wrap-up — focused 4 min"),
+        "{}",
+        choice.text
+    );
+    assert!(!choice.text.contains("Private"));
+    assert!(!choice.text.contains("Unrelated"));
+    assert_eq!(choice.url, renamed.url);
+    assert_eq!(index.worklog_choices(day, day).unwrap().0.len(), 1);
+    let rebuilt_cache = TempDir::new().unwrap();
+    let rebuilt =
+        ArtifactIndex::open_in(&storage(root.path()), None, rebuilt_cache.path()).unwrap();
+    assert_eq!(
+        selected.choices,
+        rebuilt
+            .worklog_focus_choices(day, day, Some(id))
+            .unwrap()
+            .choices
+    );
+}
+
+#[test]
+fn selected_session_is_date_scoped_and_excludes_summary_and_container_copies() {
+    use super::containers::github_blob;
+    let document = github_document(true);
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache).with_adapters(Some(&document));
+    let mut event = github_pr(1, 7, "2026-11-03T10:00:00Z");
+    event.focus_session = tagged(1, "A", 1, "Release", 1).focus_session;
+    let mut repo = github_blob(2, "2026-11-03T11:00:00Z");
+    repo.focus_session = tagged(2, "A", 2, "Other", 1).focus_session;
+    let mut tomorrow = event.clone();
+    tomorrow.event_id = Uuid::new_v4().to_string();
+    tomorrow.occurred_at = "2026-11-04T10:00:00Z".into();
+    tomorrow.title = Some("Next day".into());
+    index
+        .record_activities([&event, &repo, &tomorrow], &[])
+        .unwrap();
+    index
+        .record_summary(&super::summaries::web_summary(
+            "https://news.example/a",
+            "2026-11-03T12:00:00Z",
+        ))
+        .unwrap();
+    let day = parse_date("2026-11-03").unwrap();
+    let id = &event.focus_session.as_ref().unwrap().id;
+    let selected = index.worklog_focus_choices(day, day, Some(id)).unwrap();
+    assert_eq!(selected.choices.len(), 1);
+    assert_eq!(selected.choices[0].artifact_id, event.artifact_id);
+    assert!(!selected.choices[0].text.contains("Next day"));
+    assert!(!selected.choices[0].text.contains("Summarized"));
+    let week = index
+        .worklog_focus_choices(day, day.next_day().unwrap(), Some(id))
+        .unwrap();
+    assert_eq!(week.choices.len(), 2);
+    for selected_day in [
+        parse_date("2026-11-02").unwrap(),
+        parse_date("2026-11-05").unwrap(),
+    ] {
+        let empty = index
+            .worklog_focus_choices(selected_day, selected_day, Some(id))
+            .unwrap();
+        assert!(empty.sessions.is_empty());
+        assert!(empty.selected_session.is_none());
+        assert!(empty.choices.is_empty());
+    }
+    let unknown = index
+        .worklog_focus_choices(day, day, Some("10000000-0000-4000-8000-999999999999"))
+        .unwrap();
+    assert_eq!(unknown.sessions.len(), 2);
+    assert!(unknown.selected_session.is_none());
+    assert!(unknown.choices.is_empty());
+}
+
+#[test]
+fn session_catalog_omission_never_limits_a_selected_sessions_entries() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let events = (1..=70)
+        .map(|n| tagged(n, &format!("A{n}"), n, "Same name", 1))
+        .collect::<Vec<_>>();
+    index.record_activities(events.iter(), &[]).unwrap();
+    let day = parse_date("2026-11-03").unwrap();
+    let catalog = index.worklog_focus_choices(day, day, None).unwrap();
+    assert_eq!(catalog.sessions.len(), 64);
+    assert!(catalog.sessions_truncated);
+    let missing = events
+        .iter()
+        .find(|event| {
+            !catalog
+                .sessions
+                .iter()
+                .any(|s| Some(s) == event.focus_session.as_ref())
+        })
+        .unwrap();
+    let selected = index
+        .worklog_focus_choices(day, day, Some(&missing.focus_session.as_ref().unwrap().id))
+        .unwrap();
+    assert!(selected.selected_session.is_some());
+    assert_eq!(selected.choices.len(), 1);
+    assert_eq!(selected.choices[0].artifact_id, missing.artifact_id);
+    assert!(!selected.truncated);
+}
+
+#[test]
+fn selected_session_choices_reuse_row_and_escaped_byte_bounds() {
+    for (count, title) in [(205, "Brief".to_owned()), (200, "\"é".repeat(250))] {
+        let root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let index = index(&root, &cache);
+        let events = (1..=count)
+            .map(|n| {
+                let mut event = tagged(n, &format!("A{n:04}"), 1, "Release", 1);
+                event.title = Some(title.clone());
+                event
+            })
+            .collect::<Vec<_>>();
+        index.record_activities(events.iter(), &[]).unwrap();
+        let day = parse_date("2026-11-03").unwrap();
+        let selected = index
+            .worklog_focus_choices(
+                day,
+                day,
+                Some(&events[0].focus_session.as_ref().unwrap().id),
+            )
+            .unwrap();
+        assert!(selected.truncated);
+        assert!(selected.choices.len() <= 200);
+        assert!(serde_json::to_vec(&selected.choices).unwrap().len() <= MAX_WORKLOG_BYTES);
+        assert_eq!(
+            selected.choices,
+            index
+                .worklog_focus_choices(
+                    day,
+                    day,
+                    Some(&events[0].focus_session.as_ref().unwrap().id)
+                )
+                .unwrap()
+                .choices
+        );
+    }
+}

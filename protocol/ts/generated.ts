@@ -280,16 +280,59 @@ export interface ListArtifactsRequest {
   request_id: string;
   artifact_type: string | null;
   title_query: string | null;
+  summary_reading?: SummaryReadingFilter;
   limit: number;
 }
 
+export type SummaryReadingFilter = "limited" | "whole" | "unknown";
+
+export interface WorklogFocusChoicesRequest {
+  type: "worklog_focus_choices";
+  protocol_version: 8;
+  request_id: string;
+  start_date: string;
+  end_date: string;
+  expected_revision: string;
+  focus_session_id: string | null;
+}
+
+export interface WorklogFocusChoicesResult {
+  type: "worklog_focus_choices_result";
+  protocol_version: 8;
+  request_id: string;
+  start_date: string;
+  end_date: string;
+  focus_session_id: string | null;
+  sessions: FocusSession[];
+  sessions_truncated: boolean;
+  selected_session: FocusSession | null;
+  name_changed: boolean;
+  choices: WorklogChoice[];
+  truncated: boolean;
+  gaps: OverflowMarker[];
+  gaps_truncated: boolean;
+}
+
 export interface WorklogChoicesRequest {
+  page?: WorklogChoicesPageRequest;
   expected_revision: string;
   type: "worklog_choices";
   protocol_version: 8;
   request_id: string;
   start_date: string;
   end_date: string;
+}
+
+export interface WorklogChoicesPageRequest {
+  offset: number;
+  snapshot?: string;
+}
+
+export interface WorklogChoicesPageInfo {
+  snapshot: string;
+  offset: number;
+  next_offset: number | null;
+  omitted: boolean;
 }
 
 export interface WorklogChoice {
@@ -300,6 +343,7 @@ export interface WorklogChoice {
 }
 
 export interface WorklogChoicesResult {
+  page?: WorklogChoicesPageInfo;
   type: "worklog_choices_result";
   protocol_version: 8;
   request_id: string;
@@ -481,6 +525,7 @@ export interface ContainedArtifactView {
 }
 
 export interface SummaryView {
+  read_scope?: AnswerReadScope;
   overview?: string;
   summarized_at: string;
   document_type: string;
@@ -681,6 +726,7 @@ export type AnswerReadScope = "whole" | "partial" | "page_only";
 export type AnswerAccess = "ok" | "sign_in" | "denied" | "not_found";
 
 export interface RunView {
+  start_request_id?: string;
   no_page?: boolean;
   run_id: string;
   state: RunState;
@@ -901,7 +947,28 @@ export interface AutoSummarySkippedResponse {
   reason: AutoSummarySkipReason;
 }
 
+export interface TaskCommand {
+  name: string;
+  description: string;
+}
+
+export interface ListTaskCommandsRequest {
+  type: "list_task_commands";
+  protocol_version: 8;
+  request_id: string;
+}
+
+export interface TaskCommandsListed {
+  type: "task_commands_listed";
+  protocol_version: 8;
+  request_id: string;
+  revision: string;
+  commands: TaskCommand[];
+  issue: string | null;
+}
+
 export interface StartTaskRequest {
+  command_revision?: string;
   no_page?: boolean;
   type: "start_task";
   protocol_version: 8;
@@ -1056,6 +1123,6 @@ export interface SiteDraftChecked {
   preview: PreviewRowView[];
 }
 
-export type Request = GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
+export type Request = GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
 
-export type Response = AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;
+export type Response = TaskCommandsListed | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;

@@ -23,6 +23,7 @@ pub(super) fn summary_view(event: &SummaryEvent) -> Option<SummaryView> {
             .filter(|value| value.len() <= 32)?
     };
     Some(SummaryView {
+        read_scope: event.read_scope.map(Into::into),
         summarized_at,
         overview: event.overview.clone(),
         document_type: event.document_type.clone(),
@@ -303,6 +304,7 @@ pub(super) fn recent(
     tx: &Transaction<'_>,
     artifact_type: Option<&str>,
     title_query: Option<&str>,
+    reading: Option<brauser_protocol::SummaryReadingFilter>,
     limit: usize,
 ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
     let types = tx
@@ -319,46 +321,77 @@ pub(super) fn recent(
          FROM brauser_artifact_days d JOIN artifacts a ON a.artifact_id = d.artifact_id
          WHERE (?1 IS NULL OR a.artifact_type = ?1)
            AND (?2 IS NULL OR instr(brauser_fold(a.title), ?2) > 0)
+           AND (?4 = 0 OR d.summaries > 0)
          ORDER BY d.local_date DESC, min(d.focused_secs, 4294967295) DESC, a.title, d.artifact_id
          LIMIT ?3",
     )?;
-    let rows = statement
-        .query_map(
-            rusqlite::params![
-                artifact_type,
-                query,
+    let rows = statement.query_map(
+        rusqlite::params![
+            artifact_type,
+            query,
+            if reading.is_some() {
+                -1
+            } else {
                 sql_count(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
-            ],
-            |row| {
-                Ok((
-                    ArtifactListItem {
-                        local_date: row.get(0)?,
-                        artifact_id: row.get(1)?,
-                        artifact_type: row.get(2)?,
-                        title: row.get(3)?,
-                        url: row.get(4)?,
-                        focused_seconds: saturating_u32(count(row.get(5)?)),
-                        background_seconds: saturating_u32(count(row.get(6)?)),
-                        opens: saturating_u32(count(row.get(7)?)),
-                        why: row.get(8)?,
-                        summary: None,
-                    },
-                    row.get::<_, i64>(9)? > 0,
-                ))
             },
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let truncated = rows.len() > limit;
-    let mut items = Vec::with_capacity(rows.len().min(limit));
-    for (mut item, summarized) in rows.into_iter().take(limit) {
+            i64::from(reading.is_some())
+        ],
+        |row| {
+            Ok((
+                ArtifactListItem {
+                    local_date: row.get(0)?,
+                    artifact_id: row.get(1)?,
+                    artifact_type: row.get(2)?,
+                    title: row.get(3)?,
+                    url: row.get(4)?,
+                    focused_seconds: saturating_u32(count(row.get(5)?)),
+                    background_seconds: saturating_u32(count(row.get(6)?)),
+                    opens: saturating_u32(count(row.get(7)?)),
+                    why: row.get(8)?,
+                    summary: None,
+                },
+                row.get::<_, i64>(9)? > 0,
+            ))
+        },
+    )?;
+    let mut items = Vec::new();
+    for row in rows {
+        let (mut item, summarized) = row?;
+        if reading.is_none() && items.len() == limit {
+            return Ok((items, types, true));
+        }
         // The day's latest summary that renders.
         if summarized {
             item.summary =
                 latest_summary_view(&summaries(tx, &item.artifact_id, Some(&item.local_date))?);
         }
+        if reading.is_some_and(|filter| !matches_reading(item.summary.as_ref(), filter)) {
+            continue;
+        }
+        // The extra matching row establishes truncation. Never limit the
+        // candidate rows first: an older matching summary must stay reachable.
+        if items.len() == limit {
+            return Ok((items, types, true));
+        }
         items.push(item);
     }
-    Ok((items, types, truncated))
+    Ok((items, types, false))
+}
+
+fn matches_reading(
+    summary: Option<&SummaryView>,
+    filter: brauser_protocol::SummaryReadingFilter,
+) -> bool {
+    use brauser_protocol::{AnswerReadScope, SummaryReadingFilter};
+    let Some(summary) = summary else { return false };
+    match filter {
+        SummaryReadingFilter::Limited => matches!(
+            summary.read_scope,
+            Some(AnswerReadScope::Partial | AnswerReadScope::PageOnly)
+        ),
+        SummaryReadingFilter::Whole => summary.read_scope == Some(AnswerReadScope::Whole),
+        SummaryReadingFilter::Unknown => summary.read_scope.is_none(),
+    }
 }
 
 #[derive(Default)]
@@ -528,7 +561,17 @@ pub(super) fn worklog_text(rows: BTreeMap<String, WorklogRow>) -> (String, usize
 }
 
 /// The most rows one worklog-choices answer lists.
-const MAX_WORKLOG_CHOICES: usize = 200;
+pub(super) const MAX_WORKLOG_CHOICES: usize = 200;
+
+/// Already scoped direct activity; shared by day and session choices.
+pub(super) struct ChoiceDay {
+    pub(super) focused: u64,
+    pub(super) background: u64,
+    pub(super) opens: u64,
+    pub(super) summary: Option<SummaryEvent>,
+    pub(super) title: String,
+    pub(super) url: String,
+}
 
 /// Independent artifact-day rows for sharing, newest day first and then by
 /// artifact ID, from the direct `visits` rows only (a container's copies
@@ -541,15 +584,16 @@ pub(super) fn worklog_choices(
     start: Date,
     end: Date,
 ) -> Result<(Vec<WorklogChoice>, bool, Vec<OverflowMarker>, bool)> {
-    struct Day {
-        focused: u64,
-        background: u64,
-        opens: u64,
-        summary: Option<SummaryEvent>,
-        title: String,
-        url: String,
-    }
     let (gaps, gaps_truncated) = worklog_gaps(tx, start, end)?;
+    let (choices, truncated) = choice_rows(worklog_choice_days(tx, start, end)?)?;
+    Ok((choices, truncated, gaps, gaps_truncated))
+}
+
+pub(super) fn worklog_choice_days(
+    tx: &Transaction<'_>,
+    start: Date,
+    end: Date,
+) -> Result<BTreeMap<(String, String), ChoiceDay>> {
     // In `order_key` order, stably by instant: a full derive's visit order,
     // with durable append order for ties.
     let mut statement = tx.prepare_cached(
@@ -575,7 +619,7 @@ pub(super) fn worklog_choices(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     visits.sort_by(|a, b| timestamp_order(&a.2, &b.2));
-    let mut rows = BTreeMap::<(String, String), Day>::new();
+    let mut rows = BTreeMap::<(String, String), ChoiceDay>::new();
     for (local_date, artifact_id, _, focused, background, opens, title, url, summary) in visits {
         let Ok(date) = parse_date(&local_date) else {
             continue;
@@ -592,7 +636,7 @@ pub(super) fn worklog_choices(
         };
         let row = rows
             .entry((local_date, artifact_id))
-            .or_insert_with(|| Day {
+            .or_insert_with(|| ChoiceDay {
                 focused: 0,
                 background: 0,
                 opens: 0,
@@ -609,16 +653,15 @@ pub(super) fn worklog_choices(
         row.title = title;
         row.url = url;
     }
+    Ok(rows)
+}
+
+pub(super) fn render_choices(
+    rows: BTreeMap<(String, String), ChoiceDay>,
+) -> impl Iterator<Item = WorklogChoice> {
     let mut ordered = rows.into_iter().collect::<Vec<_>>();
     ordered.sort_by(|a, b| b.0.0.cmp(&a.0.0).then(a.0.1.cmp(&b.0.1)));
-    let mut choices = Vec::new();
-    let mut bytes = 2usize; // JSON array brackets; count escaped fields too.
-    let mut truncated = false;
-    for ((local_date, artifact_id), row) in ordered {
-        if choices.len() == MAX_WORKLOG_CHOICES {
-            truncated = true;
-            break;
-        }
+    ordered.into_iter().map(|((local_date, artifact_id), row)| {
         let mut text = format!("{}: {}", artifact_id, plain_text(&row.title));
         if row.summary.is_none() || row.focused > 0 || row.background > 0 || row.opens > 0 {
             text.push_str(&format!(
@@ -633,30 +676,46 @@ pub(super) fn worklog_choices(
                 crate::summary::importance_str(summary.importance)
             ));
         }
-        let choice = WorklogChoice {
+        WorklogChoice {
             artifact_id,
             local_date,
             text,
             url: row.url,
-        };
+        }
+    })
+}
+
+pub(super) fn choice_fits(choice: &WorklogChoice) -> bool {
+    choice.artifact_id.chars().count() <= 2048
+        && choice.text.chars().count() <= 8192
+        && choice.url.chars().count() <= 8192
+}
+
+pub(super) fn choice_rows(
+    rows: BTreeMap<(String, String), ChoiceDay>,
+) -> Result<(Vec<WorklogChoice>, bool)> {
+    let mut choices = Vec::new();
+    let mut bytes = 2usize; // JSON array brackets; count escaped fields too.
+    let mut truncated = false;
+    for choice in render_choices(rows) {
+        if choices.len() == MAX_WORKLOG_CHOICES {
+            truncated = true;
+            break;
+        }
         let size = serde_json::to_vec(&choice)?.len().saturating_add(1);
-        if choice.artifact_id.chars().count() > 2048
-            || choice.text.chars().count() > 8192
-            || choice.url.chars().count() > 8192
-            || bytes.saturating_add(size) > MAX_WORKLOG_BYTES
-        {
+        if !choice_fits(&choice) || bytes.saturating_add(size) > MAX_WORKLOG_BYTES {
             truncated = true;
             continue;
         }
         bytes = bytes.saturating_add(size);
         choices.push(choice);
     }
-    Ok((choices, truncated, gaps, gaps_truncated))
+    Ok((choices, truncated))
 }
 
 /// The overflow notices whose span intersects the range, oldest first, at
 /// most `MAX_WORKLOG_GAPS`, and whether more did.
-fn worklog_gaps(
+pub(super) fn worklog_gaps(
     tx: &Transaction<'_>,
     start: Date,
     end: Date,

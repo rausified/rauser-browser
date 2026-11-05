@@ -189,6 +189,19 @@ const SUMMARY_VIEW = {
   summary_path: "summaries/a.summary.md", harness: "codex",
 };
 
+test("saved summary scope is optional and accepts only recorded scope values", () => {
+  for (const read_scope of [undefined, "whole", "partial", "page_only"]) {
+    for (const overview of [undefined, "Release tradeoffs."]) {
+      const summary = { ...SUMMARY_VIEW, ...(read_scope ? { read_scope } : {}), ...(overview ? { overview } : {}) };
+      assert.equal(isSummaryView(summary), true);
+      assert.equal(isResponseShape({ type: "artifact_result", recognized: false, artifact: null, summary }), true);
+    }
+  }
+  for (const read_scope of [null, 7, "", "Whole", "most", "<img src=x>"]) {
+    assert.equal(isSummaryView({ ...SUMMARY_VIEW, read_scope }), false);
+  }
+});
+
 test("artifact_result requires summary", () => {
   const result = { type: "artifact_result", recognized: false, artifact: null, summary: SUMMARY_VIEW };
   assert.equal(isResponseShape(result), true);

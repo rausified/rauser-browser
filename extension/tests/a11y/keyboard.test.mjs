@@ -2,6 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { activate, audit, browserFixture, enterPanelTab, focused, task } from "./fixture.mjs";
 
+test("optional task notifications can be enabled and disabled by keyboard without losing focus", async (t) => {
+  const page = await browserFixture(t, "options");
+  if (!page) return;
+  const button = page.locator("#task-notifications-toggle");
+  await page.locator("#task-notifications-state").filter({ hasText: "Off." }).waitFor();
+  await activate(page, button, "Space");
+  await page.locator("#task-notifications-state").filter({ hasText: "On." }).waitFor();
+  await focused(page, "#task-notifications-toggle");
+  await activate(page, button, "Enter");
+  await page.locator("#task-notifications-state").filter({ hasText: "Off." }).waitFor();
+  await focused(page, "#task-notifications-toggle");
+  assert.deepEqual(await page.evaluate(() => fixture.actions.filter((action) => action.endsWith("task-notifications"))),
+    ["enable-task-notifications", "disable-task-notifications"]);
+  await audit(t, page, "settings/task-notifications");
+});
+
 test("a task report saves to its source note by keyboard with focus and confirmation", async (t) => {
   const page = await browserFixture(t, "tasks");
   if (!page) return;
@@ -40,6 +56,29 @@ test("panel tabs expose their panels, use arrows/Home/End, and keep one tab stop
   assert.ok(await page.evaluate(() => fixture.actions.includes("settings")));
 });
 
+test("worklog pagination appends unchecked choices and keeps keyboard focus on the final page", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => { fixture.worklogPages = true; });
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  const choices = page.locator('#worklog-choices input[type="checkbox"]');
+  await choices.first().waitFor();
+  await activate(page, choices.first(), "Space");
+  await activate(page, "#worklog-more", "Enter");
+  await page.waitForFunction(() => document.querySelectorAll('#worklog-choices input').length === 3);
+  assert.equal(await choices.nth(2).evaluate((input) => input === document.activeElement), true);
+  assert.equal(await choices.first().isChecked(), true);
+  assert.equal(await choices.nth(2).isChecked(), false);
+  assert.doesNotMatch(await page.locator("#worklog-text").textContent(), /Later work/);
+  await page.keyboard.press("Space");
+  const preview = await page.locator("#worklog-text").textContent();
+  await activate(page, "#copy-worklog", "Space");
+  await page.waitForFunction(() => fixture.copied.length === 1);
+  assert.equal(await page.evaluate(() => fixture.copied[0]), preview);
+  await audit(t, page, "panel/selected-work-pages");
+});
+
 test("worklog curation selects and copies checked work entirely by keyboard", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;
@@ -66,6 +105,42 @@ test("worklog curation selects and copies checked work entirely by keyboard", as
   await activate(page, "#worklog-select-all", "Space");
   assert.match(await page.locator("#worklog-text").textContent(), /2 artifact-day entries/);
   await audit(t, page, "panel/selected-work-all");
+});
+
+test("sharing a recorded focus session is named, keyboard operable and copies the exact preview", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  await page.locator('#worklog-choices input[type="checkbox"]').first().waitFor();
+  await page.locator("#worklog-share-scope").focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  // Use the native select's keyboard, and wait for the recorded catalog.
+  await page.locator("#worklog-focus-session:enabled").waitFor();
+  await page.getByLabel("Recorded focus session", { exact: true }).focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  const choice = page.locator('#worklog-choices input[type="checkbox"]').first();
+  await choice.waitFor();
+  await focused(page, "#worklog-focus-session");
+  // A second keyboard choice must work without focusing the select again.
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await page.getByText("Choose a session, then check entries to include.", { exact: true }).first().waitFor();
+  await focused(page, "#worklog-focus-session");
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await choice.waitFor();
+  await focused(page, "#worklog-focus-session");
+  await activate(page, choice, "Space");
+  const preview = await page.locator("#worklog-text").textContent();
+  assert.match(preview, /Focus session: Release/);
+  assert.doesNotMatch(preview, /Private research/);
+  await audit(t, page, "panel/share-focus-session");
+  await activate(page, "#copy-worklog", "Space");
+  await page.waitForFunction(() => fixture.actions.includes("copy"));
+  assert.equal(await page.evaluate(() => fixture.copied.at(-1)), preview);
 });
 
 test("the worklog period segments are one tab stop that arrows move, with a visible ring", async (t) => {
@@ -95,14 +170,35 @@ test("the worklog period segments are one tab stop that arrows move, with a visi
   await audit(t, page, "panel/worklog-period");
 });
 
+test("Recent's saved-summary reading filter is named and keyboard operable", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await enterPanelTab(page, "tab-recent");
+  const selector = page.getByRole("combobox", { name: "Saved summary reading", exact: true });
+  await activate(page, selector, null);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => fixture.requests.some((request) => request.type === "list_artifacts" && request.summary_reading === "unknown"));
+  await focused(page, "#recent-reading");
+  await audit(t, page, "panel/summary-reading");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => {
+    const latest = fixture.requests.filter((request) => request.type === "list_artifacts").at(-1);
+    return latest && !Object.hasOwn(latest, "summary_reading");
+  });
+  await focused(page, "#recent-reading");
+});
+
 test("a summarized page's re-summarize icon sits in the Summary card, named and keyboard-operable", async (t) => {
   for (const colorScheme of ["light", "dark"]) {
     const page = await browserFixture(t, "panel", "configured", { colorScheme, summary: {
       summarized_at: "2026-11-02T10:00:00-07:00", document_type: "report", category: "work", importance: "high",
-      summary_path: "summaries/2026-11-02 Work item.md", harness: "codex", overview: "A fixture overview.",
+      summary_path: "summaries/2026-11-02 Work item.md", harness: "codex", overview: "A fixture overview.", read_scope: "page_only",
     } });
     if (!page) return;
     await page.locator("#page-summary:visible").waitFor();
+    await page.locator("#page-summary-chips").getByText("Agent read: browser page only", { exact: true }).waitFor();
     assert.equal(await page.locator("#page-summary-head #summarize").count(), 1);
     assert.equal(await page.locator("#page-actions #summarize").count(), 0);
     await page.getByRole("button", { name: "Summarize again" }).waitFor();
@@ -346,4 +442,30 @@ test("focus sessions start, rename and end by keyboard with text-only names", as
   await page.waitForFunction(() => document.querySelector("#focus-current").textContent === "None");
   assert.equal(await page.locator("#focus-end").isHidden(), true);
   await audit(t, page, "panel/focus-ended");
+});
+
+test("saved task commands are chosen by keyboard and require an explicit Run", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.locator("#task-run:enabled").waitFor();
+  await activate(page, "#task-input", null);
+  await page.keyboard.type("Focus on today");
+  await activate(page, "#task-commands summary", "Enter");
+  await page.locator("#task-command:enabled").waitFor();
+  await activate(page, "#task-command", null);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#task-input").inputValue(), "Focus on today");
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
+  await activate(page, "#task-command-insert", "Space");
+  await page.waitForFunction(() => document.querySelector("#task-input").value === "/actions Focus on today");
+  await focused(page, "#task-input");
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
+  await audit(t, page, "panel/saved-commands");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => fixture.requests.some((r) => r.type === "start_task"));
+  const request = await page.evaluate(() => fixture.requests.find((r) => r.type === "start_task"));
+  assert.equal(request.command_revision, "1");
+  assert.equal(request.instruction, "/actions Focus on today");
+  assert.equal("prompt" in request, false);
 });

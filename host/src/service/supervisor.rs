@@ -2882,6 +2882,85 @@ mod tests {
     }
 
     #[test]
+    fn contradictory_wall_answers_fail_the_run_after_one_correction() {
+        for access in ["sign_in", "denied", "not_found"] {
+            for scope in ["whole", "partial"] {
+                let mut answer: serde_json::Value = serde_json::from_str(TEST_ANSWER).unwrap();
+                answer["access"] = serde_json::json!(access);
+                answer["read_scope"] = serde_json::json!(scope);
+                let text = answer.to_string();
+                let (fixture, seen) = recording_with(
+                    &[&text, &text],
+                    Some(Box::new(|dir| {
+                        Box::new(SummaryFinisher::new(dir.join("config.toml")))
+                    })),
+                );
+                let id = fixture.start("a");
+                let view = fixture.wait_finished(id);
+                assert_eq!(view.state, RunState::Failed, "{access}/{scope}: {view:?}");
+                assert_eq!(view.error_kind, Some(RunErrorKind::InvalidOutput));
+                let error = view.error.as_deref().unwrap();
+                assert!(
+                    error.contains("access and read_scope contradict"),
+                    "{error}"
+                );
+                assert!(!view.can_retry_save);
+                assert!(view.answer.is_none());
+                assert!(!run_dir(&fixture, id).join("result.json").exists());
+                let seen = seen.lock().unwrap();
+                assert_eq!(seen.prompts.len(), 2, "exactly one correction");
+                assert!(seen.prompts[1].contains("an access wall requires page_only"));
+            }
+        }
+    }
+
+    #[test]
+    fn page_only_walls_succeed_without_saving_or_requesting_correction() {
+        for access in ["sign_in", "denied", "not_found"] {
+            let text = TEST_ANSWER
+                .replace("\"access\":\"ok\"", &format!("\"access\":\"{access}\""))
+                .replace("\"read_scope\":\"whole\"", "\"read_scope\":\"page_only\"");
+            let (fixture, seen) = recording_with(
+                &[&text],
+                Some(Box::new(|dir| {
+                    Box::new(SummaryFinisher::new(dir.join("config.toml")))
+                })),
+            );
+            let id = fixture.start("a");
+            let view = fixture.wait_finished(id);
+            assert_eq!(view.state, RunState::Succeeded, "{access}: {view:?}");
+            assert!(view.summary_path.is_none());
+            assert_eq!(
+                view.answer.unwrap().read_scope,
+                Some(brauser_protocol::AnswerReadScope::PageOnly)
+            );
+            assert_eq!(seen.lock().unwrap().prompts.len(), 1);
+            assert!(!fixture.path("config.toml").exists());
+        }
+    }
+
+    #[test]
+    fn a_wall_answer_can_correct_its_reading_claim_without_saving() {
+        let whole = TEST_ANSWER.replace("\"access\":\"ok\"", "\"access\":\"sign_in\"");
+        let page_only = whole.replace("\"read_scope\":\"whole\"", "\"read_scope\":\"page_only\"");
+        let (fixture, seen) = recording_with(
+            &[&whole, &page_only],
+            Some(Box::new(|dir| {
+                Box::new(SummaryFinisher::new(dir.join("config.toml")))
+            })),
+        );
+        let id = fixture.start("a");
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert!(view.summary_path.is_none());
+        assert_eq!(seen.lock().unwrap().prompts.len(), 2);
+        assert_eq!(
+            view.answer.unwrap().access,
+            Some(brauser_protocol::AnswerAccess::SignIn)
+        );
+    }
+
+    #[test]
     fn second_invalid_answer_fails_invalid_output_and_keeps_stream() {
         let fixture = Fixture::new(&two_turns(
             "echo 'not json at all'",
@@ -3523,6 +3602,7 @@ mod tests {
 
     fn sentinel_task() -> TaskStatus {
         TaskStatus {
+            start_request_id: None,
             no_page: false,
             instruction: "Do it".into(),
             protected: Vec::new(),
@@ -5383,6 +5463,7 @@ mod tests {
                 incoming: Vec::new(),
                 kind: RunKind::Task,
                 task: Some(TaskStatus {
+                    start_request_id: None,
                     no_page: false,
                     instruction: instruction.to_string(),
                     protected: self.protected(),
@@ -5556,6 +5637,7 @@ mod tests {
         assert_eq!(
             status.task,
             Some(TaskStatus {
+                start_request_id: None,
                 no_page: false,
                 instruction: INSTRUCTION.to_string(),
                 protected: fixture.protected(),
@@ -5912,6 +5994,7 @@ mod tests {
                 RunState::Queued,
                 "2026-10-26T09:00:00.000000000Z",
                 Some(TaskStatus {
+                    start_request_id: None,
                     no_page: false,
                     instruction: INSTRUCTION.to_string(),
                     protected: vec![cwd.join("home/notes").display().to_string()],

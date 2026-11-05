@@ -50,6 +50,7 @@ use crate::vault::{
 };
 
 mod catchup;
+mod choice_page;
 mod db;
 mod focus;
 mod fold;
@@ -64,6 +65,7 @@ mod scan;
 mod store;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) use choice_page::{StaleWorklogPage, valid_page_request};
 pub(crate) use db::BUSY_MESSAGE;
 /// Busy accounting for host-level tests (7vf).
 #[cfg(test)]
@@ -996,7 +998,19 @@ impl ArtifactIndex {
         title_query: Option<&str>,
         limit: usize,
     ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
-        self.read(|tx| query::recent(tx, artifact_type, title_query, limit))
+        self.read(|tx| query::recent(tx, artifact_type, title_query, None, limit))
+    }
+
+    /// Filter by the day's displayed saved summary before applying the cap.
+    /// Unknown scope is distinct from a day without a summary.
+    pub fn recent_with_reading(
+        &self,
+        artifact_type: Option<&str>,
+        title_query: Option<&str>,
+        reading: brauser_protocol::SummaryReadingFilter,
+        limit: usize,
+    ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
+        self.read(|tx| query::recent(tx, artifact_type, title_query, Some(reading), limit))
     }
 
     /// Render a measured, agent-free summary for an inclusive range of local
@@ -1023,6 +1037,32 @@ impl ArtifactIndex {
         end: Date,
     ) -> Result<(Vec<WorklogChoice>, bool, Vec<OverflowMarker>, bool)> {
         self.read(|tx| query::worklog_choices(tx, start, end))
+    }
+
+    /// Stateless pages bound to all choices and the same storage/date scope.
+    pub(crate) fn worklog_choices_page(
+        &self,
+        start: Date,
+        end: Date,
+        page: &brauser_protocol::WorklogChoicesPageRequest,
+    ) -> Result<choice_page::ChoicesPage> {
+        let scope = serde_json::to_vec(&(
+            &self.storage,
+            &self.root_identity,
+            self.adapters_fingerprint(),
+        ))?;
+        self.read(|tx| choice_page::query(tx, start, end, &scope, page))
+    }
+
+    /// A bounded session catalog and only the selected session's direct
+    /// activity, all from the same date-scoped snapshot.
+    pub(crate) fn worklog_focus_choices(
+        &self,
+        start: Date,
+        end: Date,
+        session_id: Option<&str>,
+    ) -> Result<focus::FocusChoices> {
+        self.read(|tx| focus::choices(tx, start, end, session_id))
     }
 
     /// Run one read in a single `read_txn` over `index.db`'s committed

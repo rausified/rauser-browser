@@ -253,6 +253,7 @@ fn panel_request(body: &[u8]) -> bool {
                     | "worklog"
                     | "worklog_report"
                     | "worklog_choices"
+                    | "worklog_focus_choices"
             )
         )
     })
@@ -361,10 +362,12 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::DraftSite(_) => "draft_site",
         Request::StartSiteDraft(_) => "start_site_draft",
         Request::StartTask(_) => "start_task",
+        Request::ListTaskCommands(_) => "list_task_commands",
         Request::SaveTaskNote(_) => "save_task_note",
         Request::CheckSiteDraft(_) => "check_site_draft",
         Request::WorklogReport(_) => "worklog_report",
         Request::WorklogChoices(_) => "worklog_choices",
+        Request::WorklogFocusChoices(_) => "worklog_focus_choices",
         Request::CheckCaptureSite(_) => "check_capture_site",
         Request::GetSiteRestore(_) => "get_site_restore",
         Request::ForgetAdoptedContracts(_) => "forget_adopted_contracts",
@@ -802,6 +805,39 @@ fn dispatch(
                 },
             }
         }
+        Request::ListTaskCommands(value) => {
+            let Ok(_lock) = config.lock_current() else {
+                return error(
+                    &value.request_id,
+                    ErrorCode::Internal,
+                    "configuration is unavailable",
+                );
+            };
+            if config.refresh().is_err() || config.config_issue().is_some() {
+                return error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    "Repair configuration before loading saved commands.",
+                );
+            }
+            let (commands, issue) = match config.task_commands() {
+                Ok(commands) => (
+                    commands
+                        .iter()
+                        .map(crate::task_commands::Command::descriptor)
+                        .collect(),
+                    None,
+                ),
+                Err(issue) => (Vec::new(), Some(issue.to_owned())),
+            };
+            Response::TaskCommandsListed(brauser_protocol::TaskCommandsListed {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                revision: config.revision().to_owned(),
+                commands,
+                issue,
+            })
+        }
         Request::ChooseFolder(value) => {
             if config.refresh().is_err() {
                 return error(
@@ -869,7 +905,17 @@ fn dispatch(
                 end_date: value.end_date,
             },
             config,
-            WorklogMode::Choices(value.expected_revision),
+            WorklogMode::Choices(value.expected_revision, value.page),
+        ),
+        Request::WorklogFocusChoices(value) => worklog_response(
+            brauser_protocol::WorklogRequest {
+                protocol_version: value.protocol_version,
+                request_id: value.request_id,
+                start_date: value.start_date,
+                end_date: value.end_date,
+            },
+            config,
+            WorklogMode::FocusChoices(value.expected_revision, value.focus_session_id),
         ),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         #[cfg(unix)]
@@ -1169,6 +1215,15 @@ fn task_request(
     value: brauser_protocol::StartTaskRequest,
     config: &mut ConfigStore,
 ) -> Result<brauser_protocol::StartRunRequest, Refusal> {
+    let _lock = config
+        .lock_current()
+        .map_err(|_| (ErrorCode::Internal, "configuration is unavailable".into()))?;
+    config.refresh().map_err(|_| {
+        (
+            ErrorCode::InvalidConfig,
+            "configuration file is unavailable".into(),
+        )
+    })?;
     let no_page = value.no_page.unwrap_or(false);
     let (url, title, content, selection, key) = if no_page {
         if value.url.is_some()
@@ -1202,18 +1257,42 @@ fn task_request(
                 "a page task needs url, title and content".into(),
             ));
         };
-        let key = page_record_key(
-            RunPage {
-                url: &url,
-                title: &title,
-                content: &content,
-                selection: value.selection.as_deref(),
-                requested_at: &value.requested_at,
-            },
-            config,
-        )?;
+        check_run_page(&RunPage {
+            url: &url,
+            title: &title,
+            content: &content,
+            selection: value.selection.as_deref(),
+            requested_at: &value.requested_at,
+        })?;
+        let key = resolve_record_key(config, &url)?;
         (url, title, content, value.selection, key)
     };
+    let instruction = match crate::task_commands::input(value.instruction.trim()) {
+        crate::task_commands::Input::Literal(text) => {
+            if value.command_revision.is_some() {
+                return Err((
+                    ErrorCode::InvalidRequest,
+                    "command_revision requires a slash command".into(),
+                ));
+            }
+            text.to_owned()
+        }
+        crate::task_commands::Input::Command { name, extra } => {
+            if value.command_revision.as_deref() != Some(config.revision()) {
+                return Err((
+                    ErrorCode::Conflict,
+                    crate::task_commands::STALE_COMMAND.into(),
+                ));
+            }
+            let commands = config
+                .task_commands()
+                .map_err(|issue| (ErrorCode::InvalidRequest, issue.into()))?;
+            crate::task_commands::resolve(&commands, name, extra)
+                .map_err(|issue| (ErrorCode::InvalidRequest, issue.into()))?
+        }
+    };
+    crate::service::record::check_task_instruction(&instruction)
+        .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
     Ok(brauser_protocol::StartRunRequest {
         no_page: no_page.then_some(true),
         protocol_version: value.protocol_version,
@@ -1227,7 +1306,7 @@ fn task_request(
         record_key: Some(key),
         requested_at: value.requested_at,
         kind: Some(brauser_protocol::RunKind::Task),
-        instruction: Some(value.instruction),
+        instruction: Some(instruction),
     })
 }
 
@@ -3028,11 +3107,20 @@ fn list_artifacts(
     // Thirty-two maximal rows still fit comfortably below Chrome's native
     // messaging cap after JSON escaping.
     let limit = usize::try_from(value.limit.clamp(1, 32)).unwrap_or(32);
-    match index.recent(
-        value.artifact_type.as_deref(),
-        value.title_query.as_deref(),
-        limit,
-    ) {
+    let result = match value.summary_reading {
+        Some(reading) => index.recent_with_reading(
+            value.artifact_type.as_deref(),
+            value.title_query.as_deref(),
+            reading,
+            limit,
+        ),
+        None => index.recent(
+            value.artifact_type.as_deref(),
+            value.title_query.as_deref(),
+            limit,
+        ),
+    };
+    match result {
         Ok((items, artifact_types, truncated)) => {
             Response::ArtifactListResult(ArtifactListResult {
                 protocol_version: PROTOCOL_VERSION,
@@ -3057,7 +3145,8 @@ fn worklog(value: brauser_protocol::WorklogRequest, config: &mut ConfigStore) ->
 enum WorklogMode {
     Text,
     Report,
-    Choices(String),
+    Choices(String, Option<brauser_protocol::WorklogChoicesPageRequest>),
+    FocusChoices(String, Option<String>),
 }
 
 fn worklog_response(
@@ -3103,7 +3192,31 @@ fn worklog_response(
             "worklog range must be one to seven inclusive local dates",
         );
     }
-    if let WorklogMode::Choices(expected_revision) = &mode {
+    if let WorklogMode::Choices(_, Some(page)) = &mode
+        && !crate::index::valid_page_request(page)
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "worklog page needs a valid snapshot for continuation",
+        );
+    }
+    if let WorklogMode::FocusChoices(_, Some(id)) = &mode
+        && !uuid::Uuid::parse_str(id).is_ok_and(|uuid| {
+            uuid.get_version_num() == 4
+                && uuid.get_variant() == uuid::Variant::RFC4122
+                && uuid.to_string() == *id
+        })
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "focus_session_id must be a canonical version-4 UUID",
+        );
+    }
+    if let WorklogMode::Choices(expected_revision, _)
+    | WorklogMode::FocusChoices(expected_revision, _) = &mode
+    {
         if config.refresh().is_err() {
             return error(
                 &value.request_id,
@@ -3123,20 +3236,69 @@ fn worklog_response(
         Ok(index) => index,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
-    if matches!(mode, WorklogMode::Choices(_)) {
-        return match index.worklog_choices(start, end) {
-            Ok((choices, truncated, gaps, gaps_truncated)) => {
+    if let WorklogMode::FocusChoices(_, focus_session_id) = mode {
+        return match index.worklog_focus_choices(start, end, focus_session_id.as_deref()) {
+            Ok(result) => {
+                Response::WorklogFocusChoicesResult(brauser_protocol::WorklogFocusChoicesResult {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id,
+                    start_date: value.start_date,
+                    end_date: value.end_date,
+                    focus_session_id,
+                    sessions: result.sessions,
+                    sessions_truncated: result.sessions_truncated,
+                    selected_session: result.selected_session,
+                    name_changed: result.name_changed,
+                    choices: result.choices,
+                    truncated: result.truncated,
+                    gaps: result.gaps,
+                    gaps_truncated: result.gaps_truncated,
+                })
+            }
+            Err(_) => error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "worklog history is unavailable; log catch-up could not complete",
+            ),
+        };
+    }
+    if let WorklogMode::Choices(_, page) = &mode {
+        let result = match page {
+            Some(page) => index.worklog_choices_page(start, end, page).map(|result| {
+                let truncated = result.page.next_offset.is_some() || result.page.omitted;
+                (
+                    result.choices,
+                    truncated,
+                    result.gaps,
+                    result.gaps_truncated,
+                    Some(result.page),
+                )
+            }),
+            None => index.worklog_choices(start, end).map(
+                |(choices, truncated, gaps, gaps_truncated)| {
+                    (choices, truncated, gaps, gaps_truncated, None)
+                },
+            ),
+        };
+        return match result {
+            Ok((choices, truncated, gaps, gaps_truncated, page)) => {
                 Response::WorklogChoicesResult(brauser_protocol::WorklogChoicesResult {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: value.request_id,
                     start_date: value.start_date,
                     end_date: value.end_date,
                     choices,
+                    page,
                     truncated,
                     gaps,
                     gaps_truncated,
                 })
             }
+            Err(error_value) if error_value.is::<crate::index::StaleWorklogPage>() => error(
+                &value.request_id,
+                ErrorCode::Conflict,
+                "work to share changed or this page is unavailable; reload choices",
+            ),
             Err(_) => error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -6705,6 +6867,7 @@ id = "work:{host}/{id}"
         };
         let summary = crate::summary::PageSummary {
             overview: None,
+            read_scope: None,
             event_id: uuid::Uuid::new_v4().to_string(),
             url: url.into(),
             title: "A summarized page".into(),
@@ -6736,6 +6899,7 @@ id = "work:{host}/{id}"
     fn expected_summary(event: &crate::summary::SummaryEvent) -> brauser_protocol::SummaryView {
         brauser_protocol::SummaryView {
             overview: event.overview.clone(),
+            read_scope: event.read_scope.map(Into::into),
             summarized_at: event.occurred_at.clone(),
             document_type: "specification".into(),
             category: "technical specification".into(),
@@ -6767,6 +6931,7 @@ id = "work:{host}/{id}"
                 request_id: "recent".into(),
                 artifact_type: None,
                 title_query: None,
+                summary_reading: None,
                 limit: 32,
             },
             config,
@@ -6807,6 +6972,42 @@ id = "work:{host}/{id}"
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].artifact_type, "web.page");
         assert_eq!(items[0].summary, Some(expected_summary(&event)));
+    }
+
+    #[test]
+    fn recent_reading_filter_reaches_the_host_index_and_keeps_unknown_distinct() {
+        use brauser_protocol::SummaryReadingFilter::{Limited, Unknown, Whole};
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        let url = "https://example.com/spec";
+        let event = record_page_summary(
+            &config,
+            url,
+            crate::vault::url_record_key(url).unwrap(),
+            crate::summary::WEB_PAGE_TYPE,
+        );
+        for (reading, count) in [(Unknown, 1), (Limited, 0), (Whole, 0)] {
+            let Response::ArtifactListResult(reply) = list_artifacts(
+                brauser_protocol::ListArtifactsRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "reading".into(),
+                    artifact_type: None,
+                    title_query: None,
+                    summary_reading: Some(reading),
+                    limit: 1,
+                },
+                &mut config,
+            ) else {
+                panic!("expected Recent reply")
+            };
+            assert_eq!(reply.items.len(), count);
+            assert!(!reply.truncated);
+            if count == 1 {
+                assert_eq!(reply.items[0].summary, Some(expected_summary(&event)));
+            }
+        }
     }
 
     #[test]
@@ -8275,6 +8476,7 @@ id = "work:{host}/{id}"
                     request_id: "recent-unavailable".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -8306,6 +8508,7 @@ id = "work:{host}/{id}"
                     request_id: "recent-recovered".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -8439,6 +8642,7 @@ id = "work:{host}/{id}"
                         request_id: "recent".into(),
                         artifact_type: None,
                         title_query: None,
+                        summary_reading: None,
                         limit: 32,
                     },
                     &mut config,
@@ -8566,6 +8770,7 @@ id = "work:{host}/{id}"
                         request_id: "recent".into(),
                         artifact_type: None,
                         title_query: None,
+                        summary_reading: None,
                         limit: 32,
                     },
                     &mut config,
@@ -8619,6 +8824,7 @@ id = "work:{host}/{id}"
                     request_id: "recovered".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -8756,6 +8962,7 @@ id = "work:{host}/{id}"
                     request_id: "recent".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -8852,6 +9059,7 @@ id = "work:{host}/{id}"
                     request_id: "recent".into(),
                     artifact_type: None,
                     title_query: None,
+                    summary_reading: None,
                     limit: 32,
                 },
                 &mut config,
@@ -9704,6 +9912,74 @@ id = "work:{host}/{id}"
     }
 
     #[test]
+    fn focus_worklog_refuses_invalid_ids_dates_and_stale_config_before_reading_history() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, root) = adapter_only_config(&folder);
+        let revision = config.revision().to_owned();
+        let request = |start: &str, end: &str| brauser_protocol::WorklogRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "focus-choices".into(),
+            start_date: start.into(),
+            end_date: end.into(),
+        };
+        for (start, end, id) in [
+            ("2026-02-30", "2026-03-01", None),
+            ("2026-11-02", "2026-11-01", None),
+            ("2026-11-01", "2026-11-08", None),
+            ("2026-11-01", "2026-11-07", Some("not-a-session")),
+            (
+                "2026-11-01",
+                "2026-11-07",
+                Some("10000000-0000-1000-8000-000000000001"),
+            ),
+        ] {
+            let Response::Error(result) = worklog_response(
+                request(start, end),
+                &mut config,
+                WorklogMode::FocusChoices(revision.clone(), id.map(str::to_owned)),
+            ) else {
+                panic!("invalid scope must fail before loading history");
+            };
+            assert_eq!(result.code, ErrorCode::InvalidRequest);
+        }
+        let Response::WorklogFocusChoicesResult(result) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::FocusChoices(revision.clone(), None),
+        ) else {
+            panic!("expected empty session catalog");
+        };
+        assert!(result.sessions.is_empty());
+        assert!(result.choices.is_empty());
+        assert!(result.selected_session.is_none());
+        let Response::Error(stale) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::FocusChoices("stale".into(), None),
+        ) else {
+            panic!("stale selection must refuse");
+        };
+        assert_eq!(stale.code, ErrorCode::Conflict);
+        let path = folder.path().join("config.toml");
+        let disk = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            disk.replace("capture_enabled = true", "capture_enabled = false"),
+        )
+        .unwrap();
+        let Response::Error(changed) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::FocusChoices(revision, None),
+        ) else {
+            panic!("external settings change must refuse");
+        };
+        assert_eq!(changed.code, ErrorCode::Conflict);
+        assert!(!root.join("notes").exists());
+        assert!(!root.join("logs").exists());
+    }
+
+    #[test]
     fn worklog_choices_use_locked_history_and_the_existing_date_bounds() {
         let folder = tempfile::tempdir().unwrap();
         let (mut config, root) = adapter_only_config(&folder);
@@ -9722,7 +9998,7 @@ id = "work:{host}/{id}"
             let Response::Error(result) = worklog_response(
                 request(start, end),
                 &mut config,
-                WorklogMode::Choices(revision.clone()),
+                WorklogMode::Choices(revision.clone(), None),
             ) else {
                 panic!("invalid dates must fail before loading history");
             };
@@ -9731,14 +10007,14 @@ id = "work:{host}/{id}"
         let Response::WorklogChoicesResult(result) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::Choices(revision.clone()),
+            WorklogMode::Choices(revision.clone(), None),
         ) else {
             panic!("expected choices for a valid seven-day range");
         };
         let Response::Error(stale) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::Choices("stale".into()),
+            WorklogMode::Choices("stale".into(), None),
         ) else {
             panic!("stale sharing scope must refuse");
         };
@@ -9755,7 +10031,7 @@ id = "work:{host}/{id}"
         let Response::Error(changed) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::Choices(revision),
+            WorklogMode::Choices(revision, None),
         ) else {
             panic!("external config change must refuse old sharing scope");
         };
@@ -9763,8 +10039,53 @@ id = "work:{host}/{id}"
         assert!(result.choices.is_empty());
         assert!(!result.truncated);
         assert!(result.gaps.is_empty());
+        assert!(result.page.is_none());
         assert!(!root.join("notes").exists());
         assert!(!root.join("logs").exists());
+    }
+
+    #[test]
+    fn worklog_page_validation_and_snapshot_conflicts_reach_the_native_boundary() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut config, _) = adapter_only_config(&folder);
+        let revision = config.revision().to_owned();
+        let request = || brauser_protocol::WorklogRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "work-page".into(),
+            start_date: "2026-11-01".into(),
+            end_date: "2026-11-01".into(),
+        };
+        let page = |offset, snapshot| {
+            Some(brauser_protocol::WorklogChoicesPageRequest { offset, snapshot })
+        };
+        let Response::WorklogChoicesResult(first) = worklog_response(
+            request(),
+            &mut config,
+            WorklogMode::Choices(revision.clone(), page(0, None)),
+        ) else {
+            panic!("first page");
+        };
+        assert_eq!(first.page.unwrap().offset, 0);
+        for (expected_revision, cursor, code) in [
+            (revision.clone(), page(1, None), ErrorCode::InvalidRequest),
+            (
+                revision.clone(),
+                page(0, Some("bad".into())),
+                ErrorCode::InvalidRequest,
+            ),
+            (revision, page(0, Some("a".repeat(64))), ErrorCode::Conflict),
+            ("old-settings".into(), page(0, None), ErrorCode::Conflict),
+        ] {
+            let Response::Error(result) = worklog_response(
+                request(),
+                &mut config,
+                WorklogMode::Choices(expected_revision, cursor),
+            ) else {
+                panic!("invalid page must refuse");
+            };
+            assert_eq!(result.code, code);
+            assert_eq!(result.request_id, "work-page");
+        }
     }
 
     #[test]
@@ -10221,6 +10542,50 @@ title = "{title} - Jira"
             config.agent_status().state,
             brauser_protocol::AgentState::NotSetUp
         );
+    }
+
+    #[test]
+    fn task_command_catalogue_is_host_built_and_registry_errors_are_separate() {
+        let home = tempfile::tempdir().unwrap();
+        let _config = configured_store(home.path());
+        let path = home.path().join("config.toml");
+        for prompt in ["Literal prompt", "Unsupported {selection}"] {
+            let mut raw: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            raw.insert(
+                "commands".into(),
+                toml::Value::try_from(serde_json::json!([{
+                    "name":"actions", "description":"<img> Extract actions", "prompt":prompt
+                }]))
+                .unwrap(),
+            );
+            std::fs::write(&path, toml::to_string(&raw).unwrap()).unwrap();
+            let responses = served(
+                &[serde_json::to_string(&Request::ListTaskCommands(
+                    brauser_protocol::ListTaskCommandsRequest {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "catalogue".into(),
+                    },
+                ))
+                .unwrap()],
+                ConfigStore::for_test(path.clone()),
+            );
+            let Response::TaskCommandsListed(catalogue) = &responses[0] else {
+                panic!("{responses:?}")
+            };
+            assert_eq!(catalogue.issue.is_none(), prompt == "Literal prompt");
+            if catalogue.issue.is_none() {
+                assert_eq!(catalogue.commands[0].description, "<img> Extract actions");
+                assert!(
+                    !serde_json::to_string(&responses[0])
+                        .unwrap()
+                        .contains("Literal prompt")
+                );
+            } else {
+                assert!(catalogue.commands.is_empty());
+            }
+            assert_eq!(catalogue.revision, loaded(&path).revision());
+        }
     }
 
     /// The run proxy against a fake service on a short `/tmp` socket. No
@@ -10819,6 +11184,159 @@ title = "{title} - Jira"
             assert_eq!(refused(&response).0, ErrorCode::NotConfigured);
         }
 
+        fn install_commands(root: &std::path::Path, prompt: &str) {
+            let path = root.join("config.toml");
+            let mut raw: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            raw.insert("commands".into(), toml::Value::try_from(serde_json::json!([{
+                "name":"actions", "description":"Extract actions", "prompt":prompt, "output":"sidebar"
+            }])).unwrap());
+            std::fs::write(path, toml::to_string(&raw).unwrap()).unwrap();
+        }
+
+        #[test]
+        fn task_commands_resolve_literal_instructions_and_preserve_untrusted_page_context() {
+            let home = tempfile::tempdir().unwrap();
+            let mut config = configured_store(home.path());
+            install_commands(home.path(), "Extract action items.");
+            config.refresh().unwrap();
+            let mut request =
+                start_task_request("https://example.com/a", "/actions Focus on today", &now());
+            request.command_revision = Some(config.revision().into());
+            request.content = Some("/actions PAGE INSTRUCTIONS".into());
+            request.selection = Some("untrusted selection".into());
+            let expected_key = note_load(&mut config, "https://example.com/a").key;
+            let forwarded = task_request(request, &mut config).unwrap();
+            assert_eq!(forwarded.kind, Some(brauser_protocol::RunKind::Task));
+            assert_eq!(
+                forwarded.instruction.as_deref(),
+                Some(
+                    "Saved command /actions:\n\nExtract action items.\n\nAdditional request from the user:\nFocus on today"
+                )
+            );
+            assert_eq!(forwarded.content, "/actions PAGE INSTRUCTIONS");
+            assert_eq!(forwarded.selection.as_deref(), Some("untrusted selection"));
+            assert_eq!(forwarded.record_key.unwrap(), expected_key);
+            let mut request = no_page_request();
+            request.instruction = "/actions".into();
+            request.command_revision = Some(config.revision().into());
+            let forwarded = task_request(request, &mut config).unwrap();
+            assert_eq!(forwarded.no_page, Some(true));
+            assert!(forwarded.content.is_empty());
+            assert_eq!(
+                forwarded.instruction.as_deref(),
+                Some("Saved command /actions:\n\nExtract action items.")
+            );
+        }
+
+        #[test]
+        fn task_commands_refuse_stale_unknown_invalid_and_oversized_requests_before_service_access()
+        {
+            let home = tempfile::tempdir().unwrap();
+            let mut config = configured_store(home.path());
+            install_commands(home.path(), "Extract action items.");
+            config.refresh().unwrap();
+            for (instruction, revision, code) in [
+                ("/actions", None, ErrorCode::Conflict),
+                ("/actions", Some("stale".to_owned()), ErrorCode::Conflict),
+                (
+                    "/missing",
+                    Some(config.revision().into()),
+                    ErrorCode::InvalidRequest,
+                ),
+                (
+                    "ordinary task",
+                    Some(config.revision().into()),
+                    ErrorCode::InvalidRequest,
+                ),
+            ] {
+                let mut request = no_page_request();
+                request.instruction = instruction.into();
+                request.command_revision = revision;
+                let response = super::super::start_task(request, &mut config, None);
+                assert_eq!(refused(&response).0, code, "{response:?}");
+            }
+            install_commands(home.path(), &"p".repeat(4096));
+            config.refresh().unwrap();
+            let mut request = no_page_request();
+            request.instruction = "/actions extra".into();
+            request.command_revision = Some(config.revision().into());
+            assert_eq!(
+                refused(&super::super::start_task(request, &mut config, None)).0,
+                ErrorCode::InvalidRequest
+            );
+            install_commands(home.path(), "Unsupported {page.content}");
+            config.refresh().unwrap();
+            let mut request = no_page_request();
+            request.instruction = "/actions".into();
+            request.command_revision = Some(config.revision().into());
+            assert_eq!(
+                refused(&super::super::start_task(request, &mut config, None)).0,
+                ErrorCode::InvalidRequest
+            );
+            let ordinary = task_request(no_page_request(), &mut config).unwrap();
+            assert_eq!(ordinary.instruction.as_deref(), Some(TASK_INSTRUCTION));
+        }
+
+        #[test]
+        fn task_commands_resolve_revision_and_prompt_only_after_the_common_lock_for_both_contexts()
+        {
+            for no_page in [false, true] {
+                let home = tempfile::tempdir().unwrap();
+                let mut config = configured_store(home.path());
+                install_commands(home.path(), "Old instruction.");
+                config.refresh().unwrap();
+                let mut request = if no_page {
+                    no_page_request()
+                } else {
+                    start_task_request("https://example.com/a", "/actions", &now())
+                };
+                request.instruction = "/actions".into();
+                request.command_revision = Some(config.revision().into());
+                let lock = config.lock_current().unwrap();
+                let mut other = ConfigStore::for_test(home.path().join("config.toml"));
+                let barrier = Arc::new(std::sync::Barrier::new(2));
+                let started = Arc::clone(&barrier);
+                let worker = std::thread::spawn(move || {
+                    started.wait();
+                    task_request(request, &mut other)
+                });
+                barrier.wait();
+                std::thread::sleep(Duration::from_millis(25));
+                assert!(!worker.is_finished(), "command escaped the config lock");
+                install_commands(home.path(), "New instruction.");
+                drop(lock);
+                assert_eq!(worker.join().unwrap().unwrap_err().0, ErrorCode::Conflict);
+            }
+        }
+
+        #[test]
+        fn literal_slashes_bypass_the_registry_and_round_trip_the_stored_instruction() {
+            let home = tempfile::tempdir().unwrap();
+            let mut config = configured_store(home.path());
+            install_commands(home.path(), "Different instruction.");
+            for typed in ["//actions", "///tmp/path", "Do /actions literally"] {
+                let mut request = no_page_request();
+                request.instruction = typed.into();
+                let forwarded = task_request(request, &mut config).unwrap();
+                let effective = forwarded.instruction.unwrap();
+                let recalled = if effective.starts_with('/') {
+                    format!("/{effective}")
+                } else {
+                    effective.clone()
+                };
+                let mut repeat = no_page_request();
+                repeat.instruction = recalled;
+                assert_eq!(
+                    task_request(repeat, &mut config)
+                        .unwrap()
+                        .instruction
+                        .unwrap(),
+                    effective
+                );
+            }
+        }
+
         const TASK_INSTRUCTION: &str = "List the open questions on this page.";
 
         fn start_task_request(
@@ -10827,6 +11345,7 @@ title = "{title} - Jira"
             requested_at: &str,
         ) -> StartTaskRequest {
             StartTaskRequest {
+                command_revision: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "task-1".into(),
@@ -10847,6 +11366,7 @@ title = "{title} - Jira"
 
         fn no_page_request() -> StartTaskRequest {
             StartTaskRequest {
+                command_revision: None,
                 no_page: Some(true),
                 url: None,
                 title: None,
@@ -11591,6 +12111,7 @@ id = "gdoc:{host}/{id}"
             brauser_protocol::SummaryView {
                 summarized_at: summarized_at.into(),
                 overview: None,
+                read_scope: None,
                 document_type: "report".into(),
                 category: "news".into(),
                 importance: brauser_protocol::ImportanceLevel::Low,
@@ -11871,6 +12392,7 @@ id = "gdoc:{host}/{id}"
             crate::service::record::LIST_INSTRUCTION_CHARS + 1
         );
         let view = brauser_protocol::RunView {
+            start_request_id: None,
             no_page: None,
             run_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
             state: RunState::Succeeded,

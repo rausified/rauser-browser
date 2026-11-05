@@ -1042,6 +1042,7 @@ fn summary_event(
     let artifact_id = crate::summary::summary_artifact_id(&key, kind, url).unwrap();
     SummaryEvent {
         overview: None,
+        read_scope: None,
         event_id: uuid(5, n),
         artifact_id,
         artifact_type: kind.into(),

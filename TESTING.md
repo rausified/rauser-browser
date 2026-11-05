@@ -934,6 +934,22 @@ missing-service, failed-launch and launch-timeout tests need the guard too.
 A boundary test that proves rejection without connecting but also verifies
 successful forwarding at the limit needs it for that forwarding step.
 
+The starter-generator CLI tests and PR-doctor's real-bd integration tests
+also capture child output. Their `child-pipe` guard runs before fixture
+creation or bd detection; the generator's seven pure tests and the doctor's
+19 pure tests still run without IPC. To inspect the per-case results rather
+than Node's file-level summary:
+
+```sh
+node --test --test-isolation=none scripts/tests/generate-starters.test.mjs scripts/tests/pr-doctor.test.mjs
+```
+
+With `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, this reports 26 passes and 21
+explicit skips on a non-Windows machine. Adding `BRAUSER_REQUIRE_IPC_TESTS=1`
+must instead fail those 21 cases. This checks the test boundary; the driver's
+unsandboxed gate exercises the actual subprocess assertions. An installed bd
+that fails `bd version` is an error, not an unavailable-tool skip.
+
 `npm run test:adapter-diff -- --cases 5000` uses the same child-pipe probe
 before starting either engine. A denied pipe explicitly reports a skip and
 "no cases compared"; with `BRAUSER_REQUIRE_IPC_TESTS=1`, it exits 1 instead.
@@ -1498,8 +1514,26 @@ cleanup; on Windows an open handle makes the cleanup fail.
   every index test also checks the incremental paths.
 - **Bounds.** Counters such as `FULL_DERIVES`, `LOG_BYTES_READ` and the
   transaction count prove that a delivery reads only the appended tail and
-  updates only the affected groups. The bounds are asserted on counters;
-  any wall-clock ceiling is loose and only catches gross regressions.
+  updates only the affected groups. The year-scale tests also bound events
+  loaded, rows written and group derives, preserve database/file identities,
+  and compare with the full-derive oracle. Elapsed delivery times are printed
+  for diagnosis, without runner-speed assertions: a bounded Windows delivery
+  took 12 seconds on a loaded runner (`brwr-gxag`). The held-lock database and
+  snapshot-read tests assert exactly one long BEGIN wait plus the Busy or
+  snapshot outcome, without a wall-clock upper bound.
+- **Contention diagnostics.** `host/src/index/db.rs` tests real SQLite locks
+  at BEGIN, connection setup, the WAL switch and commit. They check one
+  `index contention exhausted` event with operation, phase, extended SQLite
+  code, elapsed milliseconds and attempts, preserve rollback and caller error
+  wording, and check contextual extended codes in both read and write bodies.
+  Successful operations, unrelated errors and already mapped failures do not
+  add contention events. The four-host first-open test prints each failing
+  thread's captured diagnostics. Multi-process results retain contention
+  fields even when a read serves the committed snapshot; the parent prints
+  them on error or a nonzero busy count. A real held-writer test exercises
+  that child/result-file path without subprocess IPC. Linux coverage does
+  not complete `brwr-epl1`'s repeated Windows stress acceptance, and this
+  diagnostic change does not restore the held contention-budget fix.
 - **Several processes.** `host/src/index/tests/mp_harness.rs` re-executes the
   test binary with `--exact <mp_child> --nocapture --test-threads=1` and
   passes each child its role, directory and seed through
@@ -1507,7 +1541,7 @@ cleanup; on Windows an open handle makes the cleanup fail.
   test process's environment is never changed, and `mp_child` is a no-op
   without the variable. Children share one root and cache, start together
   on a barrier file, never take `.config.lock`, and each writes one JSON
-  result (errors, busy count and a regeneration trace) under
+  result (errors, busy count, contention diagnostics and a regeneration trace) under
   `<dir>/results`. `mp_deliver_read_and_regenerate_share_one_cache` runs
   deliverers (with retried batches), readers and regenerators at once and
   requires no error and no surfaced busy in any process, no lost or
@@ -1534,6 +1568,27 @@ cleanup; on Windows an open handle makes the cleanup fail.
   hooks run another process's step (an append, a finished rebuild) at the
   exact point it would race. These use local temporary folders only; no
   browser, dialog or service is involved.
+
+### Contention budget
+
+Run `cargo test --locked -p brauser --lib index::db::tests` for the database
+boundary. `immediate_busy_replies_wait_for_a_writer_beyond_three_retries` uses
+a real SQLite writer, a channel confirming it holds the lock, and a second
+connection with its busy-handler timeout set to zero. Releasing the writer
+after 400 ms demonstrates that immediate busy replies must keep retrying past
+the old three-attempt limit; only lock acquisition repeats, and the body writes
+one row once. The ordinary ten-second acquisition budget leaves room for a
+slow runner. This models an immediate BUSY response, not a specific operating
+system's WAL recovery implementation.
+
+The exhaustion case uses a short thread-local acquisition budget and a writer
+that never releases during the attempt. It verifies one mapped busy failure,
+no body execution, connection-timeout preservation, and later reuse. The
+existing held-lock case also verifies restoration of a nonzero timeout after
+it was reduced to the remaining deadline. All database cases use temporary
+folders and no external service. The separate Windows regression `brwr-epl1`
+still requires ten consecutive Windows runs of the migration and multi-process
+concurrency tests; Linux results do not establish that acceptance.
 
 ## Worklog capture gaps
 
@@ -1779,6 +1834,34 @@ checks a markup-shaped name remains text. A sandbox skip does not establish
 browser acceptance. macOS/Windows interactive capture acceptance remains
 separate; this feature adds no dialog and changes no scripted-dialog count.
 
+## Sharing one recorded focus session
+
+`cargo test --locked -p brauser --lib index::tests::focus` covers selecting
+before aggregation: an artifact shared by two sessions and untagged work keeps
+only the chosen session's seconds, title and URL. It also covers rename versus
+same-name IDs, multi-day and absent sessions, direct container activity,
+summary exclusion, log-only rebuild, 64-session catalog omission and the shared
+200-entry/escaped-JSON byte limits. `cargo test --locked -p brauser --lib
+focus_worklog_refuses` checks dates, canonical UUIDs and locked config revisions.
+`cargo test --locked -p brauser-protocol --test wire_focus_worklog` checks the
+new additive request/result shapes without altering existing worklog messages.
+
+After the extension build, `node --test --test-isolation=none
+extension/tests/panel/recent-worklog.test.mjs` checks explicit session and entry
+selection, exact preview/clipboard equality, period-wide capture gaps, empty
+and unavailable sessions, separate omission notices, unsupported hosts and
+malformed responses. Held replies cannot restore old choices after session,
+period, scope, revision, home or host changes. Policy-change signals clear the
+preview before the debounced reload, including when the home path is unchanged.
+
+The accessibility suite includes a native-select keyboard journey through
+the session catalog, repeated session choices without losing focus, entry
+selection and Copy, with an axe audit of the visible
+controls. Its offline transport fixture validates both catalog and selection
+responses even when Chromium is blocked. Sandbox browser skips leave the real
+keyboard/accessibility result to the driver gate and CI. No test uses a real
+agent, external API or live user data.
+
 ## Explicit task report note copies
 
 `cargo test --locked -p brauser --lib native::task_note` uses temporary homes
@@ -1802,3 +1885,111 @@ trusted run-ID comment is omitted from that check):
 BRAUSER_TASK_NOTE_CORPUS_OUT="$PWD/target/task-note-markdown.json" cargo test --locked -p brauser --lib native::task_note::tests::report_and_instruction_use_the_shared_markdown_safety_helpers
 node scripts/check-markdown-neutralizer.mjs --outputs target/task-note-markdown.json
 ```
+
+
+### Saved-summary reading coverage
+
+`brwr-30xv` records the validated answer's scope in new summary events and
+projects it to This page and Recent. Offline finisher tests distinguish whole
+reading after capped capture from page-only reading. Index tests cover URL
+and adapter keys, legacy omission, incremental updates, reopen, cold replay
+and reindex; malformed recorded scope cannot become a summary. Capture tests
+truncate the log before, during and after older prepared entries, preserve
+their exact bytes, and refuse changed scope, overview or path. Built panel
+and wire tests cover every scope with and without an overview, literal text,
+legacy absence and clearing on navigation. These fixtures do not certify the
+agent's actual reading or a live browser deployment.
+
+## Optional task completion notifications
+
+Task completion notifications have offline coverage in
+`extension/tests/task-notifications.test.mjs`: pre-start discovery, fast
+finishes and lost answers, exact request correlation across overlapping windows
+and browser profiles, MV3 restart, pagination, permission refusal and
+revocation, deferred/acknowledged finishes, storage failure, no duplicate
+delivery after a Chrome API failure, and capture-badge precedence. The worker
+test drives an actual alarm through a fake native port and checks synchronous
+panel opening before any await. Panel/task tests pin the awaited pre-start
+handoff and observed-finish acknowledgement. The accessibility keyboard suite
+exercises the optional Settings permission control with a fake Chrome API.
+
+Real desktop acceptance remains separate: enable notifications in Settings,
+start a task, close the panel before the start reply and wait for its finish;
+check one generic alert and the unread badge, click to open the panel and the
+selected Tasks report, then repeat with the panel left open (no alert), a
+failed/canceled task, permission refusal/revocation, and a closed source
+window. Check OS-level notification permission/Do Not Disturb separately;
+headless mocks cannot prove OS toast presentation or Chrome's gesture grant.
+Use only fake harnesses in automated tests. No test invokes the real OS
+notification center. `wire_tasks` pins the optional task-view correlation field;
+the service record test proves its persistence and legacy omission, and fake
+service/harness tests check that it is the original forwarded request ID.
+
+## Reusable sidebar task commands
+
+`host/src/task_commands.rs` tests registry limits, duplicate/reserved names,
+unsupported fields/outputs/templates, literal slash parsing and literal
+composition. Config tests prove both valid and invalid raw command tables
+survive unrelated settings saves. Native tests exercise the actual catalogue
+message, host-derived command requests with page/no-page context, unchanged
+untrusted page text, stale/unknown/oversized refusal before service access,
+literal repetition, and a held config lock changed before resolution for both
+page scopes. These tests require no socket, harness or external API.
+`protocol/tests/wire_tasks.rs` pins the descriptor-only catalogue and optional
+command revision, including forged prompt fields and malformed revisions.
+
+Built-panel regressions in `panel/task-bar.test.mjs` cover lazy review,
+literal descriptor rendering, draft-preserving selection, explicit execution,
+stale refresh without retry, older-host and invalid-registry refusal while
+ordinary tasks continue, and literal Reuse. Task and recall unit tests pin
+revision forwarding and stored-instruction escaping. The a11y fixture checks
+catalogue replies even inside the sandbox; the keyboard journey opens Saved
+commands, chooses and inserts by keyboard, verifies preserved draft/focus, runs axe and
+requires Enter to submit. A sandbox skip does not prove Chromium acceptance;
+the driver and platform CI must run the journey in a real browser.
+
+
+## Selected-work pagination
+
+`brwr-p71k` adds opt-in `worklog_choices` pages. Focused checks after building:
+
+```sh
+cargo test --locked -p brauser worklog_page
+cargo test --locked -p brauser-protocol --test wire_artifacts
+node --test --test-isolation=none extension/tests/panel/recent-worklog.test.mjs
+BRAUSER_REQUIRE_A11Y_TESTS=1 npm run test:a11y
+```
+
+The index fixtures traverse 451 real logged artifact-days under both the
+200-row and escaped-byte limits, compare the complete deterministic order,
+and repeat the final continuation after cache-loss replay without modifying
+any source log. A smaller real-reindex fixture checks unchanged snapshot
+identity before testing stale history. These fixtures also cover
+inserted/deleted/edited history, date/storage/adapter scope,
+invalid cursors, capture gaps including notices beyond the display cap, and
+whole oversized-row omission with terminal progress. Native tests distinguish
+malformed cursors from stale snapshots and retain locked config validation;
+wire tests keep unpaged shapes and validate optional page metadata.
+
+Panel cases check unchecked append, unchanged earlier checkbox identity,
+exact selected Copy, accumulated omissions, same-snapshot refresh, changed
+history resets, failed continuation and explicit reload, and delayed replies
+after refresh, period, home-folder and disconnect boundaries. The browser
+keyboard journey reaches Load more with Tab/Enter, checks final-page focus,
+selects a new row and audits/copies the exact preview. The fixture's paged
+responses are wire-validated even when Chromium is sandbox-blocked; such a
+skip does not establish browser acceptance. The focus-session path retains
+its existing independent caps and tests. No real API or harness is used.
+
+Cycle 8's external gate caught a real focus-order defect that the minimal
+fake DOM missed: `focus()` has no effect on a checkbox inside a disabled
+fieldset. The append/Copy panel regression now models that inherited disabled
+state using a test-scoped focus mock. It must fail if the fieldset is enabled
+only after focusing the new row. Keep the existing real-browser focus
+assertion; the mock supplements it when Chromium cannot start in the sandbox.
+
+On a constrained worker VM, run the workspace Rust suite before the Dolt
+integration fixtures in `test:queue`/`test:dev-tools`. The 2026-11-05 parallel
+run encountered heavy I/O pressure and an error in the no-TTY contract fixture;
+the unchanged fixture passed alone in 11.6 seconds and the full serial tooling
+suite passed all 252 cases. Retain the existing deadlines and assertions.

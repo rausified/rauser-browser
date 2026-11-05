@@ -115,6 +115,16 @@ impl ReadScope {
     }
 }
 
+impl From<ReadScope> for brauser_protocol::AnswerReadScope {
+    fn from(scope: ReadScope) -> Self {
+        match scope {
+            ReadScope::Whole => Self::Whole,
+            ReadScope::Partial => Self::Partial,
+            ReadScope::PageOnly => Self::PageOnly,
+        }
+    }
+}
+
 /// Whether the agent could see the artifact, or met a wall instead. Anything
 /// but `Ok` means the run saves no summary (`finisher::SummaryFinisher`).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -204,6 +214,11 @@ pub fn parse_answer(final_text: &str, knowledge_base: &Path) -> Result<SummaryAn
     let references = references(&object)?;
     let read_scope = read_scope(&object)?;
     let access = access(&object)?;
+    if access != Access::Ok && read_scope != ReadScope::PageOnly {
+        return Err(
+            "access and read_scope contradict each other: an access wall requires page_only".into(),
+        );
+    }
     let importance = object_field(&object, "importance", "importance")?;
     let importance = Importance {
         level: level(importance)?,
@@ -926,6 +941,7 @@ mod tests {
     fn access_is_required_and_matched_case_insensitively() {
         let (_dir, kb) = knowledge_base();
         let mut value = answer();
+        value["read_scope"] = json!("page_only");
         for (wire, access) in [
             ("ok", Access::Ok),
             ("SIGN_IN", Access::SignIn),
@@ -953,6 +969,33 @@ mod tests {
             schema["properties"]["access"]["enum"],
             json!(["ok", "sign_in", "denied", "not_found"])
         );
+    }
+
+    #[test]
+    fn access_walls_cannot_claim_artifact_reading() {
+        let (_dir, kb) = knowledge_base();
+        for access in ["sign_in", "DENIED", "Not_Found"] {
+            for scope in ["whole", "PARTIAL"] {
+                let mut value = answer();
+                value["access"] = json!(access);
+                value["read_scope"] = json!(scope);
+                assert_eq!(
+                    parse(&value, &kb).unwrap_err(),
+                    "access and read_scope contradict each other: an access wall requires page_only",
+                    "{access}/{scope}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn readable_artifacts_allow_every_reading_scope() {
+        let (_dir, kb) = knowledge_base();
+        for scope in ["whole", "partial", "page_only"] {
+            let mut value = answer();
+            value["read_scope"] = json!(scope);
+            assert_eq!(parse(&value, &kb).unwrap().access, Access::Ok);
+        }
     }
 
     #[test]

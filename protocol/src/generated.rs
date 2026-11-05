@@ -376,17 +376,79 @@ pub struct ListArtifactsRequest {
     pub artifact_type: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub title_query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_reading: Option<SummaryReadingFilter>,
     pub limit: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryReadingFilter {
+    Limited,
+    Whole,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogFocusChoicesRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub expected_revision: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub focus_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogFocusChoicesResult {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub start_date: String,
+    pub end_date: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub focus_session_id: Option<String>,
+    pub sessions: Vec<FocusSession>,
+    pub sessions_truncated: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub selected_session: Option<FocusSession>,
+    pub name_changed: bool,
+    pub choices: Vec<WorklogChoice>,
+    pub truncated: bool,
+    pub gaps: Vec<OverflowMarker>,
+    pub gaps_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorklogChoicesRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<WorklogChoicesPageRequest>,
     pub expected_revision: String,
     pub protocol_version: u32,
     pub request_id: String,
     pub start_date: String,
     pub end_date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogChoicesPageRequest {
+    pub offset: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorklogChoicesPageInfo {
+    pub snapshot: String,
+    pub offset: u32,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub next_offset: Option<u32>,
+    pub omitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -401,6 +463,8 @@ pub struct WorklogChoice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorklogChoicesResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<WorklogChoicesPageInfo>,
     pub protocol_version: u32,
     pub request_id: String,
     pub start_date: String,
@@ -621,6 +685,8 @@ pub struct ContainedArtifactView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SummaryView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_scope: Option<AnswerReadScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
     pub summarized_at: String,
@@ -947,6 +1013,8 @@ pub enum AnswerAccess {
 #[serde(deny_unknown_fields)]
 pub struct RunView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_page: Option<bool>,
     pub run_id: String,
     pub state: RunState,
@@ -1238,7 +1306,34 @@ pub struct AutoSummarySkippedResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TaskCommand {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListTaskCommandsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskCommandsListed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub revision: String,
+    pub commands: Vec<TaskCommand>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StartTaskRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_page: Option<bool>,
     pub protocol_version: u32,
@@ -1548,11 +1643,13 @@ pub enum Request {
     DraftSite(DraftSiteRequest),
     StartSiteDraft(StartSiteDraftRequest),
     StartTask(StartTaskRequest),
+    ListTaskCommands(ListTaskCommandsRequest),
     SaveTaskNote(SaveTaskNoteRequest),
     StartAutoSummary(StartAutoSummaryRequest),
     CheckSiteDraft(CheckSiteDraftRequest),
     WorklogReport(WorklogReportRequest),
     WorklogChoices(WorklogChoicesRequest),
+    WorklogFocusChoices(WorklogFocusChoicesRequest),
     CheckCaptureSite(CheckCaptureSiteRequest),
     GetSiteRestore(GetSiteRestoreRequest),
     ForgetAdoptedContracts(ForgetAdoptedContractsRequest),
@@ -1595,11 +1692,13 @@ impl Request {
             Self::DraftSite(value) => value.protocol_version,
             Self::StartSiteDraft(value) => value.protocol_version,
             Self::StartTask(value) => value.protocol_version,
+            Self::ListTaskCommands(value) => value.protocol_version,
             Self::SaveTaskNote(value) => value.protocol_version,
             Self::StartAutoSummary(value) => value.protocol_version,
             Self::CheckSiteDraft(value) => value.protocol_version,
             Self::WorklogReport(value) => value.protocol_version,
             Self::WorklogChoices(value) => value.protocol_version,
+            Self::WorklogFocusChoices(value) => value.protocol_version,
             Self::CheckCaptureSite(value) => value.protocol_version,
             Self::GetSiteRestore(value) => value.protocol_version,
             Self::ForgetAdoptedContracts(value) => value.protocol_version,
@@ -1642,11 +1741,13 @@ impl Request {
             Self::DraftSite(value) => &value.request_id,
             Self::StartSiteDraft(value) => &value.request_id,
             Self::StartTask(value) => &value.request_id,
+            Self::ListTaskCommands(value) => &value.request_id,
             Self::SaveTaskNote(value) => &value.request_id,
             Self::StartAutoSummary(value) => &value.request_id,
             Self::CheckSiteDraft(value) => &value.request_id,
             Self::WorklogReport(value) => &value.request_id,
             Self::WorklogChoices(value) => &value.request_id,
+            Self::WorklogFocusChoices(value) => &value.request_id,
             Self::CheckCaptureSite(value) => &value.request_id,
             Self::GetSiteRestore(value) => &value.request_id,
             Self::ForgetAdoptedContracts(value) => &value.request_id,
@@ -1659,6 +1760,7 @@ impl Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
+    TaskCommandsListed(TaskCommandsListed),
     AdapterRepairLoaded(AdapterRepairLoaded),
     PreservedNotesListed(PreservedNotesListed),
     HelloResult(HelloResult),
@@ -1690,6 +1792,7 @@ pub enum Response {
     SiteDraftChecked(SiteDraftChecked),
     WorklogReported(WorklogReported),
     WorklogChoicesResult(WorklogChoicesResult),
+    WorklogFocusChoicesResult(WorklogFocusChoicesResult),
     CaptureSiteChecked(CaptureSiteChecked),
     SiteRestoreLoaded(SiteRestoreLoaded),
     ServiceReady(ServiceReady),
@@ -1699,6 +1802,7 @@ pub enum Response {
 impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::TaskCommandsListed(value) => value.protocol_version,
             Self::AdapterRepairLoaded(value) => value.protocol_version,
             Self::PreservedNotesListed(value) => value.protocol_version,
             Self::HelloResult(value) => value.protocol_version,
@@ -1730,6 +1834,7 @@ impl Response {
             Self::SiteDraftChecked(value) => value.protocol_version,
             Self::WorklogReported(value) => value.protocol_version,
             Self::WorklogChoicesResult(value) => value.protocol_version,
+            Self::WorklogFocusChoicesResult(value) => value.protocol_version,
             Self::CaptureSiteChecked(value) => value.protocol_version,
             Self::SiteRestoreLoaded(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
@@ -1739,6 +1844,7 @@ impl Response {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::TaskCommandsListed(value) => &value.request_id,
             Self::AdapterRepairLoaded(value) => &value.request_id,
             Self::PreservedNotesListed(value) => &value.request_id,
             Self::HelloResult(value) => &value.request_id,
@@ -1770,6 +1876,7 @@ impl Response {
             Self::SiteDraftChecked(value) => &value.request_id,
             Self::WorklogReported(value) => &value.request_id,
             Self::WorklogChoicesResult(value) => &value.request_id,
+            Self::WorklogFocusChoicesResult(value) => &value.request_id,
             Self::CaptureSiteChecked(value) => &value.request_id,
             Self::SiteRestoreLoaded(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,

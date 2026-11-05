@@ -51,7 +51,7 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
   };
   const configured = state !== "setup";
   const fixture = window.fixture = {
-    state, runs, requests: [], actions: [], ports: [], revision: "1",
+    state, runs, requests: [], actions: [], copied: [], ports: [], revision: "1",
     adapterIssue: state === "adapter-repair" ? "unsupported adapter format 2" : null,
     listError: state === "error", getRunReads: 0,
     config: {
@@ -102,11 +102,25 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       case "list_artifacts": return { type: "artifact_list_result", items: [], artifact_types: [], truncated: false };
       case "worklog_choices": return {
         type: "worklog_choices_result", start_date: request.start_date, end_date: request.end_date,
-        choices: ["Release update", "Private research"].map((title, n) => ({
-          artifact_id: `doc:${n}`, local_date: request.start_date,
+        choices: (request.page?.offset ? ["Later work"] : ["Release update", "Private research"]).map((title, n) => ({
+          artifact_id: `doc:${(request.page?.offset ?? 0) + n}`, local_date: request.start_date,
           text: `${title} — focused 2 min · opened 1×`, url: `https://work.example/${n}`,
-        })), truncated: false, gaps: [], gaps_truncated: false,
+        })), truncated: Boolean(fixture.worklogPages && request.page?.offset === 0), gaps: [], gaps_truncated: false,
+        ...(request.page ? { page: { snapshot: "a".repeat(64), offset: request.page.offset,
+          next_offset: fixture.worklogPages && request.page.offset === 0 ? 2 : null, omitted: false } } : {}),
       };
+      case "worklog_focus_choices": {
+        const session = { id: "10000000-0000-4000-8000-000000000001", name: "Release", revision: 1 };
+        const selected = request.focus_session_id === session.id ? session : null;
+        return {
+          type: "worklog_focus_choices_result", start_date: request.start_date, end_date: request.end_date,
+          focus_session_id: request.focus_session_id, sessions: [session], sessions_truncated: false,
+          selected_session: selected, name_changed: false,
+          choices: selected ? [{ artifact_id: "doc:0", local_date: request.start_date,
+            text: "Release update — focused 2 min · opened 1×", url: "https://work.example/0" }] : [],
+          truncated: false, gaps: [], gaps_truncated: false,
+        };
+      }
       case "worklog_report": return {
         type: "worklog_reported", start_date: request.start_date, end_date: request.end_date,
         text: "No recorded artifacts.", artifact_count: 0, gaps: [], gaps_truncated: false,
@@ -133,6 +147,8 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       case "choose_folder": return { type: "error", code: "cancelled", message: "Fixture picker canceled." };
       case "refresh_artifacts": return { type: "artifacts_refreshed", written: 0, unchanged: 0, conflicts: 0, conflict_paths: [] };
       case "open_path": return { type: "path_opened" };
+      case "list_task_commands": return { type: "task_commands_listed", revision: fixture.revision,
+        commands: [{ name: "actions", description: "Extract action items" }], issue: null };
       case "start_task":
       case "start_run": return { type: "error", code: "service_unavailable", message: "Fixture harness is offline." };
       case "update_config":
@@ -184,7 +200,12 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       },
     },
     storage: { local: area("local"), session: area("session"), onChanged: storageChanged },
-    permissions: { contains: async () => true, onAdded: event(), onRemoved: event() },
+    permissions: {
+      contains: async (permission) => permission.permissions?.includes("notifications") ? fixture.taskNotificationsEnabled === true : true,
+      request: async () => { fixture.taskNotificationsEnabled = true; fixture.actions.push("enable-task-notifications"); return true; },
+      remove: async () => { fixture.taskNotificationsEnabled = false; fixture.actions.push("disable-task-notifications"); return true; },
+      onAdded: event(), onRemoved: event(),
+    },
     tabs: {
       query: async () => [{ id: 1, incognito: false, url: pageUrl, title: "Work item" }],
       create: async (properties) => { fixture.actions.push(properties.url); return { id: 2 }; },
@@ -199,7 +220,10 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       return [{ frameId: 0, result: { title: "Work item", content: "Fixture article. ".repeat(40), selection: null, truncated: false, readable: true, href: pageUrl } }];
     } },
   };
-  Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { fixture.actions.push("copy"); } } });
+  Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text) => {
+    fixture.copied.push(text);
+    fixture.actions.push("copy");
+  } } });
 }
 
 export async function browserFixture(t, pageName, state = "configured", options = {}) {

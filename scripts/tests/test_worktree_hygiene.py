@@ -19,6 +19,9 @@ import time
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import git_test_env  # noqa: E402
+
 SCRIPT = Path(__file__).resolve().parents[1] / "dev" / "worktree-hygiene"
 _loader = importlib.machinery.SourceFileLoader("worktree_hygiene", str(SCRIPT))
 _spec = importlib.util.spec_from_loader("worktree_hygiene", _loader)
@@ -26,11 +29,14 @@ wh = importlib.util.module_from_spec(_spec)
 sys.modules["worktree_hygiene"] = wh
 _loader.exec_module(wh)
 
-GIT_ENV = {
-    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
-    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
-    "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
-}
+# Background maintenance off (git_test_env): its lock files would race the
+# fixture's cleanup and the hygiene tool's own lock checks.
+GIT_ENV = git_test_env.env(
+    base={},
+    GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com",
+    GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+)
 
 
 def run(cwd, *args):
@@ -72,7 +78,7 @@ def no_prs(_repo, _branch):
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="wt-hygiene-")).resolve()
-        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(git_test_env.rmtree, self.tmp)
         self.origin = self.tmp / "origin.git"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True,
                        env={**os.environ, **GIT_ENV})

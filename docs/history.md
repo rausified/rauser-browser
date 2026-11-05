@@ -1349,3 +1349,303 @@ later user text. The shared Markdown scanner additionally neutralizes report
 brackets so its definitions cannot activate earlier user image/link references.
 This adds only `save_task_note` / `task_note_saved` within v8;
 ordinary note messages, physical ownership and browser-local recovery remain.
+
+## 2026-11-04 — Guard script integrations before child IPC
+
+`brwr-xkd1`: starter-generator CLI tests and PR-doctor's real-bd integration
+tests now use `scripts/tests/ipc-guard.mjs` before spawning or creating
+fixtures. Baseline health reproduced empty CLI diagnostics and `spawnSync
+git EPERM`; the shared probe confirms denied child pipes. Five generator and
+18 doctor pure tests remain active, while 13 integration cases explicitly
+skip on denial and fail under `BRAUSER_REQUIRE_IPC_TESTS=1`. bd detection
+moves behind the probe; only a missing executable skips, while an installed
+tool's errors fail. Product and identity-migration contracts are unchanged.
+
+## 2026-11-04 — Reject contradictory summary access and reading scope
+
+`brwr-divh`: `answer::parse_answer` rejects a fresh sign-in, denied or
+not-found answer unless its reading scope is `page_only`. Validation occurs
+before `SummaryFinisher` can turn a wall into a successful no-save result.
+The ordinary one-correction flow supplies the reason, then fails repeated
+contradictions as `invalid_output`; a corrected page-only wall still saves
+nothing. Root `SUMMARY.md` states the rule and prompt tests pin its presence.
+Existing stored-answer deserialization, summary save retries, protocol fields
+and auto-summary eligibility remain unchanged. Tests use the in-memory
+recording harness with the actual summary finisher; no real agent is run.
+
+## 2026-11-04 — Spend the index lock-acquisition budget before refusing
+
+`brwr-rx0s`, discovered while investigating `brwr-epl1`: `BEGIN IMMEDIATE`
+previously stopped after three immediate busy retries, at most about 240 ms,
+even though its configured contention budget is ten seconds. A real SQLite
+writer holding its lock for 400 ms reproduces the early refusal when the
+waiter's busy handler is disabled. Lock acquisition now retries through one
+total deadline, caps SQLite waits and retry sleeps to the remaining budget,
+and restores the connection's configured timeout on success or failure. The
+transaction body is still executed once. Two new cases cover eventual success
+and deadline exhaustion, alongside the existing held-lock and concurrency tests.
+
+This establishes the early-refusal defect, not the Windows-specific cause of
+`brwr-epl1`: ten repeated Linux first-open runs passed even before this fix.
+That parent retains its Windows stress acceptance and remains open.
+
+## 2026-11-04 — Measure index work and retain contention phases
+
+`brwr-gxag`: year-scale delivery tests retain deterministic work bounds,
+file identities and full-derive equivalence, while elapsed time is diagnostic
+only. Removed the two reported held-lock upper timing bounds, preserving the
+exact one-long-wait and Busy/snapshot checks. No production timeout changed.
+
+`brwr-bszr`: `index/db.rs` maps contention through operation/phase-aware
+boundaries, retaining primary/extended SQLite codes, elapsed milliseconds and
+actual BEGIN/WAL attempt counts in one warning. Ordinary errors, rollback and
+legacy-replacement wording remain intact. Recovered reads can also emit that
+warning. The four-host migration test captures each worker's diagnostics;
+multi-process result files retain structured contention fields and print them
+on failure. Seven new regressions exercise real setup/BEGIN/WAL/commit locks,
+extended-code bodies, no duplicate/no-success noise and child-result
+persistence. Merged with `brwr-rx0s`: `BEGIN IMMEDIATE` keeps that one total
+deadline and timeout restore, and its exhaustion warning now reports the
+attempts made within it. Repeated Windows stress acceptance and the Windows
+root cause remain on `brwr-epl1`.
+
+## 2026-11-04 — Share one recorded focus session (brwr-1jeb)
+
+Recent's selected-work area now offers **One focus session** and a catalog of
+recorded sessions in the chosen local-date range. The additive protocol-v8
+`worklog_focus_choices` query refreshes and checks the configuration revision
+under its lock, then reads catalog, selected direct activity and period capture
+gaps in one index transaction. Session ID filtering precedes artifact-day
+aggregation: other sessions' seconds, titles, URLs, untagged visits, summaries
+and container copies cannot enter the selected rows. The existing bounded row
+formatter is shared, with separate catalog and entry omission flags. Renames
+use the highest recorded in-period revision; an omitted catalog entry does not
+prevent a directly requested session from being read.
+
+The panel preserves explicit unchecked entries and copies its exact preview.
+A policy-change signal invalidates sharing before the debounced config reload;
+a same-revision reload also restores the now-empty catalog. Session, period,
+scope, home and host changes invalidate pending replies. Existing note editing,
+copy-out recovery and capture replay boundaries are unchanged. The staged plan
+is `docs/superpowers/plans/2026-11-04-share-focus-session.md`; catalog paging is
+follow-up `brwr-t4gf`. Assigned Re-learn apply and panel work still await their
+existing recovery/history/downgrade decisions.
+
+Validation: the complete local gate reports 1,604 workspace Rust passes (+6
+new; 2 ignored, with existing sandbox IPC guards), 47 extension test files,
+45 focused worklog panel cases (+18 new), both Clippy configurations and all
+protocol/frontend checks green. Supplemental script, queue/current-state and
+10,696-rendering Markdown checks pass. Accessibility passes its two offline
+fixtures and explicitly skips 47 sandbox-blocked browser cases; the driver and
+CI must supply real browser/platform validation.
+
+
+## 2026-11-04 — Show recorded reading coverage in saved-summary choices (brwr-30xv)
+
+`SummaryFinisher` now copies the validated answer's optional reading scope
+into `PageSummary` and the typed `SummaryEvent`. `SummaryView` projects it
+through the existing cached event body and the shared history projector,
+without reading summary-file frontmatter or migrating the SQLite schema.
+Legacy absence preserves old serialization. `ReadScope` shares one conversion
+to the protocol enum with run cards. This page adds the existing reading
+label as a chip regardless of overview presence; Recent appends it as text.
+Capture truncation never substitutes for the answer's claim.
+
+Prepared-append compatibility now removes scope before trying the existing
+pre-overview payload; all attempts retain frozen byte equality and return the
+actual restored event. Tests cover both historical formats at three tail
+positions and refuse changed new scope, overview and paths. Coordinated
+deployment and older-host cache/rebuild limitations are recorded in DESIGN.md,
+protocol/README.md and the staged saved-summary plan. Re-learn apply remains
+blocked on its existing policy decisions; no identity migration is enabled.
+
+
+Validation: full local gate passes with 1,609 workspace Rust-reported passes
+(+5, 2 ignored; sandbox IPC guards apply), 47 extension test files (+2 cases),
+both Clippy configurations and README extras. The 10,696 Markdown renderings
+remain inert. Accessibility reports two offline passes and 47 explicit
+sandbox browser skips. Fresh complete diff review and one independent
+in-session Codex pass found no actionable issues; the driver owns external
+review, real browser/platform validation and publication.
+
+## 2026-11-04 — Reusable sidebar task commands
+
+`brwr-f410` delivers the first custom-command slice of `brwr-cdq`.
+`host/src/task_commands.rs` validates bounded literal sidebar recipes;
+`ConfigStore` retains their raw TOML independently of the wire snapshot and
+carries it through unrelated config saves, including an invalid registry.
+The read-only `list_task_commands` catalogue returns descriptors, a command
+issue and the config revision. `start_task.command_revision` binds a slash
+invocation; native task preparation resolves the page key and command under
+one config lock and checks the composed instruction before service access.
+Both additions are within protocol v8. Existing task service records need no
+new fields because they store the effective instruction.
+
+The panel loads the catalogue on explicit review or slash execution, explicitly inserts
+a chosen command before the draft, and never starts it implicitly. Stale
+choices refresh without retrying execution. `//` escapes a literal slash, and
+Reuse/recall escape stored leading slashes. Templates, `include`, built-in
+actions and non-sidebar outputs remain unsupported and are refused visibly.
+See `docs/superpowers/plans/2026-11-04-task-commands.md` for the design challenge,
+scope decisions and validation. Ordinary config saves retain ID freezing.
+
+Validation: the full required and README gate passes with 1,619 Rust-reported
+passes (+10; 94 explicit IPC guards, two ignored), 47 extension files (+6 new
+JavaScript regressions), both Clippy configurations, 12 script files, 252
+Python tooling cases (92 platform skips), queue checks and 10,696 inert
+Markdown renderings. Accessibility reports two offline fixture passes and
+48 explicit sandbox browser skips. Fresh complete manual diff review and one
+independent in-session Codex pass found no actionable issues; the external
+driver owns real browser/platform validation, approval and publication.
+
+
+## 2026-11-05 — Find saved summaries by recorded reading coverage
+
+`brwr-y1q2` adds Recent's Saved summary reading selector: All activity,
+Limited reading, Whole artifact and Unknown reading. An optional
+`list_artifacts.summary_reading` enum selects the host query before its
+32-row response cap. The existing latest renderable summary resolver supplies
+the displayed scope per artifact and local day, preserving instant ordering,
+recorded-order ties and fallback past unrenderable events. Unknown requires
+a displayed saved summary with absent scope; it excludes days without one.
+Title/type filters continue to intersect the reading filter. Responses and
+event formats are unchanged, and All activity omits the field for older hosts.
+The panel clears obsolete rows while loading, ignores late replies and gives
+rebuild guidance when an older host refuses the filter.
+
+This changes no content or cache format and starts no agent. Filtering streams
+candidate rows until the bounded result and one extra match establish
+truncation. A no-match scan over 365 summarized days of one artifact measured
+133 ms on the worker VM; no timing threshold is asserted. Tests also recover
+a matching older day beyond those 365 nonmatches. The full required gate
+passes with 1,625 Rust-reported passes (+5; 94 explicit sandbox IPC guards,
+two ignored), all 47 extension test files and both Clippy configurations.
+Accessibility has two fixture passes and 49 explicit sandbox browser skips,
+including the new keyboard case; external Chrome execution remains pending.
+Manual full-diff review and one independent in-session reviewer found no
+findings. The README script and Markdown checks pass. The driver retains
+queue export, external approval and publication. Follow-up `brwr-a30j`
+proposes continuation beyond the first 32 matching rows.
+
+
+## 2026-11-05 — Notify when tasks finish outside the panel
+
+`brwr-8qm` adds default-off task completion notifications through Chrome's
+optional permission and a Settings control. The worker persists an exact
+start-request intent before `start_task`, discovers its run through paginated
+history, and retains watched IDs across worker/browser restarts. The service
+keeps the original forwarded request ID in `TaskStatus.start_request_id` and
+optional protocol-v8 `RunView.start_request_id`. Matching is exact across
+windows and profiles; timestamps never establish ownership. Legacy records
+omit the field and never become discovery candidates. Both components must
+deploy together; older extensions reject the new task view and older services
+cannot read correlated task records, so the existing task rollback boundary
+still applies. Ordinary task execution remains panel-to-host; the worker
+never forwards `start_task` or gains authority over instructions or identity.
+
+Terminal outcomes defer while a panel is open. Its observed-finish signal
+suppresses a notification even during slow host polling. Handling is durable
+before the generic Chrome toast: an interruption in that small gap may lose
+the toast but retains the unread badge and cannot duplicate delivery. A single
+badge owner keeps capture pressure ahead of unread task counts. Click routing
+opens the originating panel synchronously within the gesture and opens or
+selects its Tasks report; optional API click listeners also install when
+permission becomes available. Monitoring holds only IDs, outcomes and times,
+and its diagnostics contain no instruction/report. It uses an independent
+chain and does not poll an idle service merely because permission is enabled.
+
+A fresh manual diff review and one independent local reviewer pass identified
+the original timestamp attribution bug. A failing regression reproduced wrong
+window and cross-profile attribution, then exact request correlation fixed it.
+Tests also cover lost start replies, pagination, worker restart, permission
+refusal/revocation, optional bindings, acknowledgements and capture-pressure
+precedence. The final required gate passes with 1,627 Rust-reported passes
+(+2; 94 explicit IPC guards, two ignored), all 48 extension test files, both
+Clippy configurations and 27 added regression cases. Accessibility reports
+two fixture passes and 50 sandbox browser skips; one of those is the added
+keyboard case. Real OS toast presentation and Chrome gesture acceptance remain
+separate desktop work in TESTING.md. No live service, harness, API, credential
+or deployed path was used. Assigned Re-learn work remains blocked on its
+explicit open decisions. Follow-ups: acknowledge visibly read reports in
+Tasks (`brwr-8v4w`) and refresh notification Settings after external permission
+changes (`brwr-2d4n`). Driver owns external approval and publication.
+
+The README extras also pass: 10,696 inert Markdown renderings, 12 script
+test files, and the dev/queue Python suites (252 cases each, 92 platform
+skips), followed by queue consistency with 60 live issues. The single commit
+attempt hit read-only `.git/index.lock`; the driver has the complete reviewed
+tree and exact `.bosun_commit_msg`. No commit retry or remote action followed.
+
+
+## 2026-11-05 — Continue through selected work (`brwr-p71k`)
+
+All-work curation now requests opt-in pages from the existing worklog query.
+The host shares the direct-day renderer with unpaged and focus-session reads,
+then binds complete logical rows, dates, storage identity/adapters and all
+capture-gap notices to a versioned hash. Logical offsets include oversized
+rows; a normal row that would exceed the remaining byte budget starts the
+next page. Unpaged responses retain their former shape and truncation rules.
+There is no new cache version or authoritative-history write.
+
+The panel appends unchecked rows and preserves earlier checkbox identities,
+checked Copy text and permanent omission notices. Same-snapshot refresh keeps
+loaded pages; changed history drops later pages with a notice. A separate
+scope-bound validated snapshot survives overlapping pending refreshes, while
+errors and host/period/home changes invalidate it. Runtime validation checks
+all nested page fields before pagination logic uses them. The loading button
+uses guarded aria-disabled so Chrome can retain focus; its final page moves
+focus into new work. Toggling capture-gap inclusion cannot re-enable selection
+or Copy during loading. The independent review identified these refresh,
+validation and focus issues, which were corrected before the final gate.
+
+Assigned Re-learn apply remains gated by the open decisions in its staged
+plan; ordinary ID freezing is unchanged. Follow-ups: selected-session entry
+pages (`brwr-6ldz`), session catalog pages (`brwr-t4gf`), and explicitly saved
+sharing drafts (`brwr-1b6o`). Cookie leaves external acceptance/publication to
+the driver and does not use live services or APIs.
+
+
+Quarantined cycle 8 local validation passed: 1,634 workspace Rust-reported passes (seven
+new; 94 explicit IPC guards and two ignored), all 48 extension test files,
+62 focused worklog cases (14 new), both Clippy configurations, and a11y two
+fixture passes/51 explicit sandbox browser skips (one new keyboard journey).
+README extras passed: 10,696 inert Markdown renderings, 12 script test files,
+252 Python tooling cases (92 platform skips), and queue consistency. The
+previously errored Dolt fixture passed alone in 11.6 seconds, then in the full
+serial tooling run. A parallel attempt during heavy I/O was interrupted;
+no assertion or timeout was weakened. Final whole-diff manual review and one
+independent Codex pass are complete; all four review findings were corrected.
+Driver owns unsandboxed browser/IPC acceptance and publication.
+
+That cycle's single commit attempt hit read-only `.git/index.lock`; no retry
+followed. The driver then rejected its real-browser gate twice on final-page
+focus and quarantined the work. Those local results did not establish browser
+acceptance; the queue item is being repaired on the restored diff.
+
+## 2026-11-05 — Repair cycle 8's final-page focus
+
+Recovered the complete prescribed `08bc0d2e..b4484a59` quarantine patch.
+The browser failure was real: `appendWorklogChoices` tried to focus the
+first new checkbox while its ancestor fieldset was still disabled. The panel
+now enables the fieldset before appending/focusing new choices. Final cleanup
+still handles errors and late replies. The existing offline append/Copy test
+models inherited-disabled focus refusal through a test-scoped mock; it failed
+on the recovered implementation and passed after the repair. The existing
+real-browser assertion remains unchanged. No new product scope was added.
+
+All required local gate commands pass. Rust reports 1,634 passes including
+94 explicit IPC guards, with two ignored tests; all 48 extension files and
+62 focused worklog cases pass. Both Clippy builds pass. Required accessibility
+reports two fixture passes and 51 sandbox browser skips, which do not prove
+the repaired browser journey. Supplementary checks pass: 10,696 inert Markdown
+renderings, 12 script files and 252 Python tooling cases (92 platform skips).
+Current-state and whitespace checks pass. The full recovered/repaired diff
+was reviewed afresh without further code findings. The driver owns independent
+review, real Chromium/IPC acceptance, queue sync/export/consistency and release.
+
+Two quarantine follow-up IDs were absent from the current database; recreated
+their work as `brwr-6ldz` (session entries) and `brwr-1b6o` (sharing drafts)
+and updated the recovered references. `brwr-tcd5` records shared disabled-focus
+modeling, reinforcing the existing improvement-feed entry. The assigned
+Re-learn chain's open decisions remain unchanged, and the existing gate ask
+plus repair status were sent through the authorized Wardroom outbox.

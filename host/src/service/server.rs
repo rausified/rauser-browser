@@ -564,6 +564,7 @@ impl Server {
             return error(&id, ErrorCode::InvalidConfig, &env_error.to_string());
         }
         let task = value.instruction.map(|instruction| TaskStatus {
+            start_request_id: Some(value.request_id.clone()),
             no_page,
             instruction,
             protected: setup.protected,
@@ -2373,6 +2374,7 @@ mod tests {
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let request = Request::StartTask(brauser_protocol::StartTaskRequest {
+            command_revision: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "direct-task".into(),
@@ -2416,6 +2418,7 @@ mod tests {
             Response::RunStarted(started) => {
                 assert!(!started.existing);
                 assert_eq!(started.run.kind, Some(RunKind::Task));
+                assert_eq!(started.run.start_request_id.as_deref(), Some("task"));
                 started.run.run_id
             }
             other => panic!("unexpected response: {other:?}"),
@@ -2441,6 +2444,7 @@ mod tests {
         let status: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(status).unwrap()).unwrap();
         assert_eq!(status["task"]["instruction"], INSTRUCTION);
+        assert_eq!(status["task"]["start_request_id"], "task");
         assert_eq!(status["task"]["protected"], serde_json::json!(protected));
         let prompt = std::fs::read_to_string(world.program.with_extension("prompt")).unwrap();
         assert!(prompt.contains(INSTRUCTION), "{prompt}");

@@ -375,3 +375,85 @@
   validation remain. Settings, README and DESIGN.md describe defaults, repair
   and rollback. Offline tests use an in-process fake harness; no live model or
   deployed service was touched. Project documentation remains in this repo.
+
+- **Brauser subprocess health checks (2026-11-04, `brwr-xkd1`):** Starter
+  generation and PR-doctor integration tests now probe child IPC before
+  creating fixtures or inspecting bd. Restricted workers run 23 pure tests
+  and explicitly skip 13 subprocess cases; strict CI still rejects denial
+  and retains the original integration assertions. The repair removes false
+  health failures without changing application behavior or live services.
+
+- **Brauser index contention budget (2026-11-04, `brwr-rx0s`):** Immediate
+  SQLite busy replies now retry through one total ten-second lock-acquisition
+  deadline instead of exhausting three attempts in about a quarter second.
+  Each wait stays within the remaining budget, connection timeouts are
+  restored, and transaction bodies run once. A real 400 ms writer reproduces
+  the old failure. The separate Windows regression `brwr-epl1` remains open
+  for Windows stress validation; project documentation stays in this repo.
+
+- **Brauser — contradictory summary reading claims now surface:** A fresh
+  answer reporting both an access wall and whole/partial artifact reading gets
+  one correction turn, then a visible invalid-output failure if it remains
+  contradictory. Valid page-only walls still save nothing and leave the page
+  eligible for later summary; old stored answers remain readable. The summary
+  instructions and validation now agree (`brwr-divh`).
+
+- **Brauser — index bounds follow work rather than runner speed (2026-11-04):**
+  Year-scale delivery tests retain row/event/transaction/log-byte bounds,
+  ownership/file identity checks and full-rebuild equivalence while reporting
+  elapsed time without fixed speed ceilings. The two reported held-lock tests
+  retain exact one-wait and Busy/snapshot outcomes. Windows platform acceptance
+  remains with CI (`brwr-gxag`).
+
+- **Brauser — locate exhausted index contention (2026-11-04):** Structured
+  diagnostics distinguish setup, schema/WAL, BEGIN, statement and commit
+  failures with extended SQLite codes, elapsed milliseconds and attempts.
+  Threaded and multi-process stress failures preserve the evidence; caller
+  errors and retry behavior are unchanged. Seven new local regressions use
+  real SQLite locks and isolated fixtures. The Windows root cause and repeated
+  acceptance remain open on `brwr-epl1`; held PR #310 is untouched (`brwr-bszr`).
+- **Brauser — share one recorded focus session:** Recent can narrow selected-work sharing to one explicitly chosen recorded session. The host filters activity before aggregation, preserving only that session's measured time and recorded page context; unchecked entries, exact preview/Copy, rename identity, explicit omission/unavailable states and immediate stale-preview invalidation keep sharing deliberate. Rebuild host and extension together. This is a standalone Brauser capability; no AMOS integration or live deployment is implied.
+
+- **Brauser — saved summaries disclose reading coverage:** Recent and This page now show the agent's whole, partial or browser-page-only reading claim from validated summary log evidence, including summaries without an overview. Index reopen/rebuild preserves it, legacy scope stays unknown, and interrupted older appends recover exact bytes. Deploy host and extension together; older-host history reads cannot safely consume the enriched records.
+
+- Brauser now runs reusable literal sidebar task commands from its task bar:
+  local `[[commands]]` entries appear in Saved commands and `/name` invocation
+  is resolved by the host under a revision check. Selection fills the draft;
+  explicit Run starts the existing task workflow. Page context remains
+  untrusted, stale choices preserve the draft, and Reuse keeps the instruction
+  that actually ran. Built-in actions, templates and other outputs remain
+  planned; users currently author commands in config.toml.
+
+
+- Brauser's Recent view can now find saved summaries by the agent's recorded
+  reading coverage: limited, whole or unknown. It filters each day's latest
+  displayed summary on the host before the result cap, making older limited
+  readings easier to find without rerunning an agent. Unknown excludes days
+  without summaries; existing history and content stay unchanged. Deploy the
+  host and extension for the filter; All activity remains usable with older
+  hosts. This is a Brauser feature, with source documentation kept in its repo.
+
+- Brauser now offers optional task completion notifications in Settings, so a
+  task can finish while its panel is closed and bring the person back to its
+  report. Generic alerts and unread badges reveal no instruction or report;
+  capture warnings retain priority. Exact persisted start-request correlation
+  handles panel closure, lost replies and worker restart without mixing browser
+  profiles. Deploy the host and extension together, retaining the task-record
+  rollback restriction. Desktop OS notification and Chrome gesture acceptance
+  remain separate from the offline test coverage.
+
+
+- Brauser's selected-work sharing view now continues beyond its first bounded
+  response through explicit Load more work. Earlier selections remain visible,
+  appended entries start unchecked, and Copy remains the exact checked
+  preview. Snapshot-bound continuation rejects changed evidence; reload and
+  refresh make selection resets explicit. This makes busy-day status updates
+  possible without altering source logs or notes. Focus-session pagination
+  remains separate work; browser keyboard acceptance belongs to the external
+  gate when Chromium cannot start in the sandbox.
+
+- Recovered Brauser's quarantined selected-work pagination delivery and fixed
+  its final-page keyboard handoff: the checkbox fieldset is enabled before
+  focus moves from the disappearing Load more button. An offline regression
+  now models Chrome's inherited disabled-state behavior, while the original
+  browser assertion remains intact for the driver's acceptance gate.

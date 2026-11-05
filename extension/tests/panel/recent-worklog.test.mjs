@@ -2,6 +2,7 @@
 // the fake DOM, Chrome, host and shared helpers are in ./harness.mjs.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import {
   CONFIG, FakeElement, PANEL_HTML, PROTOCOL_VERSION, hostReply, install, isResponseShape,
   statusFor, until,
@@ -145,6 +146,76 @@ test("Recent replaces its startup wait with setup guidance when no home folder i
   assert.equal(page.sent("worklog_report").length, 0);
 });
 
+test("Recent sends reading filters with title and type, clears old rows and ignores late results", async () => {
+  worklogOptions();
+  let releaseLimited;
+  const limited = new Promise((resolve) => { releaseLimited = resolve; });
+  const reply = (title, scope) => ({
+    type: "artifact_list_result", artifact_types: ["work.item"], truncated: false,
+    items: [{ artifact_id: "work:example/a", artifact_type: "work.item", title,
+      url: "https://new.example/a", local_date: "2026-10-27", focused_seconds: 30,
+      background_seconds: 20, opens: 1, why: null, summary: {
+        summarized_at: "2026-10-27T12:00:00Z", document_type: "report", category: "work", importance: "high",
+        summary_path: "summaries/report.md", harness: "codex", ...(scope ? { read_scope: scope } : {}),
+      } }],
+  });
+  const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
+    if (request.type !== "list_artifacts") return null;
+    if (request.summary_reading === "limited") return limited;
+    return reply(request.summary_reading === "whole" ? "Whole report" : "All reports", "whole");
+  } });
+  await until(() => page.sent("load_note").length > 0, "startup");
+  page.el("tab-recent").click();
+  await until(() => page.el("recent-list").textContent.includes("All reports"), "unfiltered results");
+  assert.equal(Object.hasOwn(page.sent("list_artifacts")[0], "summary_reading"), false);
+  page.el("recent-type").value = "work.item";
+  page.el("recent-title").value = "report";
+  page.el("recent-reading").value = "limited";
+  page.el("recent-reading").dispatch("change");
+  assert.equal(page.el("recent-list").textContent, "");
+  await until(() => page.sent("list_artifacts").length === 2, "limited request");
+  assert.equal(page.sent("list_artifacts").at(-1).artifact_type, "work.item");
+  assert.equal(page.sent("list_artifacts").at(-1).title_query, "report");
+  assert.equal(page.sent("list_artifacts").at(-1).summary_reading, "limited");
+  page.el("recent-reading").value = "whole";
+  page.el("recent-reading").dispatch("change");
+  await until(() => page.el("recent-list").textContent.includes("Whole report"), "whole results");
+  releaseLimited(reply("Late partial report", "partial"));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(page.el("recent-list").textContent.includes("Late partial report"), false);
+  assert.equal(page.el("recent-type").value, "work.item");
+  assert.equal(page.sent("start_run").length + page.sent("start_task").length, 0);
+});
+
+test("Recent reading has a named selector, honest empty results and older-host guidance", async () => {
+  worklogOptions();
+  assert.match(PANEL_HTML, /<label for="recent-reading">Saved summary reading<\/label>/);
+  for (const value of ["limited", "whole", "unknown"]) assert.ok(PANEL_HTML.includes(`value="${value}"`));
+  const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
+    if (request.type !== "list_artifacts") return null;
+    if (request.summary_reading === "limited") return {
+      type: "error", code: "invalid_request", message: "unsupported request",
+    };
+    return { type: "artifact_list_result", artifact_types: [], items: [], truncated: false };
+  } });
+  await until(() => page.sent("load_note").length > 0, "startup");
+  page.el("tab-recent").click();
+  await until(() => page.el("recent-status").textContent.startsWith("0 artifact-day"), "all results");
+  page.el("recent-reading").value = "unknown";
+  page.el("recent-reading").dispatch("change");
+  await until(() => page.sent("list_artifacts").at(-1)?.summary_reading === "unknown" && page.el("recent-status").textContent.startsWith("0 artifact-day"), "unknown empty results");
+  assert.match(page.el("recent-list").textContent, /No matching saved summaries/);
+  page.el("recent-reading").value = "limited";
+  page.el("recent-reading").dispatch("change");
+  await until(() => page.el("recent-status").textContent.includes("Rebuild"), "old host guidance");
+  assert.match(page.el("recent-status").textContent, /choose All activity/);
+  assert.equal(page.el("recent-list").textContent, "");
+  page.el("recent-reading").value = "";
+  page.el("recent-reading").dispatch("change");
+  await until(() => page.el("recent-status").textContent.startsWith("0 artifact-day"), "all restored");
+  assert.equal(Object.hasOwn(page.sent("list_artifacts").at(-1), "summary_reading"), false);
+});
+
 /** Picks a worklog period the way a click on its segment does: the radio
  * becomes the checked one of its group and fires change. */
 function chooseWorklogPeriod(page, period) {
@@ -270,7 +341,10 @@ function choicesReply(request, ids = ["A", "PRIVATE"], extra = {}) {
     type: "worklog_choices_result", start_date: request.start_date, end_date: request.end_date,
     choices: ids.map((id) => ({ artifact_id: `doc:${id}`, local_date: request.start_date,
       text: `${id} <script> — focused 2 min · opened 1×`, url: `https://work.example/${id}?view=full` })),
-    truncated: false, gaps: [], gaps_truncated: false, ...extra,
+    truncated: false, gaps: [], gaps_truncated: false,
+    ...(request.page ? { page: { snapshot: createHash("sha256").update(JSON.stringify([ids, extra])).digest("hex"),
+      offset: request.page.offset, next_offset: null, omitted: extra.truncated ?? false } } : {}),
+    ...extra,
   };
 }
 async function curation(intercept = (request) => choicesReply(request)) {
@@ -310,6 +384,172 @@ test("selected work copies exactly checked day rows, measured text, links and th
   assert.ok(choiceRows(page).every((row) => !row.checked));
   assert.equal(page.sent("save_note").length + page.sent("update_config").length, 0);
 });
+
+function pagedReply(request, ids, { snapshot = "a".repeat(64), next = null, omitted = false } = {}) {
+  return choicesReply(request, ids, { truncated: next !== null || omitted,
+    page: { snapshot, offset: request.page.offset, next_offset: next, omitted } });
+}
+
+test("overlapping same-snapshot refreshes retain checked later-page work", async () => {
+  let delay = false;
+  const waiting = [];
+  const page = await curation((request) => {
+    if (delay && request.page.offset === 0) return new Promise((resolve) => waiting.push({ request, resolve }));
+    return request.page.offset === 0 ? pagedReply(request, ["A"], { next: 1 }) : pagedReply(request, ["LATER"]);
+  });
+  checkChoice(choiceRows(page)[0]);
+  page.el("worklog-more").click();
+  await until(() => choiceRows(page).length === 2, "later page");
+  checkChoice(choiceRows(page)[1]);
+  delay = true;
+  page.el("tab-recent").click();
+  page.el("tab-recent").click();
+  await until(() => waiting.length === 2, "overlapping refreshes");
+  waiting[1].resolve(pagedReply(waiting[1].request, ["A"], { next: 1 }));
+  await until(() => choiceRows(page).length > 0, "winning refresh");
+  waiting[0].resolve(pagedReply(waiting[0].request, ["A"], { next: 1 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(choiceRows(page).length, 2);
+  assert.ok(choiceRows(page).every((row) => row.checked));
+  assert.match(page.el("worklog-text").textContent, /LATER/);
+});
+
+test("runtime response validation rejects malformed pagination metadata", () => {
+  const request = { start_date: "2026-11-05", end_date: "2026-11-05", page: { offset: 0 } };
+  const valid = pagedReply(request, ["A"], { next: 1 });
+  assert.equal(isResponseShape(valid), true);
+  for (const mutate of [
+    (page) => { delete page.next_offset; }, (page) => { delete page.omitted; },
+    (page) => { page.next_offset = "1"; }, (page) => { page.next_offset = 1.5; },
+    (page) => { page.next_offset = -1; }, (page) => { page.offset = "0"; },
+    (page) => { page.omitted = "false"; }, (page) => { page.snapshot = "bad"; },
+    (page) => { page.extra = true; },
+  ]) {
+    const reply = structuredClone(valid);
+    mutate(reply.page);
+    assert.equal(isResponseShape(reply), false, JSON.stringify(reply.page));
+  }
+  assert.equal(isResponseShape({ ...valid, page: null }), false);
+});
+
+test("loading more appends unchecked work and Copy stays exactly the checked preview", async (t) => {
+  const page = await curation((request) => ({ ...(request.page.offset === 0
+    ? pagedReply(request, ["A", "PRIVATE"], { next: 2 }) : pagedReply(request, ["LATER", "OTHER"])), gaps: [WORKLOG_GAP] }));
+  // Chrome ignores focus() on controls inside a disabled fieldset. The
+  // minimal shared DOM does not model inherited disabled state.
+  const focus = FakeElement.prototype.focus;
+  t.mock.method(FakeElement.prototype, "focus", function () {
+    const fieldset = page.el("worklog-choices");
+    if (fieldset.disabled && fieldset.contains(this)) return;
+    focus.call(this);
+  });
+  const original = choiceRows(page)[0];
+  checkChoice(original);
+  assert.equal(page.el("worklog-more").hidden, false);
+  document.activeElement = page.el("worklog-more");
+  page.el("worklog-more").click();
+  assert.equal(page.el("copy-worklog").disabled, true);
+  assert.equal(page.el("worklog-more").disabled, false, "native disabling would drop Chrome focus");
+  assert.equal(page.el("worklog-more").getAttribute("aria-disabled"), "true");
+  page.el("worklog-include-gaps").dispatch("change");
+  assert.equal(page.el("worklog-select-all").disabled, true);
+  assert.equal(page.el("worklog-clear").disabled, true);
+  assert.equal(page.el("copy-worklog").disabled, true);
+  assert.equal(page.el("worklog-more").textContent, "Loading…");
+  page.el("worklog-more").click();
+  await until(() => choiceRows(page).length === 4, "appended page");
+  assert.equal(choiceRows(page)[0], original, "old checkboxes keep their identity");
+  assert.deepEqual(choiceRows(page).map((row) => row.checked), [true, false, false, false]);
+  assert.equal(choiceRows(page)[2].focused, true, "final-page button hands focus to new work");
+  assert.equal(page.el("worklog-more").hidden, true);
+  assert.equal(page.sent("worklog_choices").length, 2, "loading guard suppresses duplicate requests");
+  assert.doesNotMatch(page.el("worklog-text").textContent, /PRIVATE|LATER|OTHER/);
+  checkChoice(choiceRows(page)[2]);
+  const preview = page.el("worklog-text").textContent;
+  page.el("copy-worklog").click();
+  await until(() => page.state.copied.length === 1, "paged Copy");
+  assert.equal(page.state.copied[0], preview);
+  assert.match(preview, /LATER/);
+  assert.doesNotMatch(preview, /PRIVATE|OTHER/);
+  assert.deepEqual(page.sent("worklog_choices").at(-1).page, { offset: 2, snapshot: "a".repeat(64) });
+  assert.equal(page.sent("save_note").length + page.sent("update_config").length, 0);
+});
+
+test("refresh retains loaded pages only for the same complete snapshot and keeps omission notices", async () => {
+  let snapshot = "a".repeat(64);
+  const page = await curation((request) => request.page.offset === 0
+    ? pagedReply(request, ["A", "PRIVATE"], { snapshot, next: 3, omitted: true })
+    : pagedReply(request, ["LATER"], { snapshot }));
+  checkChoice(choiceRows(page)[0]);
+  page.el("worklog-more").click();
+  await until(() => choiceRows(page).length === 3, "second page");
+  checkChoice(choiceRows(page)[2]);
+  assert.match(page.el("worklog-selection-status").textContent, /exceed the display limits/);
+  page.el("tab-recent").click();
+  await until(() => choiceRows(page).length === 3, "same snapshot refresh");
+  assert.deepEqual(choiceRows(page).map((row) => row.checked), [true, false, true]);
+  assert.match(page.el("worklog-selection-status").textContent, /exceed the display limits/);
+  snapshot = "b".repeat(64);
+  page.el("tab-recent").click();
+  await until(() => choiceRows(page).length === 2, "changed snapshot refresh");
+  assert.deepEqual(choiceRows(page).map((row) => row.checked), [true, false]);
+  assert.match(page.el("worklog-selection-status").textContent, /History changed.*Later pages were cleared/);
+  assert.doesNotMatch(page.el("worklog-text").textContent, /LATER/);
+});
+
+for (const failure of ["snapshot", "offset", "nonadvancing", "duplicate", "period", "conflict"]) {
+  test(`continuation refuses ${failure} and offers an explicit reload with Copy disabled`, async () => {
+    const page = await curation((request) => {
+      if (request.page.offset === 0) return pagedReply(request, ["A"], { next: 1 });
+      if (failure === "conflict") return { type: "error", code: "conflict", message: "History changed; reload choices" };
+      const reply = pagedReply(request, [failure === "duplicate" ? "A" : "LATER"]);
+      if (failure === "snapshot") reply.page.snapshot = "b".repeat(64);
+      if (failure === "offset") reply.page.offset = 0;
+      if (failure === "nonadvancing") { reply.page.next_offset = 1; reply.truncated = true; }
+      if (failure === "period") reply.end_date = "1900-01-01";
+      return reply;
+    });
+    checkChoice(choiceRows(page)[0]);
+    page.el("worklog-more").click();
+    await until(() => /Could not load more work/.test(page.el("worklog-text").textContent), "refused continuation");
+    assert.equal(page.el("copy-worklog").disabled, true);
+    assert.equal(choiceRows(page).length, 0);
+    assert.equal(page.el("worklog-more").textContent, "Reload choices");
+    assert.equal(page.el("worklog-select-all").disabled, true);
+    page.el("worklog-more").click();
+    await until(() => choiceRows(page).length === 1, "reloaded choices");
+    assert.equal(choiceRows(page)[0].checked, false);
+  });
+}
+
+for (const boundary of ["period", "refresh", "home", "disconnect"]) {
+  test(`a delayed continuation cannot restore choices after ${boundary}`, async () => {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    let request;
+    const page = await curation((message) => {
+      if (message.page.offset === 0) return pagedReply(message, ["A"], { next: 1 });
+      request = message;
+      return pending;
+    });
+    checkChoice(choiceRows(page)[0]);
+    page.el("worklog-more").click();
+    await until(() => request, "in-flight page");
+    if (boundary === "period") chooseWorklogPeriod(page, "yesterday");
+    if (boundary === "refresh") page.el("tab-recent").click();
+    if (boundary === "home") {
+      page.state.config.storage.root = "/other-home";
+      page.state.revision = "2";
+      page.policyChanged();
+    }
+    if (boundary === "disconnect") { page.state.hostDead = true; page.hostExits(); }
+    else await until(() => choiceRows(page).length === 1, "replacement snapshot");
+    release(pagedReply(request, ["LATE"]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.doesNotMatch(page.el("worklog-choices").textContent, /LATE/);
+    if (boundary !== "refresh") assert.equal(page.el("copy-worklog").disabled, true);
+  });
+}
 
 test("same-period refresh keeps stable selections, drops removed ones and leaves arriving work unchecked", async () => {
   let ids = ["A", "PRIVATE"];
@@ -467,6 +707,194 @@ for (const failure of ["unsupported", "mismatched", "duplicate", "outside period
     page.el("worklog-curate").dispatch("change");
     await until(() => !page.el("copy-worklog").disabled, "ordinary worklog remains usable");
     assert.match(page.el("worklog-text").textContent, /Opened 1 artifact/);
+  });
+}
+
+
+const FOCUS_ONE = { id: "10000000-0000-4000-8000-000000000001", name: "Release <script>", revision: 2 };
+const FOCUS_TWO = { id: "10000000-0000-4000-8000-000000000002", name: "Private work", revision: 1 };
+function focusChoicesReply(request, extra = {}) {
+  const selected = [FOCUS_ONE, FOCUS_TWO].find((session) => session.id === request.focus_session_id) ?? null;
+  return { ...choicesReply(request, selected ? [selected.id === FOCUS_ONE.id ? "RELEASE" : "PRIVATE"] : []),
+    type: "worklog_focus_choices_result", focus_session_id: request.focus_session_id,
+    sessions: [FOCUS_ONE, FOCUS_TWO], sessions_truncated: false, selected_session: selected,
+    name_changed: selected?.id === FOCUS_ONE.id, ...extra };
+}
+async function focusCuration(intercept = (request) => focusChoicesReply(request)) {
+  worklogOptions();
+  const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, workerStatus: { delivered_batches: 0 },
+    intercept: (request, state) => request.type === "worklog_focus_choices" ? intercept(request, state)
+      : request.type === "worklog_choices" ? choicesReply(request)
+        : request.type === "worklog_report" ? worklogReply(request) : null });
+  await until(() => page.sent("load_note").length > 0, "startup");
+  page.el("worklog-curate").checked = true;
+  page.el("worklog-share-scope").value = "focus";
+  page.el("tab-recent").click();
+  await until(() => page.el("worklog-focus-status").textContent !== "Loading recorded sessions…", "session catalog");
+  return page;
+}
+function chooseFocus(page, id) {
+  page.el("worklog-focus-session").value = id;
+  page.el("worklog-focus-session").dispatch("change");
+}
+
+test("a recorded focus session narrows sharing before explicit selection and copies the exact preview", async () => {
+  const page = await focusCuration((request) => focusChoicesReply(request, { gaps: [WORKLOG_GAP], sessions_truncated: true }));
+  assert.equal(page.sent("worklog_choices").length, 0);
+  assert.equal(page.el("worklog-focus-area").hidden, false);
+  assert.match(page.el("worklog-focus-status").textContent, /Choose a session.*More sessions omitted/);
+  assert.equal(page.el("copy-worklog").disabled, true);
+  assert.equal(choiceRows(page).length, 0);
+  assert.ok(page.el("worklog-focus-session").textContent.includes("Release <script>"), "session names remain text");
+  chooseFocus(page, FOCUS_ONE.id);
+  await until(() => choiceRows(page).length === 1, "release session entries");
+  assert.equal(choiceRows(page)[0].checked, false);
+  assert.match(page.el("worklog-focus-status").textContent, /name changed/);
+  page.el("worklog-select-all").click();
+  const preview = page.el("worklog-text").textContent;
+  assert.match(preview, /Focus session: Release <script> \(name changed in this period\)/);
+  assert.match(preview, /RELEASE <script> — focused 2 min/);
+  assert.doesNotMatch(preview, /PRIVATE/);
+  assert.match(preview, /Capture gaps: this period has missing activity/);
+  page.el("copy-worklog").click();
+  await until(() => page.state.copied.length === 1, "focus Copy");
+  assert.equal(page.state.copied[0], preview);
+  page.el("worklog-include-gaps").checked = false;
+  page.el("worklog-include-gaps").dispatch("change");
+  assert.doesNotMatch(page.el("worklog-text").textContent, /Capture gaps/);
+  page.el("worklog-clear").click();
+  assert.equal(page.el("copy-worklog").disabled, true);
+  assert.equal(page.sent("start_task").length + page.sent("start_run").length + page.sent("save_note").length, 0);
+});
+
+for (const unavailable of ["empty", "unknown"]) {
+  test(`session sharing explains ${unavailable} without falling back to whole-day work`, async () => {
+    const page = await focusCuration((request) => focusChoicesReply(request, unavailable === "empty" ? { sessions: [] } : {}));
+    if (unavailable === "empty") {
+      assert.match(page.el("worklog-text").textContent, /No recorded focus sessions/);
+      assert.equal(page.el("worklog-focus-session").disabled, true);
+    } else {
+      chooseFocus(page, "10000000-0000-4000-8000-999999999999");
+      await until(() => page.el("worklog-text").textContent.includes("no recorded activity in this period"), "unavailable session");
+    }
+    assert.equal(choiceRows(page).length, 0);
+    assert.equal(page.el("copy-worklog").disabled, true);
+    assert.equal(page.sent("worklog_choices").length, 0);
+  });
+}
+
+test("a policy reload with an unchanged revision restores the invalidated session catalog", async () => {
+  const page = await focusCuration();
+  chooseFocus(page, FOCUS_ONE.id);
+  await until(() => choiceRows(page).length === 1, "session entries");
+  checkChoice(choiceRows(page)[0]);
+  const before = page.sent("worklog_focus_choices").length;
+  page.policyChanged();
+  assert.equal(page.el("copy-worklog").disabled, true);
+  await until(() => page.sent("worklog_focus_choices").length > before &&
+    page.el("worklog-focus-session").disabled === false, "reloaded unchanged-revision catalog");
+  assert.equal(page.el("worklog-focus-session").value, "");
+  assert.equal(choiceRows(page).length, 0);
+  assert.match(page.el("worklog-text").textContent, /Choose a session/);
+});
+
+test("session refresh preserves checked entries and leaves newly arriving entries unchecked", async () => {
+  let extra = {};
+  const page = await focusCuration((request) => focusChoicesReply(request, extra));
+  chooseFocus(page, FOCUS_ONE.id);
+  await until(() => choiceRows(page).length === 1, "session entries");
+  checkChoice(choiceRows(page)[0]);
+  extra = { choices: choicesReply({ start_date: page.sent("worklog_focus_choices").at(-1).start_date }, ["NEW", "RELEASE"]).choices, truncated: true };
+  page.el("tab-recent").click();
+  assert.equal(page.el("copy-worklog").disabled, true);
+  await until(() => choiceRows(page).length === 2, "updated session entries");
+  assert.deepEqual(choiceRows(page).map((row) => row.checked), [false, true]);
+  assert.match(page.el("worklog-selection-status").textContent, /More work omitted/);
+  assert.doesNotMatch(page.el("worklog-text").textContent, /NEW/);
+});
+
+test("the session selector stays usable while an earlier selection is loading", async () => {
+  let waiting, release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const page = await focusCuration((request) => {
+    if (request.focus_session_id === FOCUS_ONE.id) { waiting = request; return pending; }
+    return focusChoicesReply(request);
+  });
+  chooseFocus(page, FOCUS_ONE.id);
+  await until(() => waiting, "first session request");
+  assert.equal(page.el("worklog-focus-session").disabled, false,
+    "disabling a focused native select drops keyboard focus");
+  chooseFocus(page, FOCUS_TWO.id);
+  await until(() => choiceRows(page).length === 1, "second session entries");
+  release(focusChoicesReply(waiting));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(page.el("worklog-focus-session").value, FOCUS_TWO.id);
+  assert.match(page.el("worklog-choices").textContent, /PRIVATE/);
+  assert.doesNotMatch(page.el("worklog-choices").textContent, /RELEASE/);
+});
+
+for (const changed of ["session", "period", "scope", "config", "home", "host exit"]) {
+  test(`a late session response cannot restore sharing after changing ${changed}`, async () => {
+    let pendingRequest, release;
+    let delay = false;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const page = await focusCuration((request) => {
+      if (delay) { pendingRequest = request; return pending; }
+      return focusChoicesReply(request);
+    });
+    chooseFocus(page, FOCUS_ONE.id);
+    await until(() => choiceRows(page).length === 1, "original session");
+    checkChoice(choiceRows(page)[0]);
+    delay = true;
+    page.el("tab-recent").click();
+    await until(() => pendingRequest, "held session reply");
+    delay = false;
+    if (changed === "session") chooseFocus(page, FOCUS_TWO.id);
+    if (changed === "period") chooseWorklogPeriod(page, "yesterday");
+    if (changed === "scope") {
+      page.el("worklog-share-scope").value = "entries";
+      page.el("worklog-share-scope").dispatch("change");
+    }
+    if (changed === "config" || changed === "home") {
+      if (changed === "home") page.state.config.storage.root = "/other-home";
+      page.state.revision = "2";
+      page.policyChanged();
+      assert.equal(page.el("copy-worklog").disabled, true);
+    }
+    if (changed === "host exit") { page.state.hostDead = true; page.hostExits(); }
+    release(focusChoicesReply(pendingRequest, { choices: choicesReply(pendingRequest, ["LATE"]).choices }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.doesNotMatch(page.el("worklog-text").textContent, /LATE/);
+    assert.doesNotMatch(page.el("worklog-choices").textContent, /LATE/);
+    assert.equal(page.el("copy-worklog").disabled, true);
+    assert.ok(choiceRows(page).every((row) => !row.checked));
+    if (changed === "session") assert.match(page.el("worklog-choices").textContent, /PRIVATE/);
+    if (changed === "config" || changed === "home") {
+      await until(() => page.sent("worklog_focus_choices").at(-1).expected_revision === "2", "refreshed sharing config");
+      assert.equal(page.sent("worklog_focus_choices").at(-1).expected_revision, "2");
+      assert.equal(page.el("worklog-focus-session").value, "");
+    }
+  });
+}
+
+for (const invalid of ["unsupported", "wrong session", "wrong dates", "duplicate entries", "outside date", "duplicate sessions", "unavailable with entries"]) {
+  test(`focus sharing rejects ${invalid} and leaves Copy disabled`, async () => {
+    const page = await focusCuration((request) => {
+      if (request.focus_session_id === null) return focusChoicesReply(request);
+      const reply = focusChoicesReply(request);
+      if (invalid === "unsupported") return { type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" };
+      if (invalid === "wrong session") { reply.focus_session_id = FOCUS_TWO.id; reply.selected_session = FOCUS_TWO; }
+      if (invalid === "wrong dates") reply.start_date = "1900-01-01";
+      if (invalid === "duplicate entries") reply.choices.push(reply.choices[0]);
+      if (invalid === "outside date") reply.choices[0].local_date = "1900-01-01";
+      if (invalid === "duplicate sessions") reply.sessions.push(FOCUS_ONE);
+      if (invalid === "unavailable with entries") reply.selected_session = null;
+      return reply;
+    });
+    chooseFocus(page, FOCUS_ONE.id);
+    await until(() => page.el("worklog-text").textContent.includes(invalid === "unsupported" ? "Rebuild" : "Could not generate"), "refused session scope");
+    assert.equal(page.el("copy-worklog").disabled, true);
+    assert.equal(choiceRows(page).length, 0);
   });
 }
 

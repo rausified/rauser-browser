@@ -19,10 +19,10 @@ use brauser_protocol::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::answer::{Access, ReadScope, SummaryAnswer};
+use crate::answer::{Access, SummaryAnswer};
 use crate::presentation::plain_line;
 use crate::service::section::PageSection;
-use brauser_protocol::{AnswerAccess, AnswerReadScope};
+use brauser_protocol::AnswerAccess;
 
 /// The largest `stream.txt`; text past it is dropped.
 pub const STREAM_CAP: usize = 4 * 1024 * 1024;
@@ -152,6 +152,10 @@ pub fn list_instruction(text: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskStatus {
+    /// Original native start request, used only to correlate notification
+    /// discovery. Legacy task records have no correlation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_request_id: Option<String>,
     /// Missing on legacy records, which always had a page.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_page: bool,
@@ -301,11 +305,7 @@ impl RunStatusFile {
                     .and_then(|value| SummaryAnswer::deserialize(value).ok())
                     .map(|answer| RunAnswer {
                         overview: (!answer.overview.is_empty()).then_some(answer.overview),
-                        read_scope: answer.read_scope.map(|scope| match scope {
-                            ReadScope::Whole => AnswerReadScope::Whole,
-                            ReadScope::Partial => AnswerReadScope::Partial,
-                            ReadScope::PageOnly => AnswerReadScope::PageOnly,
-                        }),
+                        read_scope: answer.read_scope.map(Into::into),
                         // Ordinary answers omit access; only a wall needs a
                         // not-saved message in the run card.
                         access: match answer.access {
@@ -338,6 +338,11 @@ impl RunStatusFile {
         }
         let summary = is_summary(&self.kind);
         RunView {
+            start_request_id: self
+                .task
+                .as_ref()
+                .filter(|_| self.kind == RunKind::Task)
+                .and_then(|task| task.start_request_id.clone()),
             no_page: self
                 .task
                 .as_ref()
@@ -961,6 +966,7 @@ mod tests {
         let mut status = sample(id);
         status.kind = RunKind::Task;
         status.task = Some(TaskStatus {
+            start_request_id: None,
             no_page: true,
             instruction: "Organize notes".into(),
             protected: vec![],
@@ -1505,11 +1511,30 @@ mod tests {
         let mut status = sample(Uuid::new_v4());
         status.kind = RunKind::Task;
         status.task = Some(TaskStatus {
+            start_request_id: None,
             no_page: false,
             instruction: instruction.into(),
             protected: vec!["/home/notes".into()],
         });
         status
+    }
+
+    #[test]
+    fn task_start_correlation_survives_record_round_trip_and_legacy_records_omit_it() {
+        let mut status = task_sample("Keep this instruction");
+        assert_eq!(status.view(0, None).start_request_id, None);
+        let request_id = "00000000-0000-4000-8000-000000000071";
+        status.task.as_mut().unwrap().start_request_id = Some(request_id.into());
+        let encoded = serde_json::to_vec(&status).unwrap();
+        let restored: RunStatusFile = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            restored.view(0, None).start_request_id.as_deref(),
+            Some(request_id)
+        );
+        status.kind = RunKind::Summary;
+        assert_eq!(status.view(0, None).start_request_id, None);
+        status.kind = RunKind::SiteDraft;
+        assert_eq!(status.view(0, None).start_request_id, None);
     }
 
     #[test]

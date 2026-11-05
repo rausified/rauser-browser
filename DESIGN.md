@@ -68,7 +68,7 @@ Captured notes, the artifact log, artifact files, and read-later items are plain
 
 **Lifecycle.** The host runs only while an extension context holds a native messaging connection to it. It is never a daemon, service, or login item. The side panel and settings page each open their own connection when they load, and the service worker opens one for each background sync (below); the browser spawns a host process per connection, and that host exits when the connection closes (stdin EOF). Work the host would otherwise do in the background, such as catching up on external edits to notes, happens on connect instead (see §5.5).
 
-**Several hosts, one index.** Because each connection has its own host, the panel, the settings page, and a background sync can all be running at once against the same `index.db`. The index is self-locking and needs no lock of Brauser's own to stay correct: SQLite runs in write-ahead-log mode, so readers see a consistent snapshot and never block a writer; every write takes the write lock when its transaction begins, with a 10-second busy timeout and a few retries within it, so a busy lock is reported after about ten seconds, inside the extension's 30-second request timeout; opening an existing index takes no write lock; one host at a time creates or replaces `index.db`, holding the OS lock on `index-open.lock` until the new file is in write-ahead-log mode with its schema, so two hosts opening it for the first time converge on one database; and one host at a time regenerates artifact files, holding the OS lock on `index-regen.lock` (§6.7). Rows are keyed by event ID and each writer re-reads the log watermark after taking the lock, so concurrent deliveries never lose or duplicate an event. A read whose catch-up stays busy past the retries serves the last committed snapshot, since the host holding the lock is ingesting the same appends; with no usable snapshot it reports history as unavailable, never SQLite's own error. Index calls still run under the configuration lock today, which serializes them; taking them out of it is a separate change.
+**Several hosts, one index.** Because each connection has its own host, the panel, the settings page, and a background sync can all be running at once against the same `index.db`. The index is self-locking and needs no lock of Brauser's own to stay correct: SQLite runs in write-ahead-log mode, so readers see a consistent snapshot and never block a writer; every write takes the write lock when its transaction begins, with one 10-second acquisition deadline, retrying immediate busy replies throughout that budget and capping each SQLite wait and retry delay to the time remaining, so a busy lock is reported after about ten seconds, inside the extension's 30-second request timeout; opening an existing index takes no write lock; one host at a time creates or replaces `index.db`, holding the OS lock on `index-open.lock` until the new file is in write-ahead-log mode with its schema, so two hosts opening it for the first time converge on one database; and one host at a time regenerates artifact files, holding the OS lock on `index-regen.lock` (§6.7). Rows are keyed by event ID and each writer re-reads the log watermark after taking the lock, so concurrent deliveries never lose or duplicate an event. A read whose catch-up stays busy past the retries serves the last committed snapshot, since the host holding the lock is ingesting the same appends; with no usable snapshot it reports history as unavailable, never SQLite's own error. Index calls still run under the configuration lock today, which serializes them; taking them out of it is a separate change.
 
 Capture does not depend on the panel. The extension's service worker observes navigation on enabled origins and buffers qualifying events in `chrome.storage.local` (with artifact logging, hourly `activity` events; see below). Each record has a stable event ID, original HTTP(S) URL, optional title, and timestamp. The buffer is capped by count and bytes. Before writing any record, the worker awaits `setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"})` and loads its policy lease, a revisioned, host-sent policy with a bounded expiry; an absent or expired lease fails closed. The host independently re-checks every delivered event against its own adapters on the original URL, before any lossy normalization. Events leave the buffer only after a terminal host acknowledgement (`persisted`, `suppressed`, or permanent-policy `rejected`); transient errors retain the event for bounded retry and appear in the panel alongside rejections and queue overflow. An invalid or newer host config suspends the extension policy without deleting buffered visits; the panel offers an explicitly confirmed discard action during repair. Disabling logging purges affected records. The side panel and settings page serialize config changes across every open window through one shared lock. The worker accepts messages only from those two extension pages. Each page watches the worker's policy lease and re-reads the host when another page publishes a different revision. **Background sync.** The service worker, not the panel, delivers the buffer and keeps its policy lease current. About 30 seconds after a capture (a one-shot `alarms` alarm, which also covers the title grace period), every 5 minutes (a periodic alarm, for retries), and at browser startup, it starts a host over native messaging, delivers every ready event, and closes the connection. When the lease is within an hour of expiry it first reads the host config under the shared config lock and republishes it, exactly as a page's reload does; a config issue suspends the lease without deleting events. A navigation that finds the lease already expired, for example the first after Chrome was closed for a day, renews it before capturing. A sync with nothing to deliver or renew starts no host. The panel's **Send pending visits** asks the worker to sync now, and a background failure to reach the host is shown in the capture strip. A background sync sends only `get_config` and `record_batch`; config changes stay with the panel and settings page, and the host re-checks every delivered event against its own config either way. Agent runs happen in the Brauser service (principle 8) and continue after the panel closes; the panel restores their cards when it reopens (§5.2). (history: [docs/history.md §3.2](docs/history.md#32-native-host--history))
 
@@ -606,7 +606,7 @@ preserved alias-note presentation remain unbuilt under `brwr-dbp`.
 
 **Recent and worklog.** Every tool being adapted already has its own "recently viewed" list. What Brauser adds is one list across all of them, and that has to be visible in M1.5a, not only on the artifact card of a page the user is already on:
 
-- **Recent tab.** The panel lists artifacts grouped by local day, newest day first, and within a day sorted by focused time. It can be filtered by type (for example, only `jira.issue` or `github.pr`) and by a title substring. Each row shows the title, type, focused and background minutes, and the one-liner if there is one, and opens the artifact's last URL. It reads the index (§5.5) through a `list_artifacts` message, so it needs no FTS5.
+- **Recent tab.** The panel lists artifacts grouped by local day, newest day first, and within a day sorted by focused time. It can be filtered by type (for example, only `jira.issue` or `github.pr`), by a title substring, and by saved-summary reading coverage. The reading selector offers All activity, Limited reading (`partial` or `page_only`), Whole artifact, and Unknown reading (a displayed legacy summary with no recorded scope). A day without a renderable saved summary matches only All activity. Coverage classifies that day's latest displayed summary, using instant order and then recorded order for ties, and is filtered by the host before the response cap. Each row shows the title, type, focused and background minutes, and the one-liner if there is one, and opens the artifact's last URL. It reads the index (§5.5) through a `list_artifacts` message, so it needs no FTS5. Filtering starts no agent and changes no content.
 - **Worklog.** An optional daily or weekly summary, generated by the host from the index without an agent. It uses the same measured wording as the rest of the log, for example: "Opened 9 artifacts, and focused on 2 left open from an earlier day. PROJ-123 *Release blocker — SBOM export times out*: focused 2 h, opened from PR #412. Why: blocking the release." The panel shows yesterday's, today's, or this week's worklog with Copy, for standups and status reports. When the user turns on worklog files (M1.5b), the host also writes Brauser-owned `worklog/<YYYY-MM-DD>.md` or `worklog/<YYYY>-W<ww>.md` files (`brauser.kind: worklog`). They are regenerated lazily and skipped when unchanged, like artifact files (§6.7), and are not rewritten after their period ends unless `brauser reindex` runs. Worklog files are off by default, and the settings page shows the sync caution below before they are enabled.
 
 **Known gaps when sharing a worklog.** The panel
@@ -662,12 +662,60 @@ Container choices describe their own direct activity, without rolled-up child
 copies, so excluding children also excludes their measures. Summary-only days
 remain selectable without inventing opens or time. Choices sort by newest local
 day then artifact ID, with at most 200 rows and 96 KiB of serialized row data;
-oversized rows are omitted whole, never with a clipped URL. Truncation stays
-visible beside the selection, and the copied entry count covers only selected
-rows. Known gaps come from the same index snapshot and concern the entire
+oversized rows are omitted whole, never with a clipped URL. **Load more work**
+appends further all-work choices under the same per-response bounds. New rows
+start unchecked; existing checkboxes and selected text remain intact. The
+copied entry count covers only selected rows. A separate omission notice stays
+visible for oversized rows, including omissions on earlier loaded pages.
+Known gaps come from the same index snapshot and concern the entire
 period; the existing explicit gap-inclusion choice also controls this preview.
 
-Selections live only in the open panel. A same-period delivery refresh retains
+Paging is opt-in through an optional `page` object on `worklog_choices`.
+It carries a logical-row offset and, on continuation, the prior snapshot hash.
+The optional response `page` echoes the offset and supplies the snapshot,
+nullable `next_offset`, and permanent-omission flag. Offsets include omitted
+rows; an ordinary row that exceeds the remaining page bytes begins the next
+page. The hash binds a versioned, framed serialization of all ordered logical
+choices before omission, date scope, storage configuration/identity, adapters,
+and capture gaps (including notices beyond their display cap), from one read
+transaction. A mismatched snapshot or unavailable offset refuses continuation.
+Unpaged requests keep their original response shape and truncation behavior.
+Older hosts refuse paged requests with rebuild guidance; an older extension's
+unpaged request remains usable with a newer host. No cache migration is needed.
+
+Same-scope refresh retains loaded later pages only when the full snapshot
+matches. Changed history drops those pages, prunes selection to refreshed rows,
+and explains the reset. Loading disables selection and Copy; a failed
+continuation clears the stale preview and offers **Reload choices**. Late
+replies cannot cross refresh, period, home/config or host-lifecycle boundaries.
+On the final page, keyboard focus moves from the disappearing Load more button
+to the first new checkbox. Focus-session choices keep their separate bounds.
+
+**One focus session.** In the sharing area, **Choose from → One focus session**
+lists up to 64 recorded sessions in the period, newest activity first. Selecting
+one offers only its direct activity as unchecked artifact-day choices. Select
+individual entries or **Select all shown**, then copy the exact preview, whose
+heading names the session. Summary-only days, untagged work, global Why context
+and container copies do not contribute. The same artifact used in another
+session contributes neither time nor title/URL context to this selection.
+
+The additive protocol-v8 `worklog_focus_choices` query carries the same dates
+and locked configuration revision, plus a nullable canonical version-4 session
+UUID. A null selection returns only the catalog; an unknown or outside-period
+ID returns no choices. The host selects activity by session ID before grouping
+artifact-days, using each matching day's newest event title/URL. A renamed
+session retains its ID; its highest recorded revision in this period names it,
+with an explicit name-change notice. Catalog and entry truncation are separate;
+an explicitly requested session remains readable even if its catalog entry was
+omitted. Entries reuse the 200-row/96-KiB limits, and capture gaps still describe
+the whole period. A missing selection, empty period, unavailable session and
+omitted sessions each have explicit text. Older hosts receive no broader-query
+fallback: rebuild the host and extension together to use the selector.
+
+Selections live only in the open panel. Session, sharing scope, period,
+configuration revision, home and host-exit changes invalidate the preview;
+policy-change signals invalidate it before the debounced configuration reload.
+A same-period delivery refresh retains
 selected artifact/day identities still shown, while newly arrived or returning
 rows stay unchecked. A focused choice regains focus after the refresh only if
 the user has not moved focus to another control. A period change, home-folder change or host-port exit
@@ -850,7 +898,7 @@ Input is either a slash command or free text.
 | `/log` | Log the current page now as a `web.page` artifact, on any HTTP(S) page, even if no adapter recognizes it (§5.1) |
 | free text | Built as the task bar (§5.7): sent to the agent with the page as context; the report shows in the panel; Brauser writes nothing |
 
-**Custom commands** are defined in config:
+**Reusable sidebar task commands** are built (2026-11-04) and defined in config:
 
 ```toml
 [[commands]]
@@ -859,15 +907,44 @@ description = "Extract action items from this page"
 prompt = """
 Extract action items from the page below. Return a markdown checklist.
 """
-include = ["page.content", "selection"]
-output = "sidebar"          # sidebar | new_note | clipboard
+output = "sidebar"
 ```
 
-No command writes agent output into a page note (§5.3), and only `/summarize` writes a page's summary file (§5.2). `new_note` creates a new Brauser-owned file and never replaces an existing one. To keep agent text in a page note, the user copies it from the sidebar. Config loading rejects `output = "page_note"`.
+The task bar's **Saved commands** disclosure loads a read-only host catalogue
+of names and descriptions. Choosing one and clicking **Insert command** adds
+`/name` before the current draft; only Enter or Run executes it. A typed `/name` with optional trailing
+text invokes that command; `//` escapes a literal leading slash. Unknown
+commands refuse instead of running as free text. The host checks the reviewed
+configuration revision, resolves the literal configured prompt and the page
+identity under one configuration lock, records a fixed command-name heading,
+and adds trailing user text under a fixed additional-request heading. A stale choice keeps the draft, refreshes
+the catalogue and needs another explicit Run. Page text and selection remain
+untrusted context in `page.md`; **Include this page** still controls attachment,
+including page-less tasks. Configured prompts gain no extra authority beyond
+an ordinary user task. Results use the existing **Tasks** report view; this
+first slice adds no new report renderer or file destination.
 
-Template variables: `{page.title}`, `{page.url}`, `{page.content}`, `{selection}`, `{input}`, `{date}`.
+This first slice accepts up to 32 commands with unique case-sensitive names
+matching `[a-z][a-z0-9_-]{0,31}`, descriptions of 1–256 characters, nonblank
+literal prompts up to 4096 characters and only `output = "sidebar"` (the
+default). Documented built-in names are reserved. Composition obeys the existing
+task instruction limit. Unsupported fields, outputs or documented template
+placeholders disable the whole command registry with a separate visible repair
+message; capture and ordinary tasks continue. Unrelated settings saves retain
+the raw command table, including invalid entries. The catalogue carries no
+prompt. Run history stores the effective instruction, and Reuse/recall escape
+a leading slash so a later command edit cannot change what they run.
 
-The free-text row is built as the task bar (2026-10-28, §4.5, §5.7). Slash commands and `[[commands]]` are still later; config does not read `[[commands]]` yet.
+Built-in slash actions in the table above, selective
+`include = ["page.content", "selection"]`, template variables
+(`{page.title}`, `{page.url}`, `{page.content}`, `{selection}`, `{input}`, `{date}`)
+and `new_note`/`clipboard` outputs remain planned under `brwr-cdq`. They are
+rejected rather than approximated in this slice. No command writes agent
+output automatically into a page note (§5.3); the existing explicit **Save to
+note** gesture remains separate. Only `/summarize` will write a summary file;
+a future `new_note` output must create a new owned file without replacing one.
+An older host refuses a config containing `[[commands]]`; remove those tables
+before rollback. Deploy both host and extension for command invocation.
 
 `/log` and notes are one-off actions the user takes on a single page and need no confirmation (§7). `/log` records the page as a `web.page` artifact: one `activity` event in the log, and an artifact file and index entry like any other artifact (§5.1). It does not enable automatic logging for the site.
 
@@ -1033,6 +1110,20 @@ Each run card shows the page title, the state with its elapsed time, the streame
 
 **Saved summaries (as built, PR 4; card layout 2026-11-02).** On the This page view, a **Summary** card heads the view and shows the page's saved summary: its overview as prose with type, category and importance chips, or "<type> · <category> · <importance> importance" for older records without an overview, and the summary's time ("09:14" today, "Mon 09:14" this week, else the date) with **Open summary**, whether or not an adapter recognizes the page; it comes from `get_artifact`'s `summary` (§6.2), is hidden for a page with none, and goes as soon as the panel follows another tab, so a line never shows for the wrong page. A recognized artifact whose history holds only summaries reads "No activity measured yet" instead of zero focus over zero days. A finished card whose run wrote a file adds **Open summary** (a failed save that wrote the file before the daily log refused or failed its event included, whether or not it offers Retry save), and a succeeded one, once one `get_artifact` call for the run's page answers, the same saved-summary line; a card that sees its run succeed also refreshes the page's own Summary line, since a summary event does not move the worker's delivery count; a failed call is retried once a poll interval later, and if that fails too only the line is left out. A summarized Recent row adds "Summarized · <overview> · <type>" ("Summarized · <type>, <importance> importance" for older records) and its own **Open summary**, named for its row ("Open summary: <title>") and placed beside the row's link, not inside it. The page and Recent **Open summary** buttons are disabled while the host is unreachable; the run card's is disabled only while one of the card's actions is running. Each sends `open_summary` with the page URL and the shown summary's own `summary_path` (the run's, for a card), so it opens the file that line, row, or run names even after the URL comes to resolve to another record (an adapter added or removed, or `strip_params` changed); the host opens only a file that is its own record's summary at that record's summary name. Each reports a failure as "Could not open the summary: …" where it was clicked; the agent's fields are set with `textContent` only.
 
+
+**Saved reading scope.** This page adds the same agent-reported reading label
+as the run card beside its saved-summary chips, including when there is no
+overview. Recent appends that label to its summary line. The host projects
+`SummaryView.read_scope` only from the optional typed `read_scope` in the
+summary log event, written from the validated answer by the service; it never
+infers coverage from the overview, capture truncation or a mutable summary
+file. Legacy events omit the label. The claim survives incremental indexing,
+cache reopen and log-only reindex. Interrupted older summary appends retain
+their exact prepared bytes and unknown scope. Deploy host and extension
+together; older hosts reject scoped event bodies in the format-9 cache and
+may fail history queries, and an older-host rebuild omits newer summary
+markers. Re-upgrade and reindex from the unchanged logs to recover that view.
+
 When the panel opens with a summary harness set up, it restores every queued or running summary and up to five summaries finished in the last day that were not dismissed (`list_runs` with `kind: "summary"`). The service filters by kind before applying its 20-run limit, so newer tasks and site drafts cannot crowd summaries out; task history likewise has its own filtered window. If an older host explicitly rejects the kind field, summary restore retries once without it and filters the legacy mixed list locally; that host still has its old shared window until rebuilt. With no harness set up it does not call `list_runs`, so opening the panel never starts the on-demand service. If the service cannot be reached then, the run area shows the setup instructions with **Open settings**.
 
 **Task bar (as built, 2026-10-28, §4.5, §5.6; task cards moved to the Tasks page, 2026-10-28, §5.7, §5.8).** A `#task-bar` section sits directly under the page area and above the This page/Recent tabs, so it shows on both tabs whenever the panel follows a tab. It holds a two-row text field (at most 4000 UTF-16 units), a round arrow **Run** button (named "Run task"; its "Run" label is visually hidden), **Tasks ↗** (reading "Tasks · N running ↗", N counting queued and running tasks, while any are active), a context line, a hint line, a visually hidden live line, and the task run area (`#task-run-area`), which now shows only a transient run line or a list-failure notice — no task card renders in the panel. Enter submits and Shift+Enter adds a newline; Enter during IME composition does nothing, and an instruction that is empty once cleaned sends nothing. Before sending, the extension makes the text well formed, turns control characters other than newline and tab into spaces and trims it; that cleaned text is what the agent gets and what Reuse shows. The context line reads "Uses this page: <title>", or "Uses this page and your selection: <title>" while the followed page has a selection (a one-boolean probe of the page, run only while an agent is ready, when the panel follows a page, when the field gets focus, on Run pointerdown and when the panel window gets focus); the selection is then sent with the page. The bar is shared by all tabs: a typed draft is kept when the panel follows another tab, the context line follows, and Enter takes the instruction and the then-current page together. The bar is only ever filled by the user's typing, Reuse or explicit keyboard recall of the service's stored task instructions, never from the page, the selection or agent text. While a start is in flight the button is disabled, its hidden label reads "Starting…", and the field is read-only. On success the bar clears and Tasks ↗ starts counting the new task; on failure the text stays and one warning line shows in the task run area for the starting tab only, mapped by error code: "Brauser could not read this page for a task." (never for an Office document page with no text, which starts its task; §4.5), "The page changed before it could be read. Run the task again.", "This page is too large to send with a task.", the service setup instructions, the host's `conflict` text, "Finish setup in Brauser settings to run tasks (home folder, knowledge base folder and agent)." or "Brauser's settings need repair before a task can run." (each with **Open settings**), "Rebuild the Brauser host to use the task bar." (an older host's "invalid or unsupported request JSON"), or "Could not start the task: …". When `start_task`'s answer is lost, the line instead reads "The task may have started — check Tasks before running it again.", the draft stays, and the panel lists tasks at once so a task the service queued anyway is picked up by Tasks ↗'s count. Lost means a port disconnect, the extension's timeout, `invalid_response`, the host's "The Brauser service stopped before answering…" (its `EXCHANGE_TIMEOUT` or a closed connection), or the host's "The Brauser service sent an unexpected reply."; definite refusals keep their text (decision 41). The summary and task run areas each own their own warning line. The one-time setup warning (§7.1) still shows before the first agent run of either kind, in the area that started it, under the `summarize_warning_seen_v2` flag.
@@ -1095,13 +1186,54 @@ Each state changes one area rather than the layout:
 | Brauser service unavailable | The service setup instructions and the host's reason show as the line of the summary or task that failed (in its own run area), or, when cards are restored, as one notice with **Open settings** in the task run area, which shows on both tabs. Notes and capture are unaffected. |
 | Not an HTTP(S) page | The page area says Brauser can't use the tab; only Read later is active. |
 
-Milestones fill the layout in: the page area, My note, and the capture strip first; the artifact card, the Recent tab, and the worklog view in M1.5a, and worklog files in M1.5b; Summarize & log with its run area and run cards in open access PR 3 (protocol v6); the summary file and log event in PR 4; the task bar, the Omnibar's free-text row, with its task cards on 2026-10-28; slash commands, custom commands and the answer card later; Related and Read later in M3; the full command list in M4.
+Milestones fill the layout in: the page area, My note, and the capture strip first; the artifact card, the Recent tab, and the worklog view in M1.5a, and worklog files in M1.5b; Summarize & log with its run area and run cards in open access PR 3 (protocol v6); the summary file and log event in PR 4; the task bar, the Omnibar's free-text row, with its task cards on 2026-10-28; reusable sidebar commands on 2026-11-04; built-in slash actions, richer custom commands and the answer card later; Related and Read later in M3; the full command list in M4.
 
 **Save a task report to a note (as built, `brwr-bsx`).** A succeeded page task with a nonempty retained report offers **Save to note** in its Tasks detail, beside Copy report. Clicking appends a Task report section to the source page's current host-resolved note, with the full instruction, finish time, report and a stable run-ID comment. The host fetches `get_run` itself; `save_task_note` supplies only a run ID and the config revision this Tasks page opened against. It accepts no URL, body or record key from the extension. Failed, canceled, unfinished and no-page tasks, summaries and missing reports cannot use this action. Viewing, polling or finishing a run never writes a note.
 
 The host waits for the service without holding a config lock, then locks and refreshes config and checks that revision, so changing the home folder or capture identity requires reloading Tasks before saving. It uses the same location-aware note resolver, ownership checks and version-checked atomic save as the editor. Existing note text, title, creation time and physical ownership remain; URL notes and artifact notes retain their ordinary separation. Simultaneous report appends serialize and each sees the latest note. An external edit during the append refuses through the note version check. A panel already editing an older note gets its ordinary conflict and recovery-copy behavior on its next save; no report save imports recovered text into an editor. The instruction uses `markdown::inline` and the report uses the shared scanner's `neutralize_note_append`, also rendering square brackets literally so report reference definitions cannot activate an earlier image or change a link in the user's note. Readable Markdown remains, with HTML, remote embeds and plugin code neutralized. An append over the existing note limit refuses whole, retaining the report for Copy.
 
 A retry after a lost answer recognizes the entire exact host-rendered report section already in the current note and acknowledges it without rewriting or duplicating it, including when the user has added text since. A run-ID comment alone is insufficient. If the user edits or removes that section, another explicit click may append it again. Errors keep the report visible and offer the same explicit action; there is no automatic retry. Save confirmation is a status message and keyboard focus returns to the action. The note persists independently of service-run retention; no task daily-log event or automatic note save is added.
+
+#### Task completion notifications
+
+Task notifications are optional and off by default. An explicit Settings
+button requests Chrome's optional `notifications` permission; turning it off
+clears monitoring and unread UI. It applies to tasks started afterward in this
+browser profile, including saved commands and tasks without a page. Summary
+and site-draft runs never produce these alerts.
+
+After page extraction and before `start_task`, the panel waits for the worker
+to persist a two-minute discovery intent and arm a one-minute alarm. This
+covers panel closure during the request, fast completions and a lost start
+answer. The existing start request UUID is generated before this handoff. The service
+retains it in the task status and optional `RunView.start_request_id`; discovery
+accepts only the matching request ID, never a timestamp-based guess. Tasks
+from another browser profile or concurrent window stay separate. The worker
+walks paginated task history for outstanding intents, retains watched run IDs, and then uses `get_run` for unfinished tasks after discovery
+expires. A failed or incomplete discovery retains the intent for retry. This
+independent chain never holds capture's serialized queue. Worker and browser
+restarts resume the local ledger; permission alone never polls the service.
+
+While any side panel is open, terminal outcomes wait for its observed-finish
+acknowledgement or closure. The panel's existing live announcement acknowledges
+a finish; an acknowledgement received during a slow poll suppresses delivery.
+A closed-panel finish raises one generic **Task finished**, **Task failed** or
+**Task canceled** notification, with no instruction, title or report. The
+ledger stores only IDs, outcomes, times and window IDs. Handling is persisted
+before Chrome creates the notification: interruption in that gap can lose a
+toast but retains its unread badge, and never repeats the toast on retry.
+
+Unread task completions appear as a blue action badge; capture pressure's
+amber **!** takes precedence. Opening the panel clears unread notifications.
+Clicking a notification synchronously opens a panel using its originating
+window, then opens or selects the report in Tasks (which also works if that
+window closed). The notification ID encodes only the window and run UUID, so
+Chrome's click gesture is used before any asynchronous storage lookup. No
+notification starts a task or saves a report. Instruction and report text
+never enter monitoring state or its diagnostics. Deploy the host and extension
+together: older extensions reject correlated task views, and older services
+cannot read correlated task status records. Roll back only with no active
+tasks, retaining the task-record downgrade rules above.
 
 ## 6. Data Format
 
@@ -1621,7 +1753,7 @@ is enforced; the full-access harness's tool restrictions remain prompt-level.
 This adds no wire, config or status field. An older service ignores the
 sidecar and uses its compiled defaults on rollback.
 
-**The answer.** The service trims the final text, strips one surrounding code fence, and requires one JSON object (unknown keys are ignored). Fields are checked in `SUMMARY.md` order. `overview` is one line of 1–300 characters; `key_points` keeps at most 10 distinct non-blank lines of up to 500 characters and needs at least one; type and category are 1–64 characters with no control characters, and so is each of at most 20 distinct `keywords` (later ones are dropped); each entity list keeps at most 32 distinct non-blank items of up to 128 characters; `metadata` values are `""` or one line of up to 200 characters, with at most 32 distinct authors; `references` keeps the first 20 titled entries (titles one line of up to 300 characters) and blanks an address that is not `http`/`https` or has whitespace; `read_scope` is `whole`, `partial` or `page_only`, and `access` is `ok`, `sign_in`, `denied` or `not_found` (an older record reads as `ok`; anything else saves nothing, §5.2 Auto-summary step 5, and the run view's optional `RunAnswer.access` carries it only then); `description` is 1–2000 characters, the importance reason 1–300, and `assessment` 1–4000; the level and `read_scope` are matched case-insensitively. The run view projects a known `read_scope` into optional `RunAnswer.read_scope` (`whole`, `partial` or `page_only`); legacy answers omit it. Deploy host and extension together because an older extension rejects the extra reply field. This projection changes no stored answer format. The run record keeps the normalized answer; a record written before `overview`, `key_points`, `keywords`, `metadata`, `references` and `read_scope` existed still reads, with those empty. An older host cannot read a newer record's answer (`deny_unknown_fields`), so after a rollback its run card shows no answer for runs the newer host finished. `related_notes` keeps at most 32 entries and silently drops any that is absolute, contains `..`, is missing, is not a regular file, or resolves outside the knowledge base. Every error names its field. An invalid answer, including an empty one, gets one repair turn; a second invalid answer fails the run as `invalid_output` and keeps the stream, and a repair turn that fails in the harness fails the run as `harness_failed`.
+**The answer.** The service trims the final text, strips one surrounding code fence, and requires one JSON object (unknown keys are ignored). Fields are checked in `SUMMARY.md` order. `overview` is one line of 1–300 characters; `key_points` keeps at most 10 distinct non-blank lines of up to 500 characters and needs at least one; type and category are 1–64 characters with no control characters, and so is each of at most 20 distinct `keywords` (later ones are dropped); each entity list keeps at most 32 distinct non-blank items of up to 128 characters; `metadata` values are `""` or one line of up to 200 characters, with at most 32 distinct authors; `references` keeps the first 20 titled entries (titles one line of up to 300 characters) and blanks an address that is not `http`/`https` or has whitespace; `read_scope` is `whole`, `partial` or `page_only`, and `access` is `ok`, `sign_in`, `denied` or `not_found` (an older record reads as `ok`; a fresh non-`ok` answer must have `read_scope: page_only`, otherwise it is contradictory and follows the invalid-answer correction/failure path; a valid wall answer saves nothing, §5.2 Auto-summary step 5, and the run view's optional `RunAnswer.access` carries it only then); `description` is 1–2000 characters, the importance reason 1–300, and `assessment` 1–4000; the level and `read_scope` are matched case-insensitively. The run view projects a known `read_scope` into optional `RunAnswer.read_scope` (`whole`, `partial` or `page_only`); legacy answers omit it. Deploy host and extension together because an older extension rejects the extra reply field. This projection changes no stored answer format. The run record keeps the normalized answer; a record written before `overview`, `key_points`, `keywords`, `metadata`, `references` and `read_scope` existed still reads, with those empty. An older host cannot read a newer record's answer (`deny_unknown_fields`), so after a rollback its run card shows no answer for runs the newer host finished. `related_notes` keeps at most 32 entries and silently drops any that is absolute, contains `..`, is missing, is not a regular file, or resolves outside the knowledge base. Every error names its field. An invalid answer, including an empty one, gets one repair turn; a second invalid answer fails the run as `invalid_output` and keeps the stream, and a repair turn that fails in the harness fails the run as `harness_failed`.
 
 **Environment and auth.** A run gets the service's environment overlaid with `agent.env`, read at the start of every run (§14). Codex needs nothing there; a Claude Code on Bedrock user puts `CLAUDE_CODE_USE_BEDROCK`, `AWS_PROFILE`, and `AWS_REGION` there. Settings lists the file's names, never its values (`get_agent_env`), and **Reveal agent.env in Finder** creates it at mode 0600 if missing and reveals it (`open_path`).
 
@@ -1823,7 +1955,7 @@ M1 validation status and the dated M1 smoke and acceptance records: (history: [d
    2. **PR 2, the service skeleton: built on `feat/agent-service-pr2`.** **[human]** checks still to run: register the dev build and close Chrome; run `start_run` from the panel console; confirm `launchctl print gui/$UID/com.rauser.brauser.service` shows the service and that it exits after 10 idle minutes; confirm `agent.env` values reach a run; confirm a rebuild plus a request restarts the service. The `agent.env` check needs a run that actually starts, which PR 3's real runners now provide. (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
    3. **PR 3, real runners, extraction, and the run card: merged (#98).** **[human]** checks still to run: a real Codex and a real Claude Code summary from the dev build, and **Open in Codex** opening the thread in Codex Desktop (TESTING.md "Real-UI acceptance"). (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
    4. **PR 4, the summary file, the `summary` log event, and index integration: built on `feat/summary-outputs-pr4`.** Its planned **[human]** check of the neutralized constructs in Obsidian and VS Code preview was dropped by John on 2026-11-02 (§5.2 step 6). (history: [docs/history.md §12.2](docs/history.md#122-next-steps--history))
-11. **The task bar (2026-10-28): built on `feat/task-bar`** (plan `docs/superpowers/plans/2026-10-28-task-bar.md`; §4.5, §5.6, §5.7). The free-text row of the Omnibar runs a task through the service, with its own run cards. **[human]** checks still to run: a real Codex and a real Claude Code task, Cancel mid-run, the hostile-page and spoofed-heading canaries, and a look at the logs (TESTING.md "Real-UI acceptance"). Next: completion notifications while the panel is closed (the `notifications` permission and a worker alarm), then slash commands with `[[commands]]`. Keyboard/context-menu entry and instruction recall are built (§5.7).
+11. **The task bar (2026-10-28): built on `feat/task-bar`** (plan `docs/superpowers/plans/2026-10-28-task-bar.md`; §4.5, §5.6, §5.7). The free-text row of the Omnibar runs a task through the service, with its own run cards. **[human]** checks still to run: a real Codex and a real Claude Code task, Cancel mid-run, the hostile-page and spoofed-heading canaries, and a look at the logs (TESTING.md "Real-UI acceptance"). Optional completion notifications while the panel is closed are built (§5.7). Next: built-in slash actions and richer custom commands; literal sidebar `[[commands]]` are built (§5.6). Keyboard/context-menu entry and instruction recall are built (§5.7).
 
 ## 13. Platforms and License
 
@@ -1873,7 +2005,7 @@ Task bar decisions (2026-10-28, decided autonomously by the orchestrating agent 
 - **The user's request is the directive; the page is untrusted context** (§4.5): fenced request, page by path only, page steps only when the request asks, protected Brauser locations named in the prompt and failing closed when unknown, prompt-level only.
 - **One task slot, four active, no joining**, so a long task never starves summaries.
 - **Free-text report, nothing written**, with a task-specific repair turn and no Codex `outputSchema`.
-- **Placement and gestures** (§5.7): the bar sits under the page area on both tabs, Enter submits, there are no Chrome notifications in this cut, and the bar is never pre-filled from page or agent text.
+- **Placement and gestures** (§5.7): the bar sits under the page area on both tabs, Enter submits, Chrome notifications are optional and off by default (§5.7 Task completion notifications), and the bar is never pre-filled from page or agent text.
 - **Diagnostics never carry the instruction or the report** (§15).
 
 The 2026-10-27 home folder decision (one home folder, fixed layout, moved once), now stated in §6.1: (history: [docs/history.md §14](docs/history.md#14-open-questions--history))
@@ -1975,6 +2107,19 @@ Brauser keeps local diagnostics so a failure can be followed after the fact: str
 | `origin` | a page's origin, the only form of a URL in a log |
 
 **Levels.** `error`: something failed that the user will notice. `warn`: degraded but continued (what was an `eprintln!` warning). `info`: one line per request and per run lifecycle step. `debug`: detail, such as batch internals. The info volume stays modest: one line per capture or visit request, never one per event in a batch.
+
+**Index contention.** A SQLite busy or locked error that escapes an index
+boundary logs one `warn` event, `index contention exhausted`, before the
+existing caller error is returned. It carries `operation` (open, schema,
+replace, empty, read or write), `phase` (connect, configure, identity, wal,
+delete_journal, begin, statement, commit, query_only or reset), `sqlite_code`,
+the numeric `sqlite_extended_code`, `elapsed_ms` for that boundary including
+retries, and `attempts` including the first attempt. BEGIN acquisition and WAL
+switches count their actual attempts; other boundaries run once. Already
+mapped errors are not logged again. A read may subsequently serve its
+committed snapshot, so this event records exhausted contention at a boundary,
+not necessarily a failed protocol request. The existing request/process spans
+provide correlation. Retries and caller-visible wording are unchanged.
 
 **stderr.** Warnings and errors are also written to stderr as plain text, as before the files existed: Chrome's log for the host, and launchd's `~/Library/Logs/Brauser/service.log` for the development service (§3.2).
 

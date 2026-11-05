@@ -45,6 +45,14 @@ test("recall reads the full stored instruction lazily and preserves draft and pe
   assert.equal(requests.filter((r) => r.type === "get_run").length, 2, "edited slots need no re-fetch");
 });
 
+test("recall escapes stored leading slashes and preserves edited literal drafts", async () => {
+  const { recall } = world([{ runs: [run(1)], more: false }], () => ({ ...run(1), instruction: "/actions stored prompt" }));
+  assert.equal(await recall.move(1, "My draft"), "//actions stored prompt");
+  recall.edited();
+  assert.equal(await recall.move(-1, "//actions my edit"), "My draft");
+  assert.equal(await recall.move(1, "My draft"), "//actions my edit");
+});
+
 test("recall pages only on demand, deduplicates active/finished IDs and cursors unfiltered terminal rows", async () => {
   const active = run(1, { state: "running" });
   const summary = run(2, { kind: "summary" });

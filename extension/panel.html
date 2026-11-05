@@ -137,6 +137,14 @@
             placeholder="Tell the agent what to do…"></textarea>
           <button id="task-run" type="submit" class="run-button" aria-label="Run task" title="Run task"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span id="task-run-label" class="visually-hidden">Run</span></button>
         </form>
+        <details id="task-commands" class="task-command-options">
+          <summary>Saved commands</summary>
+          <label for="task-command">Insert a saved command</label>
+          <select id="task-command" aria-describedby="task-command-status" disabled><option value="">Choose a command…</option></select>
+          <button id="task-command-insert" type="button" class="secondary compact" disabled>Insert command</button>
+          <button id="task-command-refresh" type="button" class="secondary compact">Refresh commands</button>
+          <p id="task-command-status" class="page-url">Open to load commands from config.toml.</p>
+        </details>
         <label class="task-page-choice"><input id="task-use-page" type="checkbox" checked> Include this page</label>
         <div class="task-meta">
           <p id="task-context" class="task-context"></p>
@@ -246,6 +254,15 @@
             <label for="recent-type" class="visually-hidden">Type</label>
             <select id="recent-type"><option value="">All types</option></select>
           </div>
+          <div class="recent-reading-filter">
+            <label for="recent-reading">Saved summary reading</label>
+            <select id="recent-reading">
+              <option value="">All activity</option>
+              <option value="limited">Limited reading</option>
+              <option value="whole">Whole artifact</option>
+              <option value="unknown">Unknown reading</option>
+            </select>
+          </div>
           <p id="recent-status" class="page-url"></p>
           <div id="recent-list" class="recent-list"></div>
         </section>
@@ -262,12 +279,23 @@
           <label class="check-label"><input id="worklog-curate" type="checkbox"> Choose work to share</label>
           <div id="worklog-choices-area" hidden>
             <p class="page-url">Selected work includes only checked entries. Container entries show direct activity, without work inside them. Choices last while this panel is open.</p>
+            <label for="worklog-share-scope">Choose from</label>
+            <select id="worklog-share-scope">
+              <option value="entries">All recorded work</option>
+              <option value="focus">One focus session</option>
+            </select>
+            <div id="worklog-focus-area" hidden>
+              <label for="worklog-focus-session">Recorded focus session</label>
+              <select id="worklog-focus-session"><option value="">Choose a session…</option></select>
+              <p id="worklog-focus-status" role="status"></p>
+            </div>
             <div class="note-header">
               <button id="worklog-select-all" type="button" class="secondary" disabled>Select all shown</button>
               <button id="worklog-clear" type="button" class="secondary" disabled>Clear</button>
             </div>
             <p id="worklog-selection-status" role="status"></p>
             <fieldset id="worklog-choices" class="worklog-choices"><legend>Work to include</legend></fieldset>
+            <button id="worklog-more" type="button" class="secondary" aria-controls="worklog-choices" hidden>Load more work</button>
           </div>
           <aside id="worklog-gaps" hidden aria-live="polite">
             <p id="worklog-gap-status"></p>

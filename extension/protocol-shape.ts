@@ -1,6 +1,7 @@
 /** Runtime shape checks for host responses. The generated types describe the
  * protocol, but a native host is a separate process and its JSON is checked
  * before the extension trusts it. */
+import { isFocusSession } from "./focus-session.js";
 
 const ERROR_CODES: ReadonlySet<string> = new Set([
   "invalid_request", "unsupported_protocol_version", "invalid_config", "not_configured",
@@ -136,7 +137,7 @@ const RUN_VIEW_KEYS: readonly string[] = [
 ];
 /** The additive v7 and v8 `RunView` keys an older service's view omits.
  * `instruction` and `task_report` belong to task views only. */
-const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page"];
+const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page", "start_request_id"];
 const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft", "task"]);
 
 /** A task view carries its instruction as a string, and its report as a
@@ -197,6 +198,8 @@ export function isRunView(value: unknown): boolean {
   if (Object.hasOwn(run, "kind") && !(typeof run.kind === "string" && RUN_KINDS.has(run.kind))) return false;
   if (!taskKeysFit(run)) return false;
   if (Object.hasOwn(run, "no_page") && (run.kind !== "task" || typeof run.no_page !== "boolean")) return false;
+  if (Object.hasOwn(run, "start_request_id") && (run.kind !== "task" ||
+      typeof run.start_request_id !== "string" || run.start_request_id.length === 0 || Array.from(run.start_request_id).length > 128)) return false;
   if (Object.hasOwn(run, "site_draft") && run.site_draft !== null && !isSiteDraftAnswer(run.site_draft)) {
     return false;
   }
@@ -267,7 +270,7 @@ function isArtifact(value: unknown): boolean {
     artifact.incoming_trails.every(isIncomingTrail);
 }
 
-/** The required summary keys; older events carry no overview. */
+/** The required summary keys; older events carry no overview or scope. */
 const SUMMARY_VIEW_KEYS: readonly string[] = [
   "summarized_at", "document_type", "category", "importance", "summary_path", "harness",
 ];
@@ -276,8 +279,11 @@ export function isSummaryView(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const summary = value as Record<string, unknown>;
   const hasOverview = Object.hasOwn(summary, "overview");
-  return hasExactKeys(summary, hasOverview ? [...SUMMARY_VIEW_KEYS, "overview"] : SUMMARY_VIEW_KEYS) &&
+  const hasScope = Object.hasOwn(summary, "read_scope");
+  return hasExactKeys(summary, [...SUMMARY_VIEW_KEYS,
+    ...(hasOverview ? ["overview"] : []), ...(hasScope ? ["read_scope"] : [])]) &&
     (!hasOverview || isOverview(summary.overview)) &&
+    (!hasScope || (typeof summary.read_scope === "string" && ANSWER_READ_SCOPES.has(summary.read_scope))) &&
     typeof summary.summarized_at === "string" && typeof summary.document_type === "string" &&
     typeof summary.category === "string" &&
     typeof summary.importance === "string" && IMPORTANCE_LEVELS.has(summary.importance) &&
@@ -523,8 +529,25 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&
         typeof value.text === "string" && isUnsignedInteger(value.artifact_count);
     case "worklog_choices_result":
-      return typeof value.start_date === "string" && typeof value.end_date === "string" &&
+      return (!Object.hasOwn(value, "page") || isWorklogChoicesPage(value.page)) &&
+        typeof value.start_date === "string" && typeof value.end_date === "string" &&
         Array.isArray(value.choices) && value.choices.length <= 200 && value.choices.every(isWorklogChoice) &&
+        typeof value.truncated === "boolean" && typeof value.gaps_truncated === "boolean" &&
+        Array.isArray(value.gaps) && value.gaps.length <= 32 && value.gaps.every(isOverflowMarker);
+    case "worklog_focus_choices_result":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "start_date", "end_date",
+        "focus_session_id", "sessions", "sessions_truncated", "selected_session", "name_changed",
+        "choices", "truncated", "gaps", "gaps_truncated"]) &&
+        typeof value.start_date === "string" && typeof value.end_date === "string" &&
+        (value.focus_session_id === null || typeof value.focus_session_id === "string" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.focus_session_id)) &&
+        Array.isArray(value.sessions) && value.sessions.length <= 64 && value.sessions.every(isFocusSession) &&
+        new Set(value.sessions.map((session) => session.id)).size === value.sessions.length &&
+        typeof value.sessions_truncated === "boolean" && typeof value.name_changed === "boolean" &&
+        (value.selected_session === null || isFocusSession(value.selected_session) &&
+          value.selected_session.id === value.focus_session_id) &&
+        Array.isArray(value.choices) && value.choices.length <= 200 && value.choices.every(isWorklogChoice) &&
+        (value.selected_session !== null || value.choices.length === 0) &&
         typeof value.truncated === "boolean" && typeof value.gaps_truncated === "boolean" &&
         Array.isArray(value.gaps) && value.gaps.length <= 32 && value.gaps.every(isOverflowMarker);
     case "worklog_reported":
@@ -539,6 +562,19 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "harnesses_discovered":
       return Array.isArray(value.harnesses) && value.harnesses.length <= 2 &&
         value.harnesses.every(isHarnessFound);
+    case "task_commands_listed":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "revision", "commands", "issue"]) &&
+        isBoundedString(value.revision, 128, 1) &&
+        (value.issue === null || isBoundedString(value.issue, 1024)) &&
+        Array.isArray(value.commands) && value.commands.length <= 32 &&
+        value.commands.every((command: unknown) => {
+          if (typeof command !== "object" || command === null || Array.isArray(command)) return false;
+          const entry = command as Record<string, unknown>;
+          return hasExactKeys(entry, ["name", "description"]) &&
+            typeof entry.name === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(entry.name) &&
+            typeof entry.description === "string" && entry.description.length > 0 &&
+            Array.from(entry.description).length <= 256;
+        }) && new Set(value.commands.map((command: { name: string }) => command.name)).size === value.commands.length;
     case "run_started":
       return isRunView(value.run) && typeof value.existing === "boolean";
     case "auto_summary_skipped":
@@ -574,6 +610,16 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     default:
       return false;
   }
+}
+
+function isWorklogChoicesPage(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const page = value as Record<string, unknown>;
+  const offset = (value: unknown): boolean => isUnsignedInteger(value) && (value as number) <= 0xffffffff;
+  return hasExactKeys(page, ["snapshot", "offset", "next_offset", "omitted"]) &&
+    typeof page.snapshot === "string" && /^[a-f0-9]{64}$/.test(page.snapshot) && offset(page.offset) &&
+    (page.next_offset === null || offset(page.next_offset) && (page.next_offset as number) > 0) &&
+    typeof page.omitted === "boolean";
 }
 
 function isWorklogChoice(value: unknown): boolean {

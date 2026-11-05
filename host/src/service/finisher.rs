@@ -245,6 +245,7 @@ impl RunFinisher for SummaryFinisher {
             .ok_or_else(|| SaveFailure::retry_after_write(INDEX_UNAVAILABLE, &written))?;
         let summary = PageSummary {
             overview: (!answer.overview.is_empty()).then(|| answer.overview.clone()),
+            read_scope: answer.read_scope,
             event_id: run.run_id.clone(),
             url: run.url.clone(),
             title,
@@ -902,6 +903,7 @@ mod tests {
         let mut status = run(world, PAGE, HarnessId::Codex);
         status.kind = RunKind::Task;
         status.task = Some(super::super::record::TaskStatus {
+            start_request_id: None,
             no_page: false,
             instruction: "Make a list of the links on this page.".into(),
             protected: vec![world.root.join("notes").display().to_string()],
@@ -1100,6 +1102,37 @@ mod tests {
         assert_eq!(summary.summary_path, slash(&relative));
     }
 
+    #[test]
+    fn saved_scope_comes_from_the_validated_answer_not_the_capture_limit() {
+        use crate::answer::ReadScope;
+        for scope in [
+            None,
+            Some(ReadScope::Whole),
+            Some(ReadScope::Partial),
+            Some(ReadScope::PageOnly),
+        ] {
+            let world = World::new();
+            let mut run = run(&world, PAGE, HarnessId::Codex);
+            run.capture_truncated = true;
+            let mut result = answer();
+            if let Some(scope) = scope {
+                result["read_scope"] = scope.as_str().into();
+            } else {
+                result.as_object_mut().unwrap().remove("read_scope");
+            }
+            world.finisher().save(&run, &result).unwrap();
+            let events = world.summary_events();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].read_scope, scope);
+            let view = world
+                .index()
+                .summary_for(&events[0].artifact_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(view.read_scope, scope.map(Into::into));
+        }
+    }
+
     /// A sign-in, no-access or not-found wall is never saved: no summary
     /// file, no log event, no index row, so the page stays unsummarized.
     #[test]
@@ -1109,7 +1142,9 @@ mod tests {
             let run = run(&world, PAGE, HarnessId::Codex);
             let mut wall = answer();
             wall["access"] = serde_json::json!(access);
-            let saved = world.finisher().save(&run, &wall).unwrap();
+            wall["read_scope"] = serde_json::json!("page_only");
+            let accepted = world.finisher().accept(&run, &wall.to_string()).unwrap();
+            let saved = world.finisher().save(&run, &accepted).unwrap();
             assert_eq!(saved.summary_path, None, "{access}");
             assert_eq!(saved.written_key, run.start_key, "{access}");
             assert!(

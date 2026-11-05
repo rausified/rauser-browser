@@ -82,6 +82,25 @@ fn task_view() -> Value {
 }
 
 #[test]
+fn task_start_request_correlation_round_trips_in_list_and_fetch_views() {
+    let mut view = task_view();
+    view["start_request_id"] = json!("00000000-0000-4000-8000-000000000071");
+    assert_response_round_trips("RunFetched", &run_fetched(view.clone()));
+    assert_response_round_trips(
+        "RunsListed",
+        &json!({
+            "type": "runs_listed", "protocol_version": 8, "request_id": "list",
+            "runs": [view], "more": false,
+        }),
+    );
+    for invalid in [json!(null), json!(42), json!(""), json!("x".repeat(129))] {
+        let mut bad = task_view();
+        bad["start_request_id"] = invalid;
+        assert!(!schema_subset::valid("RunView", &bad));
+    }
+}
+
+#[test]
 fn tasks_without_a_page_round_trip_without_changing_legacy_tasks() {
     let mut value = start_task();
     for key in ["url", "title", "content"] {
@@ -338,4 +357,30 @@ fn run_kind_accepts_task() {
     assert!(schema_subset::valid("RunKind", &json!("task")));
     assert!(!schema_subset::valid("RunKind", &json!("chat")));
     assert!(serde_json::from_value::<RunKind>(json!("chat")).is_err());
+}
+
+#[test]
+fn task_command_catalogues_expose_descriptors_and_revision_without_prompts() {
+    assert_request_round_trips(
+        "ListTaskCommandsRequest",
+        &json!({
+            "type":"list_task_commands", "protocol_version":8, "request_id":"commands",
+        }),
+    );
+    let catalogue = json!({
+        "type":"task_commands_listed", "protocol_version":8, "request_id":"commands",
+        "revision":"current", "commands":[{"name":"actions", "description":"Extract actions"}], "issue":null,
+    });
+    assert_response_round_trips("TaskCommandsListed", &catalogue);
+    let mut forged = catalogue.clone();
+    forged["commands"][0]["prompt"] = json!("caller instruction");
+    assert!(serde_json::from_value::<Response>(forged.clone()).is_err());
+    assert!(!schema_subset::valid("TaskCommandsListed", &forged));
+    let mut invocation = start_task();
+    invocation["instruction"] = json!("/actions Focus on today");
+    invocation["command_revision"] = json!("current");
+    assert_request_round_trips("StartTaskRequest", &invocation);
+    invocation["command_revision"] = json!(123);
+    assert!(serde_json::from_value::<Request>(invocation.clone()).is_err());
+    assert!(!schema_subset::valid("StartTaskRequest", &invocation));
 }

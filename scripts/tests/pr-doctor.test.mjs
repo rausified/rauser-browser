@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ipcDenied } from "./ipc-guard.mjs";
+import { quietGitEnv } from "./git-test-env.mjs";
 import { spawnSync as spawnSyncTop } from "node:child_process";
 
 import {
@@ -142,19 +144,27 @@ test("adopt syncs only when the doctor may push, and checks against a given fram
 // files, so GitHub reports a modify/delete conflict. The doctor applies the
 // edits through bd, moves the backlog prose into the frame, and drops the
 // files. Needs bd; skipped where it is not installed.
-const hasBd = spawnSyncTop("bd", ["version"]).status === 0;
-test("tryRepair applies a PR's queue edits through bd and drops the files", { skip: process.platform === "win32" || !hasBd }, () => doctorRepair({ conflicting: false }));
-test("tryRepair refuses, naming the bead and field, when the database changed a field the PR also changed", { skip: process.platform === "win32" || !hasBd }, () => doctorRepair({ conflicting: true }));
+test("tryRepair applies a PR's queue edits through bd and drops the files", { skip: process.platform === "win32" }, (t) => doctorRepair(t, { conflicting: false }));
+test("tryRepair refuses, naming the bead and field, when the database changed a field the PR also changed", { skip: process.platform === "win32" }, (t) => doctorRepair(t, { conflicting: true }));
 
-async function doctorRepair({ conflicting }) {
+async function doctorRepair(t, { conflicting }) {
+  if (await ipcDenied(t, "child-pipe")) return;
   const { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join, dirname } = await import("node:path");
   const { spawnSync } = await import("node:child_process");
+  const version = spawnSync("bd", ["version"], { encoding: "utf8" });
+  if (version.error?.code === "ENOENT") {
+    t.skip("needs bd (beads) installed");
+    return;
+  }
+  if (version.error) throw version.error;
+  assert.equal(version.status, 0, version.stdout + version.stderr);
   const { fileURLToPath } = await import("node:url");
   const scripts = join(dirname(fileURLToPath(import.meta.url)), "..");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pr-doctor-queue-")));
-  const identity = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com", BD_NON_INTERACTIVE: "1" };
+  // Background git maintenance off in every scratch repo (git-test-env.mjs).
+  const identity = quietGitEnv({ GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com", BD_NON_INTERACTIVE: "1" });
   const saved = { ...process.env };
   const cwd = process.cwd();
   const run = (cmd, dir, ...args) => {
@@ -244,3 +254,11 @@ async function doctorRepair({ conflicting }) {
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("scratch-repo git env turns background maintenance off and keeps existing entries", () => {
+  const env = quietGitEnv({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "!echo" });
+  assert.equal(env.GIT_CONFIG_COUNT, "4");
+  assert.equal(env.GIT_CONFIG_KEY_0, "credential.helper");
+  const pairs = Object.fromEntries([1, 2, 3].map((i) => [env[`GIT_CONFIG_KEY_${i}`], env[`GIT_CONFIG_VALUE_${i}`]]));
+  assert.deepEqual(pairs, { "maintenance.auto": "false", "gc.auto": "0", "gc.autoDetach": "false" });
+});

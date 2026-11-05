@@ -1478,3 +1478,235 @@ still read process-recovery information and use their defaults on rollback.
 Offline reader, setup, storage, prompt and in-process harness tests exercise the
 feature; no real model was called. `brwr-myn8` proposes a settings preview so
 users can validate guidance before launching a summary.
+
+
+## 2026-11-04 — Repair subprocess tests in restricted workspaces
+
+The overnight health check found that the starter-generator CLI fixtures and
+PR-doctor scratch-repository integrations treated denied child-process pipes
+as application failures. Those cases now start with the existing shared IPC
+probe, before making fixtures or checking for optional tools. A sandbox denial
+produces an explicit skip; CI's required-IPC mode still fails the same cases,
+so this does not turn an unavailable integration into a passing verification.
+All pure validation, rendering and conflict-resolution checks continue to run.
+The focused real-denial and simulated-denial runs each execute 26 pure cases
+and explicitly skip 21 integrations; strict simulated denial fails all 21
+integrations with no skips. Application behavior and capture identity rules
+are unchanged. The independent driver must exercise the integrations with IPC
+available before publication.
+## 2026-11-04 — Keep subprocess health checks honest in the sandbox
+
+The overnight health check caught two newly added script suites treating denied
+child-process pipes as application failures. Starter-generator checks received
+empty diagnostic output, while PR-doctor's scratch queue integration failed
+with `spawnSync git EPERM`. Both suites now use the repository's shared IPC
+probe before starting subprocess fixtures. Their 23 pure unit tests still run;
+13 subprocess cases visibly skip when the sandbox denies pipes. The strict
+CI flag turns that same denial into failure, leaving all original integration
+assertions in place for the driver's unsandboxed gate. PR-doctor now checks
+whether bd is installed after the probe and reports a broken installed tool
+as an error. This was a health-only repair; no Re-learn migration or product
+behavior was enabled.
+
+## 2026-11-04 — Give contending index writers their full wait budget
+
+Brauser now gives an index writer the intended ten seconds to acquire its
+SQLite write lock even when SQLite immediately reports contention instead of
+waiting internally. Previously three quick retries could abandon the attempt
+in roughly a quarter second, making history appear unavailable while another
+writer was about to finish. A real database test reproduced that failure with
+a writer releasing its lock after 400 ms. The fix uses one total deadline,
+limits every internal wait and retry pause to what remains, and restores the
+connection's original timeout afterward. It never repeats a transaction body,
+so a successful write still happens once. The independently reproduced defect
+is tracked as `brwr-rx0s`; the original Windows concurrency investigation
+`brwr-epl1` stays open until its Windows stress acceptance is established.
+
+## 2026-11-04 — Surface contradictory summary reading claims
+
+Brauser now catches an agent that claims to have read a whole or partial
+artifact while also reporting a sign-in, permission or not-found wall. Those
+answers previously ended as successful runs that quietly saved nothing,
+hiding the contradiction. Fresh answers now receive the existing single
+correction turn with a clear explanation; a repeated contradiction fails the
+run visibly as invalid output. A wall reported with page-only reading still
+succeeds without creating a summary, log event or index entry, leaving the
+artifact eligible for a later summary. The compiled summary instructions now
+state the same rule. Stored older answers remain readable, and no protocol
+or migration behavior changes. Offline regression coverage exercises all six
+contradictions, all valid wall types, correction success and ordinary readable
+artifacts through the parser and actual summary finisher.
+
+## 2026-11-04 — Keep index bounds independent of runner speed
+
+The year-scale index tests now judge deliveries by the work they perform:
+events loaded, rows written, group derives, transactions, log bytes read and
+whether database or artifact files were replaced. They still compare the
+result with a full rebuild and print elapsed times. A correctly bounded
+Windows delivery had taken 12 seconds on a loaded runner, failing a three
+second ceiling despite updating only 16 rows. Removing those timing ceilings
+lets the tests distinguish actual unbounded work from slow infrastructure.
+The two reported held-lock tests likewise retain their exact one-wait and
+Busy/snapshot assertions without an elapsed-time upper bound. Windows CI
+remains the final platform acceptance for brwr-gxag.
+
+## 2026-11-04 — Identify the database boundary that exhausts contention
+
+Index contention logs now name the operation and phase that failed, the
+SQLite primary and extended codes, elapsed milliseconds and actual attempts.
+An operator can distinguish connection setup, schema creation, WAL switching,
+BEGIN acquisition, statement execution and commit instead of receiving only
+the shared unavailable-history error. Caller errors and lock retry behavior
+are preserved, and errors already translated at an inner boundary are not
+logged twice. Real SQLite locks verify setup, BEGIN, WAL and commit behavior;
+read/write body tests retain extended codes, and successful or unrelated
+operations add no contention event. The Windows stress harness now preserves
+these fields in each child's JSON result and prints them on failure, including
+when a read recovered by serving its snapshot. A local test exercises that
+persistence path without spawning a child. This completes the diagnostic
+implementation for brwr-bszr; it does not identify or fix brwr-epl1's Windows
+root cause or restore held PR #310's separate retry-budget change.
+
+## 2026-11-04 — Share one recorded focus session
+
+Recent now lets you share a deliberate work block instead of an entire day of
+activity on the same artifact. Turn on **Choose work to share**, choose **One
+focus session**, pick a recorded session and check the entries to include (or
+use **Select all shown**). The preview names the session and Copy receives
+exactly its displayed text. Brauser selects the session's recorded activity
+before combining artifact-days, so time, page titles and URLs from another
+session or untagged work do not slip into the result. Renames keep the same
+session identity, and empty, unavailable or shortened choices are explained.
+Capture gaps remain notices about the whole period. Settings changes and late
+host replies invalidate the old preview immediately. This uses existing local
+history, with no agent call or new capture; deploy the host and extension
+together for the new read-only query. Validation and driver handoff details are
+recorded in the implementation plan and overnight cycle log.
+
+
+## 2026-11-04 — Show how much a saved summary's agent read
+
+Recent and This page now show whether the agent read the whole artifact,
+part of it, or only its browser page. The label sits beside the saved summary,
+so a polished overview no longer hides limited reading after the run card is
+gone. It uses the same wording as Tasks and appears even when there is no
+overview. The service records the validated answer's scope in the summary log
+event; history reads that event, so cache rebuilding preserves the claim and
+never guesses coverage from text or capture length. Older summaries keep
+unknown scope and no label. Recovery restores interrupted older appends
+byte-for-byte. This needs the host and extension deployed together; older
+hosts cannot provide a complete history view after scoped events are written.
+
+## 2026-11-04 — Run reusable task commands from the task bar
+
+Brauser can now keep repeatable workflows as named instructions in
+`[[commands]]` in its local configuration. Open **Saved commands** in the task
+bar to review their names and descriptions. Choosing one and clicking **Insert command** adds its slash
+name before your current draft; pressing Enter or Run is still the action that
+starts the agent. For example, `/actions Focus on this week's decisions` uses
+your saved action-extraction instruction with that extra request. The normal
+page checkbox, task runner, progress, report and explicit Save to note flow
+continue to apply, including tasks with no attached page.
+
+The native host resolves the instruction and page identity under the same
+configuration lock, checks the command revision and keeps page text solely as
+untrusted context. A changed command leaves the draft intact and requires a
+fresh Run. History keeps the effective instruction, so Reuse and recall do
+not silently switch to a newer recipe; literal leading slashes are escaped.
+Only literal prompts and sidebar reports are supported in this first slice.
+Unsupported templates, selective context and output destinations produce a
+separate repair message without blocking ordinary tasks or erasing the raw
+command table on unrelated settings saves. Built-in slash actions and a
+Settings command editor remain follow-up work.
+
+
+## 2026-11-05 — Find summaries that need a fuller reading
+
+Recent now has a **Saved summary reading** selector alongside its existing
+title and type filters. Choose **Limited reading** to find summaries whose
+agent read part of the artifact or only its browser page, **Whole artifact**
+to find whole readings, or **Unknown reading** to review saved summaries that
+predate recorded coverage. **All activity** keeps the original list, including
+days without summaries. The selector searches recorded history and starts no
+agent, so reviewing a limited reading never silently reruns a summary.
+
+The host classifies each artifact day's latest displayed summary before
+applying its response cap. This keeps older matching summaries discoverable
+behind many newer nonmatching days, while a newer full reading replaces an
+earlier limited claim for that day. Unknown never implies full reading and
+never includes unsummarized activity. Changing the selector clears old rows;
+late replies cannot restore results for a previous selection. The protocol
+field is optional, so All activity still works with older hosts; a filtered
+request gives rebuild guidance there. The implementation reuses the existing
+index and summary ordering with no cache or content migration. Offline checks
+cover ties, unreadable summary timestamps, replay, mixed history and stale
+panel replies; real-browser keyboard verification remains with the external
+gate because Chromium cannot start in this sandbox.
+
+
+## 2026-11-05 — Notify when tasks finish outside the panel
+
+Task notifications can now be enabled in Settings, so you can leave an agent
+working and return when it finishes. Chrome asks for an optional notification
+permission; it stays off until you choose to enable it. With the panel closed,
+a task produces a generic finished, failed or canceled alert and an unread
+count on Brauser's toolbar badge. Clicking the alert opens the panel and the
+selected report in Tasks. Capture warnings keep priority over the unread
+count, and reopening the panel clears the alerts.
+
+The worker records a start intent before the task request leaves the panel.
+The service retains that request's ID, so monitoring can find the exact run
+even if the panel closes during startup or its answer is lost. This also
+keeps concurrent windows and browser profiles from picking up each other's
+tasks. Monitoring survives worker restarts, stops polling once its work is
+done, and suppresses finishes the panel already announced. Notification state
+and text contain no instruction or report. A worker interruption immediately
+before Chrome creates an alert can lose that toast, but keeps its unread badge
+and cannot repeatedly alert for the same result.
+
+The host and extension must deploy together because task history now carries
+start-request correlation. Older services cannot read those new task records
+on rollback; keep the existing no-active-task rollback rule. Automated tests
+use fake Chrome APIs and harnesses. Real desktop notification presentation and
+Chrome's click gesture still need the separate acceptance checks in TESTING.md.
+
+
+## 2026-11-05 — Continue through all captured work before sharing
+
+Recent's **Choose work to share** now offers **Load more work**, so a busy
+single day no longer hides everything beyond the first response. Each click
+adds another bounded page to the choices already shown. Earlier checkboxes
+stay in place, newly loaded work stays unchecked, and Copy still copies
+exactly the selected preview. Oversized entries keep a separate visible
+omission notice rather than being confused with work that can be loaded.
+
+Every continuation is bound to the complete ordered result, date range,
+home-folder identity, adapter scope and capture-gap notices. If capture or
+recorded evidence changes that sharing result between pages, the host refuses
+continuation and the panel offers Reload choices with Copy disabled. A routine refresh
+keeps all loaded pages when that complete snapshot still matches. Otherwise
+it drops later pages, retains only checked identities in the refreshed first
+page, and explains the reset. Period, home-folder and host-lifecycle changes
+still clear the sharing scope; a late response cannot put old work back.
+
+The final Load more button hands keyboard focus to the first new checkbox
+when it disappears. The existing unpaged protocol response stays available
+for older extensions, while a paged request to an older host gives rebuild
+guidance. No content or cache migration is needed. The separate focus-session
+catalog and entry caps remain in place. Offline tests cover bounded busy-day
+traversal, escaped text, rebuilds, changed history, omitted rows, stale replies,
+and exact checked Copy; the added browser keyboard journey still needs the
+external gate when Chromium is blocked by the sandbox.
+
+## 2026-11-05 — Repair keyboard focus after loading the last work page
+
+The driver's real-browser gate caught a problem in the selected-work
+pagination delivery: when the last Load more button disappeared, keyboard
+focus did not reach the first new checkbox. Brauser tried to focus that
+checkbox before enabling its containing fieldset, and Chrome ignored the
+request. This repair recovers the quarantined delivery and enables the choices
+before handing over focus, so keyboard users can continue selecting work.
+The existing offline append-and-Copy test now reproduces Chrome's refusal to
+focus a control inside a disabled fieldset; it failed before the fix and passes
+afterward. The real-browser assertion remains unchanged and must still pass
+in the driver's external gate. No new feature scope was added this cycle.

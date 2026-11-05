@@ -28,8 +28,10 @@ import {
 } from "./task.js";
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
+import { armTaskNotifications, taskNoticeSignal } from "./task-notifications.js";
 import { TaskRecall } from "./task-recall.js";
-import { recentSummaryText, summaryLine } from "./summary-text.js";
+import { literalTaskInstruction } from "./task-commands.js";
+import { readScopeText, recentSummaryText, summaryLine } from "./summary-text.js";
 import {
   artifactLook, capturePill, compactDuration, importanceLabel, importanceTone, pageLook, summaryTimeLabel,
 } from "./panel-look.js";
@@ -50,6 +52,7 @@ import type {
   WorklogReported,
   WorklogChoice,
   WorklogChoicesResult,
+  WorklogFocusChoicesResult,
   FocusSession,
 } from "../protocol/ts/generated.js";
 
@@ -200,6 +203,7 @@ const pageView = element<HTMLDivElement>("page-view");
 const recentView = element<HTMLDivElement>("recent-view");
 const recentType = element<HTMLSelectElement>("recent-type");
 const recentTitle = element<HTMLInputElement>("recent-title");
+const recentReading = element<HTMLSelectElement>("recent-reading");
 const recentStatus = element<HTMLParagraphElement>("recent-status");
 const recentList = element<HTMLDivElement>("recent-list");
 /** The worklog period's segments: one native radio group, so arrows move
@@ -216,7 +220,12 @@ const worklogText = element<HTMLElement>("worklog-text");
 const copyWorklogButton = element<HTMLButtonElement>("copy-worklog");
 const curateWorklog = element<HTMLInputElement>("worklog-curate");
 const worklogChoicesArea = element<HTMLElement>("worklog-choices-area");
+const worklogShareScope = element<HTMLSelectElement>("worklog-share-scope");
+const worklogFocusArea = element<HTMLElement>("worklog-focus-area");
+const worklogFocusSession = element<HTMLSelectElement>("worklog-focus-session");
+const worklogFocusStatus = element<HTMLElement>("worklog-focus-status");
 const worklogChoices = element<HTMLFieldSetElement>("worklog-choices");
+const worklogMore = element<HTMLButtonElement>("worklog-more");
 const worklogSelectAll = element<HTMLButtonElement>("worklog-select-all");
 const worklogClear = element<HTMLButtonElement>("worklog-clear");
 const worklogSelectionStatus = element<HTMLElement>("worklog-selection-status");
@@ -237,6 +246,15 @@ const pageSummaryHead = element<HTMLDivElement>("page-summary-head");
 const taskBar = element<HTMLElement>("task-bar");
 const taskForm = element<HTMLFormElement>("task-form");
 const taskInput = element<HTMLTextAreaElement>("task-input");
+const taskCommands = element<HTMLDetailsElement>("task-commands");
+const taskCommand = element<HTMLSelectElement>("task-command");
+const taskCommandInsert = element<HTMLButtonElement>("task-command-insert");
+const taskCommandRefresh = element<HTMLButtonElement>("task-command-refresh");
+const taskCommandStatus = element<HTMLElement>("task-command-status");
+let commandRevision: string | null = null;
+let commandIssue: string | null = null;
+let commandLoading: Promise<void> | null = null;
+
 const taskRunButton = element<HTMLButtonElement>("task-run");
 const taskRunLabel = element<HTMLSpanElement>("task-run-label");
 const taskUsePage = element<HTMLInputElement>("task-use-page");
@@ -276,6 +294,7 @@ let lastStartedRunId: string | null = null;
 // Chrome that cannot answer, which then claims any window's Reuse value.
 const panelWindowId: Promise<number | null> = chrome.windows.getCurrent()
   .then((current) => current.id ?? null, () => null);
+taskNoticeSignal("task_notice_opened");
 let captureSite: CaptureSitePanel | null = null;
 // Suppress note loads only while capture policy can change their identity.
 // Once the post-save reload starts, tab events must reach NoteEditor's token
@@ -355,18 +374,31 @@ let recentLoadSeq = 0;
 let recentWaitingForHost = false;
 let worklogWaitingForHost = false;
 let worklogLoadSeq = 0;
-let worklogReport: WorklogReported | WorklogChoicesResult | null = null;
+let worklogReport: WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | null = null;
+// A pending refresh disables Copy but must not discard the last validated
+// pages: another refresh can supersede it before either response arrives.
+let worklogValidated: { scope: string; report: WorklogChoicesResult } | null = null;
 let worklogScope = "";
 let worklogStorage = "";
+let worklogPageLoading = false;
+let worklogPageNotice = "";
 const selectedWork = new Set<string>();
 const worklogChoiceKey = (row: WorklogChoice): string => JSON.stringify([row.artifact_id, row.local_date]);
 
 function resetWorklogSelection(): void {
   worklogScope = "";
   selectedWork.clear();
+  worklogFocusSession.value = "";
+  worklogFocusSession.replaceChildren();
+  worklogFocusSession.disabled = true;
+  worklogFocusStatus.textContent = "";
   ++worklogLoadSeq;
   worklogReport = null;
+  worklogValidated = null;
   worklogChoices.replaceChildren();
+  worklogMore.hidden = true;
+  worklogPageLoading = false;
+  worklogPageNotice = "";
   worklogGaps.hidden = true;
   copyWorklogButton.disabled = true;
   worklogSelectAll.disabled = true;
@@ -425,6 +457,13 @@ function renderPageSummary(summary: SummaryView | null, pageUrl: string | null):
       chip.textContent = text;
       pageSummaryChips.append(chip);
     }
+  }
+  const scope = readScopeText(shown?.read_scope);
+  if (scope !== null) {
+    const chip = document.createElement("span");
+    chip.className = "tag";
+    chip.textContent = scope;
+    pageSummaryChips.append(chip);
   }
   renderSummarizeLabel();
 }
@@ -1102,7 +1141,7 @@ function renderQueue(state: WorkerStatus): void {
 
 function render(): void {
   const connected = session.connected;
-  const storage = JSON.stringify(session.config?.storage ?? null);
+  const storage = JSON.stringify([session.config?.storage ?? null, session.revision]);
   if (storage !== worklogStorage || (!connected && artifactHostConnected)) {
     worklogStorage = storage;
     resetWorklogSelection();
@@ -1192,6 +1231,9 @@ function scheduleReload(): void {
         if (session.revision !== previousRevision) void notes.reload();
         else void notes.retry();
         void refreshArtifact(true);
+        // A policy signal can require a reload even when the host's actual
+        // revision is unchanged. Restore the invalidated sharing catalog too.
+        if (!closed && !recentView.hidden && worklogReport === null) void loadWorklog();
       });
   }, 250);
 }
@@ -1399,6 +1441,47 @@ function taskBlocked(): { text: string; settings: boolean } | null {
   return null;
 }
 
+async function loadTaskCommands(): Promise<void> {
+  if (commandLoading) return commandLoading;
+  taskCommand.disabled = true;
+  taskCommandInsert.disabled = true;
+  taskCommandRefresh.disabled = true;
+  commandLoading = (async () => {
+    try {
+      const response = await session.host.call({
+        type: "list_task_commands", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      }, "task_commands_listed");
+      if (closed) return;
+      commandRevision = response.revision;
+      commandIssue = response.issue;
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose a command…";
+      taskCommand.replaceChildren(placeholder);
+      for (const command of response.commands) {
+        const option = document.createElement("option");
+        option.value = command.name;
+        option.textContent = `/${command.name} · ${command.description}`;
+        taskCommand.append(option);
+      }
+      taskCommand.value = "";
+      taskCommandStatus.textContent = response.issue ?? (response.commands.length === 0
+        ? "No saved commands. Add [[commands]] in config.toml; see the README."
+        : "Choose a command, insert it before your draft, then press Run. Use // for a literal leading slash.");
+      taskCommand.disabled = taskStarting || response.commands.length === 0;
+    } catch (error) {
+      commandRevision = null;
+      commandIssue = error instanceof HostError && error.code === "invalid_request"
+        ? `Rebuild the ${APP_NAME} host to use saved commands.` : `Could not load saved commands: ${describe(error)}`;
+      if (!closed) taskCommandStatus.textContent = commandIssue;
+    } finally {
+      commandLoading = null;
+      if (!closed) taskCommandRefresh.disabled = taskStarting;
+    }
+  })();
+  return commandLoading;
+}
+
 function renderTaskBar(): void {
   const blocked = taskBlocked();
   taskBar.hidden = followedTabId === null;
@@ -1406,6 +1489,10 @@ function renderTaskBar(): void {
   const label = taskStarting ? "Starting…" : "Run";
   if (taskRunLabel.textContent !== label) taskRunLabel.textContent = label;
   taskInput.readOnly = taskStarting;
+  taskCommand.disabled = taskStarting || commandLoading !== null || commandRevision === null ||
+    commandIssue !== null || taskCommand.children.length <= 1;
+  taskCommandInsert.disabled = taskCommand.disabled || !taskCommand.value;
+  taskCommandRefresh.disabled = taskStarting || commandLoading !== null;
   taskUsePage.disabled = taskStarting || (currentPage === null && pageState !== "site-access");
   taskHint.hidden = blocked === null;
   if (taskHintText.textContent !== (blocked?.text ?? "")) taskHintText.textContent = blocked?.text ?? "";
@@ -1474,6 +1561,7 @@ async function probeSelection(): Promise<void> {
 async function runTask(): Promise<void> {
   const page = currentPage;
   const instruction = taskInput.value;
+  const commandInvocation = cleanInstruction(instruction).startsWith("/") && !cleanInstruction(instruction).startsWith("//");
   if (taskStarting || taskBlocked() !== null || followedTabId === null) return;
   if (cleanInstruction(instruction) === "") return;
   const tabId = followedTabId;
@@ -1486,10 +1574,17 @@ async function runTask(): Promise<void> {
   showRunLine(taskRunArea, tabId, tab === null ? "Starting task…" : "Reading this page…");
   try {
     await showSetupWarningOnce(taskRunArea);
+    if (commandInvocation && commandRevision === null) await loadTaskCommands();
+    if (commandInvocation && commandIssue !== null) throw new HostError("invalid_request", commandIssue);
     const run = await startTask(
       tab,
       instruction,
       { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
+      commandRevision ?? undefined,
+      async (requestId) => {
+        const windowId = await panelWindowId;
+        if (windowId !== null) await armTaskNotifications(windowId, requestId);
+      },
     );
     if (runLines.get(taskRunArea)?.tabId === tabId) clearRunLine(taskRunArea);
     if (run !== null) {
@@ -1508,6 +1603,9 @@ async function runTask(): Promise<void> {
     // A lost answer may hide a queued task; listing the tasks counts it on
     // the Tasks button, so Run is not pressed again for a duplicate.
     if (failure.uncertain) void refreshTasks();
+    if (error instanceof HostError && error.code === "conflict" && commandInvocation) {
+      await loadTaskCommands();
+    }
   } finally {
     taskStarting = false;
     updateControls();
@@ -1526,6 +1624,7 @@ let announceTimer: ReturnType<typeof setTimeout> | null = null;
  * region. The region is emptied first and written on the next tick, so a
  * screen reader announces a text identical to the last one again. */
 function announceTask(run: RunView): void {
+  taskNoticeSignal("task_notice_seen", run.run_id);
   const chars = Array.from(run.instruction ?? "");
   const shown = chars.length > 60 ? `${chars.slice(0, 60).join("")}…` : chars.join("");
   const outcome = run.state === "succeeded" ? "done" : run.state === "canceled" ? "canceled" : "failed";
@@ -1593,7 +1692,7 @@ async function checkReuse(): Promise<void> {
   const reused = await takeReuse(chrome.storage.session, windowId).catch(() => null);
   if (!closed && reused !== null && !taskStarting) {
     taskRecall.reset();
-    taskInput.value = reused.instruction;
+    taskInput.value = literalTaskInstruction(reused.instruction);
     taskUsePage.checked = !reused.no_page;
     renderTaskBar();
     taskInput.focus();
@@ -1869,13 +1968,18 @@ function renderRecent(items: readonly ArtifactListItem[]): void {
   }
   if (!items.length) {
     const empty = document.createElement("p");
-    empty.textContent = "No matching artifact activity yet.";
+    empty.textContent = recentReading.value
+      ? "No matching saved summaries. Try another reading filter or All activity."
+      : "No matching artifact activity yet.";
     recentList.append(empty);
   }
 }
 
 async function loadRecent(): Promise<void> {
   const seq = ++recentLoadSeq;
+  const reading = recentReading.value;
+  // The selector now describes a new result; do not leave old rows beneath it.
+  recentList.replaceChildren();
   if (!session.connected) {
     recentWaitingForHost = true;
     recentStatus.textContent = "Waiting for the host…";
@@ -1895,6 +1999,8 @@ async function loadRecent(): Promise<void> {
       request_id: newRequestId(),
       artifact_type: recentType.value || null,
       title_query: recentTitle.value.trim() || null,
+      ...(reading === "limited" || reading === "whole" || reading === "unknown"
+        ? { summary_reading: reading } : {}),
       limit: 32,
     }, "artifact_list_result");
     if (seq !== recentLoadSeq) return;
@@ -1906,22 +2012,34 @@ async function loadRecent(): Promise<void> {
     recentStatus.textContent = `${response.items.length} artifact-day entr${response.items.length === 1 ? "y" : "ies"}${response.truncated ? " · first 32 shown" : ""}`;
   } catch (error) {
     if (seq !== recentLoadSeq) return;
-    recentStatus.textContent = `Could not load Recent: ${describe(error)}`;
-    renderRecent([]);
+    recentStatus.textContent = reading && error instanceof HostError && error.code === "invalid_request"
+      ? `Rebuild the ${APP_NAME} host to filter saved summary reading, or choose All activity.`
+      : `Could not load Recent: ${describe(error)}`;
+    recentList.replaceChildren();
   }
 }
 
 async function loadWorklog(): Promise<void> {
+  const previous = worklogValidated;
   const focused = document.activeElement as HTMLElement | null;
   const focusedKey = focused?.dataset?.worklogKey ?? null;
   const focusedScope = worklogScope;
   const seq = ++worklogLoadSeq;
   worklogReport = null;
+  worklogPageLoading = false;
+  worklogPageNotice = "";
+  worklogChoices.disabled = false;
+  worklogMore.hidden = true;
   worklogGaps.hidden = true;
   worklogChoices.replaceChildren();
   worklogSelectAll.disabled = true;
   worklogClear.disabled = true;
   worklogChoicesArea.hidden = !curateWorklog.checked;
+  const focusOnly = curateWorklog.checked && worklogShareScope.value === "focus";
+  worklogFocusArea.hidden = !focusOnly;
+  // Keep an existing catalog usable: disabling a native select drops its
+  // keyboard focus. The sequence guard discards superseded selections.
+  worklogFocusStatus.textContent = focusOnly ? "Loading recorded sessions…" : "";
   worklogSelectionStatus.textContent = "Loading choices…";
   if (!session.connected) {
     worklogWaitingForHost = true;
@@ -1937,40 +2055,177 @@ async function loadWorklog(): Promise<void> {
   }
   const range = worklogRange();
   const revision = session.revision ?? "";
-  const scope = JSON.stringify([session.config.storage, range.start, range.end]);
-  if (scope !== worklogScope) selectedWork.clear();
+  const sessionId = focusOnly ? worklogFocusSession.value || null : null;
+  const scope = JSON.stringify([session.config.storage, revision, range.start, range.end,
+    curateWorklog.checked, focusOnly, sessionId]);
+  if (scope !== worklogScope) {
+    selectedWork.clear();
+    worklogValidated = null;
+  }
   worklogScope = scope;
   worklogText.textContent = "Generating…";
   copyWorklogButton.disabled = true;
   try {
     const dates = { protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), start_date: range.start, end_date: range.end };
-    const response = curateWorklog.checked
-      ? await session.host.call({ ...dates, type: "worklog_choices", expected_revision: revision }, "worklog_choices_result")
+    const response = focusOnly
+      ? await session.host.call({ ...dates, type: "worklog_focus_choices", expected_revision: revision,
+        focus_session_id: sessionId }, "worklog_focus_choices_result")
+      : curateWorklog.checked
+      ? await session.host.call({ ...dates, type: "worklog_choices", expected_revision: revision, page: { offset: 0 } }, "worklog_choices_result")
       : await session.host.call({ ...dates, type: "worklog_report" }, "worklog_reported");
     if (seq !== worklogLoadSeq || closed) return;
     if (response.start_date !== range.start || response.end_date !== range.end) throw new Error("The host returned a different worklog period. Try again.");
-    if (response.type === "worklog_choices_result") {
+    if (response.type !== "worklog_reported") {
       if (session.revision !== revision) throw new Error("Settings changed. Open Recent again to choose work to share.");
-      const keys = new Set(response.choices.map(worklogChoiceKey));
-      if (keys.size !== response.choices.length || response.choices.some((row) => row.local_date < range.start || row.local_date > range.end)) {
+      const replyKeys = new Set(response.choices.map(worklogChoiceKey));
+      if (replyKeys.size !== response.choices.length || response.choices.some((row) => row.local_date < range.start || row.local_date > range.end)) {
         throw new Error("The host returned invalid worklog choices. Try again.");
       }
+      if (response.type === "worklog_choices_result") {
+        validateWorklogPage(response, 0);
+        if (previous?.scope === scope && previous.report.page) {
+          if (previous.report.page.snapshot === response.page?.snapshot) {
+            // The digest binds every row, including pages not in this reply.
+            response.choices = previous.report.choices;
+            response.page = { ...previous.report.page };
+            response.truncated = previous.report.truncated;
+          } else if (previous.report.choices.length > response.choices.length || previous.report.page.offset > 0) {
+            worklogPageNotice = "History changed. Later pages were cleared; review the refreshed choices.";
+          }
+        }
+      }
+      const keys = new Set(response.choices.map(worklogChoiceKey));
       for (const key of selectedWork) if (!keys.has(key)) selectedWork.delete(key);
     }
+    if (response.type === "worklog_focus_choices_result") {
+      if (response.focus_session_id !== sessionId) throw new Error("The host returned a different focus session. Try again.");
+      renderWorklogSessions(response);
+    }
     worklogReport = response;
+    worklogValidated = response.type === "worklog_choices_result" ? { scope, report: response } : null;
     // A delivery refresh removes the old checkbox. Restore its stable identity
     // only if the user has not moved focus elsewhere while the host answered.
     const restoreFocus = focusedScope === scope &&
       (document.activeElement === focused || document.activeElement === document.body);
     renderWorklogChoices(restoreFocus ? focusedKey : null);
     renderWorklog();
+    if (restoreFocus && focused === worklogMore && !worklogMore.hidden) worklogMore.focus();
   } catch (error) {
     if (seq !== worklogLoadSeq || closed) return;
+    worklogValidated = null;
     worklogSelectionStatus.textContent = "Choices unavailable. Open Recent again to retry.";
+    worklogFocusStatus.textContent = focusOnly ? "Recorded sessions unavailable. Open Recent again to retry." : "";
     worklogText.textContent = error instanceof HostError && error.code === "invalid_request" && /unsupported request/.test(error.message)
       ? "Rebuild the Brauser host and extension together, then reopen Recent to generate this worklog."
       : `Could not generate worklog: ${describe(error)}`;
   }
+}
+
+function validateWorklogPage(report: WorklogChoicesResult, offset: number, snapshot?: string): void {
+  const page = report.page;
+  if (!page || !/^[a-f0-9]{64}$/.test(page.snapshot) || page.offset !== offset || (snapshot !== undefined && page.snapshot !== snapshot) ||
+      (page.next_offset !== null && (page.next_offset <= offset || report.choices.length === 0)) ||
+      report.truncated !== (page.next_offset !== null || page.omitted)) {
+    throw new Error("Work to share changed or this page is unavailable. Reload choices.");
+  }
+}
+
+async function loadMoreWorklog(): Promise<void> {
+  const report = worklogReport;
+  if (worklogPageLoading) return;
+  if (report?.type !== "worklog_choices_result" || !report.page || report.page.next_offset === null) {
+    await loadWorklog();
+    return;
+  }
+  const seq = ++worklogLoadSeq;
+  const revision = session.revision;
+  const offset = report.page.next_offset;
+  worklogPageLoading = true;
+  worklogChoices.disabled = true;
+  // A natively disabled button loses keyboard focus in Chrome. Keep it
+  // focusable while the loading guard prevents a second request.
+  worklogMore.setAttribute("aria-disabled", "true");
+  worklogMore.textContent = "Loading…";
+  worklogSelectAll.disabled = true;
+  worklogClear.disabled = true;
+  copyWorklogButton.disabled = true;
+  try {
+    const response = await session.host.call({ type: "worklog_choices", protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(), expected_revision: revision ?? "",
+      start_date: report.start_date, end_date: report.end_date,
+      page: { offset, snapshot: report.page.snapshot } }, "worklog_choices_result");
+    if (seq !== worklogLoadSeq || closed) return;
+    if (revision !== session.revision || response.start_date !== report.start_date || response.end_date !== report.end_date) {
+      throw new Error("The sharing period or settings changed. Reload choices.");
+    }
+    validateWorklogPage(response, offset, report.page.snapshot);
+    const keys = new Set(report.choices.map(worklogChoiceKey));
+    for (const row of response.choices) {
+      const key = worklogChoiceKey(row);
+      if (keys.has(key) || row.local_date < report.start_date || row.local_date > report.end_date) {
+        throw new Error("The host returned invalid worklog choices. Reload choices.");
+      }
+      keys.add(key);
+    }
+    const omitted = report.page.omitted || response.page!.omitted;
+    worklogReport = { ...response, choices: [...report.choices, ...response.choices],
+      truncated: response.page!.next_offset !== null || omitted,
+      page: { ...response.page!, omitted } };
+    worklogValidated = { scope: worklogScope, report: worklogReport };
+    worklogPageLoading = false;
+    // Descendants of a disabled fieldset cannot receive focus. Re-enable
+    // it before appending and focusing the final page's first new choice.
+    worklogChoices.disabled = false;
+    // Keep old checkboxes. If the final page hides the button holding focus,
+    // move into the new choices instead of dropping focus to the document.
+    const focusNew = document.activeElement === worklogMore && response.page!.next_offset === null;
+    const firstNew = response.choices[0];
+    appendWorklogChoices(response.choices, focusNew && firstNew ? worklogChoiceKey(firstNew) : null);
+    renderWorklog();
+  } catch (error) {
+    if (seq !== worklogLoadSeq || closed) return;
+    worklogReport = null;
+    worklogValidated = null;
+    selectedWork.clear();
+    worklogChoices.replaceChildren();
+    worklogGaps.hidden = true;
+    worklogPageLoading = false;
+    worklogSelectionStatus.textContent = "Choices changed or are unavailable. Reload before selecting work.";
+    worklogText.textContent = `Could not load more work: ${describe(error)}`;
+    worklogMore.textContent = "Reload choices";
+    worklogMore.hidden = false;
+  } finally {
+    if (seq === worklogLoadSeq && !closed) {
+      worklogChoices.disabled = false;
+      worklogMore.setAttribute("aria-disabled", "false");
+    }
+  }
+}
+
+function renderWorklogSessions(report: WorklogFocusChoicesResult): void {
+  worklogFocusSession.replaceChildren();
+  const add = (value: string, text: string): void => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    worklogFocusSession.append(option);
+  };
+  add("", "Choose a session…");
+  for (const recorded of report.sessions) add(recorded.id, `${recorded.name} · ${recorded.id.slice(-8)}`);
+  if (report.focus_session_id && !report.sessions.some((recorded) => recorded.id === report.focus_session_id)) {
+    add(report.focus_session_id, report.selected_session?.name ?? "Unavailable session");
+  }
+  worklogFocusSession.value = report.focus_session_id ?? "";
+  worklogFocusSession.disabled = report.sessions.length === 0 && report.focus_session_id === null;
+  const state = report.focus_session_id !== null && report.selected_session === null
+    ? "This session has no recorded activity in this period."
+    : report.sessions.length === 0 && report.selected_session === null
+      ? "No recorded focus sessions in this period."
+      : report.selected_session === null
+        ? "Choose a session, then check entries to include."
+        : `Only this session’s direct activity is offered.${report.name_changed ? " Its name changed in this period." : ""}`;
+  worklogFocusStatus.textContent = state + (report.sessions_truncated
+    ? " More sessions omitted; choose a shorter period to find them." : "");
 }
 
 function renderWorklogChoices(focusedKey: string | null = null): void {
@@ -1979,8 +2234,12 @@ function renderWorklogChoices(focusedKey: string | null = null): void {
   legend.textContent = "Work to include";
   worklogChoices.append(legend);
   const report = worklogReport;
-  if (report?.type !== "worklog_choices_result") return;
-  for (const row of report.choices) {
+  if (!report || report.type === "worklog_reported") return;
+  appendWorklogChoices(report.choices, focusedKey);
+}
+
+function appendWorklogChoices(rows: WorklogChoice[], focusedKey: string | null = null): void {
+  for (const row of rows) {
     const label = document.createElement("label");
     label.className = "check-label";
     const input = document.createElement("input");
@@ -1989,6 +2248,7 @@ function renderWorklogChoices(focusedKey: string | null = null): void {
     input.dataset.worklogKey = key;
     input.checked = selectedWork.has(key);
     input.addEventListener("change", () => {
+      if (worklogPageLoading) return;
       if (input.checked) selectedWork.add(key);
       else selectedWork.delete(key);
       renderWorklog();
@@ -2017,21 +2277,32 @@ function renderWorklog(): void {
     worklogGapList.append(item);
   }
   let text: string;
-  if (report.type === "worklog_choices_result") {
+  if (report.type !== "worklog_reported") {
     const selected = report.choices.filter((row) => selectedWork.has(worklogChoiceKey(row)));
-    worklogSelectionStatus.textContent = `${selected.length} of ${report.choices.length} shown entries selected.${report.truncated ? " More work omitted; choose a shorter period to review it." : ""}`;
-    worklogSelectAll.disabled = report.choices.length === 0;
-    worklogClear.disabled = selected.length === 0;
-    copyWorklogButton.disabled = selected.length === 0;
+    const page = report.type === "worklog_choices_result" ? report.page : null;
+    const more = page?.next_offset !== null && page?.next_offset !== undefined;
+    worklogMore.hidden = !more;
+    worklogMore.setAttribute("aria-disabled", String(worklogPageLoading));
+    worklogMore.textContent = worklogPageLoading ? "Loading…" : "Load more work";
+    const omission = page ? page.omitted ? " More work omitted; some entries exceed the display limits." : ""
+      : report.truncated ? " More work omitted; choose a shorter period to review it." : "";
+    worklogSelectionStatus.textContent = `${selected.length} of ${report.choices.length} shown entries selected.${more ? " More work available below." : ""}${omission}${worklogPageNotice ? ` ${worklogPageNotice}` : ""}`;
+    worklogSelectAll.disabled = report.choices.length === 0 || worklogPageLoading;
+    worklogClear.disabled = selected.length === 0 || worklogPageLoading;
+    copyWorklogButton.disabled = selected.length === 0 || worklogPageLoading;
+    const focus = report.type === "worklog_focus_choices_result";
+    const heading = focus && report.selected_session
+      ? `Focus session: ${report.selected_session.name}${report.name_changed ? " (name changed in this period)" : ""}\n` : "";
     text = selected.length
-      ? `Selected work: ${report.start_date} through ${report.end_date}\n${selected.length} artifact-day entr${selected.length === 1 ? "y" : "ies"}\n\n${selected.map((row) => `${row.local_date} · ${row.text}\n${row.url}`).join("\n\n")}`
-      : "Select work to include in the preview.";
+      ? `${heading}Selected work: ${report.start_date} through ${report.end_date}\n${selected.length} artifact-day entr${selected.length === 1 ? "y" : "ies"}\n\n${selected.map((row) => `${row.local_date} · ${row.text}\n${row.url}`).join("\n\n")}`
+      : focus && report.selected_session === null ? worklogFocusStatus.textContent ?? "Choose a session."
+        : "Select work to include in the preview.";
   } else {
     text = report.text;
     copyWorklogButton.disabled = false;
   }
   worklogText.textContent = text + (hasGaps && includeWorklogGaps.checked
-    ? `\n\nCapture gaps: ${report.type === "worklog_choices_result" ? "this period has missing activity" : "this worklog is incomplete"}. Counts cover full reported ranges, may overlap, and are not added to activity totals.\n${lines.join("\n")}`
+    ? `\n\nCapture gaps: ${report.type !== "worklog_reported" ? "this period has missing activity" : "this worklog is incomplete"}. Counts cover full reported ranges, may overlap, and are not added to activity totals.\n${lines.join("\n")}`
     : "");
 }
 
@@ -2234,6 +2505,7 @@ for (const tab of [pageTab, recentTab]) {
   });
 }
 recentType.addEventListener("change", () => void loadRecent());
+recentReading.addEventListener("change", () => void loadRecent());
 recentTitle.addEventListener("input", scheduleRecent);
 for (const radio of worklogPeriodRadios.values()) {
   radio.addEventListener("change", () => {
@@ -2242,8 +2514,14 @@ for (const radio of worklogPeriodRadios.values()) {
   });
 }
 curateWorklog.addEventListener("change", () => void loadWorklog());
+worklogShareScope.addEventListener("change", () => {
+  resetWorklogSelection();
+  void loadWorklog();
+});
+worklogFocusSession.addEventListener("change", () => void loadWorklog());
+worklogMore.addEventListener("click", () => void loadMoreWorklog());
 worklogSelectAll.addEventListener("click", () => {
-  if (worklogReport?.type !== "worklog_choices_result") return;
+  if (!worklogReport || worklogReport.type === "worklog_reported") return;
   for (const row of worklogReport.choices) selectedWork.add(worklogChoiceKey(row));
   renderWorklogChoices();
   renderWorklog();
@@ -2305,6 +2583,27 @@ taskInput.addEventListener("keydown", (event) => {
   event.preventDefault?.();
   void runTask();
 });
+taskCommands.addEventListener("toggle", () => {
+  if (taskCommands.open && commandRevision === null && !taskStarting) void loadTaskCommands();
+});
+taskCommandRefresh.addEventListener("click", () => { if (!taskStarting) void loadTaskCommands(); });
+taskCommand.addEventListener("change", () => {
+  taskCommandInsert.disabled = taskStarting || taskCommand.disabled || !taskCommand.value;
+});
+taskCommandInsert.addEventListener("click", () => {
+  if (taskStarting || taskCommand.disabled || !taskCommand.value) return;
+  const inserted = `/${taskCommand.value} ${taskInput.value}`;
+  if (inserted.length > 4000) {
+    taskCommandStatus.textContent = "Shorten the draft before inserting a command.";
+    taskCommand.value = "";
+    return;
+  }
+  taskRecall.reset();
+  taskInput.value = inserted;
+  taskCommand.value = "";
+  taskCommandInsert.disabled = true;
+  taskInput.focus();
+});
 taskUsePage.addEventListener("change", () => { renderTaskBar(); void probeSelection(); });
 taskInput.addEventListener("input", () => taskRecall.edited());
 taskInput.addEventListener("focus", () => void probeSelection());
@@ -2318,6 +2617,7 @@ taskOpenButton.addEventListener("click", openTasks);
 // catches up at once.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") return;
+  taskNoticeSignal("task_notice_opened");
   if (tracker !== null) void refreshTasks();
   void checkForUpdate();
 });
@@ -2365,7 +2665,13 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
   return false;
 });
-session.watchPolicy(scheduleReload);
+session.watchPolicy(() => {
+  // The config reload is debounced; invalidate sharing immediately so a
+  // reply from the old home/revision cannot publish during that wait.
+  resetWorklogSelection();
+  worklogText.textContent = "Settings changed. Reloading worklog…";
+  scheduleReload();
+});
 // The Tasks page may leave a Reuse instruction while this panel is open.
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "session" && REUSE_KEY in changes) void checkReuse();
