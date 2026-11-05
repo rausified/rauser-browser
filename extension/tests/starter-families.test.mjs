@@ -1,6 +1,9 @@
 // Unit tests for the STARTER_FAMILIES-driven starterKind/starterStatus in
 // extension/starter-adapters.ts, from dist (npm run build:extension).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const {
@@ -8,6 +11,7 @@ const {
   starterStatus,
   starterOffers,
   starterFamily,
+  starterFamilies,
   displayTypes,
   recordLabel,
   recordOrder,
@@ -17,7 +21,13 @@ const {
   starterRuleAddition,
   setStarterFamiliesForTest,
 } = await import("../dist/starter-adapters.js");
-const { EXAMPLE_TENANT_FAMILY } = await import("./starter-fixtures.mjs");
+const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
+const { EXAMPLE_TENANT_FAMILY, EXAMPLE_STRICT_FAMILY } = await import("./starter-fixtures.mjs");
+const { ORIGIN_CASES, STRICT_ORIGIN_CASES } = await import("./starter-origin-cases.mjs");
+const { loadFamilies } = await import("../../scripts/generate-starters.mjs");
+const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // A tenant_name family whose one type has two match rules (EXAMPLE_TENANT_FAMILY's
 // example.item has only one), test-only, to exercise starterRuleAddition's
@@ -39,63 +49,20 @@ const TENANT_TWO_RULE_FAMILY = {
   ],
 };
 
-// [origin, expected StarterKind | null], computed from today's rules
-// (secureHostname: canonical https origin only; a subdomain suffix match
-// requires the bare suffix host itself to be excluded).
-const ORIGIN_CASES = [
-  // Atlassian (.atlassian.net subdomain)
-  ["https://acme.atlassian.net", "atlassian"],
-  ["https://atlassian.net", null], // the bare suffix host itself is excluded
-  ["http://acme.atlassian.net", null], // not https
-  // A non-default port is accepted today: secureHostname compares `.hostname`,
-  // which drops the port, so the suffix check still matches.
-  ["https://acme.atlassian.net:8443", "atlassian"],
-  ["https://ACME.atlassian.net", null], // not a canonical origin (URL lowercases the host)
-  ["https://acme.atlassian.net/", null], // trailing slash is not a canonical origin
-  ["https://evil-atlassian.net", null], // no dot before "atlassian.net"
-  ["https://a.b.atlassian.net", "atlassian"], // nested subdomain still matches
-  ["https://acme.atlassian.net.evil.example", null], // suffix only, not a match
-  ["https://acme.atlassian.net?x=1", null], // query string is not a canonical origin
-  ["https://x.atlassian.net", "atlassian"], // minimal one-letter subdomain
-  ["https://acme.ATLASSIAN.net", null], // not a canonical origin
-
-  // SharePoint (.sharepoint.com subdomain)
-  ["https://acme-my.sharepoint.com", "sharepoint"],
-  ["https://sharepoint.com", null],
-  ["http://acme.sharepoint.com", null],
-  ["https://acme.sharepoint.com.evil.example", null],
-  ["https://evil-sharepoint.com", null],
-  ["https://a.b.sharepoint.com", "sharepoint"],
-  ["https://ACME.sharepoint.com", null],
-  ["https://acme.sharepoint.com:443", null], // the default port is stripped, so this is not canonical
-  ["https://acme.sharepoint.com/", null],
-  ["https://my.sharepoint.com", "sharepoint"], // "my" is just another subdomain label here
-
-  // GitHub (exact origin)
-  ["https://github.com", "github"],
-  ["https://www.github.com", null],
-  ["http://github.com", null],
-  ["https://github.com.evil.example", null],
-  ["https://github.com/", null],
-  ["https://api.github.com", null],
-  ["https://GITHUB.com", null],
-  ["https://github.com:443", null],
-  ["https://github.co", null],
-
-  // Miro (exact origin)
-  ["https://miro.com", "miro"],
-  ["https://www.miro.com", null],
-  ["http://miro.com", null],
-  ["https://miro.com.evil.example", null],
-  ["https://miro.com/", null],
-  ["https://app.miro.com", null],
-  ["https://MIRO.com", null],
-  ["https://miro.com:443", null],
-  ["https://miro.co", null],
-];
-
 test("starterKind agrees with the legacy rules on 40 origins", () => {
   assert.equal(ORIGIN_CASES.length, 40);
+  for (const [origin, expected] of ORIGIN_CASES) {
+    assert.equal(starterKind(origin), expected, origin);
+  }
+});
+
+test("strict subdomain families claim one label and skip excluded hosts", (t) => {
+  setStarterFamiliesForTest([...STARTER_FAMILIES, EXAMPLE_STRICT_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  for (const [origin, expected] of STRICT_ORIGIN_CASES) {
+    assert.equal(starterKind(origin), expected, origin);
+  }
+  // Adding the strict family must not change what the real families claim.
   for (const [origin, expected] of ORIGIN_CASES) {
     assert.equal(starterKind(origin), expected, origin);
   }
@@ -129,7 +96,28 @@ test("displayTypes puts containers first", () => {
 test("record labels and order come from the family files", () => {
   assert.equal(recordLabel("github.pr"), "pull requests");
   assert.equal(recordLabel("jira.issue"), null);
-  assert.deepEqual(recordOrder(), ["github.repo", "github.pr", "github.issue"]);
+
+  // recordOrder()'s documented contract: starterFamilies() order, then each
+  // family's displayTypes() order, keeping only types with a non-null
+  // record_label. Reimplementing that contract from the family data (rather
+  // than pinning its current output) means a new family, or a new labelled
+  // type, cannot break this test the way it broke for every new family in
+  // the final review (Important 1) — only a real contract violation can.
+  const expected = [];
+  for (const family of starterFamilies()) {
+    for (const type of displayTypes(family)) {
+      if (type.record_label !== null) expected.push(type.type);
+    }
+  }
+  assert.deepEqual(recordOrder(), expected);
+
+  // Today, GitHub's three types are the only ones with a label; check that
+  // subset rather than the full list, so a future family with its own
+  // record_label does not break this pin.
+  assert.deepEqual(
+    expected.filter((type) => type.startsWith("github.")),
+    ["github.repo", "github.pr", "github.issue"],
+  );
 });
 
 test("isContainerType", () => {
@@ -213,4 +201,168 @@ test("the test seam swaps and restores the family list", () => {
   }
   assert.equal(starterKind("https://example.test"), null);
   assert.equal(starterKind("https://github.com"), "github");
+});
+
+/** The scope value a titled, scoped sample's own URL needs for
+ * `starterOffers` to build a matching adapter: today, only `github_org`
+ * families have titled samples, and GitHub's path-captured `owner` is
+ * lower-cased (`{owner:name|lower}`), so the org list must hold the
+ * lower-cased first path segment. A `tenant_name` family has no path to
+ * derive a value from the same way; it supplies its own fixed tenant list
+ * through `sample_scope` (the same field `synthesizeFixture` uses to build
+ * its `starter:<family>` fixture), so a valid `tenant_name` family with a
+ * titled sample can resolve its adapter here too (Codex P2 round). */
+function scopeOrganizationsFor(family, url) {
+  const kind = family.scope?.kind;
+  if (kind === "tenant_name") return family.sample_scope;
+  if (kind !== "github_org") return [];
+  const owner = new URL(url).pathname.split("/").filter(Boolean)[0] ?? "";
+  return [owner.toLowerCase()];
+}
+
+test("every titled sample's recorded title agrees with its own URL's captures (adapter-templates.md §9.1)", () => {
+  // protocol/starters/*.json's `samples` (and their `title`) are test-only:
+  // renderTs strips them from STARTER_FAMILIES, and renderStarterShapes
+  // keeps only {note, url, shape} in starter-shapes.json. Load the family
+  // files directly, build each sample's real adapter through starterOffers
+  // (the shipped STARTER_FAMILIES, scoped from the sample's own URL when its
+  // family needs scope), and check the engine actually matches the sample's
+  // title to a template entry. A template whose same-named capture (for
+  // example `{key}`, `{owner}`, `{number}`) disagrees with the URL's own
+  // capture does not match at all (§9.1), so `title_entry !== null` is
+  // exactly the check for a type whose adapter declares a `title`
+  // template. A type with no `title` template (today: `sharepoint.doc`,
+  // `github.repo`) can still legitimately carry a non-null raw `title` on
+  // a sample — recorded for documentation, not matched against anything —
+  // so `title_entry` stays `null` there and that is not a failure (Codex
+  // P2 round).
+  const families = loadFamilies(REPO);
+  let titledSamples = 0;
+  for (const family of families) {
+    for (const type of family.types) {
+      for (const sample of type.samples) {
+        if (sample.title === null) continue;
+        titledSamples += 1;
+        const origin = new URL(sample.url).origin;
+        const organizations = scopeOrganizationsFor(family, sample.url);
+        const offer = starterOffers(origin, organizations).find((o) => o.artifact_type === type.type);
+        assert.ok(offer, `${type.type}: no starter offer for ${origin}`);
+        assert.ok(offer.adapter, `${type.type}: ${sample.note} needs a scope value to build its adapter`);
+        const compiled = compileDocument({ format: 1, artifacts: [offer.adapter] });
+        assert.ok(compiled.ok, `${type.type}: ${sample.note}'s adapter compiles: ${JSON.stringify(compiled.error)}`);
+        const result = evaluate(compiled.doc, sample.url, sample.title);
+        assert.equal(result.match, true, `${sample.note}: ${sample.url} must match its own type's adapter`);
+        if ("title" in type.adapter) {
+          assert.notEqual(
+            result.title_entry,
+            null,
+            `${sample.note}: title "${sample.title}" must match a title template entry for ${sample.url}`,
+          );
+        }
+      }
+    }
+  }
+  assert.ok(titledSamples >= 5, `expected at least 5 titled samples, saw ${titledSamples}`);
+});
+
+test("a titled sample on a type with no title template is not required to match a title entry (Codex P2 round)", (t) => {
+  // sharepoint.doc and github.repo have no title template today, and the
+  // README allows a non-null raw title on such a type regardless (it is
+  // simply not used for matching). A synthetic stand-in proves the title
+  // check above does not wrongly require title_entry !== null there.
+  const NO_TEMPLATE_FAMILY = {
+    family: "notemplate",
+    display_name: "No Template",
+    review_prompt: null,
+    origin: { kind: "exact", origin: "https://notemplate.test" },
+    scope: null,
+    sample_origin: "https://notemplate.test",
+    sample_scope: [],
+    overlaps: [],
+    types: [{
+      type: "notemplate.doc",
+      key: "notemplate.doc",
+      label: "No-template docs",
+      label_variants: [],
+      description: "A type with no title template.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "notemplate.doc",
+        match: [{ path: "/doc/{id:int}" }],
+        id: "notemplate.doc:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/notemplate.doc.md",
+      samples: [{ note: "No-template doc", url: "https://notemplate.test/doc/1", title: "Plan.docx", shape: "/doc/{id}" }],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+  setStarterFamiliesForTest([NO_TEMPLATE_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+
+  const type = NO_TEMPLATE_FAMILY.types[0];
+  const sample = type.samples[0];
+  assert.ok(!("title" in type.adapter));
+  const offer = starterOffers("https://notemplate.test", []).find((o) => o.artifact_type === type.type);
+  const compiled = compileDocument({ format: 1, artifacts: [offer.adapter] });
+  assert.ok(compiled.ok);
+  const result = evaluate(compiled.doc, sample.url, sample.title);
+  assert.equal(result.match, true);
+  assert.equal(result.title_entry, null, "a template-less adapter never sets title_entry");
+});
+
+test("a tenant_name family's titled sample resolves its scope from sample_scope (Codex P2 round)", (t) => {
+  // Before this fix, scopeOrganizationsFor returned [] for a tenant_name
+  // family, so starterOffers left its adapter unresolved (adapter: null)
+  // and a titled sample on such a family could never be checked at all.
+  const TENANT_TITLED_FAMILY = {
+    ...EXAMPLE_TENANT_FAMILY,
+    types: [{
+      ...EXAMPLE_TENANT_FAMILY.types[0],
+      adapter: { ...EXAMPLE_TENANT_FAMILY.types[0].adapter, title: "{title} - Item {id:int}" },
+      samples: [{ note: "Example item", url: "https://example.test/acme/item/42", title: "Ship login fix - Item 42", shape: "/{workspace}/item/{id}" }],
+    }],
+  };
+  setStarterFamiliesForTest([TENANT_TITLED_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+
+  const type = TENANT_TITLED_FAMILY.types[0];
+  const sample = type.samples[0];
+  const organizations = scopeOrganizationsFor(TENANT_TITLED_FAMILY, sample.url);
+  assert.deepEqual(organizations, TENANT_TITLED_FAMILY.sample_scope);
+  const offer = starterOffers("https://example.test", organizations).find((o) => o.artifact_type === type.type);
+  assert.ok(offer.adapter, "expected a resolved adapter, not null, once scope is supplied");
+  const compiled = compileDocument({ format: 1, artifacts: [offer.adapter] });
+  assert.ok(compiled.ok, JSON.stringify(compiled.ok ? null : compiled.error));
+  const result = evaluate(compiled.doc, sample.url, sample.title);
+  assert.equal(result.match, true);
+  assert.notEqual(result.title_entry, null);
+});
+
+test("starter-vectors fixtures are the runtime offers", () => {
+  // protocol/adapter-templates/starter-vectors.json's starter:<family>
+  // fixtures (scripts/generate-starters.mjs synthesizeFixture) must stay
+  // exactly the documents starterOffers builds for the family's own
+  // sample_origin and sample_scope at runtime: the load-bearing guarantee
+  // that a generated fixture is not a stand-in the engines test against
+  // while the shipped offers quietly drift from it.
+  const families = loadFamilies(REPO);
+  const starterVectors = JSON.parse(
+    readFileSync(path.join(REPO, "protocol", "adapter-templates", "starter-vectors.json"), "utf8"),
+  );
+  assert.ok(families.length > 0);
+  for (const family of families) {
+    const fixture = starterVectors.fixtures[`starter:${family.family}`];
+    assert.ok(fixture, `starter-vectors.json has no starter:${family.family} fixture`);
+    const offers = starterOffers(family.sample_origin, family.sample_scope);
+    const adapters = family.types.map((type) => {
+      const offer = offers.find((candidate) => candidate.artifact_type === type.type);
+      assert.ok(offer, `${family.sample_origin} offers no ${type.type}`);
+      return offer.adapter;
+    });
+    assert.deepEqual(fixture.artifacts, adapters, family.family);
+  }
 });

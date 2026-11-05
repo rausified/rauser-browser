@@ -217,7 +217,7 @@ test("a tenant_name family plans through its parser", (t) => {
 test("an unscoped family plans without extra input", (t) => {
   setStarterFamiliesForTest([EXAMPLE_UNSCOPED_FAMILY]);
   t.after(() => setStarterFamiliesForTest(null));
-  const result = planCaptureSite(CONFIG, "https://www.figma.com/p/1", { types: new Set(), scopes: {} });
+  const result = planCaptureSite(CONFIG, `${EXAMPLE_UNSCOPED_FAMILY.origin.origin}/p/1`, { types: new Set(), scopes: {} });
   assert.equal(result.ok, true, result.message);
   for (const adapter of result.plan.document.artifacts) assert.equal(adapter.unscoped, "acknowledged");
 });
@@ -935,7 +935,16 @@ test("draftModeAt removes whichever family claims the origin", async (t) => {
   // real. draftModeAt has to remove whichever family claims the origin, not
   // a hardcoded one, so this proves the removal is origin-driven.
   const CLAIMS_DOCS = { ...EXAMPLE_UNSCOPED_FAMILY, origin: { kind: "exact", origin: DOCS } };
-  setStarterFamiliesForTest([...STARTER_FAMILIES, CLAIMS_DOCS]);
+  // Once a real family claims docs.google.com (PR D's Google family),
+  // starterFamily's first-exact-match rule would resolve DOCS to that real
+  // family instead of this stand-in, since it comes first in
+  // STARTER_FAMILIES. The stand-in must replace any real claimant, not sit
+  // behind it (final review, B2).
+  const realClaimant = starterFamily(DOCS);
+  const base = realClaimant === null
+    ? STARTER_FAMILIES
+    : STARTER_FAMILIES.filter((family) => family.family !== realClaimant.family);
+  setStarterFamiliesForTest([...base, CLAIMS_DOCS]);
   t.after(() => setStarterFamiliesForTest(null));
   assert.equal(starterKind(DOCS), CLAIMS_DOCS.family);
   await draftModeAt(t, DOCS);

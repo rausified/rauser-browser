@@ -4,6 +4,9 @@
   "review_prompt": "Choose the kinds of work to remember on this Atlassian site.",
   "origin": { "kind": "subdomain", "suffix": ".atlassian.net" },
   "scope": null,
+  "sample_origin": "https://acme.atlassian.net",
+  "sample_scope": [],
+  "overlaps": [{ "a": "jira.issue", "b": "confluence.page", "expect": "disjoint" }],
   "types": [
     {
       "type": "jira.issue",
@@ -26,7 +29,23 @@
       },
       "history": [],
       "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
-      "docs": "docs/adapters/jira.issue.md"
+      "docs": "docs/adapters/jira.issue.md",
+      "samples": [
+        {
+          "note": "Jira canonical issue",
+          "url": "https://acme.atlassian.net/browse/PROJ-42",
+          "title": "[PROJ-42] Fix the bug - Jira",
+          "shape": "/browse/{key}"
+        },
+        {
+          "note": "Jira board modal",
+          "url": "https://acme.atlassian.net/jira/software/projects/PROJ/boards/7?selectedIssue=PROJ-42",
+          "title": null,
+          "shape": "/jira/software/projects/{slug}/boards/{num}?{param}={key}"
+        }
+      ],
+      "samples_shape": true,
+      "vectors": []
     },
     {
       "type": "confluence.page",
@@ -50,7 +69,35 @@
       },
       "history": [],
       "status": { "state": "development", "method": null, "checked_on": null, "checked_by": null },
-      "docs": "docs/adapters/confluence.page.md"
+      "docs": "docs/adapters/confluence.page.md",
+      "samples": [
+        {
+          "note": "Confluence page",
+          "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan",
+          "title": "Release plan - Engineering - Confluence",
+          "shape": "/wiki/spaces/{slug}/pages/{num}/{slug}"
+        },
+        {
+          "note": "Confluence page without a slug",
+          "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000002",
+          "title": null,
+          "shape": "/wiki/spaces/{slug}/pages/{num}"
+        },
+        {
+          "note": "Confluence page in a personal space",
+          "url": "https://acme.atlassian.net/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1000003/Some+Page",
+          "title": "Some Page - Alex Example - Confluence",
+          "shape": "/wiki/spaces/{slug}/pages/{num}/{slug}"
+        },
+        {
+          "note": "Confluence page version history",
+          "url": "https://acme.atlassian.net/wiki/spaces/ENG/history/1000004/Release+Plan",
+          "title": "Version history - Release plan - Engineering - Confluence",
+          "shape": "/wiki/spaces/{slug}/history/{num}/{slug}"
+        }
+      ],
+      "samples_shape": true,
+      "vectors": []
     }
   ]
 }

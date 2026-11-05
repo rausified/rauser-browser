@@ -4,6 +4,9 @@
   "review_prompt": null,
   "origin": { "kind": "exact", "origin": "https://miro.com" },
   "scope": null,
+  "sample_origin": "https://miro.com",
+  "sample_scope": [],
+  "overlaps": [],
   "types": [
     {
       "type": "miro.board",
@@ -21,7 +24,17 @@
       },
       "history": [],
       "status": { "state": "development", "method": null, "checked_on": null, "checked_by": null },
-      "docs": "docs/adapters/miro.board.md"
+      "docs": "docs/adapters/miro.board.md",
+      "samples": [
+        {
+          "note": "Miro board",
+          "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
+          "title": "SSE ZTA SWOT - Miro",
+          "shape": "/app/board/{id}/"
+        }
+      ],
+      "samples_shape": true,
+      "vectors": []
     }
   ]
 }

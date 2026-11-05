@@ -49,7 +49,10 @@ test("one shaper covers Jira, SharePoint, GitHub and named future tool URL forms
 test("every recorded starter fixture URL produces a valid private shape", () => {
   let checked = 0;
   const vectors = JSON.parse(readFileSync(new URL("../../protocol/adapter-templates/vectors.json", import.meta.url), "utf8"));
-  for (const vector of vectors.cases.filter((row) => row.doc?.$fixture === "starters" && typeof row.url === "string")) {
+  const starterVectors = JSON.parse(readFileSync(new URL("../../protocol/adapter-templates/starter-vectors.json", import.meta.url), "utf8"));
+  const isStarterFixtureDoc = (fixture) => fixture === "starters" || fixture.startsWith("starter:");
+  const cases = [...vectors.cases, ...starterVectors.cases];
+  for (const vector of cases.filter((row) => isStarterFixtureDoc(row.doc?.$fixture ?? "") && typeof row.url === "string")) {
     const origin = httpOrigin(vector.url);
     if (!origin || new URL(vector.url).pathname.split("/").length > 33) {
       assert.equal(shape(vector.url), null, vector.id);
@@ -179,8 +182,13 @@ test("corrupt samples are discarded and origin, shape and metadata budgets are i
 });
 
 // One fixture pins this shaper and the host's Rust parser
-// (adapter-templates/src/shape.rs) to the same canonical shapes.
-const shapeFixture = JSON.parse(readFileSync(new URL("../../protocol/capture-site/shapes.json", import.meta.url), "utf8"));
+// (adapter-templates/src/shape.rs) to the same canonical shapes. The 15
+// starter rows this moved out of shapes.json now live in
+// starter-shapes.json (protocol/starters/README.md "Recorded samples");
+// concatenate both so the combined fixture is unchanged.
+const shapesA = JSON.parse(readFileSync(new URL("../../protocol/capture-site/shapes.json", import.meta.url), "utf8"));
+const shapesB = JSON.parse(readFileSync(new URL("../../protocol/capture-site/starter-shapes.json", import.meta.url), "utf8"));
+const shapeFixture = { accept: [...shapesA.accept, ...shapesB.accept], reject: [...shapesA.reject, ...shapesB.reject] };
 const built = (value) => typeof value === "string" ? value : value.$build.map((part) =>
   typeof part === "string" ? part : part.repeat.repeat(part.times)).join("");
 

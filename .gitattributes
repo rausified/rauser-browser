@@ -16,7 +16,12 @@ CookieFeature.md merge=union
 # delimiters are LF-only, so never let a checkout convert it to CRLF.
 SUMMARY.md text eol=lf
 
-# generate-starters.mjs writes LF and compares raw bytes in --check; keep
-# these checked out as LF so Windows CI doesn't see a false "out of date".
+# generate-starters.mjs writes these as LF, and --check normalises a CRLF
+# checkout before comparing so it never flags one on its own; other checks
+# (git diff --exit-code, byte-exact test assertions) do compare raw bytes,
+# so keep them checked out as LF to avoid a false diff on Windows CI.
 extension/starter-families.generated.ts text eol=lf
 protocol/starters/*.json text eol=lf
+protocol/capture-site/starter-shapes.json text eol=lf
+protocol/adapter-templates/starter-vectors.json text eol=lf
+docs/adapters/README.md text eol=lf

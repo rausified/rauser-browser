@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
-const { setStarterFamiliesForTest } = await import("../dist/starter-adapters.js");
+const { setStarterFamiliesForTest, starterFamilies } = await import("../dist/starter-adapters.js");
 const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
 const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY } = await import("./starter-fixtures.mjs");
 
@@ -1227,10 +1227,31 @@ test("a missing starter offer cannot become available when scope changes", async
 test("the gallery hint joins the family display names", async () => {
   install();
   await openSettings();
-  assert.equal(
-    nodeText(env.elements.get("starter-gallery")).trim(),
-    "Enter an Atlassian Cloud (Jira or Confluence), SharePoint/OneDrive, GitHub, or Miro site address above to see starter drafts.",
-  );
+  const hint = nodeText(env.elements.get("starter-gallery")).trim();
+
+  // Independently reimplement options.ts's joinOr grammar ("A", "A or B",
+  // "A, B, …, or Z") against the real STARTER_FAMILIES data, so the
+  // expectation tracks any new family instead of pinning a literal that a
+  // new family would break (final review, Important 1).
+  const names = starterFamilies().map((family) => family.display_name);
+  const joined =
+    names.length < 2
+      ? names.join("")
+      : names.length === 2
+        ? `${names[0]} or ${names[1]}`
+        : `${names.slice(0, -1).join(", ")}, or ${names[names.length - 1]}`;
+  assert.equal(hint, `Enter an ${joined} site address above to see starter drafts.`);
+
+  // Today's four families' exact display names still appear, in order, among
+  // whichever families exist — an ordered-subsequence check, not an exact
+  // list, so a family added later (PR D) does not break this pin.
+  const today = ["Atlassian Cloud (Jira or Confluence)", "SharePoint/OneDrive", "GitHub", "Miro"];
+  let cursor = -1;
+  for (const name of today) {
+    const index = names.indexOf(name);
+    assert.ok(index > cursor, `expected "${name}" after position ${cursor} in ${JSON.stringify(names)}`);
+    cursor = index;
+  }
 });
 
 test("gallery cards say whether each starter is certified", async () => {
@@ -1243,7 +1264,7 @@ test("gallery cards say whether each starter is certified", async () => {
 });
 
 test("each scoped origin gets its own scope input", async (t) => {
-  setStarterFamiliesForTest([...STARTER_FAMILIES, EXAMPLE_TENANT_FAMILY]);
+  setStarterFamiliesForTest([...starterFamilies(), EXAMPLE_TENANT_FAMILY]);
   t.after(() => setStarterFamiliesForTest(null));
   const githubAdapter = {
     type: "github.issue", origin: "https://github.com", scope: { owner: ["acme"] },
@@ -1278,7 +1299,7 @@ test("the gallery scope field caps input length at the scope-kind registry's bou
   // (renderScopeField in extension/options.ts) did not, so an overlong
   // value was refused only after being typed. Both fields must share one
   // bound (docs/improvement-feed/2026-11-03-settings-gallery-scope-fields-have-no-length-cap.md).
-  setStarterFamiliesForTest([...STARTER_FAMILIES, EXAMPLE_TENANT_FAMILY]);
+  setStarterFamiliesForTest([...starterFamilies(), EXAMPLE_TENANT_FAMILY]);
   t.after(() => setStarterFamiliesForTest(null));
   const githubAdapter = {
     type: "github.issue", origin: "https://github.com", scope: { owner: ["acme"] },

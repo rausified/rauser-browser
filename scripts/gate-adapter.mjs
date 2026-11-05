@@ -45,10 +45,12 @@ export const NODE_MAJOR = 24;
 
 /**
  * Paths an adapter or starter change may touch. Docs and beads config
- * (root Markdown, docs/**, .beads/**) are allowed too, through
- * scripts/ci-changes.mjs's isDocsOrQueuePath, so the two classifiers agree
- * on what counts as docs. Anything else needs the full README gate.
- * `exact` matches one path, `prefix` a directory, `pattern` a RegExp.
+ * (root Markdown, docs/** except docs/adapters/, .beads/**) are allowed
+ * too, through scripts/ci-changes.mjs's isDocsOrQueuePath, so the two
+ * classifiers agree on what counts as docs; docs/adapters/ is code there
+ * (Open decision 7), so it has its own entry below instead. Anything else
+ * needs the full README gate. `exact` matches one path, `prefix` a
+ * directory, `pattern` a RegExp.
  */
 export const ALLOWLIST = [
   // The starter table: one entry per starter site and its fixtures.
@@ -80,6 +82,10 @@ export const ALLOWLIST = [
   // (scripts/generate-starters.mjs, protocol/starters/README.md).
   { prefix: "protocol/starters/" },
   { exact: "extension/starter-families.generated.ts" },
+  // Starter doc pages and the generated status index: no longer exempted
+  // through ci-changes.mjs's docs-only path (docs/adapters/ is code there),
+  // so the gate needs its own entry to keep them in scope.
+  { prefix: "docs/adapters/" },
 ];
 
 function matches(entry, file) {
@@ -102,8 +108,17 @@ export function outOfScope(files) {
 const anyOf = (...tests) => (files) => files.some((file) => tests.some((t) => (typeof t === "string" ? file.startsWith(t) : t.test(file))));
 
 const RUST = /\.rs$/;
-// No extension test reads the capture-site host fixtures, so they are not here.
-const EXTENSION_INPUTS = anyOf("extension/", "protocol/adapter-templates/", "protocol/capture-site/");
+// No extension test reads the capture-site host fixtures, so they are not
+// here. The starter registry test (extension/tests/starter-registry.test.mjs)
+// reads the family sources and their doc pages directly, so both join the
+// set that reruns test:extension.
+const EXTENSION_INPUTS = anyOf(
+  "extension/",
+  "protocol/adapter-templates/",
+  "protocol/capture-site/",
+  "protocol/starters/",
+  "docs/adapters/",
+);
 // agent_draft.rs reads the site-draft answers.
 const ENGINE_TEST_INPUTS = anyOf(
   "adapter-templates/",
@@ -112,9 +127,11 @@ const ENGINE_TEST_INPUTS = anyOf(
   "host/tests/fixtures/site-draft-answers/",
 );
 const HOST_TEST_INPUTS = anyOf("protocol/capture-site/catalog.json", "host/tests/fixtures/");
-// A family source or its generated TypeScript twin; checked before anything
-// else reads either, so a stale generated file is reported first.
-const STARTER_INPUTS = anyOf("protocol/starters/", "extension/starter-families.generated.ts");
+// A family source, a doc page (Open decision 7: a Status: line edit must
+// still run the generator's check 3), or the generated TypeScript twin;
+// checked before anything else reads any of them, so a stale generated file
+// is reported first.
+const STARTER_INPUTS = anyOf("protocol/starters/", "extension/starter-families.generated.ts", "docs/adapters/");
 
 /**
  * Every step, in run order. `when(files)` says whether a change triggers it;

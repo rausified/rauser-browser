@@ -1222,7 +1222,7 @@ mod handler_tests {
         SiteDrafter, UnscopedChoice,
     };
     use serde_json::{Value as Json, json};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1925,6 +1925,32 @@ mod handler_tests {
         let mut json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["revision"], s.config.revision());
         json["revision"] = json!("<revision>");
+        let expected: BTreeSet<String> = catalog()
+            .starter_types
+            .iter()
+            .cloned()
+            .chain(std::iter::once("tools.item".to_owned()))
+            .collect();
+        assert_eq!(json["taken_types"], json!(expected));
+        // A literal floor (design challenge e2): a broken catalog read can
+        // never pass with an empty `taken_types`, because every one of
+        // today's legacy starter types must still be present.
+        for starter in [
+            "confluence.page",
+            "github.issue",
+            "github.pr",
+            "github.repo",
+            "jira.issue",
+            "miro.board",
+            "sharepoint.doc",
+            "tools.item",
+        ] {
+            assert!(
+                expected.contains(starter),
+                "a legacy starter type left taken_types: {starter}"
+            );
+        }
+        json["taken_types"] = json!("<taken_types>");
         let pinned: Json = serde_json::from_str(include_str!(
             "../tests/fixtures/capture-site-structural-response.json"
         ))

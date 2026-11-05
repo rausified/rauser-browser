@@ -14,7 +14,6 @@ test("root Markdown, docs/ and .beads/ are docs paths (check_current_state.py re
     "TESTING.md",
     "adapter-templates.md",
     "docs/history.md",
-    "docs/adapters/github.pr.md",
     "docs/superpowers/plans/2026-10-28-task-bar.md",
     ".beads/issues.jsonl",
     ".beads/config.yaml",
@@ -31,6 +30,10 @@ test("everything else counts as code, including SUMMARY.md and nested Markdown t
     "protocol/README.md",
     "protocol/adapter-templates/README.md",
     "protocol/schema.json",
+    // Open decision 7 (starter families PR C): a starter doc's Status: line
+    // is read by the generator's check 3 and the registry test, both code.
+    "docs/adapters/jira.issue.md",
+    "docs/adapters/README.md",
     ".github/workflows/ci.yml",
     "scripts/check_queue_consistency.py",
     "package.json",
@@ -50,6 +53,11 @@ test("everything else counts as code, including SUMMARY.md and nested Markdown t
 test("a change is docs-only only when every path is a docs or queue file", () => {
   assert.equal(classify(["AGENTS.md", ".beads/issues.jsonl", "docs/history.md"]), true);
   assert.equal(classify(["AGENTS.md", "host/src/native.rs"]), false);
+});
+
+test("docs/adapters/ is carved out of docs/ (Open decision 7): a doc edit always runs the code builds", () => {
+  assert.equal(classify(["docs/adapters/jira.issue.md"]), false);
+  assert.equal(classify(["docs/history.md"]), true);
 });
 
 test("an empty change list is not docs-only, so a failed diff never skips the builds", () => {

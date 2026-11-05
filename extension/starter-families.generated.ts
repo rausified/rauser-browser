@@ -22,7 +22,7 @@ export interface StarterFamilyData {
   family: StarterFamilyId;
   display_name: string;
   review_prompt: string | null;
-  origin: { kind: "exact"; origin: string } | { kind: "subdomain"; suffix: string };
+  origin: { kind: "exact"; origin: string } | { kind: "subdomain"; suffix: string; labels?: 1; exclude?: string[] };
   scope: StarterScopeData | null;
   types: StarterTypeData[];
 }

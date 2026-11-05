@@ -10,6 +10,9 @@ export const EXAMPLE_TENANT_FAMILY = {
   review_prompt: "Choose what to remember on Example.",
   origin: { kind: "exact", origin: "https://example.test" },
   scope: { kind: "tenant_name", max: 4, label: "Workspaces", placeholder: "acme" },
+  sample_origin: "https://example.test",
+  sample_scope: ["acme"],
+  overlaps: [{ a: "example.item", b: "example.note", expect: "disjoint" }],
   types: [
     {
       type: "example.item",
@@ -28,6 +31,9 @@ export const EXAMPLE_TENANT_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/example.item.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
     },
     {
       type: "example.note",
@@ -46,6 +52,9 @@ export const EXAMPLE_TENANT_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/example.note.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
     },
   ],
 };
@@ -58,13 +67,21 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
   // `SHARED_ORIGINS`) only allows an `unscoped` marker on its five hardcoded
   // shared origins; an unscoped family's fixture has to use one of them, not
   // a synthetic test domain, or a full plan/validate round trip fails
-  // "unscoped_not_shared". Figma is in that set and claimed by no starter
-  // family or other fixture.
-  origin: { kind: "exact", origin: "https://www.figma.com" },
+  // "unscoped_not_shared". Linear is in that set and claimed by no starter
+  // family or other fixture. (This fixture used to sit on www.figma.com;
+  // Task 5 moved it to linear.app because PR D's Figma family will claim
+  // www.figma.com, and the generator's origin-collision check, exercised
+  // against every starter-fixtures.mjs family in
+  // scripts/tests/generate-starters.test.mjs, would otherwise flag this
+  // fixture as colliding with it.)
+  origin: { kind: "exact", origin: "https://linear.app" },
   scope: {
     kind: "unscoped",
     notice: "Records every Everyone page from every account in this Chrome profile.",
   },
+  sample_origin: "https://linear.app",
+  sample_scope: [],
+  overlaps: [],
   types: [
     {
       type: "everyone.page",
@@ -83,6 +100,55 @@ export const EXAMPLE_UNSCOPED_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/everyone.page.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    },
+  ],
+};
+
+// A strict subdomain family (Task 4): `labels: 1` restricts the subdomain
+// prefix to a single label, and `exclude` removes specific product hosts
+// (`www`, `signin`) a permissive suffix match would otherwise claim. Used
+// by extension/tests/starter-origin-cases.mjs's STRICT_ORIGIN_CASES, via
+// setStarterFamiliesForTest([...STARTER_FAMILIES, EXAMPLE_STRICT_FAMILY]),
+// and by the generator's own familyClaims tests.
+export const EXAMPLE_STRICT_FAMILY = {
+  family: "strict",
+  display_name: "Strict",
+  review_prompt: null,
+  origin: { kind: "subdomain", suffix: ".strict.test", labels: 1, exclude: ["www", "signin"] },
+  scope: null,
+  sample_origin: "https://acme.strict.test",
+  sample_scope: [],
+  overlaps: [],
+  types: [
+    {
+      type: "strict.item",
+      key: "strict.item:{origin}",
+      label: "Strict items",
+      label_variants: [],
+      description: "An example strict-subdomain item.",
+      record_label: null,
+      example_path: null,
+      adapter: {
+        type: "strict.item",
+        match: [{ path: "/item/{id:int}" }],
+        id: "strict.item:{host}/{id}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/strict.item.md",
+      samples: [
+        {
+          note: "Strict item",
+          url: "https://acme.strict.test/item/1",
+          title: null,
+          shape: "/item/{id}",
+        },
+      ],
+      samples_shape: true,
+      vectors: [],
     },
   ],
 };
@@ -114,6 +180,9 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
     kind: "unscoped",
     notice: "Records every Pair page and board from every account in this Chrome profile.",
   },
+  sample_origin: "https://www.notion.so",
+  sample_scope: [],
+  overlaps: [{ a: "pair.page", b: "pair.board", expect: "disjoint" }],
   types: [
     {
       type: "pair.page",
@@ -132,6 +201,9 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/pair.page.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
     },
     {
       type: "pair.board",
@@ -150,6 +222,9 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
       docs: "docs/adapters/pair.board.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
     },
   ],
 };

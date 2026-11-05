@@ -20,7 +20,8 @@ use serde_json::{Value as Json, json};
 mod common;
 
 use common::{
-    SHAPES, TOOLS, document, drafted_document, empty, evaluable, policy, rules, shapes, value,
+    SHAPES, STARTER_SHAPES, TOOLS, document, drafted_document, empty, evaluable, policy, rules,
+    shapes, value,
 };
 
 const GITHUB: &str = "https://github.com";
@@ -71,22 +72,29 @@ fn reason_of(site: &SiteDraft, shape: &str) -> Option<DropReason> {
         .map(|d| d.reason)
 }
 
-/// `(note, url, shape)` for every accept row of the shape fixture that has a
-/// plain URL and shape.
+/// `(note, url, shape)` for every accept row with a plain URL and shape, in
+/// `shapes.json` followed by `starter-shapes.json` (the 15 starter rows this
+/// moved out of `shapes.json`, `protocol/starters/README.md` "Recorded
+/// samples").
 fn fixture_rows() -> Vec<(String, String, String)> {
-    let fixture: Json = serde_json::from_str(SHAPES).expect("shapes.json parses");
-    fixture["accept"]
-        .as_array()
-        .expect("accept rows")
-        .iter()
-        .filter_map(|row| {
-            Some((
-                row["note"].as_str()?.to_owned(),
-                row["url"].as_str()?.to_owned(),
-                row["shape"].as_str()?.to_owned(),
-            ))
-        })
-        .collect()
+    let accept_rows = |source: &str| -> Vec<(String, String, String)> {
+        let fixture: Json = serde_json::from_str(source).expect("shape fixture parses");
+        fixture["accept"]
+            .as_array()
+            .expect("accept rows")
+            .iter()
+            .filter_map(|row| {
+                Some((
+                    row["note"].as_str()?.to_owned(),
+                    row["url"].as_str()?.to_owned(),
+                    row["shape"].as_str()?.to_owned(),
+                ))
+            })
+            .collect()
+    };
+    let mut rows = accept_rows(SHAPES);
+    rows.extend(accept_rows(STARTER_SHAPES));
+    rows
 }
 
 /// The shape fixture's row with this note.
@@ -118,15 +126,28 @@ fn starter_recorded_urls_draft_to_matching_adapters_one_per_kind() {
                 .push((note, url, shape));
         }
     }
-    let starters: BTreeSet<&str> = by_origin
+    let starters: BTreeSet<String> = by_origin
         .values()
         .flatten()
         .filter_map(|(note, _, _)| note.split("(docs/adapters/").nth(1))
+        .map(|doc| doc.trim_end_matches(".md)").to_owned())
         .collect();
+    let starter_shapes: Json =
+        serde_json::from_str(STARTER_SHAPES).expect("starter-shapes.json parses");
+    let types: BTreeSet<String> = starter_shapes["types"]
+        .as_array()
+        .expect("types array")
+        .iter()
+        .map(|t| t.as_str().expect("type string").to_owned())
+        .collect();
+    assert!(
+        types.len() >= 6,
+        "expected the shared fixture, saw {} starter types: {types:?}",
+        types.len()
+    );
     assert_eq!(
-        starters.len(),
-        6,
-        "every starter has a recorded URL: {starters:?}"
+        starters, types,
+        "every starter with samples has a recorded URL"
     );
 
     let policy = policy();
@@ -868,10 +889,16 @@ fn drafted_rules_pass_the_draft_checks_again_and_never_match_the_root() {
         )
         .collect();
     let corpus: Vec<&str> = corpus.iter().map(String::as_str).collect();
+    // Pinned rather than `&corpus[..1]`: `fixture_rows()` chains two files
+    // now (shapes.json then starter-shapes.json), so "the corpus's first
+    // shape" is no longer a stable seed on its own. `/browse/{key}` is still
+    // in the corpus (a jira.issue sample, protocol/starters/atlassian.json),
+    // so this keeps today's single-visit case exactly as before.
+    let single_visit = ["/browse/{key}"];
     let policy = policy();
     let mut drafted = 0;
     for origin in [TOOLS, GITHUB] {
-        for (visited, links) in [(&corpus[..], &[][..]), (&corpus[..1], &corpus[..])] {
+        for (visited, links) in [(&corpus[..], &[][..]), (&single_visit[..], &corpus[..])] {
             let site = draft(origin, &empty(), visited, links);
             let mut accepted = Vec::new();
             for adapter in &site.adapters {

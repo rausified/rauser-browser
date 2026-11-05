@@ -8,6 +8,7 @@ use adapter_templates::{Document, DraftPolicy, Fill, ScopeState, SharedOrigin, V
 use serde_json::Value as Json;
 
 pub const SHAPES: &str = include_str!("../../../protocol/capture-site/shapes.json");
+pub const STARTER_SHAPES: &str = include_str!("../../../protocol/capture-site/starter-shapes.json");
 pub const CATALOG: &str = include_str!("../../../protocol/capture-site/catalog.json");
 
 pub const TOOLS: &str = "https://tools.example.com";

@@ -15,6 +15,7 @@ use adapter_templates::{
 use serde_json::{Map, Value as Json, json};
 
 const VECTORS: &str = include_str!("../../protocol/adapter-templates/vectors.json");
+const STARTER_VECTORS: &str = include_str!("../../protocol/adapter-templates/starter-vectors.json");
 const DISPUTED: &str = include_str!("disputed.txt");
 /// The host-owned drafting catalog; `draft_rules` cases judge against it.
 const CATALOG: &str = include_str!("../../protocol/capture-site/catalog.json");
@@ -419,19 +420,47 @@ fn run_case(case: &Json) -> Result<Json, String> {
     })
 }
 
+/// Merges `vectors.json` and `protocol/adapter-templates/starter-vectors.json`
+/// (`protocol/adapter-templates/README.md`): the two `fixtures` maps,
+/// panicking on a name both define, and the two `cases` arrays, chained.
+/// Also checks that every case id is unique across both files, the one
+/// place that sees them both at once.
+fn merged_vectors() -> (Map<String, Json>, Vec<Json>) {
+    let legacy: Json = serde_json::from_str(VECTORS).expect("vectors.json parses");
+    let starters: Json =
+        serde_json::from_str(STARTER_VECTORS).expect("starter-vectors.json parses");
+    assert_eq!(legacy["vectors_format"], 1);
+    assert_eq!(starters["vectors_format"], 1);
+    let mut fixtures = legacy["fixtures"].as_object().expect("fixtures").clone();
+    for (name, fixture) in starters["fixtures"].as_object().expect("fixtures") {
+        if fixtures.contains_key(name) {
+            panic!("fixture {name} defined twice");
+        }
+        fixtures.insert(name.clone(), fixture.clone());
+    }
+    let mut cases: Vec<Json> = legacy["cases"].as_array().expect("cases").clone();
+    cases.extend(starters["cases"].as_array().expect("cases").iter().cloned());
+    let mut seen = HashSet::new();
+    for case in &cases {
+        let id = str_field(case, "id");
+        if !seen.insert(id.to_owned()) {
+            panic!("duplicate vector id {id}");
+        }
+    }
+    (fixtures, cases)
+}
+
 #[test]
 fn every_rust_vector_passes() {
-    let file: Json = serde_json::from_str(VECTORS).expect("vectors.json parses");
-    assert_eq!(file["vectors_format"], 1);
-    let fixtures = file["fixtures"].as_object().expect("fixtures");
+    let (fixtures, cases) = merged_vectors();
     let disputed: HashSet<&str> = DISPUTED
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect();
     let (mut passed, mut skipped, mut failures) = (0, 0, Vec::new());
-    for raw in file["cases"].as_array().expect("cases") {
-        let case = resolve(raw, fixtures);
+    for raw in &cases {
+        let case = resolve(raw, &fixtures);
         let id = str_field(&case, "id").to_owned();
         let rust = case["impls"]
             .as_array()

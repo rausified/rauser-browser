@@ -19,8 +19,13 @@
 // compiles it in as the page-summary prompt, so its tests must run) and
 // Markdown below the root (fixtures under
 // host/tests/, protocol/README.md and protocol/adapter-templates/README.md
-// are read by tests or define the protocol). An empty change list is never
-// docs-only, so a diff that found nothing (or failed) runs the full builds.
+// are read by tests or define the protocol). docs/adapters/ is carved back
+// out of docs/ for the same reason (Open decision 7, starter families PR C):
+// scripts/generate-starters.mjs's check 3 and the registry test
+// (extension/tests/starter-registry.test.mjs) both read a starter doc's
+// `Status:` line, and only the code builds run them. An empty change list is
+// never docs-only, so a diff that found nothing (or failed) runs the full
+// builds.
 //
 // It also decides, through scripts/ci-macos.mjs, whether a code change needs
 // the macOS build.
@@ -38,10 +43,17 @@ import { macosReasons, parseChangedLines } from "./ci-macos.mjs";
 const DOCS_DIRS = ["docs/", ".beads/"];
 /** Root Markdown that a build reads, so it is code. */
 const BUILT_ROOT_MARKDOWN = ["SUMMARY.md"];
+/** Open decision 7 (starter families PR C): a starter doc's `Status:` line
+ * is read by scripts/generate-starters.mjs's own check 3 and by the
+ * registry test (extension/tests/starter-registry.test.mjs, part of
+ * test:extension), both of which only run in the code builds. Carving this
+ * directory out of docs/ keeps that edit from skipping them. */
+const DOCS_EXCEPTIONS = ["docs/adapters/"];
 
 /** True when nothing in CI builds or tests from `path`. */
 export function isDocsOrQueuePath(path) {
   if (typeof path !== "string" || path === "") return false;
+  if (DOCS_EXCEPTIONS.some((dir) => path.startsWith(dir) && path.length > dir.length)) return false;
   if (DOCS_DIRS.some((dir) => path.startsWith(dir) && path.length > dir.length)) return true;
   if (BUILT_ROOT_MARKDOWN.includes(path)) return false;
   return !path.includes("/") && path.endsWith(".md") && path.length > ".md".length;

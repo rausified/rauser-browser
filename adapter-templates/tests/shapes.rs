@@ -7,6 +7,7 @@ use adapter_templates::{DraftPolicy, Fill};
 use serde_json::Value as Json;
 
 const SHAPES: &str = include_str!("../../protocol/capture-site/shapes.json");
+const STARTER_SHAPES: &str = include_str!("../../protocol/capture-site/starter-shapes.json");
 const CATALOG: &str = include_str!("../../protocol/capture-site/catalog.json");
 
 const ALL_CLASSES: [ShapeClass; 9] = [
@@ -23,6 +24,10 @@ const ALL_CLASSES: [ShapeClass; 9] = [
 
 fn fixture() -> Json {
     serde_json::from_str(SHAPES).expect("shapes.json parses")
+}
+
+fn starter_fixture() -> Json {
+    serde_json::from_str(STARTER_SHAPES).expect("starter-shapes.json parses")
 }
 
 /// Expands a string or a `{"$build": [...]}` of strings and
@@ -46,8 +51,8 @@ fn built(value: &Json) -> String {
         .collect()
 }
 
-fn rows(section: &str) -> Vec<(String, String)> {
-    fixture()[section]
+fn section_rows(source: &Json, section: &str) -> Vec<(String, String)> {
+    source[section]
         .as_array()
         .unwrap_or_else(|| panic!("{section} array"))
         .iter()
@@ -56,6 +61,15 @@ fn rows(section: &str) -> Vec<(String, String)> {
             (note, built(&row["shape"]))
         })
         .collect()
+}
+
+/// `section`'s rows of `shapes.json` followed by those of
+/// `starter-shapes.json` (the 15 starter rows this moved out of
+/// `shapes.json`, `protocol/starters/README.md` "Recorded samples").
+fn rows(section: &str) -> Vec<(String, String)> {
+    let mut all = section_rows(&fixture(), section);
+    all.extend(section_rows(&starter_fixture(), section));
+    all
 }
 
 /// A policy whose fill values come from the host catalog; the drafting
@@ -109,6 +123,26 @@ fn shape_fixture_round_trips_through_rust_parser() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn starter_shape_rows_all_name_a_doc() {
+    // starter-shapes.json's rows are the ones this task moved out of
+    // shapes.json (protocol/starters/README.md "Recorded samples"); each
+    // one's note still names the doc page `renderStarterShapes` suffixed it
+    // with, and shapes.json keeps none of them. The emptiness checks guard
+    // against both loops passing vacuously if starter-shapes.json ever
+    // shipped with no rows.
+    let starter_rows = section_rows(&starter_fixture(), "accept");
+    assert!(!starter_rows.is_empty(), "starter-shapes.json accept rows");
+    for (note, _) in &starter_rows {
+        assert!(note.contains("(docs/adapters/"), "{note}");
+    }
+    let shape_rows = section_rows(&fixture(), "accept");
+    assert!(!shape_rows.is_empty(), "shapes.json accept rows");
+    for (note, _) in &shape_rows {
+        assert!(!note.contains("(docs/adapters/"), "{note}");
+    }
 }
 
 #[test]

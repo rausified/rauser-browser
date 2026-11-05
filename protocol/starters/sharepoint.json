@@ -4,6 +4,9 @@
   "review_prompt": null,
   "origin": { "kind": "subdomain", "suffix": ".sharepoint.com" },
   "scope": null,
+  "sample_origin": "https://acme.sharepoint.com",
+  "sample_scope": [],
+  "overlaps": [],
   "types": [
     {
       "type": "sharepoint.doc",
@@ -33,7 +36,29 @@
         }
       ],
       "status": { "state": "certified", "method": "live", "checked_on": "2026-11-02", "checked_by": "John" },
-      "docs": "docs/adapters/sharepoint.doc.md"
+      "docs": "docs/adapters/sharepoint.doc.md",
+      "samples": [
+        {
+          "note": "SharePoint site document",
+          "url": "https://acme.sharepoint.com/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
+          "title": null,
+          "shape": "/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
+        },
+        {
+          "note": "SharePoint personal document",
+          "url": "https://acme-my.sharepoint.com/personal/jdoe_acme_com/_layouts/15/Doc.aspx?sourcedoc=0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+          "title": null,
+          "shape": "/personal/{slug}/_layouts/{num}/{slug}?sourcedoc={uuid}"
+        },
+        {
+          "note": "SharePoint sharing form",
+          "url": "https://acme.sharepoint.com/:w:/r/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
+          "title": null,
+          "shape": "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
+        }
+      ],
+      "samples_shape": true,
+      "vectors": []
     }
   ]
 }
