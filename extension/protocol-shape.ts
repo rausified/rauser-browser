@@ -572,6 +572,15 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
             typeof entry.description === "string" && entry.description.length > 0 &&
             Array.from(entry.description).length <= 256;
         }) && new Set(value.commands.map((command: { name: string }) => command.name)).size === value.commands.length;
+    case "task_command_settings":
+      return isMessage(value, ["revision", "original_toml", "commands", "issue"]) &&
+        isBoundedString(value.revision, 128, 1) && isBoundedString(value.original_toml, 262144) &&
+        (value.issue === null || isBoundedString(value.issue, 1024)) &&
+        Array.isArray(value.commands) && value.commands.length <= 32 && value.commands.every((command: unknown) =>
+          isPlainObject(command) && hasExactKeys(command, ["name", "description", "prompt"]) &&
+          isBoundedString(command.name, 32) && typeof command.description === "string" &&
+          Array.from(command.description).length <= 256 && typeof command.prompt === "string" &&
+          Array.from(command.prompt).length <= 4096);
     case "run_started":
       return isRunView(value.run) && typeof value.existing === "boolean";
     case "auto_summary_skipped":

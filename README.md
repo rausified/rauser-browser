@@ -266,8 +266,18 @@ the new overview field.
 
 ### Save a reusable task command
 
-Add a named instruction to your Brauser `config.toml`, beside the other
-settings (use the OS configuration folder, not the home content folder):
+In **Settings → Saved task commands**, click **Edit saved commands**, then
+**Add command**. Enter a name (without `/`), description and literal
+instruction, then **Save commands**. Edit any row to change it; **Remove
+command** takes effect when you save the complete list. Saving starts no task.
+
+If commands contain unsupported values, Settings shows their preserved TOML
+for explicit repair and keeps an exact backup of config.toml before saving.
+A stale save keeps your draft; **Review current commands** shows what is now
+saved before you deliberately replace that list. Other settings are preserved.
+
+You can also add a named instruction to your Brauser `config.toml`, beside the
+other settings (use the OS configuration folder, not the home content folder):
 
 ```toml
 [[commands]]
@@ -295,7 +305,7 @@ The composed instruction (including its command heading) must fit the existing
 4096-character task limit.
 Template variables and `include` are not supported yet; those configurations
 show a command-specific repair message while ordinary tasks keep working.
-Use **Refresh commands** after editing the file. If a reviewed command changes,
+Use **Refresh commands** in the task bar after saving. If a reviewed command changes,
 Brauser keeps your draft, refreshes the list and requires another Run.
 History, Reuse and keyboard recall retain the effective instruction that ran,
 so reusing it does not silently pick up a newer command definition.

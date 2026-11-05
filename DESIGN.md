@@ -886,6 +886,17 @@ Extract action items from the page below. Return a markdown checklist.
 output = "sidebar"
 ```
 
+Settings offers **Saved task commands** with name, description and literal
+instruction rows, Add/Remove, and an explicit save of the complete list.
+Dedicated `get_task_command_settings` and `save_task_commands` messages bind
+the whole config revision. The host parses commands-only TOML with the existing
+registry validator and atomically replaces only that raw config value; unrelated
+unsupported settings and their issue states remain. Invalid registries expose
+preserved TOML for explicit repair and get an exact config backup before
+replacement. Syntax-invalid or oversized config files refuse command editing.
+Refreshes and stale saves retain the draft; explicit **Review current commands**
+shows current values before another save can replace them. Saving starts no task.
+
 The task bar's **Saved commands** disclosure loads a read-only host catalogue
 of names and descriptions. Choosing one and clicking **Insert command** adds
 `/name` before the current draft; only Enter or Run executes it. A typed `/name` with optional trailing

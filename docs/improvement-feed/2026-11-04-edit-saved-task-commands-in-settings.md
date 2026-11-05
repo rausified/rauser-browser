@@ -13,3 +13,5 @@ never populate instruction fields. Cover create/edit/remove and stale-save
 behavior with offline native and settings tests.
 
 Tracked as `brwr-kqt4`.
+
+- Done 2026-11-05: brwr-kqt4 — Settings authoring/removal, revision-bound saves, preserved invalid-value repair and offline regressions; complete local gates pass with explicit sandbox skips.
