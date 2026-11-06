@@ -21,5 +21,11 @@
   "box.folder": "box.folder:{host}/{id}",
   "box.share": "box.share:{host}/{kind}/{link}",
   "webex.recording": "webex.recording:{host}/{id}",
-  "webex.meeting": "webex.meeting:{host}/{id}"
+  "webex.meeting": "webex.meeting:{host}/{id}",
+  "aha.feature": "aha.feature:{host}/{ref}",
+  "aha.requirement": "aha.requirement:{host}/{ref}",
+  "aha.epic": "aha.epic:{host}/{ref}",
+  "aha.release": "aha.release:{host}/{ref}",
+  "aha.idea": "aha.idea:{host}/{ref}",
+  "aha.note": "aha.note:{host}/{ref}"
 }
