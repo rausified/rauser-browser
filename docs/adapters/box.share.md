@@ -48,6 +48,11 @@ One entry: `{title} | Powered by Box` strips the app's own title-component
 suffix, leaving the shared file's or folder's name (with its extension, for
 a file).
 
+While the page is untitled, an enterprise user's tab instead reads
+`{enterprise name} | Powered by Box` (same limit as `box.file`): this entry
+still matches, so the enterprise name is recorded as if it were the shared
+item's name.
+
 A dead or bad link's title, `Box | Simple Online Collaboration`, matches no
 entry and is kept whole.
 
@@ -86,7 +91,7 @@ the latter needs a rule, as researched.
 ## Known limits
 
 - **This draft does not cover personal `https://app.box.com` or
-  `<company>.ent.box.com`** (Open decision 1), the same gap `box.file`'s
+  `<company>.ent.box.com`**, the same gap `box.file`'s
   page states in full.
 - **This starter is also offered, unintentionally, on Box's upload hosts**
   (`fupload-<n>.app.box.com`), the same `exclude`-is-whole-label-only limit
@@ -99,6 +104,9 @@ the latter needs a rule, as researched.
   Only a server redirect from `/s/<name>` to the item's own route — if Box
   ever adds one for a signed-in collaborator — would let the two be joined
   as aliases; none was observed.
+- **The enterprise-name loading title is recorded as the shared item's
+  name**, the same limit `box.file` carries, predicted and confirmed by the
+  scorecard.
 - Localized Box UIs may translate "Powered by Box"; not checked.
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).
 
@@ -119,6 +127,13 @@ with real Chrome and a real Box account:
 5. Open a shared link as an unauthorized user, and a deleted or unknown
    share name. Record both titles and decide whether those visits should
    keep being recorded.
+6. Watch the title while the enterprise name flashes before the real title
+   loads on a shared link, and in a non-English locale.
+7. On a Capture Site review on a shared-link page with no saved rules,
+   confirm Brauser offers all three Box types — files, folders, shared
+   links — each with its own Box-account statement and the
+   development-draft source line; confirm saving one turns the page card's
+   status to "● Artifact recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `box.share`'s

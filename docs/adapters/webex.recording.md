@@ -74,19 +74,23 @@ One entry: `{title} - {~}` drops everything after the last ` - `, the
 site's configured brand (default `Webex`) that the player and the router
 both append.
 
-Two titles are recorded whole, `title_entry` null, because the page has not
-yet set a title with a `-`-joined brand:
+The vectors show two outcomes before a recording has set its real title:
 
-- **Before a recording loads**, the router's own route title is recorded:
-  `Replay Recorded Meeting` (the player route) or `Recorded Meeting
-  Password` (the share link's password gate), each with the site's brand
-  still attached as ` - Webex` at this point, so the template actually
-  strips it in that form (`eval.webex.recording.player_loading_title`,
-  `eval.webex.recording.share_recordingservice`). It is only the version
-  with **no** brand suffix at all (`eval.webex.recording.password_title`)
-  that is kept whole.
-- **A dead or unbranded title**, `Cisco Webex Meetings`, matches no `-`
-  split point the template expects and is kept whole.
+- **Branded interstitials are recorded stripped.** Before a recording
+  loads, and at the share link's password gate, the router's own route
+  title still carries the site's brand as ` - Webex` (`Replay Recorded
+  Meeting - Webex`, `Recorded Meeting Password - Webex`), so the template
+  strips it the same as a loaded title, recording `Replay Recorded Meeting`
+  or `Recorded Meeting Password`
+  (`eval.webex.recording.player_loading_title`,
+  `eval.webex.recording.share_recordingservice`).
+- **An unbranded title is kept whole,** `title_entry` null, whenever the
+  page has not attached a `-`-joined brand at all: the password gate's
+  title before any brand is attached, `Recorded Meeting Password`
+  (`eval.webex.recording.password_title`), and a dead or unbranded page
+  title, `Cisco Webex Meetings`
+  (`eval.webex.recording.title_no_suffix_kept_whole`), both match no split
+  point and are recorded exactly as shown.
 
 ## Recorded samples
 
@@ -163,9 +167,9 @@ vectors.
   claimed by the strict `.webex.com` family too. Those hosts are internal or
   media infrastructure, not Meetings site pages, so none of this type's
   rules is expected to match anything there in practice; this is a known
-  limit of the data, not a behavior change, and is tracked as a follow-up
-  (mirrors Box's `fupload-*` hosts, `docs/adapters/box.file.md` "Known
-  limits").
+  limit of the data, not a behavior change (mirrors Box's `fupload-*`
+  hosts, `docs/adapters/box.file.md` "Known limits"). It is listed in the
+  D2 pull request as a follow-up; bead to follow.
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).
 
 ## Live check still needed
@@ -188,6 +192,11 @@ with real Chrome and a real Webex Meetings site:
    available, and record its real URL and ID shape.
 6. Watch the title while the pre-load route name flashes before the real
    title loads, and in a non-English locale.
+7. On a Capture Site review on a recording page with no saved rules,
+   confirm Brauser offers both Webex types — recordings, meeting
+   summaries — with the development-draft source line in each type's own
+   description; confirm saving one turns the page card's status to "●
+   Artifact recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `webex.recording`'s

@@ -71,10 +71,11 @@ real Webex visits were all recordings; none exercised a `postinfo` URL
 directly, so this type's ID shape and lack of a per-meeting title remain
 unverified against a real account (see "Live check still needed").
 
-`samples_shape` may be flipped to `false` if the structural drafter cannot
-tell `/meeting/postinfo/<id>` and `/postinfo/<id>` apart from this single
-example alone; see the generated-checks step for whether that applied
-here.
+`samples_shape` is `true`: this type records only one sample, so there is no
+second concrete URL for the structural drafter to confuse it with (the
+ambiguity that flips Vidcast's video samples to `false` needs two samples
+at different depths sharing a route word); one sample cannot create that
+ambiguity.
 
 ## What the draft does not record
 
@@ -115,9 +116,9 @@ here.
   claimed by the strict `.webex.com` family too. Those hosts are internal or
   media infrastructure, not Meetings site pages, so none of this type's
   rules is expected to match anything there in practice; this is a known
-  limit of the data, not a behavior change, and is tracked as a follow-up
-  (mirrors Box's `fupload-*` hosts, `docs/adapters/box.file.md` "Known
-  limits").
+  limit of the data, not a behavior change (mirrors Box's `fupload-*`
+  hosts, `docs/adapters/box.file.md` "Known limits"). It is listed in the
+  D2 pull request as a follow-up; bead to follow.
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).
 
 ## Live check still needed
@@ -138,6 +139,11 @@ with real Chrome and a real Webex Meetings site:
    - Webex`, and in a non-English locale.
 6. Try `/postinfo/<id>` (the short redirect form) directly and confirm it
    lands on the canonical `/meeting/postinfo/<id>` URL with the same ID.
+7. On a Capture Site review on a meeting page with no saved rules, confirm
+   Brauser offers both Webex types — recordings, meeting summaries — with
+   the development-draft source line in each type's own description;
+   confirm saving one turns the page card's status to "● Artifact
+   recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `webex.meeting`'s

@@ -90,11 +90,10 @@ research matched all 5 correctly, with a stable ID across URL forms
 (`{title} | Powered by Box`) — the only miss recorded for the site was the
 known enterprise-name loading-title limit below, named up front.
 
-`samples_shape` may be flipped to `false` if the structural drafter cannot
-tell `/file/<id>` and `/s/<share>/file/<id>` apart from these two examples
-alone (the same ambiguity Vidcast's video samples hit, `docs/adapters/
-vidcast.video.md` "Recorded samples"); see the generated-checks step for
-whether that applied here.
+`samples_shape` is `true`: unlike Vidcast's video samples (`docs/adapters/
+vidcast.video.md` "Recorded samples"), the structural drafter tells
+`/file/<id>` and `/s/<share>/file/<id>` apart from these two examples alone,
+so no ambiguity forces it to `false` here.
 
 ## What the draft does not record
 
@@ -113,15 +112,17 @@ whether that applied here.
 ## Known limits
 
 - **This draft does not cover personal `https://app.box.com` or
-  `<company>.ent.box.com`** (Open decision 1). The family's strict
+  `<company>.ent.box.com`**. The family's strict
   `.app.box.com` subdomain origin claims only `<company>.app.box.com`
   hosts; `familyClaims` never claims the suffix's own bare host, so a
   personal Box account without a custom subdomain is not offered this
   starter, and Box Zones' `*.ent.box.com` twins (observed serving shared
-  links, e.g. `weforum.ent.box.com`) are a separate suffix this family does
+  links, e.g. `acme.ent.box.com`) are a separate suffix this family does
   not claim either. Covering all three needs either a permissive `.box.com`
-  family (ruled out: builder's call 7) or a multi-origin model, which needs
-  engine code; it is recorded as a follow-up bead.
+  family (ruled out because it would claim Box's product hosts) or a
+  multi-origin model, which needs engine code; it is listed in the D2 pull
+  request as a follow-up, with a bead to follow once the shared `bd`
+  database can create one.
 - **This starter is also offered, unintentionally, on Box's upload hosts,**
   `fupload-<n>.app.box.com` (named in `docs/research/blind/box/
   adapters.toml`): `origin.exclude` matches a whole first label exactly, and
@@ -129,11 +130,11 @@ whether that applied here.
   family claims these hosts too. Those hosts serve file uploads, not the web
   app's pages, so none of this type's rules is expected to match anything
   there in practice; this is a known limit of the data, not a behavior
-  change, and is tracked as a follow-up (an `exclude` prefix-pattern form in
-  the generator).
+  change. It is listed in the D2 pull request as a follow-up (an `exclude`
+  prefix-pattern form in the generator); bead to follow.
 - **The enterprise-name loading title is recorded as the file's title.**
   While a page is untitled, an enterprise user's tab reads `{enterprise
-  name} | Powered by Box` (Review Focus; predicted and confirmed by the
+  name} | Powered by Box` (predicted and confirmed by the
   scorecard). The worker's wait for a later title update usually covers
   this, but a fast enough save can still catch it.
 - **Box Notes and Canvas titles are unverified.** Notes open in a new tab
@@ -167,6 +168,11 @@ with real Chrome and a real Box account:
    loads, and in a non-English locale.
 6. Check `/file/<id>` sub-routes the UI uses (versions, details sidebar) and
    whether any should count; today the rules have no rest segment.
+7. On a Capture Site review on a file page with no saved rules, confirm
+   Brauser offers all three Box types — files, folders, shared links — each
+   with its own Box-account statement and the development-draft source
+   line; confirm saving one turns the page card's status to "● Artifact
+   recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `box.file`'s `status`

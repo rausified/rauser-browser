@@ -30,7 +30,7 @@ title  = "{title} | Powered by Box"
 ## What each rule covers
 
 1. **Folder view**, `/folder/<id>`, logged in. `int(2,19)` leaves out
-   `/folder/0`, the "All Files" root (Review Focus item 2): it lists
+   `/folder/0`, the "All Files" root: it lists
    everything rather than being a folder anyone works in, and real folder
    IDs run 9–12+ digits.
 2. **Subfolder of a shared folder**, `/s/<shared name>/folder/<id>`, reached
@@ -75,7 +75,7 @@ per-type, since none of those 5 real visits happened to be a folder.
 ## What the draft does not record
 
 - `/folder/0`, the "All Files" root, deliberately excluded by `int(2,19)`
-  (Review Focus item 2);
+  since it lists everything rather than being a folder anyone works in;
 - `/folder/<id>/search`, searching inside a folder, since no rule carries a
   rest segment;
 - Box's lists and chrome: `/recents`, `/trash`, `/files/favorites`, the
@@ -85,7 +85,7 @@ per-type, since none of those 5 real visits happened to be a folder.
 ## Known limits
 
 - **This draft does not cover personal `https://app.box.com` or
-  `<company>.ent.box.com`** (Open decision 1), the same gap `box.file`'s
+  `<company>.ent.box.com`**, the same gap `box.file`'s
   page states in full.
 - **This starter is also offered, unintentionally, on Box's upload hosts**
   (`fupload-<n>.app.box.com`), the same `exclude`-is-whole-label-only limit
@@ -113,6 +113,11 @@ with real Chrome and a real Box account:
    loads, and in a non-English locale.
 5. Rename a folder and confirm the tab title follows while the folder ID
    does not change.
+6. On a Capture Site review on a folder page with no saved rules, confirm
+   Brauser offers all three Box types — files, folders, shared links — each
+   with its own Box-account statement and the development-draft source
+   line; confirm saving one turns the page card's status to "● Artifact
+   recognized".
 
 Then record the date in this page's status line (`Status: release-certified
 <date>. …`, as in `docs/adapters/jira.issue.md`), set `box.folder`'s

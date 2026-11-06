@@ -14,9 +14,10 @@ generator's `overlaps` validation only accepts `"disjoint"`; it has no way to
 declare a container-first pair. That gap surfaced only during planning (Open
 decision 2), after the research was already written, and forced deferring
 the whole `splunk-cloud` family out of this PR (D2 ships Box and Webex only;
-a follow-up bead tracks the generator change and the Splunk family). Had the
-research step itself run the overlap report and the generator against a
-draft family file, the gap would have surfaced then, when research could
+the generator change and the Splunk family are a follow-up, listed in the D2
+pull request; bead to follow). Had the research step itself run the overlap
+report and the generator against a draft family file, the gap would have
+surfaced then, when research could
 either flag the limitation up front or choose a different type split, instead
 of blocking a finished plan's task list.
 
