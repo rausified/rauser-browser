@@ -87,6 +87,9 @@ per-type, since none of those 5 real visits happened to be a folder.
 - **This draft does not cover personal `https://app.box.com` or
   `<company>.ent.box.com`** (Open decision 1), the same gap `box.file`'s
   page states in full.
+- **This starter is also offered, unintentionally, on Box's upload hosts**
+  (`fupload-<n>.app.box.com`), the same `exclude`-is-whole-label-only limit
+  `box.file`'s page states in full.
 - **Shared-subfolder titles may carry the share root's name**, not the
   subfolder's own name: the one rendered sample observed showed the share
   root's title on a subfolder page.

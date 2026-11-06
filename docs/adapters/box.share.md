@@ -88,6 +88,9 @@ the latter needs a rule, as researched.
 - **This draft does not cover personal `https://app.box.com` or
   `<company>.ent.box.com`** (Open decision 1), the same gap `box.file`'s
   page states in full.
+- **This starter is also offered, unintentionally, on Box's upload hosts**
+  (`fupload-<n>.app.box.com`), the same `exclude`-is-whole-label-only limit
+  `box.file`'s page states in full.
 - **A shared name dies when its link is disabled or re-created; a vanity
   name can be edited or reused by the owner.** This ID names the link, not
   the item behind it.

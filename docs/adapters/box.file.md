@@ -122,6 +122,15 @@ whether that applied here.
   not claim either. Covering all three needs either a permissive `.box.com`
   family (ruled out: builder's call 7) or a multi-origin model, which needs
   engine code; it is recorded as a follow-up bead.
+- **This starter is also offered, unintentionally, on Box's upload hosts,**
+  `fupload-<n>.app.box.com` (named in `docs/research/blind/box/
+  adapters.toml`): `origin.exclude` matches a whole first label exactly, and
+  cannot express a `fupload-*` prefix pattern, so the strict `.app.box.com`
+  family claims these hosts too. Those hosts serve file uploads, not the web
+  app's pages, so none of this type's rules is expected to match anything
+  there in practice; this is a known limit of the data, not a behavior
+  change, and is tracked as a follow-up (an `exclude` prefix-pattern form in
+  the generator).
 - **The enterprise-name loading title is recorded as the file's title.**
   While a page is untitled, an enterprise user's tab reads `{enterprise
   name} | Powered by Box` (Review Focus; predicted and confirmed by the
