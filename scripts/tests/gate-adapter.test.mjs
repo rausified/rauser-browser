@@ -52,6 +52,16 @@ test("a family-file change is in scope and runs gen:starters --check first", () 
   assert.equal(names(["extension/starter-families.generated.ts"])[0], "starter sources");
 });
 
+test("a family-file change also runs the generator's own tests (PR #323 CI post-mortem)", () => {
+  // scripts/tests/generate-starters.test.mjs and new-starter.test.mjs pin
+  // assumptions about the family registry that --check alone does not
+  // verify; a starter-input change must run them locally, not just on CI.
+  assert.ok(names(["protocol/starters/atlassian.json"]).includes("starter generator tests"));
+  assert.ok(names(["extension/starter-families.generated.ts"]).includes("starter generator tests"));
+  assert.ok(names(["docs/adapters/jira.issue.md"]).includes("starter generator tests"));
+  assert.ok(!names(["README.md"]).includes("starter generator tests"));
+});
+
 test("the Confluence and Miro starter changes are in scope", () => {
   assert.deepEqual(outOfScope(CONFLUENCE), []);
   assert.deepEqual(outOfScope(MIRO), []);
@@ -108,6 +118,7 @@ test("the Confluence change runs every extension, engine and host check plus a11
     // docs/adapters/confluence.page.md is in CONFLUENCE, which now also
     // triggers STARTER_INPUTS (Open decision 7).
     "starter sources",
+    "starter generator tests",
     "status docs",
     "typecheck",
     "lint",
@@ -142,7 +153,15 @@ test("a starter doc change runs the generator check and the extension group (Ope
   const steps = names(["docs/adapters/jira.issue.md"]);
   assert.ok(steps.includes("starter sources"));
   assert.ok(steps.includes("test:extension"));
-  assert.deepEqual(steps, ["starter sources", "status docs", "typecheck", "lint", "build:extension", "test:extension"]);
+  assert.deepEqual(steps, [
+    "starter sources",
+    "starter generator tests",
+    "status docs",
+    "typecheck",
+    "lint",
+    "build:extension",
+    "test:extension",
+  ]);
 });
 
 test("a vectors-only change skips the host and Rust lints", () => {

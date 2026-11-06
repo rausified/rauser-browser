@@ -24,6 +24,11 @@ const VECTORS_JSON = "protocol/adapter-templates/vectors.json";
 const STARTER_VECTORS_JSON = "protocol/adapter-templates/starter-vectors.json";
 
 const LEGACY_ORDER = ["jira.issue", "confluence.page", "sharepoint.doc", "github.pr", "github.issue", "github.repo", "miro.board"];
+// The four families shipped before D1 (figma, google-workspace, vidcast);
+// file-name order, which is also legacy catalog order for these four. A
+// later family must not disturb this relative order (catalogTypeOrder keeps
+// every existing type's position and only ever appends new ones).
+const LEGACY_FAMILIES = ["atlassian", "github", "miro", "sharepoint"];
 
 function tmpRoot(t) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "generate-starters-"));
@@ -43,11 +48,24 @@ function run(args, cwd = REPO) {
   return spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: "utf8" });
 }
 
-test("loads the four shipped families with seven types in legacy catalog order", () => {
+test("loads the shipped families, with the four legacy families and their seven types ordered as before", () => {
+  // Derived from the loaded families/catalog rather than pinned to today's
+  // exact family list, so a new family (D1: google-workspace, figma,
+  // vidcast) does not break this test; the four legacy families and their
+  // seven types must still appear, in their original relative order, as a
+  // subset (team lead's CI fix, PR #323).
   const families = loadFamilies(REPO);
-  assert.deepEqual(families.map((family) => family.family), ["atlassian", "github", "miro", "sharepoint"]);
+  const familyNames = families.map((family) => family.family);
+  assert.deepEqual(familyNames.filter((name) => LEGACY_FAMILIES.includes(name)), LEGACY_FAMILIES);
+  // families is file-name order, which groups a family's types together but
+  // does not itself follow catalog order (e.g. sharepoint's file sorts after
+  // miro's), so only the presence of exactly the seven legacy types is
+  // checked here; the catalog-order guarantee belongs to `current` below,
+  // which is what catalog.json (and renderTs's STARTER_FAMILY_IDS) actually
+  // orders by.
   const types = families.flatMap((family) => family.types.map((type) => type.type));
-  assert.equal(types.length, 7);
+  const legacyTypesPresent = types.filter((type) => LEGACY_ORDER.includes(type));
+  assert.deepEqual([...legacyTypesPresent].sort(), [...LEGACY_ORDER].sort());
   const current = JSON.parse(readFileSync(path.join(REPO, CATALOG_JSON), "utf8")).starter_types;
   // Find the line by content, not a hard-coded index: the index breaks
   // whenever catalog.json gains a line, and splitting on "\n" alone leaves a
@@ -56,7 +74,10 @@ test("loads the four shipped families with seven types in legacy catalog order",
   const line = catalogLines.find((candidate) => candidate.includes('"starter_types"'));
   assert.ok(line, "catalog.json has no starter_types line");
   assert.equal(renderCatalogLine(families, current), line);
-  assert.deepEqual(current, LEGACY_ORDER);
+  // catalogTypeOrder keeps every existing type's position and only appends
+  // new ones at the end, so the legacy seven stay an ordered prefix of the
+  // live catalog no matter how many types get added after them.
+  assert.deepEqual(current.slice(0, LEGACY_ORDER.length), LEGACY_ORDER);
 });
 
 test("--check is clean on the committed tree", async (t) => {
@@ -221,14 +242,29 @@ test("renderTs starts with the generated-file header and is deterministic", () =
   assert.equal(rendered, renderTs(loadFamilies(REPO)));
   // .gitattributes pins this file to LF, but normalise anyway: a CRLF
   // checkout (Windows CI) should not fail this on line endings alone.
-  const catalogOrdered = renderTs(families, LEGACY_ORDER);
+  // Derive the catalog order from the live catalog.json (via the same
+  // catalogTypeOrder main() calls) instead of the pinned legacy-only
+  // LEGACY_ORDER: a new family's types extend the real catalog order on
+  // disk, so comparing against LEGACY_ORDER alone would disagree with what
+  // main() actually wrote (team lead's CI fix, PR #323).
+  const current = JSON.parse(readFileSync(path.join(REPO, CATALOG_JSON), "utf8")).starter_types;
+  const catalogOrdered = renderTs(families, catalogTypeOrder(families, current));
   assert.equal(catalogOrdered, readFileSync(path.join(REPO, GENERATED_TS), "utf8").replace(/\r\n/g, "\n"));
 });
 
-test("STARTER_FAMILY_IDS follows catalog order", () => {
+test("STARTER_FAMILY_IDS follows catalog order, with the legacy families as an ordered prefix", () => {
+  // Ranking families by LEGACY_ORDER alone (rather than the live catalog)
+  // isolates this from however many families ship today: any family with no
+  // type in LEGACY_ORDER ranks last (familyCatalogOrder), so the four legacy
+  // families must still come first, in their original order, no matter how
+  // many later families (D1: google-workspace, figma, vidcast) got appended
+  // after them (team lead's CI fix, PR #323).
   const families = loadFamilies(REPO);
   const rendered = renderTs(families, LEGACY_ORDER);
-  assert.match(rendered, /export const STARTER_FAMILY_IDS = \["atlassian", "sharepoint", "github", "miro"\] as const;/);
+  const match = rendered.match(/export const STARTER_FAMILY_IDS = \[([^\]]*)\] as const;/);
+  assert.ok(match, "STARTER_FAMILY_IDS line not found in rendered output");
+  const ids = JSON.parse(`[${match[1]}]`);
+  assert.deepEqual(ids.slice(0, LEGACY_FAMILIES.length), ["atlassian", "sharepoint", "github", "miro"]);
 });
 
 test("--check tolerates a CRLF checkout of the generated outputs", async (t) => {

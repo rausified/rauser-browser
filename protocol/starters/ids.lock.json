@@ -6,5 +6,15 @@
   "github.issue": "github.issue:{host}/{owner}/{repo}/{number}",
   "github.repo": "github.repo:{host}/{owner}/{repo}",
   "miro.board": "miro.board:{host}/{board}",
-  "github.repo#within": "github.repo:{host}/{owner}/{repo}"
+  "github.repo#within": "github.repo:{host}/{owner}/{repo}",
+  "google.doc": "google.doc:{host}/{id}",
+  "google.sheet": "google.sheet:{host}/{id}",
+  "google.slides": "google.slides:{host}/{id}",
+  "google.form": "google.form:{host}/{id}",
+  "google.formresponse": "google.formresponse:{host}/{id}",
+  "figma.file": "figma.file:{host}/{key}",
+  "figma.branch": "figma.branch:{host}/{branch}",
+  "vidcast.video": "vidcast.video:{host}/{video}",
+  "vidcast.playlist": "vidcast.playlist:{host}/{playlist}",
+  "vidcast.page": "vidcast.page:{host}/{page}"
 }

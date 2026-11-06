@@ -191,6 +191,282 @@
           "title": "{title} - Miro"
         }
       ]
+    },
+    "starter:google-workspace": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "google.doc",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/document/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+            },
+            {
+              "path": "/document/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+            },
+            {
+              "path": "/a/{_}/document/d/{id:token(20,128)}/{mode?:(edit|view|preview|mobilebasic)}"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "modes": {
+            "edit": "edit",
+            "view": "view",
+            "preview": "view",
+            "mobilebasic": "view"
+          },
+          "id": "google.doc:{host}/{id}",
+          "title": [
+            "{title} - Google Docs",
+            "{title} – Google Docs"
+          ],
+          "refs": [
+            {
+              "type": "jira.issue",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "google.sheet",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+            },
+            {
+              "path": "/spreadsheets/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+            },
+            {
+              "path": "/a/{_}/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "modes": {
+            "edit": "edit",
+            "view": "view",
+            "preview": "view",
+            "htmlview": "view"
+          },
+          "id": "google.sheet:{host}/{id}",
+          "title": [
+            "{title} - Google Sheets",
+            "{title} – Google Sheets",
+            "{title} - Google Drive",
+            "{title} – Google Drive"
+          ],
+          "refs": [
+            {
+              "type": "jira.issue",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "google.slides",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/presentation/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+            },
+            {
+              "path": "/presentation/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+            },
+            {
+              "path": "/a/{_}/presentation/d/{id:token(20,128)}/{mode?:(edit|view|preview|present|embed)}"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "modes": {
+            "edit": "edit",
+            "view": "view",
+            "preview": "view",
+            "present": "view",
+            "embed": "view"
+          },
+          "id": "google.slides:{host}/{id}",
+          "title": [
+            "{title} - Google Slides",
+            "{title} – Google Slides"
+          ],
+          "refs": [
+            {
+              "type": "jira.issue",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "google.form",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/forms/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+            },
+            {
+              "path": "/forms/u/{_}/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+            },
+            {
+              "path": "/a/{_}/forms/d/{id:token(20,128)}/{mode?:(edit|viewform)}"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "modes": {
+            "edit": "edit",
+            "viewform": "view"
+          },
+          "id": "google.form:{host}/{id}",
+          "title": [
+            "{title} - Google Forms",
+            "{title} – Google Forms"
+          ]
+        },
+        {
+          "type": "google.formresponse",
+          "origin": "https://docs.google.com",
+          "match": [
+            {
+              "path": "/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+              "mode": "view"
+            },
+            {
+              "path": "/forms/u/{_}/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+              "mode": "view"
+            },
+            {
+              "path": "/a/{_}/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)",
+              "mode": "view"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "id": "google.formresponse:{host}/{id}"
+        }
+      ]
+    },
+    "starter:figma": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "figma.file",
+          "origin": "https://www.figma.com",
+          "match": [
+            {
+              "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{key:token(22,128)}"
+            },
+            {
+              "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{key:token(22,128)}/{_}"
+            },
+            {
+              "path": "/(proto|deck|presenter)/{key:token(22,128)}",
+              "mode": "view"
+            },
+            {
+              "path": "/(proto|deck|presenter)/{key:token(22,128)}/{_}",
+              "mode": "view"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "id": "figma.file:{host}/{key}",
+          "title": [
+            "{~} · {title} - Figma Slides",
+            "{title} – {~}",
+            "{title} - {~}"
+          ]
+        },
+        {
+          "type": "figma.branch",
+          "origin": "https://www.figma.com",
+          "match": [
+            {
+              "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{_}/branch/{branch:token(22,128)}"
+            },
+            {
+              "path": "/(file|design|board|slides|site|buzz|make|rev|spec|weave)/{_}/branch/{branch:token(22,128)}/{_}"
+            },
+            {
+              "path": "/(proto|deck|presenter)/{_}/branch/{branch:token(22,128)}",
+              "mode": "view"
+            },
+            {
+              "path": "/(proto|deck|presenter)/{_}/branch/{branch:token(22,128)}/{_}",
+              "mode": "view"
+            }
+          ],
+          "unscoped": "acknowledged",
+          "id": "figma.branch:{host}/{branch}",
+          "title": [
+            "{~} · {title} - Figma Slides",
+            "{title} – {~}",
+            "{title} - {~}"
+          ]
+        }
+      ]
+    },
+    "starter:vidcast": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "vidcast.video",
+          "origin": "https://app.vidcast.io",
+          "match": [
+            {
+              "path": "/share/{video:uuid}",
+              "mode": "view"
+            },
+            {
+              "path": "/share/embed/{video:uuid}",
+              "mode": "view"
+            },
+            {
+              "path": "/share/edit/{video:uuid}",
+              "mode": "edit"
+            }
+          ],
+          "id": "vidcast.video:{host}/{video}",
+          "title": "Vidcast - {title}"
+        },
+        {
+          "type": "vidcast.playlist",
+          "origin": "https://app.vidcast.io",
+          "match": [
+            {
+              "path": "/playlists/{playlist:uuid}",
+              "mode": "view"
+            },
+            {
+              "path": "/playlists/embed/{playlist:uuid}",
+              "mode": "view"
+            },
+            {
+              "path": "/collections/share/{playlist:uuid}",
+              "mode": "view"
+            }
+          ],
+          "id": "vidcast.playlist:{host}/{playlist}",
+          "title": "Vidcast - Playlist - {title}"
+        },
+        {
+          "type": "vidcast.page",
+          "origin": "https://app.vidcast.io",
+          "match": [
+            {
+              "path": "/pages/{page:uuid}",
+              "mode": "view"
+            },
+            {
+              "path": "/pages/{page:uuid}/edit",
+              "mode": "edit"
+            },
+            {
+              "path": "/pages/embed/{page:uuid}",
+              "mode": "view"
+            }
+          ],
+          "id": "vidcast.page:{host}/{page}",
+          "title": "Vidcast - {title}"
+        }
+      ]
     }
   },
   "cases": [
@@ -309,6 +585,4270 @@
       "expect": {
         "pairs": []
       }
+    },
+    {
+      "id": "validate.starter.google-workspace",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:google-workspace fixture (protocol/starters/google-workspace.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.google-workspace",
+      "kind": "overlap_report",
+      "why": "generated: google-workspace's declared overlaps (protocol/starters/google-workspace.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.google-workspace.doc.edit",
+      "kind": "evaluate",
+      "why": "edit route, title suffix stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": "Q4 Plan",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+      "title": "Q4 Plan - Google Docs"
+    },
+    {
+      "id": "eval.google-workspace.doc.endash",
+      "kind": "evaluate",
+      "why": "en dash title suffix (scorecard miss 3)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": "Team plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+      "title": "Team plan – Google Docs"
+    },
+    {
+      "id": "eval.google-workspace.doc.bare",
+      "kind": "evaluate",
+      "why": "bare doc path, no mode segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": null
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa"
+    },
+    {
+      "id": "eval.google-workspace.doc.trailing_slash",
+      "kind": "evaluate",
+      "why": "trailing slash, no mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": null
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/"
+    },
+    {
+      "id": "eval.google-workspace.doc.share_link",
+      "kind": "evaluate",
+      "why": "usp=sharing query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": "Design - Review",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=sharing",
+      "title": "Design - Review - Google Docs"
+    },
+    {
+      "id": "eval.google-workspace.doc.tab_query_fragment",
+      "kind": "evaluate",
+      "why": "tab query and heading fragment are ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?tab=t.0#heading=h.abc123"
+    },
+    {
+      "id": "eval.google-workspace.doc.view",
+      "kind": "evaluate",
+      "why": "view mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "view"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/view"
+    },
+    {
+      "id": "eval.google-workspace.doc.preview",
+      "kind": "evaluate",
+      "why": "preview mode maps to view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "preview"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/preview"
+    },
+    {
+      "id": "eval.google-workspace.doc.mobilebasic_title_no_suffix",
+      "kind": "evaluate",
+      "why": "mobilebasic has no title suffix; whole title recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "mobilebasic"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "view",
+        "title": "Q4 Plan",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/mobilebasic",
+      "title": "Q4 Plan"
+    },
+    {
+      "id": "eval.google-workspace.doc.account_index",
+      "kind": "evaluate",
+      "why": "/document/u/<n>/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/document/u/1/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=drive_web&ouid=123"
+    },
+    {
+      "id": "eval.google-workspace.doc.legacy_domain",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ Google Apps form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/a/example.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit"
+    },
+    {
+      "id": "eval.google-workspace.doc.drive_open_redirect_target",
+      "kind": "evaluate",
+      "why": "the /open?id= redirect's landing form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit?usp=drive_open"
+    },
+    {
+      "id": "eval.google-workspace.doc.ref_in_title",
+      "kind": "evaluate",
+      "why": "a Jira key in the title resolves as a ref",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": "PROJ-123 rollout notes",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": [
+          {
+            "type": "jira.issue",
+            "value": "PROJ-123"
+          }
+        ]
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+      "title": "PROJ-123 rollout notes - Google Docs"
+    },
+    {
+      "id": "eval.google-workspace.doc.home",
+      "kind": "evaluate",
+      "why": "Docs home list is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/u/0/"
+    },
+    {
+      "id": "eval.google-workspace.doc.create",
+      "kind": "evaluate",
+      "why": "create route, not an existing document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/create"
+    },
+    {
+      "id": "eval.google-workspace.doc.u_create",
+      "kind": "evaluate",
+      "why": "create route with an account index",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/u/0/create?usp=docs_home"
+    },
+    {
+      "id": "eval.google-workspace.doc.copy",
+      "kind": "evaluate",
+      "why": "copy action, not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/copy"
+    },
+    {
+      "id": "eval.google-workspace.doc.export",
+      "kind": "evaluate",
+      "why": "export download",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/export?format=pdf"
+    },
+    {
+      "id": "eval.google-workspace.doc.template_preview",
+      "kind": "evaluate",
+      "why": "template link (unverified route)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/template/preview"
+    },
+    {
+      "id": "eval.google-workspace.doc.published",
+      "kind": "evaluate",
+      "why": "published copy, a different ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/e/2PACX-1vSyntheticPublishedIdIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIi/pub"
+    },
+    {
+      "id": "eval.google-workspace.doc.short_id",
+      "kind": "evaluate",
+      "why": "ID shorter than the 20-character floor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/document/d/abc123/edit"
+    },
+    {
+      "id": "eval.google-workspace.doc.open_redirector",
+      "kind": "evaluate",
+      "why": "/open?id= redirector, not an open itself",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/open?id=1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa"
+    },
+    {
+      "id": "eval.google-workspace.doc.encoded_slash",
+      "kind": "evaluate",
+      "why": "an encoded slash is rejected, not matched",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa%2Fedit"
+    },
+    {
+      "id": "eval.google-workspace.doc.double_slash",
+      "kind": "evaluate",
+      "why": "an empty path segment is rejected",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://docs.google.com/document//d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit"
+    },
+    {
+      "id": "eval.google-workspace.doc.case_sensitive",
+      "kind": "evaluate",
+      "why": "paths are case-sensitive",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/Document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit"
+    },
+    {
+      "id": "eval.google-workspace.sheet.edit",
+      "kind": "evaluate",
+      "why": "edit route, title suffix stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit",
+        "title": "Budget 2027",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit",
+      "title": "Budget 2027 - Google Sheets"
+    },
+    {
+      "id": "eval.google-workspace.sheet.endash",
+      "kind": "evaluate",
+      "why": "en dash title suffix (scorecard miss 3)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit",
+        "title": "Team plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit",
+      "title": "Team plan – Google Sheets"
+    },
+    {
+      "id": "eval.google-workspace.sheet.gid",
+      "kind": "evaluate",
+      "why": "gid (sheet tab) is not part of the identity",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit?gid=1234567#gid=1234567"
+    },
+    {
+      "id": "eval.google-workspace.sheet.bare",
+      "kind": "evaluate",
+      "why": "bare sheet path, no mode segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": null
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b"
+    },
+    {
+      "id": "eval.google-workspace.sheet.trailing",
+      "kind": "evaluate",
+      "why": "trailing slash after edit",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit/"
+    },
+    {
+      "id": "eval.google-workspace.sheet.view",
+      "kind": "evaluate",
+      "why": "view mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "view"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "view",
+        "title": "Budget 2027",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/view",
+      "title": "Budget 2027 - Google Sheets"
+    },
+    {
+      "id": "eval.google-workspace.sheet.htmlview_drive_title",
+      "kind": "evaluate",
+      "why": "htmlview renders with the Google Drive title suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "htmlview"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "view",
+        "title": "Budget 2027",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/htmlview",
+      "title": "Budget 2027 - Google Drive"
+    },
+    {
+      "id": "eval.google-workspace.sheet.preview",
+      "kind": "evaluate",
+      "why": "preview also renders with the Google Drive title suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "preview"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "view",
+        "title": "Budget 2027",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/preview",
+      "title": "Budget 2027 - Google Drive"
+    },
+    {
+      "id": "eval.google-workspace.sheet.account_index",
+      "kind": "evaluate",
+      "why": "/spreadsheets/u/<n>/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/spreadsheets/u/0/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit?usp=sharing"
+    },
+    {
+      "id": "eval.google-workspace.sheet.legacy_domain",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ Google Apps form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/a/example.org/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit#gid=0"
+    },
+    {
+      "id": "eval.google-workspace.sheet.copy",
+      "kind": "evaluate",
+      "why": "copy action, not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/copy"
+    },
+    {
+      "id": "eval.google-workspace.sheet.home",
+      "kind": "evaluate",
+      "why": "Sheets home is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/spreadsheets/u/0/"
+    },
+    {
+      "id": "eval.google-workspace.sheet.published",
+      "kind": "evaluate",
+      "why": "published copy, a different ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vSyntheticPublishedIdJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJj/pubhtml"
+    },
+    {
+      "id": "eval.google-workspace.sheet.legacy_ccc",
+      "kind": "evaluate",
+      "why": "legacy /spreadsheet/ccc redirector",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/spreadsheet/ccc?key=1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b"
+    },
+    {
+      "id": "eval.google-workspace.slides.edit",
+      "kind": "evaluate",
+      "why": "edit route, title suffix stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit",
+        "title": "Kickoff deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit",
+      "title": "Kickoff deck - Google Slides"
+    },
+    {
+      "id": "eval.google-workspace.slides.endash",
+      "kind": "evaluate",
+      "why": "en dash title suffix (scorecard miss 3)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit",
+        "title": "Team plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit",
+      "title": "Team plan – Google Slides"
+    },
+    {
+      "id": "eval.google-workspace.slides.slide_fragment",
+      "kind": "evaluate",
+      "why": "#slide= fragment is a slide position, not identity",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit#slide=id.p1"
+    },
+    {
+      "id": "eval.google-workspace.slides.slide_query",
+      "kind": "evaluate",
+      "why": "?slide= query is a slide position, not identity",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit?slide=id.g2a3b4c5d6e_0_0"
+    },
+    {
+      "id": "eval.google-workspace.slides.present",
+      "kind": "evaluate",
+      "why": "present (slideshow) mode maps to view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "present"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "view",
+        "title": "Kickoff deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/present?slide=id.p",
+      "title": "Kickoff deck - Google Slides"
+    },
+    {
+      "id": "eval.google-workspace.slides.preview",
+      "kind": "evaluate",
+      "why": "preview mode maps to view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "preview"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/preview"
+    },
+    {
+      "id": "eval.google-workspace.slides.embed",
+      "kind": "evaluate",
+      "why": "embed mode maps to view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "embed"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/embed?start=false&loop=false"
+    },
+    {
+      "id": "eval.google-workspace.slides.view",
+      "kind": "evaluate",
+      "why": "view mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "view"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/view"
+    },
+    {
+      "id": "eval.google-workspace.slides.account_index",
+      "kind": "evaluate",
+      "why": "/presentation/u/<n>/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/presentation/u/2/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit?usp=sharing"
+    },
+    {
+      "id": "eval.google-workspace.slides.legacy_domain",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ Google Apps form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 2,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/a/example.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit"
+    },
+    {
+      "id": "eval.google-workspace.slides.bare_trailing",
+      "kind": "evaluate",
+      "why": "bare presentation path with a trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": null
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/"
+    },
+    {
+      "id": "eval.google-workspace.slides.export",
+      "kind": "evaluate",
+      "why": "export is not a recognised mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/export"
+    },
+    {
+      "id": "eval.google-workspace.slides.home",
+      "kind": "evaluate",
+      "why": "Slides home is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/presentation/u/0/?tgif=d"
+    },
+    {
+      "id": "eval.google-workspace.form.edit",
+      "kind": "evaluate",
+      "why": "edit route, title suffix stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit",
+        "title": "Team survey",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+      "title": "Team survey - Google Forms"
+    },
+    {
+      "id": "eval.google-workspace.form.endash",
+      "kind": "evaluate",
+      "why": "en dash title suffix (scorecard miss 3)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit",
+        "title": "Team plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+      "title": "Team plan – Google Forms"
+    },
+    {
+      "id": "eval.google-workspace.form.edit_responses_fragment",
+      "kind": "evaluate",
+      "why": "#responses fragment is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit#responses"
+    },
+    {
+      "id": "eval.google-workspace.form.bare",
+      "kind": "evaluate",
+      "why": "bare form path, no mode segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": null
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd"
+    },
+    {
+      "id": "eval.google-workspace.form.legacy_viewform",
+      "kind": "evaluate",
+      "why": "legacy respondent link built on formId, no title suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "viewform"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "view",
+        "title": "Team survey",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/viewform",
+      "title": "Team survey"
+    },
+    {
+      "id": "eval.google-workspace.form.account_index",
+      "kind": "evaluate",
+      "why": "/forms/u/<n>/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/forms/u/0/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit"
+    },
+    {
+      "id": "eval.google-workspace.form.legacy_domain",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ Google Apps form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/a/example.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit"
+    },
+    {
+      "id": "eval.google-workspace.form.trailing",
+      "kind": "evaluate",
+      "why": "trailing slash after edit",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit/"
+    },
+    {
+      "id": "eval.google-workspace.form.query_noise",
+      "kind": "evaluate",
+      "why": "query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit"
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit?usp=forms_home&ths=true"
+    },
+    {
+      "id": "eval.google-workspace.form.home",
+      "kind": "evaluate",
+      "why": "Forms home is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/forms/u/0/"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.viewform",
+      "kind": "evaluate",
+      "why": "responder viewform; first match wins in adapter order, proving google.form (adapter 3) never claims a responder link",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view",
+        "title": "Team survey",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform",
+      "title": "Team survey"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.share_link",
+      "kind": "evaluate",
+      "why": "share-link query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?usp=sf_link"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.embedded",
+      "kind": "evaluate",
+      "why": "embedded query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?embedded=true"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.prefilled",
+      "kind": "evaluate",
+      "why": "prefilled entry query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform?usp=pp_url&entry.123456=Alice"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.formresponse",
+      "kind": "evaluate",
+      "why": "formResponse route after submitting",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/formResponse"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.closedform",
+      "kind": "evaluate",
+      "why": "closedform route, no longer accepting",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/closedform"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.account_index",
+      "kind": "evaluate",
+      "why": "/forms/u/<n>/d/e/ multi-account form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 1,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/forms/u/1/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.legacy_domain_trailing",
+      "kind": "evaluate",
+      "why": "legacy /a/<domain>/ form with a trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 2,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view"
+      },
+      "url": "https://docs.google.com/a/example.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform/"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.prefill",
+      "kind": "evaluate",
+      "why": "prefill builder is not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/prefill"
+    },
+    {
+      "id": "eval.google-workspace.formresponse.bare",
+      "kind": "evaluate",
+      "why": "no route word after the published ID (unverified)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+    },
+    {
+      "id": "validate.starter.figma",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:figma fixture (protocol/starters/figma.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.figma",
+      "kind": "overlap_report",
+      "why": "generated: figma's declared overlaps (protocol/starters/figma.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.figma.file.design_slug",
+      "kind": "evaluate",
+      "why": "design editor route with a slug",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.design_share_link_query",
+      "kind": "evaluate",
+      "why": "share-link query noise (node-id, t) is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?node-id=4185-3778&t=Xy12AbCdEfGh34Ij-0",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.design_dev_mode",
+      "kind": "evaluate",
+      "why": "Dev Mode (m=dev) is a query flag, not a separate rule",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?node-id=12-34&m=dev",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.design_no_slug_trailing_slash",
+      "kind": "evaluate",
+      "why": "trailing slash with the slug omitted (opaque_file_slug_in_url)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.design_no_slug_fragment",
+      "kind": "evaluate",
+      "why": "a fragment with no slug segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv#comments",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.legacy_file_route",
+      "kind": "evaluate",
+      "why": "the legacy /file/ route shares the design file's key space",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/file/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?type=design&mode=design",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.version_history",
+      "kind": "evaluate",
+      "why": "version-id and node-id query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?version-id=1234567890&node-id=0-1",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.file.title_with_en_dash_in_name",
+      "kind": "evaluate",
+      "why": "a file name containing its own en dash keeps the nearer one",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Q3 – Roadmap",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Q3-Roadmap",
+      "title": "Q3 – Roadmap – Figma"
+    },
+    {
+      "id": "eval.figma.file.loading",
+      "kind": "evaluate",
+      "why": "while a file loads the tab title is just Figma; no entry matches, so the whole title is recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "Figma",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow",
+      "title": "Figma"
+    },
+    {
+      "id": "eval.figma.file.board_figjam",
+      "kind": "evaluate",
+      "why": "a FigJam board shares the file key space and the en-dash suffix entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "ZyXwVuTsRqPoNmLkJiHgFe"
+        },
+        "artifact_id": "figma.file:www.figma.com/ZyXwVuTsRqPoNmLkJiHgFe",
+        "mode": null,
+        "title": "Sprint Retro",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/board/ZyXwVuTsRqPoNmLkJiHgFe/Sprint-Retro?node-id=0-1&t=AbCd1234EfGh5678-0",
+      "title": "Sprint Retro – FigJam"
+    },
+    {
+      "id": "eval.figma.file.slides_editor",
+      "kind": "evaluate",
+      "why": "a Figma Slides editor title still ends with one en-dash suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "Sl1d3sK3yAbCdEfGhIjKlM"
+        },
+        "artifact_id": "figma.file:www.figma.com/Sl1d3sK3yAbCdEfGhIjKlM",
+        "mode": null,
+        "title": "QBR Deck",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/slides/Sl1d3sK3yAbCdEfGhIjKlM/QBR-Deck",
+      "title": "QBR Deck – Figma Slides"
+    },
+    {
+      "id": "eval.figma.file.slides_deck_audience",
+      "kind": "evaluate",
+      "why": "the Slides audience view uses the Presenter/Audience middle-dot title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "figma.file",
+        "captures": {
+          "key": "Sl1d3sK3yAbCdEfGhIjKlM"
+        },
+        "artifact_id": "figma.file:www.figma.com/Sl1d3sK3yAbCdEfGhIjKlM",
+        "mode": "view",
+        "title": "QBR Deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/deck/Sl1d3sK3yAbCdEfGhIjKlM/QBR-Deck?node-id=1-42",
+      "title": "Audience · QBR Deck - Figma Slides"
+    },
+    {
+      "id": "eval.figma.file.slides_presenter",
+      "kind": "evaluate",
+      "why": "the Slides presenter view uses the same middle-dot title shape",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "figma.file",
+        "captures": {
+          "key": "Sl1d3sK3yAbCdEfGhIjKlM"
+        },
+        "artifact_id": "figma.file:www.figma.com/Sl1d3sK3yAbCdEfGhIjKlM",
+        "mode": "view",
+        "title": "QBR Deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/presenter/Sl1d3sK3yAbCdEfGhIjKlM/QBR-Deck",
+      "title": "Presenter · QBR Deck - Figma Slides"
+    },
+    {
+      "id": "eval.figma.file.proto_single_page",
+      "kind": "evaluate",
+      "why": "a real prototype tab reads <file> - <page>, which the hyphen entry records as <file> (coordinator ruling)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?node-id=2654-15&starting-point-node-id=2654-15&scaling=scale-down",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.file.proto_multi_page_keeps_page",
+      "kind": "evaluate",
+      "why": "page-id query noise is ignored; the hyphen entry still records the file name",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow?page-id=0%3A1",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.file.proto_no_slug",
+      "kind": "evaluate",
+      "why": "the bare proto route (no slug) still carries mode view and the hyphen title entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.file.site_figma_sites",
+      "kind": "evaluate",
+      "why": "Figma Sites shares the key space and the en-dash suffix entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "S1t3K3yAbCdEfGhIjKlMnO"
+        },
+        "artifact_id": "figma.file:www.figma.com/S1t3K3yAbCdEfGhIjKlMnO",
+        "mode": null,
+        "title": "Marketing Site",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/site/S1t3K3yAbCdEfGhIjKlMnO/Marketing-Site",
+      "title": "Marketing Site – Figma Sites"
+    },
+    {
+      "id": "eval.figma.file.make_figma_make",
+      "kind": "evaluate",
+      "why": "Figma Make shares the key space and the en-dash suffix entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "M4k3K3yAbCdEfGhIjKlMnO"
+        },
+        "artifact_id": "figma.file:www.figma.com/M4k3K3yAbCdEfGhIjKlMnO",
+        "mode": null,
+        "title": "Pricing Prototype",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/make/M4k3K3yAbCdEfGhIjKlMnO/Pricing-Prototype?fullscreen=1",
+      "title": "Pricing Prototype – Figma Make"
+    },
+    {
+      "id": "eval.figma.file.buzz_figma_buzz",
+      "kind": "evaluate",
+      "why": "Figma Buzz shares the key space and the en-dash suffix entry",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "Bu2zK3yAbCdEfGhIjKlMnO"
+        },
+        "artifact_id": "figma.file:www.figma.com/Bu2zK3yAbCdEfGhIjKlMnO",
+        "mode": null,
+        "title": "Launch Assets",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/buzz/Bu2zK3yAbCdEfGhIjKlMnO/Launch-Assets",
+      "title": "Launch Assets – Figma Buzz"
+    },
+    {
+      "id": "eval.figma.file.long_key",
+      "kind": "evaluate",
+      "why": "a key longer than 22 characters is still within the token's upper bound",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+        "mode": null,
+        "title": "Long Key",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/Long-Key",
+      "title": "Long Key – Figma"
+    },
+    {
+      "id": "eval.figma.file.hyphen_name",
+      "kind": "evaluate",
+      "why": "a file name containing a plain hyphen is kept when the en-dash entry fails and the hyphen entry catches the suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": "A - B",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/A-B",
+      "title": "A - B – Figma"
+    },
+    {
+      "id": "eval.figma.file.root",
+      "kind": "evaluate",
+      "why": "the bare origin has no route word at all",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/"
+    },
+    {
+      "id": "eval.figma.file.file_browser_recents",
+      "kind": "evaluate",
+      "why": "the plural /files/ file-browser route is deliberately not /file/",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/files/recents-and-sharing?fuid=1234567890"
+    },
+    {
+      "id": "eval.figma.file.file_browser_project",
+      "kind": "evaluate",
+      "why": "a project folder is not a file",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/files/project/123456789/Design-System"
+    },
+    {
+      "id": "eval.figma.file.file_browser_team",
+      "kind": "evaluate",
+      "why": "a team's file list is not a file",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/files/team/123456789012345678/Acme"
+    },
+    {
+      "id": "eval.figma.file.create_design",
+      "kind": "evaluate",
+      "why": "/design/new is a create route, excluded by the 22-character key floor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/new"
+    },
+    {
+      "id": "eval.figma.file.create_board",
+      "kind": "evaluate",
+      "why": "/board/new is a create route",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/board/new"
+    },
+    {
+      "id": "eval.figma.file.create_slides",
+      "kind": "evaluate",
+      "why": "/slides/new is a create route, even with a query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/slides/new?localFileKey=abc"
+    },
+    {
+      "id": "eval.figma.file.create_make",
+      "kind": "evaluate",
+      "why": "/make/new is a create route",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/make/new"
+    },
+    {
+      "id": "eval.figma.file.marketing_design_landing",
+      "kind": "evaluate",
+      "why": "a marketing page reusing the design word has no key segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/"
+    },
+    {
+      "id": "eval.figma.file.marketing_figjam_landing",
+      "kind": "evaluate",
+      "why": "figjam is a marketing word, not a route in the match alternation",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/figjam/"
+    },
+    {
+      "id": "eval.figma.file.community_file",
+      "kind": "evaluate",
+      "why": "the community listing is a different, public ID space, not a user's own file",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/community/file/1234567890123456789/ui-kit"
+    },
+    {
+      "id": "eval.figma.file.embed_wrapper",
+      "kind": "evaluate",
+      "why": "the embed wrapper page carries the real URL inside a query value, which no rule reads",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/embed?embed_host=share&url=https%3A%2F%2Fwww.figma.com%2Fdesign%2FAbCdEfGhIjKlMnOpQrStUv"
+    },
+    {
+      "id": "eval.figma.file.image_asset_under_file",
+      "kind": "evaluate",
+      "why": "an image asset under a file has a rest segment no open rule has",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/image/0123456789abcdef0123456789abcdef01234567"
+    },
+    {
+      "id": "eval.figma.file.video_export",
+      "kind": "evaluate",
+      "why": "export is not one of the matched route words",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/export/AbCdEfGhIjKlMnOpQrStUv"
+    },
+    {
+      "id": "eval.figma.file.short_key",
+      "kind": "evaluate",
+      "why": "a 20-character key is below the 22-character floor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrSt/Too-Short"
+    },
+    {
+      "id": "eval.figma.file.key_with_illegal_char",
+      "kind": "evaluate",
+      "why": "a period is outside the token alphabet",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKl.nOpQrStUv/Bad"
+    },
+    {
+      "id": "eval.figma.file.settings",
+      "kind": "evaluate",
+      "why": "settings is not a route word",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/settings"
+    },
+    {
+      "id": "eval.figma.file.login",
+      "kind": "evaluate",
+      "why": "sign-in is not a route word",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/login?locale=en-us"
+    },
+    {
+      "id": "eval.figma.file.user_profile",
+      "kind": "evaluate",
+      "why": "a community profile handle is not a route word",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/@acmedesign"
+    },
+    {
+      "id": "eval.figma.file.double_slash",
+      "kind": "evaluate",
+      "why": "an empty path segment is rejected before any rule is tried",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://www.figma.com/design//AbCdEfGhIjKlMnOpQrStUv"
+    },
+    {
+      "id": "eval.figma.file.encoded_slash",
+      "kind": "evaluate",
+      "why": "an encoded slash inside a segment is rejected, not matched",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv%2FCheckout-Flow"
+    },
+    {
+      "id": "eval.figma.branch.design",
+      "kind": "evaluate",
+      "why": "a branch of a design file, keyed by the branch key alone",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow?node-id=1-2",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.design_no_slug",
+      "kind": "evaluate",
+      "why": "a branch URL with the slug omitted",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.design_trailing_slash_query",
+      "kind": "evaluate",
+      "why": "a trailing slash and query with the slug omitted",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/?m=dev&t=AbCd1234EfGh5678-0",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.legacy_file",
+      "kind": "evaluate",
+      "why": "a branch reached through the legacy /file/ route",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/file/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.board",
+      "kind": "evaluate",
+      "why": "a FigJam board branch",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYzYxWvUtSrQpOn"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYzYxWvUtSrQpOn",
+        "mode": null,
+        "title": "Sprint Retro",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/board/ZyXwVuTsRqPoNmLkJiHgFe/branch/BrAnChKeYzYxWvUtSrQpOn/Sprint-Retro",
+      "title": "Sprint Retro – FigJam"
+    },
+    {
+      "id": "eval.figma.branch.proto",
+      "kind": "evaluate",
+      "why": "a branch's prototype tab reads <file> - <page>, recorded as <file> (coordinator ruling)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 3,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow?node-id=3-4",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.branch.proto_no_slug",
+      "kind": "evaluate",
+      "why": "a branch's bare prototype route, no slug",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": "view",
+        "title": "Checkout Flow",
+        "title_entry": 2,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/proto/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm",
+      "title": "Checkout Flow - Onboarding"
+    },
+    {
+      "id": "eval.figma.branch.slides_deck",
+      "kind": "evaluate",
+      "why": "a Slides branch viewed in audience mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 3,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYsLiDeSaBcDeFg"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYsLiDeSaBcDeFg",
+        "mode": "view",
+        "title": "QBR Deck",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/deck/Sl1d3sK3yAbCdEfGhIjKlM/branch/BrAnChKeYsLiDeSaBcDeFg/QBR-Deck",
+      "title": "Audience · QBR Deck - Figma Slides"
+    },
+    {
+      "id": "eval.figma.branch.fragment",
+      "kind": "evaluate",
+      "why": "a fragment after the slug is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": "Checkout Flow",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow#123",
+      "title": "Checkout Flow – Figma"
+    },
+    {
+      "id": "eval.figma.branch.branch_short_key",
+      "kind": "evaluate",
+      "why": "a 5-character branch key is below the 22-character floor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/short/Checkout-Flow"
+    },
+    {
+      "id": "validate.starter.vidcast",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:vidcast fixture (protocol/starters/vidcast.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.vidcast",
+      "kind": "overlap_report",
+      "why": "generated: vidcast's declared overlaps (protocol/starters/vidcast.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.vidcast.video.share",
+      "kind": "evaluate",
+      "why": "share link as handed out by the Share dialog",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view",
+        "title": "Q3 roadmap walkthrough",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de",
+      "title": "Vidcast - Q3 roadmap walkthrough"
+    },
+    {
+      "id": "eval.vidcast.video.share.trailing_slash",
+      "kind": "evaluate",
+      "why": "trailing slash dropped (§5.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de/"
+    },
+    {
+      "id": "eval.vidcast.video.share.query_t",
+      "kind": "evaluate",
+      "why": "timestamp query; title containing ' - '",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view",
+        "title": "Demo - part 2",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de?t=95",
+      "title": "Vidcast - Demo - part 2"
+    },
+    {
+      "id": "eval.vidcast.video.share.in_playlist",
+      "kind": "evaluate",
+      "why": "video watched inside a playlist is the video, not the playlist",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view",
+        "title": "How to stitch",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de?playlistShareId=5e7e1157-1111-4222-8333-444444444444&autoplay=1",
+      "title": "Vidcast - How to stitch"
+    },
+    {
+      "id": "eval.vidcast.video.share.player_mode",
+      "kind": "evaluate",
+      "why": "player mode / highlight query noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de?playerMode=vidcast&highlightId=abc123"
+    },
+    {
+      "id": "eval.vidcast.video.share.fragment",
+      "kind": "evaluate",
+      "why": "fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de#comments"
+    },
+    {
+      "id": "eval.vidcast.video.share.uppercase",
+      "kind": "evaluate",
+      "why": "uuid canonicalized lowercase; server resolves upper-case share UUIDs to the same video",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/share/0A1B2C3D-0000-4000-8000-00000000C0DE"
+    },
+    {
+      "id": "eval.vidcast.video.share.braced",
+      "kind": "evaluate",
+      "why": "uuid type accepts braces after decoding; canonical form drops them (engine behaviour, not a Vidcast form)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/share/%7B0a1b2c3d-0000-4000-8000-00000000c0de%7D"
+    },
+    {
+      "id": "eval.vidcast.video.share.access_request",
+      "kind": "evaluate",
+      "why": "known limit: no-access page title is recorded as 'Request Access'",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view",
+        "title": "Request Access",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de?accessRequestId=42",
+      "title": "Vidcast - Request Access"
+    },
+    {
+      "id": "eval.vidcast.video.embed",
+      "kind": "evaluate",
+      "why": "embed link opened top-level; bare 'Vidcast' title matches no entry and is recorded whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view",
+        "title": "Vidcast",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/embed/0a1b2c3d-0000-4000-8000-00000000c0de?autoplay=1&mute=1&cc=1",
+      "title": "Vidcast"
+    },
+    {
+      "id": "eval.vidcast.video.embed.theme",
+      "kind": "evaluate",
+      "why": "theme/mute/autoplay query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "f0e1d2c3-b4a5-4697-8899-aabbccddeeff"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/f0e1d2c3-b4a5-4697-8899-aabbccddeeff",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/share/embed/f0e1d2c3-b4a5-4697-8899-aabbccddeeff?theme=DARK&disableAMA=1&t=10"
+    },
+    {
+      "id": "eval.vidcast.video.edit",
+      "kind": "evaluate",
+      "why": "editor; known limit: fixed editor title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "edit",
+        "title": "Video Edit",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/edit/0a1b2c3d-0000-4000-8000-00000000c0de",
+      "title": "Vidcast - Video Edit"
+    },
+    {
+      "id": "eval.vidcast.video.edit.tab",
+      "kind": "evaluate",
+      "why": "tab query noise on the editor route is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "edit"
+      },
+      "url": "https://app.vidcast.io/share/edit/0a1b2c3d-0000-4000-8000-00000000c0de?tab=transcript"
+    },
+    {
+      "id": "eval.vidcast.video.share.title_prefix_in_name",
+      "kind": "evaluate",
+      "why": "prefix matched once from the left",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "f0e1d2c3-b4a5-4697-8899-aabbccddeeff"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/f0e1d2c3-b4a5-4697-8899-aabbccddeeff",
+        "mode": "view",
+        "title": "Vidcast - weekly update",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/f0e1d2c3-b4a5-4697-8899-aabbccddeeff",
+      "title": "Vidcast - Vidcast - weekly update"
+    },
+    {
+      "id": "eval.vidcast.neg.root",
+      "kind": "evaluate",
+      "why": "app root / home feed",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/"
+    },
+    {
+      "id": "eval.vidcast.neg.library",
+      "kind": "evaluate",
+      "why": "library list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/library?type=mine"
+    },
+    {
+      "id": "eval.vidcast.neg.search",
+      "kind": "evaluate",
+      "why": "search",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/search?term=roadmap"
+    },
+    {
+      "id": "eval.vidcast.neg.settings",
+      "kind": "evaluate",
+      "why": "settings",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/settings?type=profile"
+    },
+    {
+      "id": "eval.vidcast.neg.sign_in",
+      "kind": "evaluate",
+      "why": "sign in",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/sign-in"
+    },
+    {
+      "id": "eval.vidcast.neg.video_redirect",
+      "kind": "evaluate",
+      "why": "internal video id redirect; differs from share id, deliberately excluded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/video/0a1b2c3d-0000-4000-8000-00000000c0de"
+    },
+    {
+      "id": "eval.vidcast.neg.share_not_uuid",
+      "kind": "evaluate",
+      "why": "share ID not a uuid",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/share/abc123"
+    },
+    {
+      "id": "eval.vidcast.neg.share_extra_segment",
+      "kind": "evaluate",
+      "why": "no rest segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de/comments"
+    },
+    {
+      "id": "eval.vidcast.neg.edit_script",
+      "kind": "evaluate",
+      "why": "AI script editor, excluded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/share/edit-script/0a1b2c3d-0000-4000-8000-00000000c0de/f0e1d2c3-b4a5-4697-8899-aabbccddeeff"
+    },
+    {
+      "id": "eval.vidcast.neg.share_bare",
+      "kind": "evaluate",
+      "why": "no id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/share"
+    },
+    {
+      "id": "eval.vidcast.neg.embed_bare",
+      "kind": "evaluate",
+      "why": "no id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/share/embed/"
+    },
+    {
+      "id": "eval.vidcast.neg.webex_stream",
+      "kind": "evaluate",
+      "why": "Webex recording streamed in Vidcast; a Webex artifact, excluded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/webex-stream?recordingUUID=0a1b2c3d-0000-4000-8000-00000000c0de&siteUrl=acme.webex.com"
+    },
+    {
+      "id": "eval.vidcast.neg.author",
+      "kind": "evaluate",
+      "why": "author profile",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/author/12345"
+    },
+    {
+      "id": "eval.vidcast.neg.analytics",
+      "kind": "evaluate",
+      "why": "analytics view with video id in query, not an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/analytics?videoShareId=0a1b2c3d-0000-4000-8000-00000000c0de"
+    },
+    {
+      "id": "eval.vidcast.neg.event",
+      "kind": "evaluate",
+      "why": "events, excluded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/event/0a1b2c3d-0000-4000-8000-00000000c0de"
+    },
+    {
+      "id": "eval.vidcast.neg.double_slash",
+      "kind": "evaluate",
+      "why": "empty segment (§5.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://app.vidcast.io//share/0a1b2c3d-0000-4000-8000-00000000c0de"
+    },
+    {
+      "id": "eval.vidcast.neg.encoded_slash",
+      "kind": "evaluate",
+      "why": "%2F in segment (§5.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://app.vidcast.io/share%2F0a1b2c3d-0000-4000-8000-00000000c0de"
+    },
+    {
+      "id": "eval.vidcast.neg.case_route",
+      "kind": "evaluate",
+      "why": "path_case sensitive; app router routes are lowercase",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/Share/0a1b2c3d-0000-4000-8000-00000000c0de"
+    },
+    {
+      "id": "eval.vidcast.playlist.page",
+      "kind": "evaluate",
+      "why": "playlist page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view",
+        "title": "Training/Demos",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444",
+      "title": "Vidcast - Playlist - Training/Demos"
+    },
+    {
+      "id": "eval.vidcast.playlist.page.trailing_slash",
+      "kind": "evaluate",
+      "why": "trailing slash dropped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444/"
+    },
+    {
+      "id": "eval.vidcast.playlist.page.query",
+      "kind": "evaluate",
+      "why": "query noise is ignored; title containing ' - '",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view",
+        "title": "Onboarding - EMEA",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444?pageShareId=9a9e9a9e-0000-4abc-9def-123456789abc&hideWatermark=1",
+      "title": "Vidcast - Playlist - Onboarding - EMEA"
+    },
+    {
+      "id": "eval.vidcast.playlist.page.fragment",
+      "kind": "evaluate",
+      "why": "fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444#top"
+    },
+    {
+      "id": "eval.vidcast.playlist.page.uppercase",
+      "kind": "evaluate",
+      "why": "uuid canonicalized lowercase",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/playlists/5E7E1157-1111-4222-8333-444444444444"
+    },
+    {
+      "id": "eval.vidcast.playlist.embed",
+      "kind": "evaluate",
+      "why": "help-article embed query form; bare title recorded whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view",
+        "title": "Vidcast",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/playlists/embed/5e7e1157-1111-4222-8333-444444444444?index=3&t=60&cc=1",
+      "title": "Vidcast"
+    },
+    {
+      "id": "eval.vidcast.playlist.embed.expand",
+      "kind": "evaluate",
+      "why": "videoShareId names the starting video but the artifact is the playlist",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/playlists/embed/5e7e1157-1111-4222-8333-444444444444?expand=1&videoShareId=0a1b2c3d-0000-4000-8000-00000000c0de"
+    },
+    {
+      "id": "eval.vidcast.playlist.legacy_collection",
+      "kind": "evaluate",
+      "why": "legacy collections share link, redirected to /playlists/<same id>",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/collections/share/5e7e1157-1111-4222-8333-444444444444"
+    },
+    {
+      "id": "eval.vidcast.playlist.legacy_collection.query",
+      "kind": "evaluate",
+      "why": "query noise on the legacy collections redirect is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/collections/share/5e7e1157-1111-4222-8333-444444444444?accessRequestId=7"
+    },
+    {
+      "id": "eval.vidcast.playlist.title.request_access",
+      "kind": "evaluate",
+      "why": "non-playlist title matches no entry and is recorded whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view",
+        "title": "Vidcast - Request Access",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444",
+      "title": "Vidcast - Request Access"
+    },
+    {
+      "id": "eval.vidcast.neg.playlists_list",
+      "kind": "evaluate",
+      "why": "playlists list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/playlists?type=shared"
+    },
+    {
+      "id": "eval.vidcast.neg.collections_list",
+      "kind": "evaluate",
+      "why": "legacy list redirect",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/collections"
+    },
+    {
+      "id": "eval.vidcast.neg.playlist_placeholder",
+      "kind": "evaluate",
+      "why": "help article placeholder, not a uuid",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/playlists/embed/playlist_link?index=3"
+    },
+    {
+      "id": "eval.vidcast.page.view",
+      "kind": "evaluate",
+      "why": "published page (ID shape assumed uuid; low confidence)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "view",
+        "title": "Sales enablement hub",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc",
+      "title": "Vidcast - Sales enablement hub"
+    },
+    {
+      "id": "eval.vidcast.page.view.trailing_slash",
+      "kind": "evaluate",
+      "why": "trailing slash dropped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/"
+    },
+    {
+      "id": "eval.vidcast.page.view.query",
+      "kind": "evaluate",
+      "why": "query noise is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc?playerMaxWidth=900"
+    },
+    {
+      "id": "eval.vidcast.page.view.fragment",
+      "kind": "evaluate",
+      "why": "fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc#section-2"
+    },
+    {
+      "id": "eval.vidcast.page.edit",
+      "kind": "evaluate",
+      "why": "page editor; fixed title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "edit",
+        "title": "Page Edit",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit",
+      "title": "Vidcast - Page Edit"
+    },
+    {
+      "id": "eval.vidcast.page.edit.trailing",
+      "kind": "evaluate",
+      "why": "trailing slash on the edit route is ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "edit"
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/"
+    },
+    {
+      "id": "eval.vidcast.page.embed",
+      "kind": "evaluate",
+      "why": "page embed link opened top-level",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 2,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/pages/embed/9a9e9a9e-0000-4abc-9def-123456789abc?theme=LIGHT&ccLang=en"
+    },
+    {
+      "id": "eval.vidcast.page.view.uppercase",
+      "kind": "evaluate",
+      "why": "uuid canonicalized lowercase",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "view"
+      },
+      "url": "https://app.vidcast.io/pages/9A9E9A9E-0000-4ABC-9DEF-123456789ABC"
+    },
+    {
+      "id": "eval.vidcast.neg.pages_list",
+      "kind": "evaluate",
+      "why": "pages list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/pages?tab=mine"
+    },
+    {
+      "id": "eval.vidcast.neg.page_edit_extra",
+      "kind": "evaluate",
+      "why": "no rest",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/more"
     }
   ]
 }

@@ -1,0 +1,137 @@
+# google.sheet starter draft
+
+Status: development draft. The URL and title rules come from
+`docs/research/blind/google-workspace/`, researched blind: public sources
+only, no browsing history, cookies or Google account. Both adapter-template
+engines verify the samples below. A live check with a real Google account is
+still needed before this draft is release-certified.
+
+Brauser offers this draft on the exact origin `https://docs.google.com`,
+alongside Google Docs, Slides, Forms editor and Forms responder (the
+`google-workspace` family). Any one of the five can be chosen alone in
+Capture Site and in the settings gallery. The draft records one artifact per
+spreadsheet, however it was opened:
+
+`google.sheet:docs.google.com/<spreadsheet ID>`
+
+The ID is Google's own spreadsheet ID, documented as stable across renames,
+`token(20,128)`, case-sensitive. The `gid` query or fragment value (the sheet
+tab within the spreadsheet) is never part of the identity.
+
+```toml
+[[artifacts]]
+type     = "google.sheet"
+origin   = "https://docs.google.com"
+unscoped = "acknowledged"
+match    = [
+  { path = "/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}" },
+  { path = "/spreadsheets/u/{_}/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}" },
+  { path = "/a/{_}/spreadsheets/d/{id:token(20,128)}/{mode?:(edit|view|preview|htmlview)}" },
+]
+modes    = { edit = "edit", view = "view", preview = "view", htmlview = "view" }
+id       = "google.sheet:{host}/{id}"
+title    = ["{title} - Google Sheets", "{title} – Google Sheets", "{title} - Google Drive", "{title} – Google Drive"]
+refs     = [{ type = "jira.issue", find = "jira_key" }]
+```
+
+## What each rule covers
+
+1. **Canonical spreadsheet**, `/spreadsheets/d/<id>[/edit|/view|/preview|/htmlview]`.
+   The mode segment is optional: a bare `/spreadsheets/d/<id>` is recorded
+   with no mode. `edit` is edit mode; `view`, `preview` and `htmlview` are
+   all view mode.
+2. **Multi-account form**, `/spreadsheets/u/<n>/d/<id>/...`. `/u/<n>/` is the
+   sign-in-order account index, matched with `{_}` and never captured
+   (research "Origin model").
+3. **Legacy Google Apps form**, `/a/<domain>/spreadsheets/d/<id>/...`,
+   matched with `{_}` for the same reason.
+
+The legacy redirector `/spreadsheet/ccc?key=<id>` is not matched: it is a
+server redirect to the canonical `/spreadsheets/d/<id>/edit` form (confirmed
+logged out), and the redirect target is what gets recorded. A `gid` query or
+fragment value and other query noise (`usp=sharing`) never change the ID or
+the mode.
+
+## Titles
+
+`edit` and `view` read the tab title as `<name> - Google Sheets`; `preview`
+and `htmlview` read it as `<name> - Google Drive` instead (both observed).
+The en dash form of each, `<name> – Google Sheets` and `<name> – Google
+Drive`, is also recorded (scorecard miss 3: a sibling Drive title used the en
+dash). That is the full four-entry limit a title list may hold
+(adapter-templates.md §9.1); a future fifth title form on this type needs a
+narrower rule or a second adapter, not a fifth entry.
+
+## Recorded samples
+
+Synthetic equivalent of the recorded shape, on `docs.google.com`:
+
+| URL | Tab title | Records |
+|---|---|---|
+| `/spreadsheets/d/<44-char id>/edit` | `Budget tracker - Google Sheets` | that ID, edit mode, title `Budget tracker` |
+
+The blind research for this family scored 17 URLs that should match across
+its five kept types, with 15 matched correctly, 0 wrongly matched, and 2
+missed (both Gmail message permalinks, outside this family — see "Known
+limits"). The only real miss inside the family's own types was a title
+suffix (a sibling Drive form used the en dash), which this draft fixes by
+listing both dashes for every suffix template, including the two this type
+already carried from `preview` and `htmlview`.
+
+## What the draft does not record
+
+- the Sheets home list (`/spreadsheets/u/0/`);
+- `/spreadsheets/d/<id>/copy` (a copy action, not an open);
+- the published-to-web copy `/spreadsheets/d/e/<published id>/pubhtml`,
+  which carries a different ID and is a different artifact;
+- the legacy `/spreadsheet/ccc?key=<id>` redirector itself (its redirect
+  target is recorded instead, see above).
+
+## Known limits
+
+- **Gmail is not covered.** See `docs/adapters/google.doc.md` "Known
+  limits": Gmail is fragment-routed and the message permalink is a possible
+  future type, not a rule here.
+- **Loading and interstitial titles are recorded as given.** See
+  `docs/adapters/google.doc.md` "Known limits": a tab still loading may
+  read the bare product name, and a Workspace-blocked or no-access
+  interstitial records that string as the title.
+- **Drive and Calendar wait** for the shared-origin migration, as for
+  `google.doc`.
+- The ID template is frozen once shipped (adapter-templates.md §8.2).
+  Widening a rule later goes through `STARTER_HISTORY` in
+  `extension/starter-adapters.ts`.
+- A fifth real title form (beyond `edit`/`view` and `preview`/`htmlview`)
+  cannot be added to this list without dropping one of the four already
+  shipped; see "Titles".
+
+## Live check still needed
+
+Before this page's status line changes to release-certified, check on macOS
+with real Chrome and a real Google account:
+
+1. Open one owned and one shared spreadsheet from the home list, from a
+   Drive double-click, and from a "Copy link" share link. Record the final
+   URL and the tab title of each.
+2. Repeat signed in to a second account to confirm the `/u/1/` form lands on
+   the same artifact.
+3. Open the same spreadsheet in `/preview` and `/htmlview`; confirm both
+   record the `- Google Drive` title suffix, and that a `gid=` tab switch
+   does not change the recorded artifact.
+4. The home list and `/copy` each stay "○ Not an artifact", and the legacy
+   `/spreadsheet/ccc?key=` link lands on the same artifact as the canonical
+   form it redirects to.
+5. Record the tab title while the spreadsheet is loading, as an account
+   without access, and on a Workspace account where the app is disabled;
+   note whether the worker's title hold hides the loading title.
+6. On a Capture Site review on a spreadsheet page with no saved rules,
+   Brauser offers all five Google Workspace types with the every-account
+   statement and the development-draft source line; saving one turns the
+   page card's status to "● Artifact recognized".
+
+Then record the date in this page's status line (`Status: release-certified
+<date>. …`, as in `docs/adapters/jira.issue.md`), set `google.sheet`'s
+`status` in `protocol/starters/google-workspace.json` to `{ "state":
+"certified", "method": "live", "checked_on": "<date>", "checked_by": "John"
+}`, and run `npm run gen:starters` (`protocol/starters/README.md`). The
+Capture Site source line follows the status.
