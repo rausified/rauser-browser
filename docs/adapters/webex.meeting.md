@@ -107,6 +107,17 @@ here.
 - **Legacy join and registration links are not recorded at all** — by
   design, since they key on a different ID than the instance ID this type
   uses.
+- **This starter is also offered, unintentionally, on Webex's media and
+  infrastructure hosts,** such as `nsj1wss.webex.com` (named in
+  `docs/research/blind/webex/research.md`, "Origin model"): `origin.exclude`
+  matches a whole first label exactly, and the research's own host list is
+  not exhaustive, so a media or infrastructure host it never named is
+  claimed by the strict `.webex.com` family too. Those hosts are internal or
+  media infrastructure, not Meetings site pages, so none of this type's
+  rules is expected to match anything there in practice; this is a known
+  limit of the data, not a behavior change, and is tracked as a follow-up
+  (mirrors Box's `fupload-*` hosts, `docs/adapters/box.file.md` "Known
+  limits").
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).
 
 ## Live check still needed
