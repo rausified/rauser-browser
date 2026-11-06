@@ -19,7 +19,9 @@
     "vidcast.page",
     "box.file",
     "box.folder",
-    "box.share"
+    "box.share",
+    "webex.recording",
+    "webex.meeting"
   ],
   "accept": [
     {
@@ -166,6 +168,16 @@
       "note": "Box shared link root (docs/adapters/box.share.md)",
       "url": "https://acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
       "shape": "/s/{id}"
+    },
+    {
+      "note": "Webex recording player (docs/adapters/webex.recording.md)",
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+      "shape": "/recordingservice/sites/example/recording/{hex32}/playback"
+    },
+    {
+      "note": "Webex Post Meeting Detail page (docs/adapters/webex.meeting.md)",
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+      "shape": "/webappng/sites/example/meeting/postinfo/{id}"
     }
   ],
   "reject": []

@@ -19,5 +19,7 @@
   "vidcast.page": "vidcast.page:{host}/{page}",
   "box.file": "box.file:{host}/{id}",
   "box.folder": "box.folder:{host}/{id}",
-  "box.share": "box.share:{host}/{kind}/{link}"
+  "box.share": "box.share:{host}/{kind}/{link}",
+  "webex.recording": "webex.recording:{host}/{id}",
+  "webex.meeting": "webex.meeting:{host}/{id}"
 }

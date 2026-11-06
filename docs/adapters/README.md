@@ -23,3 +23,5 @@
 | [box.file](box.file.md) | box | development | — | — | — |
 | [box.folder](box.folder.md) | box | development | — | — | — |
 | [box.share](box.share.md) | box | development | — | — | — |
+| [webex.recording](webex.recording.md) | webex | development | — | — | — |
+| [webex.meeting](webex.meeting.md) | webex | development | — | — | — |

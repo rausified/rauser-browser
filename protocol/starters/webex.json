@@ -1,0 +1,651 @@
+{
+  "family": "webex",
+  "display_name": "Webex Meetings",
+  "review_prompt": "Choose the kinds of Webex work to remember on this Webex site.",
+  "origin": {
+    "kind": "subdomain",
+    "suffix": ".webex.com",
+    "labels": 1,
+    "exclude": [
+      "www",
+      "web",
+      "teams",
+      "help",
+      "developer",
+      "admin",
+      "status",
+      "cart",
+      "idbroker",
+      "identity",
+      "apphub",
+      "signin",
+      "settings",
+      "eaf-sdk",
+      "web-sdk",
+      "downloadservicebts",
+      "mrsprod"
+    ]
+  },
+  "scope": null,
+  "sample_origin": "https://example.webex.com",
+  "sample_scope": [],
+  "overlaps": [
+    {
+      "a": "webex.recording",
+      "b": "webex.meeting",
+      "expect": "disjoint"
+    }
+  ],
+  "types": [
+    {
+      "type": "webex.recording",
+      "key": "webex.recording:{origin}",
+      "label": "Webex recordings",
+      "label_variants": [],
+      "description": "Each cloud recording becomes one artifact, keyed by its 32-character hex recording ID, however it is opened: the player, a share link, or any of the router's redirect forms, in either the recordingservice or webappng context.",
+      "record_label": "recordings",
+      "example_path": null,
+      "adapter": {
+        "type": "webex.recording",
+        "match": [
+          {
+            "path": "/(recordingservice|webappng)/sites/{_}/recording/{id:hex(32)}/playback"
+          },
+          {
+            "path": "/(recordingservice|webappng)/sites/{_}/recording/playback/{id:hex(32)}"
+          },
+          {
+            "path": "/(recordingservice|webappng)/sites/{_}/recording/play/{id:hex(32)}"
+          },
+          {
+            "path": "/(recordingservice|webappng)/sites/{_}/recording/recording/{id:hex(32)}"
+          },
+          {
+            "path": "/(recordingservice|webappng)/sites/{_}/playback/{id:hex(32)}"
+          },
+          {
+            "path": "/(recordingservice|webappng)/sites/{_}/{id:hex(32)}/playback"
+          }
+        ],
+        "id": "webex.recording:{host}/{id}",
+        "title": "{title} - {~}"
+      },
+      "history": [],
+      "status": {
+        "state": "development",
+        "method": null,
+        "checked_on": null,
+        "checked_by": null
+      },
+      "docs": "docs/adapters/webex.recording.md",
+      "samples": [
+        {
+          "note": "Webex recording player",
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+          "title": "Design review - Example Site",
+          "shape": "/recordingservice/sites/example/recording/{hex32}/playback"
+        }
+      ],
+      "samples_shape": true,
+      "vectors": [
+        {
+          "id": "eval.webex.recording.player_recordingservice",
+          "kind": "evaluate",
+          "why": "player route, recordingservice context",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "webex.recording",
+            "captures": { "id": "0123456789abcdef0123456789abcdef" },
+            "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+            "mode": null,
+            "title": "Quarterly Planning-20261014 1702-1",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+          "title": "Quarterly Planning-20261014 1702-1 - Webex"
+        },
+        {
+          "id": "eval.webex.recording.player_webappng_trailing_slash",
+          "kind": "evaluate",
+          "why": "player route, webappng context; trailing slash ignored",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "webex.recording",
+            "captures": { "id": "0123456789abcdef0123456789abcdef" },
+            "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+            "mode": null,
+            "title": "Design Review - Sprint 12-20261020 1500-1",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/playback/",
+          "title": "Design Review - Sprint 12-20261020 1500-1 - Webex"
+        },
+        {
+          "id": "eval.webex.recording.player_uppercase_id_folds",
+          "kind": "evaluate",
+          "why": "uppercase hex ID folds to the lowercase ID",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "webex.recording",
+            "captures": { "id": "0123456789abcdef0123456789abcdef" },
+            "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+            "mode": null
+          },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789ABCDEF0123456789ABCDEF/playback"
+        },
+        {
+          "id": "eval.webex.recording.player_query_fragment_noise",
+          "kind": "evaluate",
+          "why": "query and fragment noise ignored",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "webex.recording",
+            "captures": { "id": "0123456789abcdef0123456789abcdef" },
+            "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+            "mode": null,
+            "title": "Weekly Sync",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback?siteurl=example&from=email&t=120#transcript",
+          "title": "Weekly Sync - Acme Webex"
+        },
+        {
+          "id": "eval.webex.recording.player_loading_title",
+          "kind": "evaluate",
+          "why": "KNOWN LIMIT: pre-load router title recorded whole once the brand suffix is stripped",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "webex.recording",
+            "captures": { "id": "0123456789abcdef0123456789abcdef" },
+            "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+            "mode": null,
+            "title": "Replay Recorded Meeting",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+          "title": "Replay Recorded Meeting - Webex"
+        },
+        {
+          "id": "eval.webex.recording.share_recordingservice",
+          "kind": "evaluate",
+          "why": "share link route; password-gate route title before the recording loads",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 1,
+            "type": "webex.recording",
+            "captures": { "id": "0123456789abcdef0123456789abcdef" },
+            "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+            "mode": null,
+            "title": "Recorded Meeting Password",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/playback/0123456789abcdef0123456789abcdef",
+          "title": "Recorded Meeting Password - Webex"
+        },
+        {
+          "id": "eval.webex.recording.share_webappng_query",
+          "kind": "evaluate",
+          "why": "share link route, webappng context; query noise ignored",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 1,
+            "type": "webex.recording",
+            "captures": { "id": "aaaabbbbccccddddeeeeffff00001111" },
+            "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+            "mode": null,
+            "title": "Customer Onboarding-20261101 0900-1",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/webappng/sites/example/recording/playback/aaaabbbbccccddddeeeeffff00001111?siteurl=example",
+          "title": "Customer Onboarding-20261101 0900-1 - Webex"
+        },
+        {
+          "id": "eval.webex.recording.play_redirect",
+          "kind": "evaluate",
+          "why": "legacy /recording/play/<id> redirect form",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 2,
+            "type": "webex.recording",
+            "captures": { "id": "aaaabbbbccccddddeeeeffff00001111" },
+            "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+            "mode": null
+          },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/play/aaaabbbbccccddddeeeeffff00001111"
+        },
+        {
+          "id": "eval.webex.recording.detail_redirect",
+          "kind": "evaluate",
+          "why": "detail redirect form, webappng context",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 3,
+            "type": "webex.recording",
+            "captures": { "id": "aaaabbbbccccddddeeeeffff00001111" },
+            "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/recording/recording/aaaabbbbccccddddeeeeffff00001111"
+        },
+        {
+          "id": "eval.webex.recording.short_share_redirect",
+          "kind": "evaluate",
+          "why": "short share redirect form, /playback/<id>",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 4,
+            "type": "webex.recording",
+            "captures": { "id": "aaaabbbbccccddddeeeeffff00001111" },
+            "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/playback/aaaabbbbccccddddeeeeffff00001111"
+        },
+        {
+          "id": "eval.webex.recording.short_player_redirect",
+          "kind": "evaluate",
+          "why": "short player redirect form, /<id>/playback",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 5,
+            "type": "webex.recording",
+            "captures": { "id": "aaaabbbbccccddddeeeeffff00001111" },
+            "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/aaaabbbbccccddddeeeeffff00001111/playback"
+        },
+        {
+          "id": "eval.webex.recording.title_no_suffix_kept_whole",
+          "kind": "evaluate",
+          "why": "title with no ' - ' brand suffix: kept whole (title_entry null)",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "webex.recording",
+            "captures": { "id": "aaaabbbbccccddddeeeeffff00001111" },
+            "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+            "mode": null,
+            "title": "Cisco Webex Meetings",
+            "title_entry": null,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/webappng/sites/example/recording/aaaabbbbccccddddeeeeffff00001111/playback",
+          "title": "Cisco Webex Meetings"
+        },
+        {
+          "id": "eval.webex.recording.password_title",
+          "kind": "evaluate",
+          "why": "KNOWN LIMIT: interstitial password-gate title with no ' - ' brand suffix yet: kept whole (title_entry null)",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 1,
+            "type": "webex.recording",
+            "captures": { "id": "bbbbccccddddeeeeffff000011112222" },
+            "artifact_id": "webex.recording:example.webex.com/bbbbccccddddeeeeffff000011112222",
+            "mode": null,
+            "title": "Recorded Meeting Password",
+            "title_entry": null,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/playback/bbbbccccddddeeeeffff000011112222",
+          "title": "Recorded Meeting Password"
+        },
+        {
+          "id": "eval.webex.neg.legacy_ldr_rcid",
+          "kind": "evaluate",
+          "why": "legacy ldr.php RCID link, deliberately not matched (forwards to the player)",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/example/ldr.php?RCID=0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.webex.neg.legacy_lsr_rcid",
+          "kind": "evaluate",
+          "why": "legacy lsr.php RCID download link, deliberately not matched",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/example/lsr.php?RCID=0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.webex.neg.recording_list",
+          "kind": "evaluate",
+          "why": "recordings list, not a single recording",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/webappng/sites/example/recording/home"
+        },
+        {
+          "id": "eval.webex.neg.recording_download_page",
+          "kind": "evaluate",
+          "why": "download page, an action rather than an open",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/download/0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.webex.neg.recording_error_page",
+          "kind": "evaluate",
+          "why": "error page",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/webappng/sites/example/recording/error/0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.webex.neg.recording_registration",
+          "kind": "evaluate",
+          "why": "webinar-recording registration sub-route (rest segment)",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/registration/0123456789abcdef0123456789abcdef/register"
+        },
+        {
+          "id": "eval.webex.neg.recording_bare_id",
+          "kind": "evaluate",
+          "why": "bare /recording/<id>, not a route the router uses",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.webex.neg.recording_short_id",
+          "kind": "evaluate",
+          "why": "ID shorter than the required 32 hex digits",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef/playback"
+        },
+        {
+          "id": "eval.webex.neg.converged_calling_recording",
+          "kind": "evaluate",
+          "why": "Webex Calling recording; a different, undocumented ID shape",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/webappng/sites/example/convergedRecording/0123456789abcdef0123456789abcdef/playback"
+        },
+        {
+          "id": "eval.webex.neg.encoded_slash",
+          "kind": "evaluate",
+          "why": "percent-encoded slash in the site segment rejected",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "path_rejected" },
+          "url": "https://example.webex.com/recordingservice/sites/example%2Fother/recording/0123456789abcdef0123456789abcdef/playback"
+        }
+      ]
+    },
+    {
+      "type": "webex.meeting",
+      "key": "webex.meeting:{origin}",
+      "label": "Webex meeting summaries",
+      "label_variants": [],
+      "description": "Each Post Meeting Detail page becomes one artifact, keyed by that meeting occurrence's instance ID.",
+      "record_label": "meetings",
+      "example_path": null,
+      "adapter": {
+        "type": "webex.meeting",
+        "match": [
+          {
+            "path": "/webappng/sites/{_}/meeting/postinfo/{id:token(32,128)}"
+          },
+          {
+            "path": "/webappng/sites/{_}/postinfo/{id:token(32,128)}"
+          }
+        ],
+        "id": "webex.meeting:{host}/{id}"
+      },
+      "history": [],
+      "status": {
+        "state": "development",
+        "method": null,
+        "checked_on": null,
+        "checked_by": null
+      },
+      "docs": "docs/adapters/webex.meeting.md",
+      "samples": [
+        {
+          "note": "Webex Post Meeting Detail page",
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+          "title": null,
+          "shape": "/webappng/sites/example/meeting/postinfo/{id}"
+        }
+      ],
+      "samples_shape": true,
+      "vectors": [
+        {
+          "id": "eval.webex.meeting.postinfo_instance_id",
+          "kind": "evaluate",
+          "why": "postMeetingDetail route with the hex_I_digits instance ID; no title template, so the generic route title is recorded whole",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 1,
+            "rule": 0,
+            "type": "webex.meeting",
+            "captures": { "id": "0123456789abcdef0123456789abcdef_I_123456789012345678" },
+            "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+            "mode": null,
+            "title": "Post Meeting Detail - Webex",
+            "title_entry": null,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+          "title": "Post Meeting Detail - Webex"
+        },
+        {
+          "id": "eval.webex.meeting.postinfo_bare_hex",
+          "kind": "evaluate",
+          "why": "bare 32-hex series ID, the token's lower bound",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 1,
+            "rule": 0,
+            "type": "webex.meeting",
+            "captures": { "id": "0123456789abcdef0123456789abcdef" },
+            "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.webex.meeting.postinfo_trailing_slash",
+          "kind": "evaluate",
+          "why": "trailing slash ignored",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 1,
+            "rule": 0,
+            "type": "webex.meeting",
+            "captures": { "id": "0123456789abcdef0123456789abcdef_I_123456789012345678" },
+            "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678/"
+        },
+        {
+          "id": "eval.webex.meeting.postinfo_query_noise",
+          "kind": "evaluate",
+          "why": "query noise ignored",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 1,
+            "rule": 0,
+            "type": "webex.meeting",
+            "captures": { "id": "0123456789abcdef0123456789abcdef_I_123456789012345678" },
+            "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678?siteurl=example&tab=transcript&from=email"
+        },
+        {
+          "id": "eval.webex.meeting.postinfo_fragment",
+          "kind": "evaluate",
+          "why": "fragment ignored",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 1,
+            "rule": 0,
+            "type": "webex.meeting",
+            "captures": { "id": "0123456789abcdef0123456789abcdef_I_123456789012345678" },
+            "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678#summary"
+        },
+        {
+          "id": "eval.webex.meeting.postinfo_short_redirect",
+          "kind": "evaluate",
+          "why": "short /postinfo/<id> redirect form",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 1,
+            "rule": 1,
+            "type": "webex.meeting",
+            "captures": { "id": "0123456789abcdef0123456789abcdef_I_123456789012345678" },
+            "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678"
+        },
+        {
+          "id": "eval.webex.meeting.postinfo_other_instance_distinct",
+          "kind": "evaluate",
+          "why": "a different instance of the same meeting series gets a distinct ID",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 1,
+            "rule": 0,
+            "type": "webex.meeting",
+            "captures": { "id": "0123456789abcdef0123456789abcdef_I_987654321098765432" },
+            "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_987654321098765432",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_987654321098765432"
+        },
+        {
+          "id": "eval.webex.meeting.postinfo_case_kept",
+          "kind": "evaluate",
+          "why": "token case kept, not lowered",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 1,
+            "rule": 0,
+            "type": "webex.meeting",
+            "captures": { "id": "0123456789ABCDEF0123456789abcdef_I_123456789012345678" },
+            "artifact_id": "webex.meeting:example.webex.com/0123456789ABCDEF0123456789abcdef_I_123456789012345678",
+            "mode": null
+          },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789ABCDEF0123456789abcdef_I_123456789012345678"
+        },
+        {
+          "id": "eval.webex.neg.join_link_mtid",
+          "kind": "evaluate",
+          "why": "join link, not a meeting detail page",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/example/j.php?MTID=m0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.webex.neg.personal_room",
+          "kind": "evaluate",
+          "why": "personal room join link",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/meet/alex.example"
+        },
+        {
+          "id": "eval.webex.neg.meeting_info_upcoming",
+          "kind": "evaluate",
+          "why": "upcoming-meeting detail, keyed by a different meeting UUID",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/info/0123456789abcdef0123456789abcdef?siteurl=example"
+        },
+        {
+          "id": "eval.webex.neg.meeting_scheduler",
+          "kind": "evaluate",
+          "why": "scheduler page, not a meeting",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/scheduler"
+        },
+        {
+          "id": "eval.webex.neg.dashboard",
+          "kind": "evaluate",
+          "why": "site dashboard",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/webappng/sites/example/dashboard?siteurl=example"
+        },
+        {
+          "id": "eval.webex.neg.postinfo_under_recordingservice",
+          "kind": "evaluate",
+          "why": "postinfo path under the wrong context; only webappng is matched",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/recordingservice/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678"
+        },
+        {
+          "id": "eval.webex.neg.postinfo_too_short",
+          "kind": "evaluate",
+          "why": "token shorter than the 32-character minimum",
+          "impls": ["rust", "ts"],
+          "expect": { "match": false, "reason": "no_rule" },
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/abc123"
+        }
+      ]
+    }
+  ]
+}
