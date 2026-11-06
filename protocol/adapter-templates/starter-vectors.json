@@ -467,6 +467,69 @@
           "title": "Vidcast - {title}"
         }
       ]
+    },
+    "starter:box": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "box.file",
+          "origin": "https://acme.app.box.com",
+          "match": [
+            {
+              "path": "/file/{id:int}"
+            },
+            {
+              "path": "/notes/{id:int}"
+            },
+            {
+              "path": "/canvas/{id:int}"
+            },
+            {
+              "path": "/s/{_}/file/{id:int}"
+            },
+            {
+              "path": "/v/{_}/file/{id:int}"
+            },
+            {
+              "path": "/integrations/officeonline/openOfficeOnline",
+              "query": {
+                "fileId": "{id:int}"
+              },
+              "mode": "edit"
+            }
+          ],
+          "id": "box.file:{host}/{id}",
+          "title": "{title} | Powered by Box"
+        },
+        {
+          "type": "box.folder",
+          "origin": "https://acme.app.box.com",
+          "match": [
+            {
+              "path": "/folder/{id:int(2,19)}"
+            },
+            {
+              "path": "/s/{_}/folder/{id:int(2,19)}"
+            },
+            {
+              "path": "/v/{_}/folder/{id:int(2,19)}"
+            }
+          ],
+          "id": "box.folder:{host}/{id}",
+          "title": "{title} | Powered by Box"
+        },
+        {
+          "type": "box.share",
+          "origin": "https://acme.app.box.com",
+          "match": [
+            {
+              "path": "/{kind:(s|v)}/{link:token(1,100)|lower}"
+            }
+          ],
+          "id": "box.share:{host}/{kind}/{link}",
+          "title": "{title} | Powered by Box"
+        }
+      ]
     }
   },
   "cases": [
@@ -4849,6 +4912,1148 @@
         "reason": "no_rule"
       },
       "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/more"
+    },
+    {
+      "id": "validate.starter.box",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:box fixture (protocol/starters/box.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.box",
+      "kind": "overlap_report",
+      "why": "generated: box's declared overlaps (protocol/starters/box.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.box.file.preview",
+      "kind": "evaluate",
+      "why": "logged-in file preview",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "111122223333"
+        },
+        "artifact_id": "box.file:acme.app.box.com/111122223333",
+        "mode": null,
+        "title": "Q3 Plan.pptx",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/111122223333",
+      "title": "Q3 Plan.pptx | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.preview.slash_query_fragment",
+      "kind": "evaluate",
+      "why": "trailing slash, ?s= share token and fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "111122223333"
+        },
+        "artifact_id": "box.file:acme.app.box.com/111122223333",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/file/111122223333/?s=abcdefghij0123456789#page=2"
+    },
+    {
+      "id": "eval.box.file.enterprise",
+      "kind": "evaluate",
+      "why": "custom subdomain; host in the ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "444455556666"
+        },
+        "artifact_id": "box.file:acme.app.box.com/444455556666",
+        "mode": null,
+        "title": "Budget FY27.xlsx",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/444455556666?sb=/details",
+      "title": "Budget FY27.xlsx | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.note",
+      "kind": "evaluate",
+      "why": "Box Note: same file-ID namespace as box.file",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "box.file",
+        "captures": {
+          "id": "222233334444"
+        },
+        "artifact_id": "box.file:acme.app.box.com/222233334444",
+        "mode": null,
+        "title": "Weekly sync.boxnote",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/notes/222233334444",
+      "title": "Weekly sync.boxnote | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.note.query",
+      "kind": "evaluate",
+      "why": "note opened with a share query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "box.file",
+        "captures": {
+          "id": "222233334444"
+        },
+        "artifact_id": "box.file:acme.app.box.com/222233334444",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/notes/222233334444?s=zzzzyyyyxxxxwwwwvvvv"
+    },
+    {
+      "id": "eval.box.file.canvas",
+      "kind": "evaluate",
+      "why": "Box Canvas route",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "box.file",
+        "captures": {
+          "id": "333344445555"
+        },
+        "artifact_id": "box.file:acme.app.box.com/333344445555",
+        "mode": null,
+        "title": "Roadmap board.boxcanvas",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/canvas/333344445555",
+      "title": "Roadmap board.boxcanvas | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.in_shared_folder",
+      "kind": "evaluate",
+      "why": "file opened inside a shared-link folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "box.file",
+        "captures": {
+          "id": "555566667777"
+        },
+        "artifact_id": "box.file:acme.app.box.com/555566667777",
+        "mode": null,
+        "title": "Press kit.pdf",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456/file/555566667777",
+      "title": "Press kit.pdf | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.in_vanity_folder",
+      "kind": "evaluate",
+      "why": "file inside a custom-URL (vanity) folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 4,
+        "type": "box.file",
+        "captures": {
+          "id": "666677778888"
+        },
+        "artifact_id": "box.file:acme.app.box.com/666677778888",
+        "mode": null,
+        "title": "Logo.png",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/v/press-kit/file/666677778888?sortColumn=name&sortDirection=ASC",
+      "title": "Logo.png | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.title_with_pipe",
+      "kind": "evaluate",
+      "why": "title containing ' | ' kept whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "777788889999"
+        },
+        "artifact_id": "box.file:acme.app.box.com/777788889999",
+        "mode": null,
+        "title": "A | B notes.docx",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/777788889999",
+      "title": "A | B notes.docx | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.officeonline",
+      "kind": "evaluate",
+      "why": "LOW-confidence route: Office for the web editing",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 5,
+        "type": "box.file",
+        "captures": {
+          "id": "888899990000"
+        },
+        "artifact_id": "box.file:acme.app.box.com/888899990000",
+        "mode": "edit"
+      },
+      "url": "https://acme.app.box.com/integrations/officeonline/openOfficeOnline?fileId=888899990000&sharedAccessCode="
+    },
+    {
+      "id": "eval.box.file.default_title",
+      "kind": "evaluate",
+      "why": "default title matches no entry: the whole tab title is kept (title_entry null)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "999900001111"
+        },
+        "artifact_id": "box.file:acme.app.box.com/999900001111",
+        "mode": null,
+        "title": "Box | Simple Online Collaboration",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/999900001111",
+      "title": "Box | Simple Online Collaboration"
+    },
+    {
+      "id": "eval.box.neg.root",
+      "kind": "evaluate",
+      "why": "app root",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/"
+    },
+    {
+      "id": "eval.box.neg.recents",
+      "kind": "evaluate",
+      "why": "recents list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/recents"
+    },
+    {
+      "id": "eval.box.neg.trash",
+      "kind": "evaluate",
+      "why": "trash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/trash"
+    },
+    {
+      "id": "eval.box.neg.favorites",
+      "kind": "evaluate",
+      "why": "favorites list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/files/favorites"
+    },
+    {
+      "id": "eval.box.neg.master",
+      "kind": "evaluate",
+      "why": "admin console",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/master/settings/accountBilling"
+    },
+    {
+      "id": "eval.box.neg.embed",
+      "kind": "evaluate",
+      "why": "embed iframe form, excluded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/embed/s/abcdefghij0123456789"
+    },
+    {
+      "id": "eval.box.neg.web_link",
+      "kind": "evaluate",
+      "why": "Box bookmark that opens another site",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/web_link/123412341234"
+    },
+    {
+      "id": "eval.box.neg.hubs",
+      "kind": "evaluate",
+      "why": "Box Hubs, not in this starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/hubs/123412341234"
+    },
+    {
+      "id": "eval.box.neg.notes_create",
+      "kind": "evaluate",
+      "why": "create-note action, not an ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/notes/create_note"
+    },
+    {
+      "id": "eval.box.neg.file_subroute",
+      "kind": "evaluate",
+      "why": "sub-route under a file (no rest)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/file/111122223333/versions"
+    },
+    {
+      "id": "eval.box.neg.legacy_files",
+      "kind": "evaluate",
+      "why": "legacy hash-era file URL, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/files/0/f/2177659772/1/f_18817194544"
+    },
+    {
+      "id": "eval.box.neg.file_noint",
+      "kind": "evaluate",
+      "why": "non-numeric file ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/file/abc"
+    },
+    {
+      "id": "eval.box.neg.officeonline_noid",
+      "kind": "evaluate",
+      "why": "officeonline route with no fileId",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/integrations/officeonline/openOfficeOnline?sharedAccessCode="
+    },
+    {
+      "id": "eval.box.folder.view",
+      "kind": "evaluate",
+      "why": "logged-in folder view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "123412341234"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/123412341234",
+        "mode": null,
+        "title": "Customer Contracts",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/folder/123412341234",
+      "title": "Customer Contracts | Powered by Box"
+    },
+    {
+      "id": "eval.box.folder.view.query",
+      "kind": "evaluate",
+      "why": "query noise ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "123412341234"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/123412341234",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/folder/123412341234?tc=collab-folder-invite-treatment"
+    },
+    {
+      "id": "eval.box.folder.view.slash_fragment",
+      "kind": "evaluate",
+      "why": "trailing slash and fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "234523452345"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/234523452345",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/folder/234523452345/#section"
+    },
+    {
+      "id": "eval.box.folder.two_digit",
+      "kind": "evaluate",
+      "why": "int(2,19) lower bound",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "12"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/12",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/folder/12"
+    },
+    {
+      "id": "eval.box.folder.in_shared",
+      "kind": "evaluate",
+      "why": "subfolder of a shared folder (title may carry the share root's name)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "box.folder",
+        "captures": {
+          "id": "345634563456"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/345634563456",
+        "mode": null,
+        "title": "Team Docs",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/folder/345634563456",
+      "title": "Team Docs | Powered by Box"
+    },
+    {
+      "id": "eval.box.folder.in_shared.sort",
+      "kind": "evaluate",
+      "why": "sort query ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "box.folder",
+        "captures": {
+          "id": "345634563456"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/345634563456",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/folder/345634563456?sortColumn=date&sortDirection=ASC"
+    },
+    {
+      "id": "eval.box.folder.in_vanity",
+      "kind": "evaluate",
+      "why": "subfolder of a custom-URL (vanity) folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "box.folder",
+        "captures": {
+          "id": "456745674567"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/456745674567",
+        "mode": null,
+        "title": "Media",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/v/media/folder/456745674567",
+      "title": "Media | Powered by Box"
+    },
+    {
+      "id": "eval.box.folder.enterprise_title_fallback",
+      "kind": "evaluate",
+      "why": "KNOWN LIMIT: while untitled, Box shows the enterprise name, recorded as the title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "567856785678"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/567856785678",
+        "mode": null,
+        "title": "Acme Corp",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/folder/567856785678",
+      "title": "Acme Corp | Powered by Box"
+    },
+    {
+      "id": "eval.box.neg.all_files",
+      "kind": "evaluate",
+      "why": "All Files root excluded by int(2,19)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/folder/0"
+    },
+    {
+      "id": "eval.box.neg.folder_search",
+      "kind": "evaluate",
+      "why": "search",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/folder/0/search?query=budget"
+    },
+    {
+      "id": "eval.box.neg.folder_sub_search",
+      "kind": "evaluate",
+      "why": "search inside a folder (no rest)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/folder/123412341234/search?query=x"
+    },
+    {
+      "id": "eval.box.share.s32",
+      "kind": "evaluate",
+      "why": "current 32-char shared name",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcd1234efgh5678ijkl9012mnop3456"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+        "mode": null,
+        "title": "Deck.pdf",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+      "title": "Deck.pdf | Powered by Box"
+    },
+    {
+      "id": "eval.box.share.s20_slash",
+      "kind": "evaluate",
+      "why": "older 20-char name, trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcdefghij0123456789"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcdefghij0123456789",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/"
+    },
+    {
+      "id": "eval.box.share.s10",
+      "kind": "evaluate",
+      "why": "10-char legacy name (seen after a /shared/ redirect)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcde12345"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcde12345",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/abcde12345"
+    },
+    {
+      "id": "eval.box.share.upper",
+      "kind": "evaluate",
+      "why": "names are case-insensitive: lowered",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcdefghij0123456789"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcdefghij0123456789",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/ABCDEFGHIJ0123456789"
+    },
+    {
+      "id": "eval.box.share.query",
+      "kind": "evaluate",
+      "why": "query and fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcdefghij0123456789"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcdefghij0123456789",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789?page=2&sortColumn=name#x"
+    },
+    {
+      "id": "eval.box.share.enterprise",
+      "kind": "evaluate",
+      "why": "shared folder root on a custom subdomain",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "zyxwvutsrq9876543210zyxwvutsrq98"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/zyxwvutsrq9876543210zyxwvutsrq98",
+        "mode": null,
+        "title": "Team Docs",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/zyxwvutsrq9876543210zyxwvutsrq98",
+      "title": "Team Docs | Powered by Box"
+    },
+    {
+      "id": "eval.box.share.vanity",
+      "kind": "evaluate",
+      "why": "custom URL, lowered",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "v",
+          "link": "press-kit_2026"
+        },
+        "artifact_id": "box.share:acme.app.box.com/v/press-kit_2026",
+        "mode": null,
+        "title": "Press Kit",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/v/Press-Kit_2026",
+      "title": "Press Kit | Powered by Box"
+    },
+    {
+      "id": "eval.box.share.vanity_slash",
+      "kind": "evaluate",
+      "why": "vanity trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "v",
+          "link": "press-kit_2026"
+        },
+        "artifact_id": "box.share:acme.app.box.com/v/press-kit_2026",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/v/press-kit_2026/"
+    },
+    {
+      "id": "eval.box.share.vanity_short",
+      "kind": "evaluate",
+      "why": "short vanity name",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "v",
+          "link": "unl"
+        },
+        "artifact_id": "box.share:acme.app.box.com/v/unl",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/v/UNL"
+    },
+    {
+      "id": "eval.box.neg.legacy_shared_tree",
+      "kind": "evaluate",
+      "why": "legacy shared tree (404 today)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/1/1111111111/2222222222/1"
+    },
+    {
+      "id": "eval.box.neg.shared_static",
+      "kind": "evaluate",
+      "why": "direct download",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/shared/static/abcdefghij0123456789.pdf"
+    },
+    {
+      "id": "eval.box.neg.shared_extra",
+      "kind": "evaluate",
+      "why": "unknown sub-route under a shared link (no rest)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/preview"
+    },
+    {
+      "id": "eval.box.neg.vanity_dot",
+      "kind": "evaluate",
+      "why": "'.' is outside token: not matched (vanity alphabet assumption)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/v/press.kit"
+    },
+    {
+      "id": "eval.box.neg.upper_route",
+      "kind": "evaluate",
+      "why": "uppercase route is 404 on Box; paths are case-sensitive",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/S/abcdefghij0123456789"
     }
   ]
 }

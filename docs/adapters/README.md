@@ -20,3 +20,6 @@
 | [vidcast.video](vidcast.video.md) | vidcast | development | — | — | — |
 | [vidcast.playlist](vidcast.playlist.md) | vidcast | development | — | — | — |
 | [vidcast.page](vidcast.page.md) | vidcast | development | — | — | — |
+| [box.file](box.file.md) | box | development | — | — | — |
+| [box.folder](box.folder.md) | box | development | — | — | — |
+| [box.share](box.share.md) | box | development | — | — | — |
