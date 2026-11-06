@@ -467,6 +467,113 @@
           "title": "Vidcast - {title}"
         }
       ]
+    },
+    "starter:box": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "box.file",
+          "origin": "https://acme.app.box.com",
+          "match": [
+            {
+              "path": "/file/{id:int}"
+            },
+            {
+              "path": "/notes/{id:int}"
+            },
+            {
+              "path": "/canvas/{id:int}"
+            },
+            {
+              "path": "/s/{_}/file/{id:int}"
+            },
+            {
+              "path": "/v/{_}/file/{id:int}"
+            },
+            {
+              "path": "/integrations/officeonline/openOfficeOnline",
+              "query": {
+                "fileId": "{id:int}"
+              },
+              "mode": "edit"
+            }
+          ],
+          "id": "box.file:{host}/{id}",
+          "title": "{title} | Powered by Box"
+        },
+        {
+          "type": "box.folder",
+          "origin": "https://acme.app.box.com",
+          "match": [
+            {
+              "path": "/folder/{id:int(2,19)}"
+            },
+            {
+              "path": "/s/{_}/folder/{id:int(2,19)}"
+            },
+            {
+              "path": "/v/{_}/folder/{id:int(2,19)}"
+            }
+          ],
+          "id": "box.folder:{host}/{id}",
+          "title": "{title} | Powered by Box"
+        },
+        {
+          "type": "box.share",
+          "origin": "https://acme.app.box.com",
+          "match": [
+            {
+              "path": "/{kind:(s|v)}/{link:token(1,100)|lower}"
+            }
+          ],
+          "id": "box.share:{host}/{kind}/{link}",
+          "title": "{title} | Powered by Box"
+        }
+      ]
+    },
+    "starter:webex": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "webex.recording",
+          "origin": "https://example.webex.com",
+          "match": [
+            {
+              "path": "/(recordingservice|webappng)/sites/{_}/recording/{id:hex(32)}/playback"
+            },
+            {
+              "path": "/(recordingservice|webappng)/sites/{_}/recording/playback/{id:hex(32)}"
+            },
+            {
+              "path": "/(recordingservice|webappng)/sites/{_}/recording/play/{id:hex(32)}"
+            },
+            {
+              "path": "/(recordingservice|webappng)/sites/{_}/recording/recording/{id:hex(32)}"
+            },
+            {
+              "path": "/(recordingservice|webappng)/sites/{_}/playback/{id:hex(32)}"
+            },
+            {
+              "path": "/(recordingservice|webappng)/sites/{_}/{id:hex(32)}/playback"
+            }
+          ],
+          "id": "webex.recording:{host}/{id}",
+          "title": "{title} - {~}"
+        },
+        {
+          "type": "webex.meeting",
+          "origin": "https://example.webex.com",
+          "match": [
+            {
+              "path": "/webappng/sites/{_}/meeting/postinfo/{id:token(32,128)}"
+            },
+            {
+              "path": "/webappng/sites/{_}/postinfo/{id:token(32,128)}"
+            }
+          ],
+          "id": "webex.meeting:{host}/{id}"
+        }
+      ]
     }
   },
   "cases": [
@@ -4849,6 +4956,2015 @@
         "reason": "no_rule"
       },
       "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/more"
+    },
+    {
+      "id": "validate.starter.box",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:box fixture (protocol/starters/box.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.box",
+      "kind": "overlap_report",
+      "why": "generated: box's declared overlaps (protocol/starters/box.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.box.file.preview",
+      "kind": "evaluate",
+      "why": "logged-in file preview",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "111122223333"
+        },
+        "artifact_id": "box.file:acme.app.box.com/111122223333",
+        "mode": null,
+        "title": "Q3 Plan.pptx",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/111122223333",
+      "title": "Q3 Plan.pptx | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.preview.slash_query_fragment",
+      "kind": "evaluate",
+      "why": "trailing slash, ?s= share token and fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "111122223333"
+        },
+        "artifact_id": "box.file:acme.app.box.com/111122223333",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/file/111122223333/?s=abcdefghij0123456789#page=2"
+    },
+    {
+      "id": "eval.box.file.enterprise",
+      "kind": "evaluate",
+      "why": "custom subdomain; host in the ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "444455556666"
+        },
+        "artifact_id": "box.file:acme.app.box.com/444455556666",
+        "mode": null,
+        "title": "Budget FY27.xlsx",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/444455556666?sb=/details",
+      "title": "Budget FY27.xlsx | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.note",
+      "kind": "evaluate",
+      "why": "Box Note: same file-ID namespace as box.file",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "box.file",
+        "captures": {
+          "id": "222233334444"
+        },
+        "artifact_id": "box.file:acme.app.box.com/222233334444",
+        "mode": null,
+        "title": "Weekly sync.boxnote",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/notes/222233334444",
+      "title": "Weekly sync.boxnote | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.note.query",
+      "kind": "evaluate",
+      "why": "note opened with a share query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "box.file",
+        "captures": {
+          "id": "222233334444"
+        },
+        "artifact_id": "box.file:acme.app.box.com/222233334444",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/notes/222233334444?s=zzzzyyyyxxxxwwwwvvvv"
+    },
+    {
+      "id": "eval.box.file.canvas",
+      "kind": "evaluate",
+      "why": "Box Canvas route",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "box.file",
+        "captures": {
+          "id": "333344445555"
+        },
+        "artifact_id": "box.file:acme.app.box.com/333344445555",
+        "mode": null,
+        "title": "Roadmap board.boxcanvas",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/canvas/333344445555",
+      "title": "Roadmap board.boxcanvas | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.in_shared_folder",
+      "kind": "evaluate",
+      "why": "file opened inside a shared-link folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "box.file",
+        "captures": {
+          "id": "555566667777"
+        },
+        "artifact_id": "box.file:acme.app.box.com/555566667777",
+        "mode": null,
+        "title": "Press kit.pdf",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456/file/555566667777",
+      "title": "Press kit.pdf | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.in_vanity_folder",
+      "kind": "evaluate",
+      "why": "file inside a custom-URL (vanity) folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 4,
+        "type": "box.file",
+        "captures": {
+          "id": "666677778888"
+        },
+        "artifact_id": "box.file:acme.app.box.com/666677778888",
+        "mode": null,
+        "title": "Logo.png",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/v/press-kit/file/666677778888?sortColumn=name&sortDirection=ASC",
+      "title": "Logo.png | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.title_with_pipe",
+      "kind": "evaluate",
+      "why": "title containing ' | ' kept whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "777788889999"
+        },
+        "artifact_id": "box.file:acme.app.box.com/777788889999",
+        "mode": null,
+        "title": "A | B notes.docx",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/777788889999",
+      "title": "A | B notes.docx | Powered by Box"
+    },
+    {
+      "id": "eval.box.file.officeonline",
+      "kind": "evaluate",
+      "why": "LOW-confidence route: Office for the web editing",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 5,
+        "type": "box.file",
+        "captures": {
+          "id": "888899990000"
+        },
+        "artifact_id": "box.file:acme.app.box.com/888899990000",
+        "mode": "edit"
+      },
+      "url": "https://acme.app.box.com/integrations/officeonline/openOfficeOnline?fileId=888899990000&sharedAccessCode="
+    },
+    {
+      "id": "eval.box.file.default_title",
+      "kind": "evaluate",
+      "why": "default title matches no entry: the whole tab title is kept (title_entry null)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "999900001111"
+        },
+        "artifact_id": "box.file:acme.app.box.com/999900001111",
+        "mode": null,
+        "title": "Box | Simple Online Collaboration",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/999900001111",
+      "title": "Box | Simple Online Collaboration"
+    },
+    {
+      "id": "eval.box.neg.root",
+      "kind": "evaluate",
+      "why": "app root",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/"
+    },
+    {
+      "id": "eval.box.neg.recents",
+      "kind": "evaluate",
+      "why": "recents list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/recents"
+    },
+    {
+      "id": "eval.box.neg.trash",
+      "kind": "evaluate",
+      "why": "trash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/trash"
+    },
+    {
+      "id": "eval.box.neg.favorites",
+      "kind": "evaluate",
+      "why": "favorites list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/files/favorites"
+    },
+    {
+      "id": "eval.box.neg.master",
+      "kind": "evaluate",
+      "why": "admin console",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/master/settings/accountBilling"
+    },
+    {
+      "id": "eval.box.neg.embed",
+      "kind": "evaluate",
+      "why": "embed iframe form, excluded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/embed/s/abcdefghij0123456789"
+    },
+    {
+      "id": "eval.box.neg.web_link",
+      "kind": "evaluate",
+      "why": "Box bookmark that opens another site",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/web_link/123412341234"
+    },
+    {
+      "id": "eval.box.neg.hubs",
+      "kind": "evaluate",
+      "why": "Box Hubs, not in this starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/hubs/123412341234"
+    },
+    {
+      "id": "eval.box.neg.notes_create",
+      "kind": "evaluate",
+      "why": "create-note action, not an ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/notes/create_note"
+    },
+    {
+      "id": "eval.box.neg.file_subroute",
+      "kind": "evaluate",
+      "why": "sub-route under a file (no rest)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/file/111122223333/versions"
+    },
+    {
+      "id": "eval.box.neg.legacy_files",
+      "kind": "evaluate",
+      "why": "legacy hash-era file URL, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/files/0/f/2177659772/1/f_18817194544"
+    },
+    {
+      "id": "eval.box.neg.file_noint",
+      "kind": "evaluate",
+      "why": "non-numeric file ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/file/abc"
+    },
+    {
+      "id": "eval.box.neg.officeonline_noid",
+      "kind": "evaluate",
+      "why": "officeonline route with no fileId",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/integrations/officeonline/openOfficeOnline?sharedAccessCode="
+    },
+    {
+      "id": "eval.box.folder.view",
+      "kind": "evaluate",
+      "why": "logged-in folder view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "123412341234"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/123412341234",
+        "mode": null,
+        "title": "Customer Contracts",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/folder/123412341234",
+      "title": "Customer Contracts | Powered by Box"
+    },
+    {
+      "id": "eval.box.folder.view.query",
+      "kind": "evaluate",
+      "why": "query noise ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "123412341234"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/123412341234",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/folder/123412341234?tc=collab-folder-invite-treatment"
+    },
+    {
+      "id": "eval.box.folder.view.slash_fragment",
+      "kind": "evaluate",
+      "why": "trailing slash and fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "234523452345"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/234523452345",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/folder/234523452345/#section"
+    },
+    {
+      "id": "eval.box.folder.two_digit",
+      "kind": "evaluate",
+      "why": "int(2,19) lower bound",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "12"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/12",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/folder/12"
+    },
+    {
+      "id": "eval.box.folder.in_shared",
+      "kind": "evaluate",
+      "why": "subfolder of a shared folder (title may carry the share root's name)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "box.folder",
+        "captures": {
+          "id": "345634563456"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/345634563456",
+        "mode": null,
+        "title": "Team Docs",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/folder/345634563456",
+      "title": "Team Docs | Powered by Box"
+    },
+    {
+      "id": "eval.box.folder.in_shared.sort",
+      "kind": "evaluate",
+      "why": "sort query ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "box.folder",
+        "captures": {
+          "id": "345634563456"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/345634563456",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/folder/345634563456?sortColumn=date&sortDirection=ASC"
+    },
+    {
+      "id": "eval.box.folder.in_vanity",
+      "kind": "evaluate",
+      "why": "subfolder of a custom-URL (vanity) folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "box.folder",
+        "captures": {
+          "id": "456745674567"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/456745674567",
+        "mode": null,
+        "title": "Media",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/v/media/folder/456745674567",
+      "title": "Media | Powered by Box"
+    },
+    {
+      "id": "eval.box.folder.enterprise_title_fallback",
+      "kind": "evaluate",
+      "why": "KNOWN LIMIT: while untitled, Box shows the enterprise name, recorded as the title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "567856785678"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/567856785678",
+        "mode": null,
+        "title": "Acme Corp",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/folder/567856785678",
+      "title": "Acme Corp | Powered by Box"
+    },
+    {
+      "id": "eval.box.neg.all_files",
+      "kind": "evaluate",
+      "why": "All Files root excluded by int(2,19)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/folder/0"
+    },
+    {
+      "id": "eval.box.neg.folder_search",
+      "kind": "evaluate",
+      "why": "search",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/folder/0/search?query=budget"
+    },
+    {
+      "id": "eval.box.neg.folder_sub_search",
+      "kind": "evaluate",
+      "why": "search inside a folder (no rest)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/folder/123412341234/search?query=x"
+    },
+    {
+      "id": "eval.box.share.s32",
+      "kind": "evaluate",
+      "why": "current 32-char shared name",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcd1234efgh5678ijkl9012mnop3456"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+        "mode": null,
+        "title": "Deck.pdf",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+      "title": "Deck.pdf | Powered by Box"
+    },
+    {
+      "id": "eval.box.share.s20_slash",
+      "kind": "evaluate",
+      "why": "older 20-char name, trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcdefghij0123456789"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcdefghij0123456789",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/"
+    },
+    {
+      "id": "eval.box.share.s10",
+      "kind": "evaluate",
+      "why": "10-char legacy name (seen after a /shared/ redirect)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcde12345"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcde12345",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/abcde12345"
+    },
+    {
+      "id": "eval.box.share.upper",
+      "kind": "evaluate",
+      "why": "names are case-insensitive: lowered",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcdefghij0123456789"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcdefghij0123456789",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/ABCDEFGHIJ0123456789"
+    },
+    {
+      "id": "eval.box.share.query",
+      "kind": "evaluate",
+      "why": "query and fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcdefghij0123456789"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcdefghij0123456789",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789?page=2&sortColumn=name#x"
+    },
+    {
+      "id": "eval.box.share.enterprise",
+      "kind": "evaluate",
+      "why": "shared folder root on a custom subdomain",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "zyxwvutsrq9876543210zyxwvutsrq98"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/zyxwvutsrq9876543210zyxwvutsrq98",
+        "mode": null,
+        "title": "Team Docs",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/zyxwvutsrq9876543210zyxwvutsrq98",
+      "title": "Team Docs | Powered by Box"
+    },
+    {
+      "id": "eval.box.share.vanity",
+      "kind": "evaluate",
+      "why": "custom URL, lowered",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "v",
+          "link": "press-kit_2026"
+        },
+        "artifact_id": "box.share:acme.app.box.com/v/press-kit_2026",
+        "mode": null,
+        "title": "Press Kit",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/v/Press-Kit_2026",
+      "title": "Press Kit | Powered by Box"
+    },
+    {
+      "id": "eval.box.share.vanity_slash",
+      "kind": "evaluate",
+      "why": "vanity trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "v",
+          "link": "press-kit_2026"
+        },
+        "artifact_id": "box.share:acme.app.box.com/v/press-kit_2026",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/v/press-kit_2026/"
+    },
+    {
+      "id": "eval.box.share.vanity_short",
+      "kind": "evaluate",
+      "why": "short vanity name",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "v",
+          "link": "unl"
+        },
+        "artifact_id": "box.share:acme.app.box.com/v/unl",
+        "mode": null
+      },
+      "url": "https://acme.app.box.com/v/UNL"
+    },
+    {
+      "id": "eval.box.neg.legacy_shared_tree",
+      "kind": "evaluate",
+      "why": "legacy shared tree (404 today)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/1/1111111111/2222222222/1"
+    },
+    {
+      "id": "eval.box.neg.shared_static",
+      "kind": "evaluate",
+      "why": "direct download",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/shared/static/abcdefghij0123456789.pdf"
+    },
+    {
+      "id": "eval.box.neg.shared_extra",
+      "kind": "evaluate",
+      "why": "unknown sub-route under a shared link (no rest)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/s/abcdefghij0123456789/preview"
+    },
+    {
+      "id": "eval.box.neg.vanity_dot",
+      "kind": "evaluate",
+      "why": "'.' is outside token: not matched (vanity alphabet assumption)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/v/press.kit"
+    },
+    {
+      "id": "eval.box.neg.upper_route",
+      "kind": "evaluate",
+      "why": "uppercase route is 404 on Box; paths are case-sensitive",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.app.box.com/S/abcdefghij0123456789"
+    },
+    {
+      "id": "validate.starter.webex",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:webex fixture (protocol/starters/webex.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.webex",
+      "kind": "overlap_report",
+      "why": "generated: webex's declared overlaps (protocol/starters/webex.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.webex.recording.player_recordingservice",
+      "kind": "evaluate",
+      "why": "player route, recordingservice context",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "webex.recording",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "Quarterly Planning-20261014 1702-1",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+      "title": "Quarterly Planning-20261014 1702-1 - Webex"
+    },
+    {
+      "id": "eval.webex.recording.player_webappng_trailing_slash",
+      "kind": "evaluate",
+      "why": "player route, webappng context; trailing slash ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "webex.recording",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "Design Review - Sprint 12-20261020 1500-1",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/playback/",
+      "title": "Design Review - Sprint 12-20261020 1500-1 - Webex"
+    },
+    {
+      "id": "eval.webex.recording.player_uppercase_id_folds",
+      "kind": "evaluate",
+      "why": "uppercase hex ID folds to the lowercase ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "webex.recording",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789ABCDEF0123456789ABCDEF/playback"
+    },
+    {
+      "id": "eval.webex.recording.player_query_fragment_noise",
+      "kind": "evaluate",
+      "why": "query and fragment noise ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "webex.recording",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "Weekly Sync",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback?siteurl=example&from=email&t=120#transcript",
+      "title": "Weekly Sync - Acme Webex"
+    },
+    {
+      "id": "eval.webex.recording.player_loading_title",
+      "kind": "evaluate",
+      "why": "KNOWN LIMIT: pre-load router title recorded whole once the brand suffix is stripped",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "webex.recording",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "Replay Recorded Meeting",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+      "title": "Replay Recorded Meeting - Webex"
+    },
+    {
+      "id": "eval.webex.recording.share_recordingservice",
+      "kind": "evaluate",
+      "why": "share link route; password-gate route title before the recording loads",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "webex.recording",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "Recorded Meeting Password",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/playback/0123456789abcdef0123456789abcdef",
+      "title": "Recorded Meeting Password - Webex"
+    },
+    {
+      "id": "eval.webex.recording.share_webappng_query",
+      "kind": "evaluate",
+      "why": "share link route, webappng context; query noise ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "webex.recording",
+        "captures": {
+          "id": "aaaabbbbccccddddeeeeffff00001111"
+        },
+        "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+        "mode": null,
+        "title": "Customer Onboarding-20261101 0900-1",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/webappng/sites/example/recording/playback/aaaabbbbccccddddeeeeffff00001111?siteurl=example",
+      "title": "Customer Onboarding-20261101 0900-1 - Webex"
+    },
+    {
+      "id": "eval.webex.recording.play_redirect",
+      "kind": "evaluate",
+      "why": "legacy /recording/play/<id> redirect form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "webex.recording",
+        "captures": {
+          "id": "aaaabbbbccccddddeeeeffff00001111"
+        },
+        "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+        "mode": null
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/play/aaaabbbbccccddddeeeeffff00001111"
+    },
+    {
+      "id": "eval.webex.recording.detail_redirect",
+      "kind": "evaluate",
+      "why": "detail redirect form, webappng context",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "webex.recording",
+        "captures": {
+          "id": "aaaabbbbccccddddeeeeffff00001111"
+        },
+        "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/recording/recording/aaaabbbbccccddddeeeeffff00001111"
+    },
+    {
+      "id": "eval.webex.recording.short_share_redirect",
+      "kind": "evaluate",
+      "why": "short share redirect form, /playback/<id>",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 4,
+        "type": "webex.recording",
+        "captures": {
+          "id": "aaaabbbbccccddddeeeeffff00001111"
+        },
+        "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/playback/aaaabbbbccccddddeeeeffff00001111"
+    },
+    {
+      "id": "eval.webex.recording.short_player_redirect",
+      "kind": "evaluate",
+      "why": "short player redirect form, /<id>/playback",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 5,
+        "type": "webex.recording",
+        "captures": {
+          "id": "aaaabbbbccccddddeeeeffff00001111"
+        },
+        "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/aaaabbbbccccddddeeeeffff00001111/playback"
+    },
+    {
+      "id": "eval.webex.recording.title_no_suffix_kept_whole",
+      "kind": "evaluate",
+      "why": "title with no ' - ' brand suffix: kept whole (title_entry null)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "webex.recording",
+        "captures": {
+          "id": "aaaabbbbccccddddeeeeffff00001111"
+        },
+        "artifact_id": "webex.recording:example.webex.com/aaaabbbbccccddddeeeeffff00001111",
+        "mode": null,
+        "title": "Cisco Webex Meetings",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/webappng/sites/example/recording/aaaabbbbccccddddeeeeffff00001111/playback",
+      "title": "Cisco Webex Meetings"
+    },
+    {
+      "id": "eval.webex.recording.password_title",
+      "kind": "evaluate",
+      "why": "KNOWN LIMIT: interstitial password-gate title with no ' - ' brand suffix yet: kept whole (title_entry null)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "webex.recording",
+        "captures": {
+          "id": "bbbbccccddddeeeeffff000011112222"
+        },
+        "artifact_id": "webex.recording:example.webex.com/bbbbccccddddeeeeffff000011112222",
+        "mode": null,
+        "title": "Recorded Meeting Password",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/playback/bbbbccccddddeeeeffff000011112222",
+      "title": "Recorded Meeting Password"
+    },
+    {
+      "id": "eval.webex.neg.legacy_ldr_rcid",
+      "kind": "evaluate",
+      "why": "legacy ldr.php RCID link, deliberately not matched (forwards to the player)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/example/ldr.php?RCID=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.webex.neg.legacy_lsr_rcid",
+      "kind": "evaluate",
+      "why": "legacy lsr.php RCID download link, deliberately not matched",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/example/lsr.php?RCID=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.webex.neg.recording_list",
+      "kind": "evaluate",
+      "why": "recordings list, not a single recording",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/webappng/sites/example/recording/home"
+    },
+    {
+      "id": "eval.webex.neg.recording_download_page",
+      "kind": "evaluate",
+      "why": "download page, an action rather than an open",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/download/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.webex.neg.recording_error_page",
+      "kind": "evaluate",
+      "why": "error page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/webappng/sites/example/recording/error/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.webex.neg.recording_registration",
+      "kind": "evaluate",
+      "why": "webinar-recording registration sub-route (rest segment)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/webappng/sites/example/recording/0123456789abcdef0123456789abcdef/registration/0123456789abcdef0123456789abcdef/register"
+    },
+    {
+      "id": "eval.webex.neg.recording_bare_id",
+      "kind": "evaluate",
+      "why": "bare /recording/<id>, not a route the router uses",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.webex.neg.recording_short_id",
+      "kind": "evaluate",
+      "why": "ID shorter than the required 32 hex digits",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef/playback"
+    },
+    {
+      "id": "eval.webex.neg.converged_calling_recording",
+      "kind": "evaluate",
+      "why": "Webex Calling recording; a different, undocumented ID shape",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/webappng/sites/example/convergedRecording/0123456789abcdef0123456789abcdef/playback"
+    },
+    {
+      "id": "eval.webex.neg.encoded_slash",
+      "kind": "evaluate",
+      "why": "percent-encoded slash in the site segment rejected",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example%2Fother/recording/0123456789abcdef0123456789abcdef/playback"
+    },
+    {
+      "id": "eval.webex.meeting.postinfo_instance_id",
+      "kind": "evaluate",
+      "why": "postMeetingDetail route with the hex_I_digits instance ID; no title template, so the generic route title is recorded whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef_I_123456789012345678"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+        "mode": null,
+        "title": "Post Meeting Detail - Webex",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+      "title": "Post Meeting Detail - Webex"
+    },
+    {
+      "id": "eval.webex.meeting.postinfo_bare_hex",
+      "kind": "evaluate",
+      "why": "bare 32-hex series ID, the token's lower bound",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.webex.meeting.postinfo_trailing_slash",
+      "kind": "evaluate",
+      "why": "trailing slash ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef_I_123456789012345678"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678/"
+    },
+    {
+      "id": "eval.webex.meeting.postinfo_query_noise",
+      "kind": "evaluate",
+      "why": "query noise ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef_I_123456789012345678"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678?siteurl=example&tab=transcript&from=email"
+    },
+    {
+      "id": "eval.webex.meeting.postinfo_fragment",
+      "kind": "evaluate",
+      "why": "fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef_I_123456789012345678"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678#summary"
+    },
+    {
+      "id": "eval.webex.meeting.postinfo_short_redirect",
+      "kind": "evaluate",
+      "why": "short /postinfo/<id> redirect form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef_I_123456789012345678"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678"
+    },
+    {
+      "id": "eval.webex.meeting.postinfo_other_instance_distinct",
+      "kind": "evaluate",
+      "why": "a different instance of the same meeting series gets a distinct ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef_I_987654321098765432"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_987654321098765432",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_987654321098765432"
+    },
+    {
+      "id": "eval.webex.meeting.postinfo_case_kept",
+      "kind": "evaluate",
+      "why": "token case kept, not lowered",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789ABCDEF0123456789abcdef_I_123456789012345678"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789ABCDEF0123456789abcdef_I_123456789012345678",
+        "mode": null
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789ABCDEF0123456789abcdef_I_123456789012345678"
+    },
+    {
+      "id": "eval.webex.neg.join_link_mtid",
+      "kind": "evaluate",
+      "why": "join link, not a meeting detail page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/example/j.php?MTID=m0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.webex.neg.personal_room",
+      "kind": "evaluate",
+      "why": "personal room join link",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/meet/alex.example"
+    },
+    {
+      "id": "eval.webex.neg.meeting_info_upcoming",
+      "kind": "evaluate",
+      "why": "upcoming-meeting detail, keyed by a different meeting UUID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/info/0123456789abcdef0123456789abcdef?siteurl=example"
+    },
+    {
+      "id": "eval.webex.neg.meeting_scheduler",
+      "kind": "evaluate",
+      "why": "scheduler page, not a meeting",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/scheduler"
+    },
+    {
+      "id": "eval.webex.neg.dashboard",
+      "kind": "evaluate",
+      "why": "site dashboard",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/webappng/sites/example/dashboard?siteurl=example"
+    },
+    {
+      "id": "eval.webex.neg.postinfo_under_recordingservice",
+      "kind": "evaluate",
+      "why": "postinfo path under the wrong context; only webappng is matched",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678"
+    },
+    {
+      "id": "eval.webex.neg.postinfo_too_short",
+      "kind": "evaluate",
+      "why": "token shorter than the 32-character minimum",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/abc123"
     }
   ]
 }

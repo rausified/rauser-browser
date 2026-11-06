@@ -24,3 +24,12 @@ family-level `foreign_negatives` list of `{url, why}` entries that the
 generator checks only for `no_adapter` outside the family's own fixture.
 Document the chosen shape in `protocol/starters/README.md` next to the
 existing `sample_origin` rule.
+
+- +1 2026-11-05: positives on a second tenant host can't be family vectors
+  either, not just negatives. Webex's research kept the
+  `site4-example.webex.com` case as a positive on its own host (documented in
+  `docs/adapters/webex.recording.md`), but it had to stay excluded from
+  coverage rather than ride as a vector in `webex.json`, because synthesized
+  fixtures pin every vector to the family's own `sample_origin`
+  (`https://example.webex.com`) and have no slot for a positive confirmed on
+  a different, real tenant host.
