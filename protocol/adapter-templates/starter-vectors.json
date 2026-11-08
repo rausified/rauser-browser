@@ -717,6 +717,192 @@
           ]
         }
       ]
+    },
+    "starter:servicenow": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "servicenow.incident",
+          "origin": "https://acme.service-now.com",
+          "match": [
+            {
+              "path": "/incident.do",
+              "query": {
+                "sys_id": "{id:hex(32)}"
+              },
+              "absent": [
+                "XML",
+                "PDF",
+                "CSV",
+                "EXCEL",
+                "XLSX",
+                "JSON",
+                "JSONv2",
+                "UNL"
+              ]
+            },
+            {
+              "path": "/now/{_}/record/incident/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/now/{_}/{_}/record/incident/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "ticket",
+                "table": "incident",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "standard_ticket",
+                "table": "incident",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "form",
+                "table": "incident",
+                "sys_id": "{id:hex(32)}"
+              }
+            }
+          ],
+          "id": "servicenow.incident:{host}/{id}",
+          "title": "{title} | Incident | {~}"
+        },
+        {
+          "type": "servicenow.ritm",
+          "origin": "https://acme.service-now.com",
+          "match": [
+            {
+              "path": "/sc_req_item.do",
+              "query": {
+                "sys_id": "{id:hex(32)}"
+              },
+              "absent": [
+                "XML",
+                "PDF",
+                "CSV",
+                "EXCEL",
+                "XLSX",
+                "JSON",
+                "JSONv2",
+                "UNL"
+              ]
+            },
+            {
+              "path": "/now/{_}/record/sc_req_item/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/now/{_}/{_}/record/sc_req_item/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "ticket",
+                "table": "sc_req_item",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "standard_ticket",
+                "table": "sc_req_item",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "form",
+                "table": "sc_req_item",
+                "sys_id": "{id:hex(32)}"
+              }
+            }
+          ],
+          "id": "servicenow.ritm:{host}/{id}",
+          "title": "{title} | Requested Item | {~}"
+        },
+        {
+          "type": "servicenow.change",
+          "origin": "https://acme.service-now.com",
+          "match": [
+            {
+              "path": "/change_request.do",
+              "query": {
+                "sys_id": "{id:hex(32)}"
+              },
+              "absent": [
+                "XML",
+                "PDF",
+                "CSV",
+                "EXCEL",
+                "XLSX",
+                "JSON",
+                "JSONv2",
+                "UNL"
+              ]
+            },
+            {
+              "path": "/now/{_}/record/change_request/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/now/{_}/{_}/record/change_request/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "ticket",
+                "table": "change_request",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "form",
+                "table": "change_request",
+                "sys_id": "{id:hex(32)}"
+              }
+            }
+          ],
+          "id": "servicenow.change:{host}/{id}",
+          "title": "{title} | Change Request | {~}"
+        },
+        {
+          "type": "servicenow.kb",
+          "origin": "https://acme.service-now.com",
+          "match": [
+            {
+              "path": "/kb_view.do",
+              "query": {
+                "sysparm_article": "{number:token(3,40)|upper}"
+              }
+            },
+            {
+              "path": "/(sp|esc|kb)",
+              "query": {
+                "id": "kb_article",
+                "sysparm_article": "{number:token(3,40)|upper}"
+              }
+            },
+            {
+              "path": "/(sp|esc|kb)",
+              "query": {
+                "id": "kb_article_view",
+                "sysparm_article": "{number:token(3,40)|upper}"
+              }
+            }
+          ],
+          "id": "servicenow.kb:{host}/{number}"
+        }
+      ]
     }
   },
   "cases": [
@@ -8883,6 +9069,2037 @@
         "reason": "no_rule"
       },
       "url": "https://acme.aha.io/pages/new"
+    },
+    {
+      "id": "validate.starter.servicenow",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:servicenow fixture (protocol/starters/servicenow.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.servicenow",
+      "kind": "overlap_report",
+      "why": "generated: servicenow's declared overlaps (protocol/starters/servicenow.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.servicenow.incident.classic_form_direct",
+      "kind": "evaluate",
+      "why": "classic form, direct",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "INC0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "INC0010001 | Incident | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.incident.query_noise_product_name_containing_still",
+      "kind": "evaluate",
+      "why": "query noise; product name containing ' | ' still skipped from the end",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "INC0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=incident&sysparm_record_row=1",
+      "title": "INC0010001 | Incident | Acme IT | Portal"
+    },
+    {
+      "id": "eval.servicenow.incident.uppercase_sys_id_lowercased_fragment_ignored",
+      "kind": "evaluate",
+      "why": "uppercase sys_id lowercased; fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "abcdef0123456789abcdef0123456789"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/abcdef0123456789abcdef0123456789",
+        "mode": null,
+        "title": "INC0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+      "title": "INC0010001 | Incident | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.incident.service_operations_workspace",
+      "kind": "evaluate",
+      "why": "Service Operations Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.incident.sow_trailing_slash",
+      "kind": "evaluate",
+      "why": "SOW, trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210/"
+    },
+    {
+      "id": "eval.servicenow.incident.sow_with_trailing_params_segments",
+      "kind": "evaluate",
+      "why": "SOW with trailing params segments (shape assumed)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210/params/selected-tab-index/1"
+    },
+    {
+      "id": "eval.servicenow.incident.legacy_agent_workspace",
+      "kind": "evaluate",
+      "why": "legacy Agent Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/workspace/agent/record/incident/00000000111111112222222233333333"
+    },
+    {
+      "id": "eval.servicenow.incident.csm_fsm_configurable_workspace_query_noise",
+      "kind": "evaluate",
+      "why": "CSM/FSM configurable workspace, query noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/cwf/agent/record/incident/00000000111111112222222233333333?foo=bar"
+    },
+    {
+      "id": "eval.servicenow.incident.service_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "Service Portal ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.employee_center_ticket_page_noise",
+      "kind": "evaluate",
+      "why": "Employee Center ticket page, noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef&view=sp"
+    },
+    {
+      "id": "eval.servicenow.incident.service_portal_form_page_param_order",
+      "kind": "evaluate",
+      "why": "Service Portal form page, param order varied",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 5,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=incident&id=form"
+    },
+    {
+      "id": "eval.servicenow.incident.employee_center_standard_ticket_page",
+      "kind": "evaluate",
+      "why": "Employee Center standard_ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 4,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=standard_ticket&table=incident&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.list",
+      "kind": "evaluate",
+      "why": "incident list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident_list.do?sysparm_query=active%3Dtrue"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.new_record_form",
+      "kind": "evaluate",
+      "why": "incident new-record form (sys_id=-1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=-1&sysparm_query="
+    },
+    {
+      "id": "eval.servicenow.incident.neg.opened_by_number_query_no_sys",
+      "kind": "evaluate",
+      "why": "incident opened by number query: no sys_id in URL",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?sysparm_query=number%3DINC0010001"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.xml_export_processor",
+      "kind": "evaluate",
+      "why": "incident XML export processor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?XML&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.duplicate_sys_id_is_ambiguous",
+      "kind": "evaluate",
+      "why": "incident duplicate sys_id is ambiguous",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.next_experience_classic_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "incident Next Experience classic wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/incident.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.nav_to_do_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "incident nav_to.do wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/nav_to.do?uri=incident.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.sow_new_record_placeholder",
+      "kind": "evaluate",
+      "why": "incident SOW new record placeholder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/record/incident/-1_uid_3"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.portal_ticket_page_without_sys_id",
+      "kind": "evaluate",
+      "why": "incident portal ticket page without sys_id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=incident"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.instance_root",
+      "kind": "evaluate",
+      "why": "instance root",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.ui16_frameset_home",
+      "kind": "evaluate",
+      "why": "UI16 frameset home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/navpage.do"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.next_experience_home",
+      "kind": "evaluate",
+      "why": "Next Experience home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/nav/ui/home"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.login",
+      "kind": "evaluate",
+      "why": "login",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/login.do"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.portal_home",
+      "kind": "evaluate",
+      "why": "portal home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.catalog_item_page",
+      "kind": "evaluate",
+      "why": "catalog item page (not a starter)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/esc?id=sc_cat_item&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.sow_home",
+      "kind": "evaluate",
+      "why": "SOW home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/home"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.sow_list",
+      "kind": "evaluate",
+      "why": "SOW list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/list/params/list-id/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.case_table_no_starter",
+      "kind": "evaluate",
+      "why": "case table: no starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=sn_customerservice_case&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.request_table_no_starter",
+      "kind": "evaluate",
+      "why": "request (REQ) table: no starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=sc_request&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.31_hex_sys_id",
+      "kind": "evaluate",
+      "why": "31-hex sys_id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcde"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.problem_table_no_starter",
+      "kind": "evaluate",
+      "why": "problem table: no starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/record/problem/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.classic_form_direct",
+      "kind": "evaluate",
+      "why": "classic form, direct",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "RITM0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "RITM0010001 | Requested Item | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.ritm.query_noise_product_name_containing_still",
+      "kind": "evaluate",
+      "why": "query noise; product name containing ' | ' still skipped from the end",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "RITM0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=sc_req_item&sysparm_record_row=1",
+      "title": "RITM0010001 | Requested Item | Acme IT | Portal"
+    },
+    {
+      "id": "eval.servicenow.ritm.uppercase_sys_id_lowercased_fragment_ignored",
+      "kind": "evaluate",
+      "why": "uppercase sys_id lowercased; fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "abcdef0123456789abcdef0123456789"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/abcdef0123456789abcdef0123456789",
+        "mode": null,
+        "title": "RITM0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+      "title": "RITM0010001 | Requested Item | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.ritm.service_operations_workspace",
+      "kind": "evaluate",
+      "why": "Service Operations Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.ritm.sow_trailing_slash",
+      "kind": "evaluate",
+      "why": "SOW, trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210/"
+    },
+    {
+      "id": "eval.servicenow.ritm.sow_with_trailing_params_segments",
+      "kind": "evaluate",
+      "why": "SOW with trailing params segments (shape assumed)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210/params/selected-tab-index/1"
+    },
+    {
+      "id": "eval.servicenow.ritm.legacy_agent_workspace",
+      "kind": "evaluate",
+      "why": "legacy Agent Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/workspace/agent/record/sc_req_item/00000000111111112222222233333333"
+    },
+    {
+      "id": "eval.servicenow.ritm.csm_fsm_configurable_workspace_query_noise",
+      "kind": "evaluate",
+      "why": "CSM/FSM configurable workspace, query noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/cwf/agent/record/sc_req_item/00000000111111112222222233333333?foo=bar"
+    },
+    {
+      "id": "eval.servicenow.ritm.service_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "Service Portal ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 3,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.employee_center_ticket_page_noise",
+      "kind": "evaluate",
+      "why": "Employee Center ticket page, noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 3,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef&view=sp"
+    },
+    {
+      "id": "eval.servicenow.ritm.service_portal_form_page_param_order",
+      "kind": "evaluate",
+      "why": "Service Portal form page, param order varied",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 5,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=sc_req_item&id=form"
+    },
+    {
+      "id": "eval.servicenow.ritm.employee_center_standard_ticket_page",
+      "kind": "evaluate",
+      "why": "Employee Center standard_ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 4,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=standard_ticket&table=sc_req_item&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.list",
+      "kind": "evaluate",
+      "why": "sc_req_item list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item_list.do?sysparm_query=active%3Dtrue"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.new_record_form",
+      "kind": "evaluate",
+      "why": "sc_req_item new-record form (sys_id=-1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=-1&sysparm_query="
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.opened_by_number_query_no_sys",
+      "kind": "evaluate",
+      "why": "sc_req_item opened by number query: no sys_id in URL",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sysparm_query=number%3DRITM0010001"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.xml_export_processor",
+      "kind": "evaluate",
+      "why": "sc_req_item XML export processor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?XML&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.duplicate_sys_id_is_ambiguous",
+      "kind": "evaluate",
+      "why": "sc_req_item duplicate sys_id is ambiguous",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.next_experience_classic_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "sc_req_item Next Experience classic wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/sc_req_item.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.nav_to_do_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "sc_req_item nav_to.do wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/nav_to.do?uri=sc_req_item.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.sow_new_record_placeholder",
+      "kind": "evaluate",
+      "why": "sc_req_item SOW new record placeholder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/record/sc_req_item/-1_uid_3"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.portal_ticket_page_without_sys_id",
+      "kind": "evaluate",
+      "why": "sc_req_item portal ticket page without sys_id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=sc_req_item"
+    },
+    {
+      "id": "eval.servicenow.change.classic_form_direct",
+      "kind": "evaluate",
+      "why": "classic form, direct",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "CHG0030001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "CHG0030001 | Change Request | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.change.query_noise_product_name_containing_still",
+      "kind": "evaluate",
+      "why": "query noise; product name containing ' | ' still skipped from the end",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "CHG0030001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=change_request&sysparm_record_row=1",
+      "title": "CHG0030001 | Change Request | Acme IT | Portal"
+    },
+    {
+      "id": "eval.servicenow.change.uppercase_sys_id_lowercased_fragment_ignored",
+      "kind": "evaluate",
+      "why": "uppercase sys_id lowercased; fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "abcdef0123456789abcdef0123456789"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/abcdef0123456789abcdef0123456789",
+        "mode": null,
+        "title": "CHG0030001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+      "title": "CHG0030001 | Change Request | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.change.service_operations_workspace",
+      "kind": "evaluate",
+      "why": "Service Operations Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.change.sow_trailing_slash",
+      "kind": "evaluate",
+      "why": "SOW, trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210/"
+    },
+    {
+      "id": "eval.servicenow.change.sow_with_trailing_params_segments",
+      "kind": "evaluate",
+      "why": "SOW with trailing params segments (shape assumed)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210/params/selected-tab-index/1"
+    },
+    {
+      "id": "eval.servicenow.change.legacy_agent_workspace",
+      "kind": "evaluate",
+      "why": "legacy Agent Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 2,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/workspace/agent/record/change_request/00000000111111112222222233333333"
+    },
+    {
+      "id": "eval.servicenow.change.csm_fsm_configurable_workspace_query_noise",
+      "kind": "evaluate",
+      "why": "CSM/FSM configurable workspace, query noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 2,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/cwf/agent/record/change_request/00000000111111112222222233333333?foo=bar"
+    },
+    {
+      "id": "eval.servicenow.change.service_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "Service Portal ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 3,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.employee_center_ticket_page_noise",
+      "kind": "evaluate",
+      "why": "Employee Center ticket page, noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 3,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef&view=sp"
+    },
+    {
+      "id": "eval.servicenow.change.service_portal_form_page_param_order",
+      "kind": "evaluate",
+      "why": "Service Portal form page, param order varied",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 4,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=change_request&id=form"
+    },
+    {
+      "id": "eval.servicenow.change.neg.list",
+      "kind": "evaluate",
+      "why": "change_request list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request_list.do?sysparm_query=active%3Dtrue"
+    },
+    {
+      "id": "eval.servicenow.change.neg.new_record_form",
+      "kind": "evaluate",
+      "why": "change_request new-record form (sys_id=-1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=-1&sysparm_query="
+    },
+    {
+      "id": "eval.servicenow.change.neg.opened_by_number_query_no_sys",
+      "kind": "evaluate",
+      "why": "change_request opened by number query: no sys_id in URL",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request.do?sysparm_query=number%3DCHG0030001"
+    },
+    {
+      "id": "eval.servicenow.change.neg.xml_export_processor",
+      "kind": "evaluate",
+      "why": "change_request XML export processor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request.do?XML&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.neg.duplicate_sys_id_is_ambiguous",
+      "kind": "evaluate",
+      "why": "change_request duplicate sys_id is ambiguous",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.change.neg.next_experience_classic_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "change_request Next Experience classic wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/change_request.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.neg.nav_to_do_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "change_request nav_to.do wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/nav_to.do?uri=change_request.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.neg.sow_new_record_placeholder",
+      "kind": "evaluate",
+      "why": "change_request SOW new record placeholder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/record/change_request/-1_uid_3"
+    },
+    {
+      "id": "eval.servicenow.change.neg.portal_ticket_page_without_sys_id",
+      "kind": "evaluate",
+      "why": "change_request portal ticket page without sys_id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=change_request"
+    },
+    {
+      "id": "eval.servicenow.kb.platform_article_view",
+      "kind": "evaluate",
+      "why": "platform article view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB0010035"
+    },
+    {
+      "id": "eval.servicenow.kb.lowercase_number_folded_to_upper_language",
+      "kind": "evaluate",
+      "why": "lowercase number folded to upper; language noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=kb0010035&sysparm_language=en"
+    },
+    {
+      "id": "eval.servicenow.kb.service_portal_kb_article",
+      "kind": "evaluate",
+      "why": "Service Portal kb_article",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035"
+    },
+    {
+      "id": "eval.servicenow.kb.service_portal_kb_article_view_with",
+      "kind": "evaluate",
+      "why": "Service Portal kb_article_view with search-ranking noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article_view&sysparm_article=KB0010035&sysparm_rank=1&sysparm_tsqueryId=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.employee_center",
+      "kind": "evaluate",
+      "why": "Employee Center",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0012345"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0012345",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=kb_article_view&sysparm_article=KB0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.employee_center_fragment",
+      "kind": "evaluate",
+      "why": "Employee Center, fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0012345"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0012345",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=kb_article&sysparm_article=KB0012345#comments"
+    },
+    {
+      "id": "eval.servicenow.kb.knowledge_portal",
+      "kind": "evaluate",
+      "why": "Knowledge portal (/kb suffix)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0099999"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0099999",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/kb?id=kb_article_view&sysparm_article=KB0099999"
+    },
+    {
+      "id": "eval.servicenow.kb.trailing_slash_on_kb_view_do",
+      "kind": "evaluate",
+      "why": "trailing slash on kb_view.do",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0099999"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0099999",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/kb_view.do/?sysparm_article=KB0099999"
+    },
+    {
+      "id": "eval.servicenow.kb.custom_prefix_param_order_varied",
+      "kind": "evaluate",
+      "why": "custom prefix, param order varied",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "HRKB0001001"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/HRKB0001001",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?sysparm_article=HRKB0001001&id=kb_article_view"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.kb_version_sys_id_form_deliberately",
+      "kind": "evaluate",
+      "why": "KB version sys_id form: deliberately not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sys_kb_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.portal_kb_version_sys_id_form",
+      "kind": "evaluate",
+      "why": "portal KB version sys_id form: not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article_view&sys_kb_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.portal_kb_sys_id_form_not",
+      "kind": "evaluate",
+      "why": "portal KB sys_id form: not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.sow_kb_view_by_sys_id",
+      "kind": "evaluate",
+      "why": "SOW KB view by sys_id: not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/kb_view/kb_knowledge/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.duplicate_sysparm_article",
+      "kind": "evaluate",
+      "why": "duplicate sysparm_article",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB0010035&sysparm_article=KB0010036"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.knowledge_home",
+      "kind": "evaluate",
+      "why": "knowledge home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_home"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.knowledge_search",
+      "kind": "evaluate",
+      "why": "knowledge search",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_search&query=vpn"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.classic_knowledge_search",
+      "kind": "evaluate",
+      "why": "classic knowledge search",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/kb_find.do?sysparm_search=vpn"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.portal_article_page_with_no_article",
+      "kind": "evaluate",
+      "why": "portal article page with no article",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/esc?id=kb_article_view"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.value_with_is_not_a_token",
+      "kind": "evaluate",
+      "why": "value with '/' is not a token",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB%2F0001"
+    },
+    {
+      "id": "eval.servicenow.kb.renamed_portal_view",
+      "kind": "evaluate",
+      "why": "KB article on a customer-renamed portal: NOT RECORDED, a renamed portal path cannot anchor a rule (adapter-templates.md §4.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_article_view&sysparm_article=KB0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.renamed_portal_article",
+      "kind": "evaluate",
+      "why": "KB article on a customer-renamed portal (kb_article): NOT RECORDED, same anchor limit",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/policyhub?id=kb_article&sysparm_article=kb0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.renamed_portal_search",
+      "kind": "evaluate",
+      "why": "knowledge search on a renamed portal",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_search&query=vpn"
+    },
+    {
+      "id": "eval.servicenow.kb.version_link",
+      "kind": "evaluate",
+      "why": "version sys_id link on a renamed portal: names a version, not the article",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_article&sys_id=0123456789abcdef0123456789abcdef"
     }
   ]
 }

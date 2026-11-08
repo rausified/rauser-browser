@@ -27,7 +27,9 @@
     "aha.epic",
     "aha.release",
     "aha.idea",
-    "aha.note"
+    "aha.note",
+    "servicenow.incident",
+    "servicenow.change"
   ],
   "accept": [
     {
@@ -214,6 +216,16 @@
       "note": "Aha! note (docs/adapters/aha.note.md)",
       "url": "https://acme.aha.io/pages/PRJ-N-67",
       "shape": "/pages/{id}"
+    },
+    {
+      "note": "Incident in Service Operations Workspace (docs/adapters/servicenow.incident.md)",
+      "url": "https://acme.service-now.com/now/sow/record/incident/0123456789abcdef0123456789abcdef",
+      "shape": "/now/sow/record/incident/{hex32}"
+    },
+    {
+      "note": "Change request in Service Operations Workspace (docs/adapters/servicenow.change.md)",
+      "url": "https://acme.service-now.com/now/sow/record/change_request/0123456789abcdef0123456789abcdef",
+      "shape": "/now/sow/record/change_request/{hex32}"
     }
   ],
   "reject": []

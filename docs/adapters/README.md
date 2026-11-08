@@ -31,3 +31,7 @@
 | [aha.release](aha.release.md) | aha | development | — | — | — |
 | [aha.idea](aha.idea.md) | aha | development | — | — | — |
 | [aha.note](aha.note.md) | aha | development | — | — | — |
+| [servicenow.incident](servicenow.incident.md) | servicenow | development | — | — | — |
+| [servicenow.ritm](servicenow.ritm.md) | servicenow | development | — | — | — |
+| [servicenow.change](servicenow.change.md) | servicenow | development | — | — | — |
+| [servicenow.kb](servicenow.kb.md) | servicenow | development | — | — | — |

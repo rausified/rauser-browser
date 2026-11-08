@@ -27,5 +27,9 @@
   "aha.epic": "aha.epic:{host}/{ref}",
   "aha.release": "aha.release:{host}/{ref}",
   "aha.idea": "aha.idea:{host}/{ref}",
-  "aha.note": "aha.note:{host}/{ref}"
+  "aha.note": "aha.note:{host}/{ref}",
+  "servicenow.incident": "servicenow.incident:{host}/{id}",
+  "servicenow.ritm": "servicenow.ritm:{host}/{id}",
+  "servicenow.change": "servicenow.change:{host}/{id}",
+  "servicenow.kb": "servicenow.kb:{host}/{number}"
 }
