@@ -461,10 +461,17 @@ function sentenceCase(text: string): string {
   return text.length ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
+/** How many families the gallery hint names before counting the rest. */
+const HINT_NAMED_FAMILIES = 3;
+
 /** The hint shown while no typed or configured site has a starter family,
- * built from the known families so a new one needs no change here. */
+ * built from the known families so a new one needs no change here: the
+ * first three in catalog order, then a count of the rest. */
 function starterGalleryHint(): string {
-  return `Enter an ${joinOr(starterFamilies().map((family) => family.display_name))} site address above to see starter drafts.`;
+  const names = starterFamilies().map((family) => family.display_name);
+  if (names.length <= HINT_NAMED_FAMILIES) return `Enter an ${joinOr(names)} site address above to see starter drafts.`;
+  const rest = names.length - HINT_NAMED_FAMILIES;
+  return `Enter an ${names.slice(0, HINT_NAMED_FAMILIES).join(", ")} or one of ${rest} more work tools' site addresses above to see starter drafts.`;
 }
 
 /** The scope values `origin`'s family asks for, parsed from the gallery's
