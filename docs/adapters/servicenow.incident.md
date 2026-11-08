@@ -102,7 +102,10 @@ sample.
   rules list only `/sp` and `/esc`; an instance that serves its portal under
   its own path (`/helpzone?id=ticket&table=incident&sys_id=…`) gets no match.
   The format cannot anchor a rule on the query alone. A follow-up is listed
-  in the D3 pull request, with a bead to follow.
+  in the D3 pull request, with a bead to follow. Until then, add the
+  instance's portal name to the portal rules' `(sp|esc)` alternation in
+  settings' advanced rule editor, for example `/(sp|esc|helpzone)`; the
+  literal names anchor the rule.
 - The workspace rules accept any one- or two-segment workspace and any
   trailing segments. A workspace sub-route that opens a related record would
   be attributed to this one (medium risk; the trailing shape is assumed).

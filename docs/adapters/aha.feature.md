@@ -97,11 +97,11 @@ in those 2 visits were Aha!'s login page, not a record page.
 
 ## Known limits
 
-- **A login tab's title is recorded whole.** If Aha!'s session has expired,
-  the tab title on a feature URL reads `Log in to your workspace | Aha!`
-  before Brauser's title-entry logic runs, and it is recorded as the
-  feature's title, since entry 2 is a literal match for a `| Aha!{~}`
-  suffix with no leading reference number. A vector pins this fallback.
+- **A login tab's title is recorded as the feature's title.** If Aha!'s
+  session has expired, the tab title on a feature URL reads
+  `Log in to your workspace | Aha!`. Entry 2 (`{title} | Aha!{~}`) matches
+  it, strips `| Aha!`, and records `Log in to your workspace` as the
+  feature's title. A vector (`eval.aha.feature.login_title`) pins this.
 - **Every app title template is low confidence.** No public source shows an
   in-app record page's tab title; both entries are a guess from the login
   page's own `| Aha!` suffix. A wrong guess only costs title cleanliness,

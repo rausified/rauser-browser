@@ -94,7 +94,12 @@ pages.
   pin the gap as non-matches. Covering it needs a format change, for example
   letting a query literal plus an identifier capture anchor a rule. That is
   listed in the D3 pull request as a follow-up, with a bead to follow. This
-  was the only miss the scorecard recorded for ServiceNow.
+  was the only miss the scorecard recorded for ServiceNow. Until then, an
+  instance with its own portal name can add it by hand in settings'
+  advanced rule editor: a rule such as
+  `{ path = "/(sp|esc|kb|helpzone)", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" } }`
+  is valid, because the literal portal names anchor it, and records the
+  same `KB…` ID.
 - `token` cannot require the `KB` prefix, so any `sysparm_article` value on
   these routes is accepted.
 - `|upper` assumes number lookup is case-insensitive (low confidence).
@@ -115,7 +120,9 @@ with real Chrome and a real ServiceNow account:
    shared link; record each URL and tab title. Is the number always in
    `sysparm_article`, or do search results link by `sys_kb_id`?
 2. Note the portal path the instance uses. If it is not `/sp`, `/esc` or
-   `/kb`, this draft records nothing there (Known limits).
+   `/kb`, this draft records nothing there (Known limits); try adding the
+   portal name to the rules' alternation in the advanced rule editor and
+   confirm the article is recorded.
 3. Open a lowercase `sysparm_article` link; confirm the instance opens the
    same article (the `|upper` assumption).
 4. Publish or find a second version of one article; confirm both visits
