@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activate, audit, browserFixture, enterPanelTab, focused, task } from "./fixture.mjs";
+import { activate, audit, browserFixture, enterPanelTab, focused, selectByKeyboard, task } from "./fixture.mjs";
 
 test("optional task notifications can be enabled and disabled by keyboard without losing focus", async (t) => {
   const page = await browserFixture(t, "options");
@@ -158,23 +158,19 @@ test("sharing a recorded focus session is named, keyboard operable and copies th
   await activate(page, "#worklog-curate", "Space");
   await page.locator('#worklog-choices input[type="checkbox"]').first().waitFor();
   await page.locator("#worklog-share-scope").focus();
-  await page.keyboard.press("End");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, "#worklog-share-scope", "last");
   // Use the native select's keyboard, and wait for the recorded catalog.
   await page.locator("#worklog-focus-session:enabled").waitFor();
   await page.getByLabel("Recorded focus session", { exact: true }).focus();
-  await page.keyboard.press("End");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, "#worklog-focus-session", "last");
   const choice = page.locator('#worklog-choices input[type="checkbox"]').first();
   await choice.waitFor();
   await focused(page, "#worklog-focus-session");
   // A second keyboard choice must work without focusing the select again.
-  await page.keyboard.press("Home");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, "#worklog-focus-session", "first");
   await page.getByText("Choose a session, then check entries to include.", { exact: true }).first().waitFor();
   await focused(page, "#worklog-focus-session");
-  await page.keyboard.press("End");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, "#worklog-focus-session", "last");
   await choice.waitFor();
   await focused(page, "#worklog-focus-session");
   await activate(page, choice, "Space");
@@ -220,13 +216,11 @@ test("Recent's saved-summary reading filter is named and keyboard operable", asy
   await enterPanelTab(page, "tab-recent");
   const selector = page.getByRole("combobox", { name: "Saved summary reading", exact: true });
   await activate(page, selector, null);
-  await page.keyboard.press("End");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, selector, "last");
   await page.waitForFunction(() => fixture.requests.some((request) => request.type === "list_artifacts" && request.summary_reading === "unknown"));
   await focused(page, "#recent-reading");
   await audit(t, page, "panel/summary-reading");
-  await page.keyboard.press("Home");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, selector, "first");
   await page.waitForFunction(() => {
     const latest = fixture.requests.filter((request) => request.type === "list_artifacts").at(-1);
     return latest && !Object.hasOwn(latest, "summary_reading");
@@ -497,8 +491,7 @@ test("saved task commands are chosen by keyboard and require an explicit Run", a
   await activate(page, "#task-commands summary", "Enter");
   await page.locator("#task-command:enabled").waitFor();
   await activate(page, "#task-command", null);
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, "#task-command", 1);
   assert.equal(await page.locator("#task-input").inputValue(), "Focus on today");
   assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
   await activate(page, "#task-command-insert", "Space");
