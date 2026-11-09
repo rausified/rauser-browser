@@ -48,6 +48,9 @@ export type StarterScopeData =
   | { kind: "github_org" }
   | { kind: "tenant_name"; max: number; label: string; placeholder: string }
   | { kind: "unscoped"; notice: string };
+export type StarterOriginData =
+  | { kind: "exact"; origin: string }
+  | { kind: "subdomain"; suffix: string; labels?: 1; exclude?: string[] };
 export interface StarterTypeData {
   type: string; key: string; label: string;
   label_variants: { host_suffix: string; label: string }[];
@@ -67,7 +70,7 @@ export interface StarterFamilyData {
   family: StarterFamilyId;
   display_name: string;
   review_prompt: string | null;
-  origin: { kind: "exact"; origin: string } | { kind: "subdomain"; suffix: string; labels?: 1; exclude?: string[] };
+  origin: StarterOriginData | { kind: "any"; of: StarterOriginData[] };
   scope: StarterScopeData | null;
   overlaps?: StarterOverlapData[];
   types: StarterTypeData[];
@@ -122,9 +125,15 @@ function isPlainObject(value) {
  * -suffix.length)`, the labels between the host and the suffix. `labels: 1`
  * refuses a `prefix` with more than one label (a dot in it); `exclude`
  * refuses a `prefix` whose first label (its leftmost, nearest the host's
- * start) names one of the excluded product hosts (`www`, `signin`). */
+ * start) names one of the excluded product hosts (`www`, `signin`), or
+ * starts with an excluded prefix (an entry ending in `*`, `fupload-*`;
+ * `excludes`). A multi-origin family (`kind: "any"`) claims `origin` when
+ * any one of its `of` members does. */
 export function familyClaims(familyOrigin, origin) {
   if (!isPlainObject(familyOrigin)) return false;
+  if (familyOrigin.kind === "any") {
+    return Array.isArray(familyOrigin.of) && familyOrigin.of.some((member) => familyClaims(member, origin));
+  }
   if (familyOrigin.kind === "exact") return origin === familyOrigin.origin;
   if (familyOrigin.kind !== "subdomain") return false;
   let url;
@@ -139,8 +148,24 @@ export function familyClaims(familyOrigin, origin) {
   if (!(host.endsWith(suffix) && host !== suffix.slice(1))) return false;
   const prefix = host.slice(0, -suffix.length);
   if (familyOrigin.labels && prefix.includes(".")) return false;
-  if (familyOrigin.exclude && familyOrigin.exclude.includes(prefix.split(".")[0])) return false;
+  if (familyOrigin.exclude && excludes(familyOrigin.exclude, prefix.split(".")[0])) return false;
   return true;
+}
+
+/** Whether a subdomain origin's `exclude` list refuses a host whose first
+ * label is `label`: an entry is either a whole label (`www`, equal) or a
+ * label prefix ending in a single `*` (`fupload-*`, `label` starts with
+ * `fupload-`). Same rule as `excludes` in extension/starter-adapters.ts. */
+export function excludes(exclude, label) {
+  return exclude.some((entry) => (entry.endsWith("*") ? label.startsWith(entry.slice(0, -1)) : label === entry));
+}
+
+/** The single-kind origins a family's `origin` is made of: its `of` members
+ * for a multi-origin (`kind: "any"`) family, otherwise just `origin`. */
+function originMembers(origin) {
+  if (!isPlainObject(origin)) return [];
+  if (origin.kind === "any") return Array.isArray(origin.of) ? origin.of.filter(isPlainObject) : [];
+  return [origin];
 }
 
 /** The canonical origin of `url`, or `null` when `url` is not a valid,
@@ -153,9 +178,12 @@ function originOf(url) {
   }
 }
 
-const ORIGIN_KEYS = { exact: ["kind", "origin"], subdomain: ["kind", "suffix", "labels", "exclude"] };
-const ORIGIN_REQUIRED = { exact: ["kind", "origin"], subdomain: ["kind", "suffix"] };
-const DNS_LABEL_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const ORIGIN_KEYS = { exact: ["kind", "origin"], subdomain: ["kind", "suffix", "labels", "exclude"], any: ["kind", "of"] };
+const ORIGIN_REQUIRED = { exact: ["kind", "origin"], subdomain: ["kind", "suffix"], any: ["kind", "of"] };
+// An `exclude` entry: a whole lowercase DNS label (`www`), or a non-empty
+// label prefix followed by one trailing `*` (`fupload-*`, `cdn*`). No other
+// `*` and no empty prefix: `*`, `*cdn`, `f*load` and `fupload-**` are refused.
+const EXCLUDE_ENTRY_RE = /^[a-z0-9]+(-[a-z0-9]+)*(-?\*)?$/;
 const SCOPE_KEYS_BY_KIND = {
   github_org: ["kind"],
   tenant_name: ["kind", "max", "label", "placeholder"],
@@ -218,26 +246,48 @@ export function isCanonicalHttpsOrigin(origin) {
   }
 }
 
-/** Validates a family's `origin`: `kind` is `"exact"` or `"subdomain"`, with
- * the fields `ORIGIN_KEYS` allows for that kind. A subdomain origin's
+/** Validates a family's `origin`: `kind` is `"exact"`, `"subdomain"` or
+ * `"any"` (a multi-origin family: `of` lists two or more exact or subdomain
+ * origins, none of them overlapping another, each validated the same way;
+ * an `any` cannot nest), with the fields `ORIGIN_KEYS` allows for that kind. A subdomain origin's
  * `labels` and `exclude` (Task 4) are optional, so they are checked for
  * shape, not required: `labels`, when present, must be exactly `1` (the
  * spec allows no other count), and `exclude`, when present, must be an
- * array of single lowercase DNS labels (`www`, not `www.sub` or `WWW`).
+ * array of single lowercase DNS labels (`www`, not `www.sub` or `WWW`) or
+ * label prefixes ending in one `*` (`fupload-*`, `EXCLUDE_ENTRY_RE`).
  * Neither key is allowed on an exact origin; `checkKeys` already reports
  * one there as an unknown field. */
-function validateOrigin(problems, file, origin, where) {
+function validateOrigin(problems, file, origin, where, member = false) {
   if (!isPlainObject(origin)) {
     fail(problems, file, `${where} must be an object`);
     return;
   }
-  const allowed = ORIGIN_KEYS[origin.kind];
+  const allowed = member && origin.kind === "any" ? undefined : ORIGIN_KEYS[origin.kind];
   if (!allowed) {
-    fail(problems, file, `${at(where, "kind")} must be "exact" or "subdomain"`);
+    fail(problems, file, `${at(where, "kind")} must be ${member ? '"exact" or "subdomain"' : '"exact", "subdomain" or "any"'}`);
     return;
   }
   checkKeys(problems, file, origin, allowed, where);
   requireKeys(problems, file, origin, ORIGIN_REQUIRED[origin.kind], where);
+  if (origin.kind === "any" && "of" in origin) {
+    if (!Array.isArray(origin.of) || origin.of.length < 2) {
+      fail(problems, file, `${at(where, "of")} must list 2 or more origins`);
+      return;
+    }
+    const clean = origin.of.map((entry, index) => {
+      const probe = [];
+      validateOrigin(probe, file, entry, `${at(where, "of")}[${index}]`, true);
+      problems.push(...probe);
+      return probe.length === 0;
+    });
+    for (let j = 1; j < origin.of.length; j += 1) {
+      for (let i = 0; i < j; i += 1) {
+        if (clean[i] && clean[j] && originsCollide(origin.of[i], origin.of[j])) {
+          fail(problems, file, `${at(where, "of")}[${j}] overlaps ${at(where, "of")}[${i}]`);
+        }
+      }
+    }
+  }
   if (origin.kind === "subdomain") {
     if ("suffix" in origin && !isValidSubdomainSuffix(origin.suffix)) {
       fail(problems, file, `${at(where, "suffix")} must start with "." and have at least two labels (e.g. ".example.com")`);
@@ -246,8 +296,10 @@ function validateOrigin(problems, file, origin, where) {
       fail(problems, file, `${at(where, "labels")} must be 1`);
     }
     if ("exclude" in origin) {
-      const isValid = Array.isArray(origin.exclude) && origin.exclude.every((label) => typeof label === "string" && DNS_LABEL_RE.test(label));
-      if (!isValid) fail(problems, file, `${at(where, "exclude")} must be a list of lowercase DNS labels`);
+      const isValid = Array.isArray(origin.exclude) && origin.exclude.every((entry) => typeof entry === "string" && EXCLUDE_ENTRY_RE.test(entry));
+      if (!isValid) {
+        fail(problems, file, `${at(where, "exclude")} must be a list of lowercase DNS labels or label prefixes ending in a single "*"`);
+      }
     }
   }
   if (origin.kind === "exact" && "origin" in origin && !isCanonicalHttpsOrigin(origin.origin)) {
@@ -556,7 +608,7 @@ function validateType(problems, file, type, where, origin) {
     fail(problems, file, `${where} must be an object`);
     return;
   }
-  const originKind = isPlainObject(origin) ? origin.kind : null;
+  const hasSubdomain = originMembers(origin).some((member) => member.kind === "subdomain");
   checkKeys(problems, file, type, TYPE_KEYS, where);
   requireKeys(problems, file, type, TYPE_KEYS, where);
   if ("label_variants" in type) validateLabelVariants(problems, file, type.label_variants, at(where, "label_variants"));
@@ -569,7 +621,7 @@ function validateType(problems, file, type, where, origin) {
   if ("docs" in type && typeof type.docs !== "string") fail(problems, file, `${at(where, "docs")} must be a string`);
   if ("key" in type) {
     if (typeof type.key !== "string") fail(problems, file, `${at(where, "key")} must be a string`);
-    else if (originKind === "subdomain" && !type.key.includes("{origin}")) {
+    else if (hasSubdomain && !type.key.includes("{origin}")) {
       fail(problems, file, `${at(where, "key")} must contain "{origin}"`);
     }
   }
@@ -1228,16 +1280,28 @@ export function appendLock(families, lock) {
   return { lock: updated, appended };
 }
 
-/** Whether two families' `origin` fields collide (Open decision 5): a
- * subdomain suffix nested inside another suffix always collides, whatever
- * `labels` or `exclude` say; an exact origin collides with a subdomain
- * family only when that family would actually claim it (`familyClaims`);
- * two identical exact origins always collide. */
+/** Whether two families' `origin` fields collide (Open decision 5). Two
+ * subdomain families on the same suffix always collide, whatever `labels`
+ * or `exclude` say. A suffix nested inside another (`.ideas.aha.io` inside
+ * `.aha.io`) collides unless the shallower family has `labels: 1`: every
+ * host the deeper family claims has at least two labels before the
+ * shallower suffix (`acme.ideas` before `.aha.io`), which `labels: 1`
+ * always refuses, so that proves the two disjoint. `exclude` proves
+ * nothing here, since the deeper family's own first label varies. An exact
+ * origin collides with a subdomain family only when that family would
+ * actually claim it (`familyClaims`); two identical exact origins always
+ * collide. A multi-origin family (`kind: "any"`) collides when any one of
+ * its members does. */
 function originsCollide(a, b) {
   if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  if (a.kind === "any") return originMembers(a).some((member) => originsCollide(member, b));
+  if (b.kind === "any") return originMembers(b).some((member) => originsCollide(a, member));
   if (a.kind === "exact" && b.kind === "exact") return a.origin === b.origin;
   if (a.kind === "subdomain" && b.kind === "subdomain") {
-    return a.suffix === b.suffix || a.suffix.endsWith(b.suffix) || b.suffix.endsWith(a.suffix);
+    if (a.suffix === b.suffix) return true;
+    const [shallow, deep] = a.suffix.length < b.suffix.length ? [a, b] : [b, a];
+    if (!deep.suffix.endsWith(shallow.suffix)) return false;
+    return shallow.labels !== 1;
   }
   if (a.kind === "exact" && b.kind === "subdomain") return familyClaims(b, a.origin);
   if (a.kind === "subdomain" && b.kind === "exact") return familyClaims(a, b.origin);

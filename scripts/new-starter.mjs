@@ -105,7 +105,9 @@ function readFamily(root, family) {
  * tenant's offer is distinct, or the bare `<type>` on an exact-origin
  * family, which already names one site). */
 function defaultKey(type, originKind) {
-  return originKind === "subdomain" ? `${type}:{origin}` : type;
+  // A subdomain or multi-origin ("any") family serves more than one origin,
+  // so its offer key names the origin; only a single exact origin needs none.
+  return originKind === "exact" ? type : `${type}:{origin}`;
 }
 
 /** The adapter-level markers a scoped or unscoped family's type needs

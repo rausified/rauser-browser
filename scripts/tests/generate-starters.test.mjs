@@ -10,7 +10,7 @@ import {
   appendLock, catalogTypeOrder, checkLock, checkPolicy, checkRegistry, familyClaims, loadFamilies, loadFamilyEntries,
   renderAdaptersIndex, renderCatalogLine, renderStarterVectors, renderTs, validateFamily,
 } from "../generate-starters.mjs";
-import { ORIGIN_CASES, STRICT_ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
+import { ORIGIN_CASES, SHIPPED_STRICT_ORIGIN_CASES, STRICT_ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
 import { EXAMPLE_CONTAINER_FIRST_FAMILY, EXAMPLE_STRICT_FAMILY } from "../../extension/tests/starter-fixtures.mjs";
 import { ipcDenied } from "./ipc-guard.mjs";
 
@@ -600,6 +600,49 @@ test("familyClaims agrees with starterKind on the strict-subdomain origins", () 
   }
 });
 
+test("familyClaims agrees with starterKind on the shipped strict-family origins", () => {
+  const families = loadFamilies(REPO);
+  for (const [origin, expected] of SHIPPED_STRICT_ORIGIN_CASES) {
+    const claimants = families.filter((family) => familyClaims(family.origin, origin));
+    assert.ok(claimants.length <= 1, `${origin}: more than one family claims it: ${claimants.map((f) => f.family)}`);
+    assert.equal(claimants[0]?.family ?? null, expected, origin);
+  }
+});
+
+test("an exclude entry ending in * skips every first label with that prefix", () => {
+  const origin = { kind: "subdomain", suffix: ".example.com", labels: 1, exclude: ["www", "up-*"] };
+  assert.equal(familyClaims(origin, "https://up-1.example.com"), false);
+  assert.equal(familyClaims(origin, "https://up.example.com"), true);
+  assert.equal(familyClaims(origin, "https://acme-up-1.example.com"), true);
+  assert.equal(familyClaims(origin, "https://www.example.com"), false);
+  const permissive = { kind: "subdomain", suffix: ".example.com", exclude: ["up-*"] };
+  assert.equal(familyClaims(permissive, "https://up-1.x.example.com"), false); // first label only
+  assert.equal(familyClaims(permissive, "https://x.up-1.example.com"), true);
+});
+
+for (const [bad, why] of [
+  [["*"], "a bare *"],
+  [["fupload-**"], "two stars"],
+  [["f*upload"], "a star not at the end"],
+  [["*fupload"], "a leading star"],
+  [["FUPLOAD-*"], "upper case"],
+  [["fup_load-*"], "a character no DNS label has"],
+  [["-x*"], "a leading hyphen"],
+]) {
+  test(`origin.exclude refuses ${why}`, (t) => {
+    const root = tmpRoot(t);
+    const atlassian = readFamily(root, "atlassian");
+    atlassian.origin.exclude = bad;
+    writeFamily(root, "atlassian", atlassian);
+    const result = run(["--check", "--root", root]);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stdout + result.stderr,
+      /protocol\/starters\/atlassian\.json: origin\.exclude must be a list of lowercase DNS labels or label prefixes ending in a single "\*"/,
+    );
+  });
+}
+
 test("origin.labels must be 1", (t) => {
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
@@ -619,7 +662,7 @@ test("origin.exclude must be a list of lowercase DNS labels", (t) => {
   assert.equal(result.status, 1);
   assert.match(
     result.stdout + result.stderr,
-    /protocol\/starters\/atlassian\.json: origin\.exclude must be a list of lowercase DNS labels/,
+    /protocol\/starters\/atlassian\.json: origin\.exclude must be a list of lowercase DNS labels or label prefixes ending in a single "\*"/,
   );
 });
 
@@ -1019,6 +1062,117 @@ test("a suffix nested inside another suffix always collides (check 6)", (t) => {
     /protocol\/starters\/sharepoint\.json: origin overlaps protocol\/starters\/onedrive\.json/,
   );
 });
+
+/** A one-type development family on `origin`, for the collision tests below. */
+function originFamily(name, origin, sampleOrigin) {
+  return {
+    family: name,
+    display_name: name,
+    review_prompt: null,
+    origin,
+    scope: null,
+    sample_origin: sampleOrigin,
+    sample_scope: [],
+    overlaps: [],
+    types: [{
+      type: `${name}.page`,
+      key: `${name}.page:{origin}`,
+      label: "Pages",
+      label_variants: [],
+      description: "An example page.",
+      record_label: null,
+      example_path: null,
+      adapter: { type: `${name}.page`, match: [{ path: "/p/{id:int}" }], id: `${name}.page:{host}/{id}` },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: `docs/adapters/${name}.page.md`,
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+}
+
+/** checkPolicy's collision problems for two synthetic families. */
+function collisions(a, b) {
+  return checkPolicy([{ file: "a.json", family: a }, { file: "b.json", family: b }], { shared_origins: {} })
+    .filter((problem) => problem.includes("origin overlaps"));
+}
+
+test("a labels: 1 family coexists with a family on a deeper suffix (check 6)", () => {
+  const shallow = originFamily("shallow", { kind: "subdomain", suffix: ".example.com", labels: 1 }, "https://acme.example.com");
+  const deep = originFamily("deep", { kind: "subdomain", suffix: ".ideas.example.com", labels: 1 }, "https://acme.ideas.example.com");
+  assert.deepEqual(collisions(shallow, deep), []);
+  assert.deepEqual(collisions(deep, shallow), []);
+  // The deeper family need not itself be strict: every host it claims has
+  // at least two labels before the shallow suffix.
+  const deepPermissive = { ...deep, origin: { kind: "subdomain", suffix: ".ideas.example.com" } };
+  assert.deepEqual(collisions(shallow, deepPermissive), []);
+});
+
+test("a permissive family still collides with a deeper suffix, whatever exclude says (check 6)", () => {
+  const shallow = originFamily("shallow", { kind: "subdomain", suffix: ".example.com", exclude: ["ideas"] }, "https://acme.example.com");
+  const deep = originFamily("deep", { kind: "subdomain", suffix: ".ideas.example.com", labels: 1 }, "https://acme.ideas.example.com");
+  assert.deepEqual(collisions(shallow, deep), ["b.json: origin overlaps a.json"]);
+  // labels: 1 only on the deeper family proves nothing about the shallow one.
+  assert.deepEqual(collisions(deep, shallow), ["b.json: origin overlaps a.json"]);
+});
+
+test("two families on the same suffix always collide, even both labels: 1 (check 6)", () => {
+  const one = originFamily("one", { kind: "subdomain", suffix: ".example.com", labels: 1, exclude: ["www"] }, "https://acme.example.com");
+  const two = originFamily("two", { kind: "subdomain", suffix: ".example.com", labels: 1 }, "https://acme.example.com");
+  assert.deepEqual(collisions(one, two), ["b.json: origin overlaps a.json"]);
+});
+
+test("a multi-origin family collides through any of its members (check 6)", () => {
+  const multi = originFamily("multi", {
+    kind: "any",
+    of: [
+      { kind: "exact", origin: "https://app.example.com" },
+      { kind: "subdomain", suffix: ".ent.example.com", labels: 1 },
+    ],
+  }, "https://app.example.com");
+  const exact = originFamily("exact", { kind: "exact", origin: "https://app.example.com" }, "https://app.example.com");
+  assert.deepEqual(collisions(multi, exact), ["b.json: origin overlaps a.json"]);
+  const nested = originFamily("nested", { kind: "subdomain", suffix: ".x.ent.example.com" }, "https://acme.x.ent.example.com");
+  assert.deepEqual(collisions(multi, nested), []); // labels: 1 on the member proves it
+  const unrelated = originFamily("unrelated", { kind: "subdomain", suffix: ".other.example" }, "https://acme.other.example");
+  assert.deepEqual(collisions(multi, unrelated), []);
+});
+
+test("a multi-origin family claims an origin any member claims", () => {
+  const origin = {
+    kind: "any",
+    of: [
+      { kind: "exact", origin: "https://app.example.com" },
+      { kind: "subdomain", suffix: ".app.example.com", labels: 1, exclude: ["up-*"] },
+    ],
+  };
+  assert.equal(familyClaims(origin, "https://app.example.com"), true);
+  assert.equal(familyClaims(origin, "https://acme.app.example.com"), true);
+  assert.equal(familyClaims(origin, "https://up-1.app.example.com"), false);
+  assert.equal(familyClaims(origin, "https://example.com"), false);
+});
+
+for (const [origin, message, why] of [
+  [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }] }, /origin\.of must list 2 or more origins/, "one member"],
+  [{ kind: "any", of: "x" }, /origin\.of must list 2 or more origins/, "a non-array"],
+  [{ kind: "any" }, /origin\.of is required/, "no of"],
+  [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }, { kind: "any", of: [] }] }, /origin\.of\[1\]\.kind must be "exact" or "subdomain"/, "a nested any"],
+  [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }, { kind: "subdomain", suffix: "bad" }] }, /origin\.of\[1\]\.suffix must start with/, "a bad member"],
+  [{ kind: "any", of: [{ kind: "subdomain", suffix: ".example.com" }, { kind: "subdomain", suffix: ".a.example.com", labels: 1 }] }, /origin\.of\[1\] overlaps origin\.of\[0\]/, "overlapping members"],
+  [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }, { kind: "exact", origin: "https://b.example.com" }], extra: 1 }, /origin unknown field "extra"/, "an unknown key"],
+]) {
+  test(`a multi-origin family refuses ${why}`, (t) => {
+    const root = tmpRoot(t);
+    const atlassian = readFamily(root, "atlassian");
+    atlassian.origin = origin;
+    writeFamily(root, "atlassian", atlassian);
+    const result = run(["--check", "--root", root]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout + result.stderr, new RegExp(`protocol/starters/atlassian\\.json: ${message.source}`));
+  });
+}
 
 test("an exact origin collides with a subdomain family that would claim it (check 6)", (t) => {
   const root = tmpRoot(t);

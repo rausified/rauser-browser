@@ -156,6 +156,27 @@ test("orderContainedFirst puts a declared container_first container ahead of its
   assert.equal(evaluate(doc.doc, "https://nest.example.test/s/acme/roadmap").artifact_id, "nest.board:nest.example.test/acme/roadmap");
 });
 
+test("a multi-origin (kind any) family's container_first declaration holds on each of its origins", (t) => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  family.origin = { kind: "any", of: [
+    { kind: "exact", origin: "https://nest.example.test" },
+    { kind: "subdomain", suffix: ".nest.example.org", labels: 1 },
+  ] };
+  setStarterFamiliesForTest([family]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const [spaceType, boardType] = family.types;
+  for (const origin of ["https://nest.example.test", "https://acme.nest.example.org"]) {
+    const space = { ...spaceType.adapter, origin };
+    const board = { ...boardType.adapter, origin };
+    assert.deepEqual(orderContainedFirst([board, space]), [space, board], origin);
+    const declared = { first_adapter: 0, first_rule: 1, second_adapter: 1, second_rule: 0 };
+    assert.deepEqual(reviewableOverlaps([declared], [space, board]), [], origin);
+  }
+  const off = "https://elsewhere.example.test";
+  const [space, board] = [{ ...spaceType.adapter, origin: off }, { ...boardType.adapter, origin: off }];
+  assert.deepEqual(orderContainedFirst([space, board]), [board, space]);
+});
+
 test("reviewableOverlaps hides only a declared container_first rule pair, unedited and container first", (t) => {
   const { space, board } = containerFirstSeam(t);
   const declared = { first_adapter: 0, first_rule: 1, second_adapter: 1, second_rule: 0 };
