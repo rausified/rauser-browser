@@ -2215,7 +2215,7 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
 enum ContainerFirstProblem {
     /// A contained adapter with no container adapter on its origin.
     Missing,
-    /// The first contained adapter sits ahead of the first container adapter.
+    /// A contained adapter sits above a container adapter.
     Behind,
 }
 
@@ -2252,7 +2252,13 @@ fn container_first_problems(
             .collect();
         for origin in origins {
             let contained = first(&pair.contained, &origin);
-            let problem = match first(&pair.container, &origin) {
+            // Every container adapter must sit above every contained one:
+            // the last container before the first contained adapter.
+            let last_container = adapters.iter().rposition(|adapter| {
+                field(adapter, "type").as_deref() == Some(pair.container.as_str())
+                    && field(adapter, "origin").as_deref() == Some(origin.as_str())
+            });
+            let problem = match last_container {
                 None => Some(ContainerFirstProblem::Missing),
                 Some(container) if contained.is_some_and(|at| at < container) => {
                     Some(ContainerFirstProblem::Behind)
@@ -4175,6 +4181,13 @@ mod tests {
             let mut store = loaded(&folder.path().join("config.toml"));
             save_adapters(&mut store, vec![app.clone()]).unwrap();
             save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
+            // With two app rules, dashboards between them are above one app.
+            let mut second = app.clone();
+            second["id"] = json!("splunk.app:{host}/app/{app}");
+            second["match"] = json!([{"path": "/{_}/app/{app:name}/(home)"}]);
+            let error = save_adapters(&mut store, vec![app.clone(), dashboard.clone(), second])
+                .unwrap_err();
+            assert!(order_refusal(&error), "{error:#}");
             // Removing dashboards and adding them back above apps is refused too.
             save_adapters(&mut store, vec![app.clone()]).unwrap();
             assert!(order_refusal(
