@@ -1813,3 +1813,20 @@ when returning to Recent. The separate Re-learn apply decisions remain open.
 Cycle 4 was quarantined after its external extension gate found the existing page-summary disconnect test dereferencing a removed Recent button. The recovered change preserves host-exit invalidation and updates the regression to assert stale-row removal, page-summary disabling, and an explicit offset-zero reload restoring enabled summary buttons. TESTING.md records the coupled behaviors. The rolled-back reading-position follow-up was recreated as `brwr-0401`; all recovered citations now name the live bead.
 
 Recovery validation: protocol generation, the complete workspace build, formatting, both Clippy configurations, npm install, typecheck, lint and extension build pass. The full extension command passes all 50 test files; the explicit non-isolated page-summary/Recent run passes all 86 cases. Workspace Rust tests report 1,677 passed and two ignored, with 94 documented IPC sandbox-skip messages. Accessibility reports two passed and 55 Chromium sandbox skips. Unsandboxed browser and IPC acceptance remains with the driver. Fresh diff review found no additional corrections.
+
+### Independent review — invalidate Recent before the settings reload
+
+The settings policy notice invalidated sharing immediately but left Recent
+valid until the debounced configuration reload completed. A delayed initial or
+continuation reply could therefore publish old-home rows in that interval.
+Recent now invalidates on the notice and restarts at offset zero after reload
+even when the revision is unchanged. Four regressions hold the config response across the debounce
+and cover both reply stages with changed and unchanged revisions; they failed
+before the fix and pass with it.
+
+Review validation: the full workspace Rust suite reports 1,677 passed and two
+ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
+90-case non-isolated Recent/page-summary run pass. Build, both Clippy checks,
+formatting, protocol generation, typecheck, lint, script tests, Markdown safety
+and queue consistency pass. Development tools pass 254 tests with 94 skips;
+accessibility passes two tests with 55 Chromium sandbox skips.

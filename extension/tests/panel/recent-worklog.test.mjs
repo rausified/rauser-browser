@@ -294,6 +294,56 @@ for (const boundary of ["title debounce", "type", "reading", "home", "disconnect
 }
 
 for (const stage of ["initial", "continuation"]) {
+  for (const changedRevision of [false, true]) {
+    test(`Recent invalidates ${stage} results before a settings reload (${changedRevision ? "new" : "same"} revision)`, async () => {
+      let releaseRecent, releaseConfig, heldRequest;
+      let holdRecent = stage === "initial";
+      let holdConfig = false;
+      const pendingRecent = new Promise((resolve) => { releaseRecent = resolve; });
+      const pendingConfig = new Promise((resolve) => { releaseConfig = resolve; });
+      const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
+        if (request.type === "get_config" && holdConfig) return pendingConfig;
+        if (request.type !== "list_artifacts") return null;
+        if (holdRecent) { heldRequest = request; return pendingRecent; }
+        return recentPageReply(request, 0, 1, 1);
+      } });
+      try {
+        await until(() => page.sent("load_note").length > 0, "startup");
+        page.el("tab-recent").click();
+        if (stage === "continuation") {
+          await until(() => !page.el("recent-more").hidden, "first page");
+          holdRecent = true;
+          page.el("recent-more").click();
+        }
+        await until(() => heldRequest, "pending Recent request");
+        holdConfig = true;
+        if (changedRevision) {
+          page.state.config = { ...page.state.config, storage: { ...page.state.config.storage, root: "/other-home" } };
+          page.state.revision = "2";
+        }
+        page.policyChanged();
+        assert.equal(recentRows(page).length, 0, "clear the old home before the debounced reload");
+        assert.equal(page.el("recent-more").hidden, true);
+        holdRecent = false;
+        releaseRecent(recentPageReply(heldRequest, 99, 1));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.doesNotMatch(page.el("recent-list").textContent, /Matching report 99/);
+        await until(() => page.sent("get_config").length >= 2, "held configuration reload");
+        assert.equal(recentRows(page).length, 0);
+        holdConfig = false;
+        releaseConfig(null);
+        await until(() => recentRows(page).length === 1, "fresh Recent after settings reload");
+        const refreshed = page.sent("list_artifacts").at(-1);
+        assert.deepEqual(refreshed.page, { offset: 0 });
+        assert.doesNotMatch(page.el("recent-list").textContent, /Matching report 99/);
+      } finally {
+        releaseRecent(heldRequest ? recentPageReply(heldRequest, 99, 1) : null);
+        releaseConfig(null);
+        page.close();
+      }
+    });
+  }
+
   test(`an answered host exiting before the ${stage} promise resumes invalidates Recent`, async () => {
     const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
       if (request.type === "list_artifacts") return recentPageReply(request, request.page.offset, 1, request.page.offset === 0 ? 1 : null);

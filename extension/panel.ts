@@ -1253,8 +1253,9 @@ function scheduleReload(): void {
         else void notes.retry();
         void refreshArtifact(true);
         // A policy signal can require a reload even when the host's actual
-        // revision is unchanged. Restore the invalidated sharing catalog too.
+        // revision is unchanged. Restore the invalidated history views too.
         if (!closed && !recentView.hidden && worklogReport === null) void loadWorklog();
+        if (!closed && !recentView.hidden && recentResult === null) void loadRecent();
       });
   }, 250);
 }
@@ -2813,9 +2814,11 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   return false;
 });
 session.watchPolicy(() => {
-  // The config reload is debounced; invalidate sharing immediately so a
+  // The config reload is debounced; invalidate history immediately so a
   // reply from the old home/revision cannot publish during that wait.
   draftPolicyPending = true;
+  invalidateRecent();
+  recentStatus.textContent = "Settings changed. Reloading Recent…";
   resetWorklogSelection();
   sharingDraftPanel?.render();
   worklogText.textContent = "Settings changed. Reloading worklog…";

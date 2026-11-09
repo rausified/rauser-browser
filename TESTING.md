@@ -2039,3 +2039,8 @@ Recent tests also exit the port synchronously after an answer but before its
 promise resumes, covering both initial and continuation replies. The real-browser
 keyboard tests in `npm run test:a11y` cover append and conflict focus; sandbox
 skips do not establish browser acceptance. All fixtures use mocked hosts.
+
+Settings-change regressions also hold `get_config` across the reload debounce:
+both initial and continuation replies must be discarded as soon as the policy
+notice arrives. Even an unchanged revision must restart at offset zero after
+the reload completes.
