@@ -1,6 +1,9 @@
 //! The host owns configuration. An absent file is an unconfigured, inert state.
 //! An update is validated in full before the old file is atomically replaced.
 
+mod task_folders;
+pub(crate) use task_folders::TaskFolder;
+
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -165,6 +168,7 @@ pub struct ConfigStore {
     issue: Option<String>,
     root_identity: Option<String>,
     knowledge_base_identity: Option<String>,
+    task_folders: Vec<TaskFolder>,
     agent: AgentView,
     commands: Option<toml::Value>,
     adapter_extensions: BTreeMap<String, toml::Value>,
@@ -211,6 +215,7 @@ struct DiskState {
     needs_backup: bool,
     root_identity: Option<String>,
     knowledge_base_identity: Option<String>,
+    task_folders: Vec<TaskFolder>,
     agent: AgentView,
     commands: Option<toml::Value>,
     adapter_extensions: BTreeMap<String, toml::Value>,
@@ -431,6 +436,7 @@ impl ConfigStore {
                 current.commands.clone(),
                 current.retired_adapter_contracts.clone(),
                 current.adapter_extensions.clone(),
+                current.task_folders.clone(),
             ))
             .context("serializing config TOML")?;
             // A local editor might ignore our lock. Leave its bytes alone;
@@ -484,6 +490,7 @@ impl ConfigStore {
         self.issue = Some("The configuration file cannot be read or is not a regular file. Fix or remove it, then reload this page.".into());
         self.root_identity = None;
         self.knowledge_base_identity = None;
+        self.task_folders.clear();
         self.agent = AgentView::default();
         self.commands = None;
         self.adapter_extensions.clear();
@@ -541,6 +548,7 @@ impl ConfigStore {
             issue: None,
             root_identity: None,
             knowledge_base_identity: None,
+            task_folders: Vec::new(),
             agent: AgentView::default(),
             commands: None,
             adapter_extensions: BTreeMap::new(),
@@ -565,6 +573,7 @@ impl ConfigStore {
         self.issue = state.issue;
         self.root_identity = state.root_identity;
         self.knowledge_base_identity = state.knowledge_base_identity;
+        self.task_folders = state.task_folders;
         self.agent = state.agent;
         self.commands = state.commands;
         self.adapter_extensions = state.adapter_extensions;
@@ -1501,6 +1510,7 @@ impl ConfigStore {
             current.commands.clone(),
             retired_adapter_contracts.clone(),
             adapter_extensions.clone(),
+            current.task_folders.clone(),
         ))
         .context("serializing config TOML")?;
         if serialized.len() > MAX_CONFIG_BYTES {
@@ -1544,6 +1554,7 @@ impl ConfigStore {
         self.issue = None;
         self.root_identity = next_identity;
         self.knowledge_base_identity = next_knowledge_base_identity;
+        self.task_folders = current.task_folders;
         self.agent = agent;
         self.commands = current.commands;
         self.adapter_extensions = adapter_extensions;
@@ -1581,6 +1592,8 @@ struct StoredConfig {
     /// Absent while the knowledge base follows `root`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     knowledge_base_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    task_folders: Vec<TaskFolder>,
     #[serde(default)]
     capture_enabled: bool,
     // Accept and ignore the retired v5 site allowlist. Capture origins now
@@ -1738,6 +1751,9 @@ fn unused_artifacts_dir(occupied: &[&Path]) -> String {
 }
 
 impl StoredConfig {
+    // Each host-owned field the extension's snapshot cannot carry is passed
+    // explicitly, so no caller can forget one.
+    #[allow(clippy::too_many_arguments)]
     fn from_snapshot(
         value: &ConfigSnapshot,
         root_identity: Option<String>,
@@ -1746,6 +1762,7 @@ impl StoredConfig {
         commands: Option<toml::Value>,
         retired_adapter_contracts: Vec<serde_json::Value>,
         adapter_extensions: BTreeMap<String, toml::Value>,
+        task_folders: Vec<TaskFolder>,
     ) -> Self {
         Self {
             storage: value.storage.clone().map(StoredStorage::from),
@@ -1754,6 +1771,7 @@ impl StoredConfig {
             root_picker_confirmed: value.storage.is_some(),
             root_identity,
             knowledge_base_identity,
+            task_folders,
             capture_enabled: value.capture_enabled,
             _sites: None,
             strip_params: value.strip_params.clone(),
@@ -1815,6 +1833,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 needs_backup: false,
                 root_identity: None,
                 knowledge_base_identity: None,
+                task_folders: Vec::new(),
                 agent: AgentView::default(),
                 commands: None,
                 adapter_extensions: BTreeMap::new(),
@@ -1857,6 +1876,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             needs_backup: true,
             root_identity: None,
             knowledge_base_identity: None,
+            task_folders: Vec::new(),
             agent: AgentView::default(),
                 commands: None,
             adapter_extensions: BTreeMap::new(),
@@ -1870,6 +1890,8 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
         Ok(mut stored) => {
             let root_identity = stored.root_identity.clone();
             let knowledge_base_identity = stored.knowledge_base_identity.clone();
+            let invalid_task_folders = task_folders::validate(&stored.task_folders).is_err();
+            let task_folders = std::mem::take(&mut stored.task_folders);
             let retired_adapter_contracts = std::mem::take(&mut stored.adapter_id_history);
             let adapter_extensions = std::mem::take(&mut stored.adapters.extensions);
             let root_unconfirmed = stored.storage.is_some()
@@ -1879,7 +1901,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             let mut config: ConfigSnapshot = stored.into();
             config.agent = agent.agent();
             upgrade_default_document_types(&mut config.summary_vocabulary);
-            if root_unconfirmed || validate_base(&config).is_err() {
+            if root_unconfirmed || invalid_task_folders || validate_base(&config).is_err() {
                 let retired_adapter_contracts = repairable_history(retired_adapter_contracts);
                 let issue = if root_unconfirmed {
                     "This home folder predates native picker confirmation. Choose it again to activate capture; the original config will be backed up."
@@ -1893,6 +1915,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     needs_backup: true,
                     root_identity: None,
                     knowledge_base_identity: None,
+                    task_folders: Vec::new(),
                     agent,
                     commands,
                     adapter_extensions: BTreeMap::new(),
@@ -1923,6 +1946,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                 needs_backup: false,
                 root_identity,
                 knowledge_base_identity,
+                task_folders,
                 agent,
                 commands,
                 adapter_extensions,
@@ -1936,6 +1960,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             needs_backup: true,
             root_identity: None,
             knowledge_base_identity: None,
+            task_folders: Vec::new(),
             agent: AgentView::default(),
                 commands: None,
             adapter_extensions: BTreeMap::new(),
@@ -8975,6 +9000,7 @@ threshold = nan
                 None,
                 Vec::new(),
                 BTreeMap::new(),
+                Vec::new(),
             ))
             .unwrap(),
         )

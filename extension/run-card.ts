@@ -584,7 +584,7 @@ export interface TaskDetailDeps extends RunProgressDeps {
   /** Puts the full instruction back in the panel's task bar and reopens the
    * run's own `url` (never a URL from agent text), so the instruction runs
    * against the page it was first given on. */
-  reuse(instruction: string, url: string, noPage?: boolean): void;
+  reuse(instruction: string, url: string, noPage?: boolean, taskFolderId?: string): void;
   /** Opens the run's own `url` (never a URL from agent text). */
   openPage(url: string): void;
   /** The run was dismissed, and its id remembered. */
@@ -734,7 +734,7 @@ export class TaskDetail extends RunWatcher {
   private reuseButtons(): HTMLButtonElement[] {
     const instruction = this.fullInstruction;
     if (!isTerminal(this.view) || instruction === null) return [];
-    return [actionButton("Reuse", () => this.deps.reuse(instruction, this.view.url, this.view.no_page === true))];
+    return [actionButton("Reuse", () => this.deps.reuse(instruction, this.view.url, this.view.no_page === true, this.view.task_folder_id))];
   }
 
   /** Whether this is a page summary's run rather than a task's. */
@@ -773,6 +773,7 @@ export class TaskDetail extends RunWatcher {
       run.no_page === true ? "No page" : `on ${run.title || run.url}`, HARNESS_NAMES[run.harness], started === null ? "" : `started ${started}`,
       stateText(run), elapsed,
     ].filter((part) => part !== "").join(" · ");
+    if (!this.isSummary() && run.cwd) this.metaLine.textContent += ` · Working folder: ${run.cwd}`;
     this.problemLine.textContent = this.problem ?? "";
     this.problemLine.hidden = this.problem === null;
     const changed = !summary && this.changesMayStay();

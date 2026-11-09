@@ -137,7 +137,7 @@ const RUN_VIEW_KEYS: readonly string[] = [
 ];
 /** The additive v7 and v8 `RunView` keys an older service's view omits.
  * `instruction` and `task_report` belong to task views only. */
-const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page", "start_request_id"];
+const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page", "start_request_id", "task_folder_id"];
 const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft", "task"]);
 
 /** A task view carries its instruction as a string, and its report as a
@@ -197,6 +197,7 @@ export function isRunView(value: unknown): boolean {
   if (!keys.every((key) => RUN_VIEW_KEYS.includes(key) || RUN_VIEW_OPTIONAL_KEYS.includes(key))) return false;
   if (Object.hasOwn(run, "kind") && !(typeof run.kind === "string" && RUN_KINDS.has(run.kind))) return false;
   if (!taskKeysFit(run)) return false;
+  if (Object.hasOwn(run, "task_folder_id") && (run.kind !== "task" || !isBoundedString(run.task_folder_id, 128, 1))) return false;
   if (Object.hasOwn(run, "no_page") && (run.kind !== "task" || typeof run.no_page !== "boolean")) return false;
   if (Object.hasOwn(run, "start_request_id") && (run.kind !== "task" ||
       typeof run.start_request_id !== "string" || run.start_request_id.length === 0 || Array.from(run.start_request_id).length > 128)) return false;
@@ -480,6 +481,14 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "adapter_repair_loaded":
       return isMessage(value, ["revision", "original_toml"]) &&
         isBoundedString(value.revision, 128, 1) && isBoundedString(value.original_toml, 262144);
+    case "task_folders_listed":
+      return isMessage(value, ["revision", "folders"]) && isBoundedString(value.revision, 128, 1) &&
+        isBoundedList(value.folders, 16, (folder) => {
+          if (typeof folder !== "object" || folder === null) return false;
+          const entry = folder as Record<string, unknown>;
+          return hasExactKeys(entry, ["id", "path"]) && isBoundedString(entry.id, 128, 1) &&
+            isBoundedString(entry.path, 4096, 1);
+        });
     case "folder_chosen":
       return typeof value.path === "string" && typeof value.picker_token === "string";
     case "visit_recorded":

@@ -57,6 +57,14 @@ function fakeChrome(contexts = [], { closedTabs = [] } = {}) {
   };
 }
 
+test("Reuse preserves a task folder ID without accepting a working-directory path", async () => {
+  const storage = storageArea();
+  await sendReuse(storage, "Inspect this project", null, false, "project-id");
+  const reused = await takeReuse(storage, 1);
+  assert.deepEqual(reused, { instruction: "Inspect this project", no_page: false, task_folder_id: "project-id" });
+  assert.equal(storage.entries.has(REUSE_KEY), false);
+});
+
 test("sendReuse stores the instruction, the window and a timestamp", async () => {
   const storage = storageArea();
   const before = Date.now();

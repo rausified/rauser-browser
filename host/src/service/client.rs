@@ -648,6 +648,7 @@ pub(crate) mod fake {
     pub fn run_view(record_key: RecordKey) -> RunView {
         RunView {
             start_request_id: None,
+            task_folder_id: None,
             no_page: None,
             run_id: "00000000-0000-4000-8000-000000000001".into(),
             state: RunState::Queued,
