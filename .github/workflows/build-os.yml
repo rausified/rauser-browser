@@ -49,14 +49,16 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ inputs.os }}
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/rb-ci-speed' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
       # Tests make their temporary folders under TMP, and the SQLite tests
       # sync after every commit. A Windows runner's TMP is on C:, whose
       # flushes are far slower than the D: drive the checkout and `target`
-      # sit on, so point TMP and TEMP at the job's temp folder on D:.
+      # sit on: with TMP on D:, `cargo test --workspace` fell from 257s to
+      # 74s and the scripted-dialogs run from 327s to 99s, running the same
+      # tests. So point TMP and TEMP at the job's temp folder on D:.
       - name: Put temporary folders on the runner's work drive (Windows)
         if: runner.os == 'Windows'
         shell: bash

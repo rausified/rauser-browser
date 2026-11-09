@@ -1,0 +1,7 @@
+## 2026-11-09 — Read test wall time before blaming compiles in CI
+
+Change: Before speeding up a slow CI job, split each `cargo test` step into its compile and its run (the `Finished` line against the last `test result` line) and look for tests that log `has been running for over 60 seconds`. Treat a gap between platforms in the run part as an environment question (disk, temp folder, antivirus) before it is a caching one.
+
+Why: The Windows build job took 998s and was put down to cold Rust compiles. Caching the compiled dependencies (`Swatinem/rust-cache`) only took it to 945s, because the two `cargo test` runs spent about 250s and 280s running tests, not compiling. Their SQLite tests sync after every commit and made their temporary folders on the runner's `C:` drive. Moving `TMP`/`TEMP` to the job's temp folder on `D:` cut those steps from 257s to 74s and from 327s to 99s with the same 1992 tests passing, and the whole job to 422s with a warm cache (766s cold).
+
+Where: `.github/workflows/build-os.yml` and the `.github/workflows/ci.yml` bullet in `AGENTS.md`.
