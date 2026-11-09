@@ -71,11 +71,15 @@ A synthetic equivalent of the recorded shape, on `acme.aha.io`:
 | `/features/<ref>` | `PRJ-123 Bulk export \| Aha! Roadmaps` | that reference number, title `Bulk export` |
 
 The blind research scored 90 synthetic vectors across its seven drafted
-types, including the deferred `aha.portalidea` (Known limits, below). This
-PR keeps six of those types and carries over 71 of the research's cases
-(13 `aha.feature` cases among them, including one rewritten onto this
-family's sample origin and one new vector pinning the login-title limit),
-all correctly classified by the research's own draft and re-verified
+types, including the deferred `aha.portalidea` (Known limits, below). The
+family keeps six of those types and carries over 71 of the research's
+cases. This type has 27 vectors: 24 carried over as written (11
+`aha.feature` cases and the family's 13 shared negatives, `eval.aha.neg.*`,
+which are filed with this type), one research negative rewritten onto this
+family's sample origin (`eval.aha.feature.host_in_id`), and two new ones:
+`eval.aha.feature.login_title`, pinning the login-title limit, and
+`eval.aha.neg.features_new`, the `/features/new` form. All are correctly
+classified by the research's own draft where it had them, and re-verified
 against this family's own fixture through both adapter-template engines.
 Graded later against 2 real, held-back Aha! browsing visits
 (`docs/research/blind/SCORECARD.md`), the research matched both correctly;
@@ -91,8 +95,8 @@ in those 2 visits were Aha!'s login page, not a record page.
 - `/products/<prefix>/features/<ref>`: the route exists for any `<ref>`, so
   it is most likely a workspace list view, not a record page — excluded as
   unverified;
-- `/features/board` and similar route words, since `jira_key` requires a
-  reference-number shape;
+- `/features/board`, the new-feature form `/features/new` and similar route
+  words, since `jira_key` requires a reference-number shape;
 - `/features` (the list) and `/features/<ref>/edit` (no rest segment).
 
 ## Known limits

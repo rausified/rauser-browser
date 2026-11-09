@@ -7705,6 +7705,23 @@
       "url": "https://acme.aha.io/features/board"
     },
     {
+      "id": "eval.aha.neg.features_new",
+      "kind": "evaluate",
+      "why": "the new-feature form: \"new\" is a route word, not a reference number (jira_key needs a dash and digits)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/features/new"
+    },
+    {
       "id": "eval.aha.neg.feature_subpath",
       "kind": "evaluate",
       "why": "no rest segment",
