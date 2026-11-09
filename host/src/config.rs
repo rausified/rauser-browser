@@ -4719,7 +4719,27 @@ mod tests {
         }
 
         const SPLUNK_SEED: u64 = 0x5eed_2026_1109_0c0c;
-        const SPLUNK_SEQUENCES: usize = 2000;
+        /// Sequences when `BRAUSER_GUARD_PROPERTY_SEQUENCES` is unset, so
+        /// local runs stay quick; CI sets 2000. Measured at this seed, the
+        /// fewest sequences that break the invariant with one guard part
+        /// disabled: the precedence refusal 2, the appended-rule overlap
+        /// check 8, the pre-#371 candidate loop 2, retired history in
+        /// `refuse_rekeyed_routes` 8, the narrowing (superseded) check 3,
+        /// `container_first_violation` 20, and the existing-child condition
+        /// of the declared-child allowance 200. The default is 3× the
+        /// largest; the reachability asserts need 8. Re-measure if the
+        /// seed, steps or variants change.
+        const SPLUNK_DEFAULT_SEQUENCES: usize = 600;
+
+        fn splunk_sequences() -> usize {
+            match std::env::var("BRAUSER_GUARD_PROPERTY_SEQUENCES") {
+                Ok(count) => count.trim().parse().unwrap_or_else(|_| {
+                    panic!("BRAUSER_GUARD_PROPERTY_SEQUENCES must be a whole number, not {count:?}")
+                }),
+                Err(std::env::VarError::NotPresent) => SPLUNK_DEFAULT_SEQUENCES,
+                Err(error) => panic!("BRAUSER_GUARD_PROPERTY_SEQUENCES: {error}"),
+            }
+        }
         const SPLUNK_STEPS: usize = 10;
 
         /// The Splunk starter's adapters exactly as the family file ships
@@ -5062,6 +5082,7 @@ mod tests {
             };
             // Sequences are independent (each has its own store), so they
             // run on every core; the first failure stops the other workers.
+            let sequences = splunk_sequences();
             let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
             let failed = std::sync::atomic::AtomicBool::new(false);
             struct StopOthers<'a>(&'a std::sync::atomic::AtomicBool);
@@ -5078,7 +5099,7 @@ mod tests {
                         let (run, failed) = (&run, &failed);
                         scope.spawn(move || {
                             let _stop = StopOthers(failed);
-                            (worker..SPLUNK_SEQUENCES)
+                            (worker..sequences)
                                 .step_by(threads)
                                 .take_while(|_| !failed.load(std::sync::atomic::Ordering::Relaxed))
                                 .map(run)
@@ -5116,7 +5137,7 @@ mod tests {
             assert!(accepted_edits[1] > 0, "no accepted widening edit");
             assert!(refused_widening > 0, "no refused widening edit");
             eprintln!(
-                "seed {SPLUNK_SEED:#x}: {SPLUNK_SEQUENCES} sequences, accepted {accepted:?}, edits narrow/widen {accepted_edits:?}, refused {refused} ({refused_widening} widening)"
+                "seed {SPLUNK_SEED:#x}: {sequences} sequences, accepted {accepted:?}, edits narrow/widen {accepted_edits:?}, refused {refused} ({refused_widening} widening)"
             );
         }
 
