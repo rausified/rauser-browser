@@ -67,14 +67,15 @@ export function latestChecks(contexts) {
 const PAYLOAD = /-\*- Mergify Payload -\*-\s*(\{[\s\S]*?\})\s*-\*- Mergify Payload End -\*-/;
 const leaves = (nodes) => (nodes ?? []).flatMap((n) => n.match ? [] : n.subconditions?.length ? leaves(n.subconditions) : [n.description]);
 
-/** Mergify's view of the PR, from its comments in update order (it edits its status comment
- * in place): the latest status payload,
+/** Mergify's view of the PR, from its comments in creation order: each queue request gets a new
+ * status comment, and Mergify rewrites the old one as finished after it (#346), so the
+ * newest-created payload is current,
  * unless a later comment says a push cancelled the request. `unmet` lists the
  * conditions a waiting request still lacks (the payload's tree, else the checklist
  * above <details>, since a waiting payload carries an empty tree). */
 export function mergifyStatus(comments) {
   let status = { state: "none", unmet: [] };
-  const at = (c) => c.updatedAt ?? c.createdAt ?? "";
+  const at = (c) => c.createdAt ?? "";
   for (const { author, body = "" } of [...(comments ?? [])].sort((a, b) => at(a).localeCompare(at(b)))) {
     if (!/^mergify(\[bot\])?$/.test(author ?? "")) continue;
     let payload = null;

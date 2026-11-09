@@ -102,12 +102,10 @@ test("mergifyStatus: a push cancels the request until a later status comment (#3
   assert.equal(mergifyStatus(FX.pr329).state, "merged");
 });
 
-test("mergifyStatus orders by update time: a status comment edited after a cancel reply is current (Codex P2)", () => {
-  const cancel = FX.pr329[1]; // 08:15:11Z
-  const status = { ...FX.checking339, createdAt: "2026-11-09T08:00:00Z", updatedAt: "2026-11-09T08:20:00Z" };
-  assert.equal(mergifyStatus([status, cancel]).state, "checking");
-  assert.equal(mergifyStatus([{ ...status, updatedAt: "2026-11-09T08:10:00Z" }, cancel]).state, "cancelled");
-  assert.equal(mergifyStatus([FX.pr329[2], FX.pr329[0], FX.pr329[1], FX.pr329[3]]).state, "merged"); // GraphQL order does not matter
+test("mergifyStatus: the newest-created status comment is current, though Mergify rewrites the old one after it (#346)", () => {
+  assert.equal(mergifyStatus(FX.pr346).state, "waiting");
+  assert.equal(mergifyStatus([...FX.pr346].reverse()).state, "waiting"); // GraphQL order does not matter
+  assert.equal(mergifyStatus([FX.pr329[2], FX.pr329[0], FX.pr329[1], FX.pr329[3]]).state, "merged");
 });
 
 test("mergifyStatus: command replies alone, or a payload from anyone but Mergify, are no request", () => {
