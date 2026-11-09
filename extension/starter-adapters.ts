@@ -590,15 +590,17 @@ function containerFirst(origin: unknown, container: unknown, contained: unknown)
 
 /** Whether `container` ahead of `contained` is a starter family's declared
  * `"container_first"` pair as the family ships it: same origin, the
- * family's own types, and every container rule the declaration names
- * (`pairs`) still exactly as shipped (`shippedRule`). `orderContainedFirst`
- * keeps such a pair container first. Once the user edits one of those rules
- * (widening a built-in list to a catch-all, say), the declaration no longer
- * describes it, and the ordinary contained-first order applies. */
+ * family's own types, and both adapters' rules exactly as shipped, every
+ * `match` rule and `path_case` (`shippedRules`). `orderContainedFirst` keeps
+ * such a pair container first, and `reviewableOverlaps` hides its declared
+ * rule pairs. Once the user edits either adapter (widening any app rule to a
+ * catch-all, adding a rule, editing the dashboard rule), the declaration no
+ * longer describes it, and the ordinary contained-first order and warnings
+ * apply. */
 export function isContainerFirstPair(container: AdapterObject, contained: AdapterObject): boolean {
   if (container.origin !== contained.origin) return false;
-  const entry = containerFirst(container.origin, container.type, contained.type);
-  return entry !== null && entry.pairs.every(([rule]) => shippedRule(container, rule));
+  return containerFirst(container.origin, container.type, contained.type) !== null
+    && shippedRules(container) && shippedRules(contained);
 }
 
 /** A stable reorder so that, on each origin, every adapter declaring
@@ -666,21 +668,17 @@ export function reviewableOverlaps(
 function declaredOverlap(warning: AdapterWarning, adapters: readonly AdapterObject[]): boolean {
   const first = adapters[warning.first_adapter];
   const second = adapters[warning.second_adapter];
-  if (!first || !second || first.origin !== second.origin) return false;
+  if (!first || !second || !isContainerFirstPair(first, second)) return false;
   const entry = containerFirst(first.origin, first.type, second.type);
-  if (!entry?.pairs.some(([a, b]) => a === warning.first_rule && b === warning.second_rule)) return false;
-  return shippedRule(first, warning.first_rule) && shippedRule(second, warning.second_rule);
+  return entry?.pairs.some(([a, b]) => a === warning.first_rule && b === warning.second_rule) ?? false;
 }
 
-/** Whether `adapter`'s rule `index` matches exactly what its starter type
- * ships at that index. */
-function shippedRule(adapter: AdapterObject, index: number): boolean {
+/** Whether `adapter`'s `match` rules and `path_case` are exactly what its
+ * starter type ships. Other keys (a `within` dropped because the container
+ * was not chosen, say) do not change which URLs it claims. */
+function shippedRules(adapter: AdapterObject): boolean {
   const shipped = typeof adapter.type === "string" ? starterType(adapter.type)?.adapter : undefined;
-  const rules = adapter.match;
-  const shippedRules = shipped?.match;
-  if (!Array.isArray(rules) || !Array.isArray(shippedRules) || index >= rules.length || index >= shippedRules.length) {
-    return false;
-  }
-  return (adapter.path_case ?? "sensitive") === (shipped!.path_case ?? "sensitive")
-    && canonicalJson(rules[index]) === canonicalJson(shippedRules[index]);
+  if (!shipped || !Array.isArray(adapter.match)) return false;
+  return (adapter.path_case ?? "sensitive") === (shipped.path_case ?? "sensitive")
+    && canonicalJson(adapter.match) === canonicalJson(shipped.match);
 }

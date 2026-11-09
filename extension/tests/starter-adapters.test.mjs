@@ -133,16 +133,22 @@ test("orderContainedFirst puts a declared container_first container ahead of its
   const elsewhereSpace = { ...space, origin: "https://elsewhere.example.test" };
   const elsewhereBoard = { ...board, origin: "https://elsewhere.example.test" };
   assert.deepEqual(orderContainedFirst([elsewhereSpace, elsewhereBoard]), [elsewhereBoard, elsewhereSpace]);
-  // Once the container's declared rule is edited (widened to a catch-all,
-  // say), the declaration no longer describes it: the ordinary
+  // Once either adapter differs from what the starter ships in any rule or
+  // in path_case, the declaration no longer describes it: the ordinary
   // contained-first order returns, so the board's own pages stay boards.
   const widened = { ...space, match: [space.match[0], { path: "/s/{space:name}/{_}" }] };
   assert.deepEqual(orderContainedFirst([widened, board]), [board, widened]);
+  // A container rule the declaration does not name, widened to a catch-all.
+  const widenedRoot = { ...space, match: [{ path: "/s/{space:name}/{*}" }, space.match[1]] };
+  assert.deepEqual(orderContainedFirst([widenedRoot, board]), [board, widenedRoot]);
+  // An extra, broader container rule appended after the shipped ones.
+  const appended = { ...space, match: [...space.match, { path: "/s/{space:name}/{_}" }] };
+  assert.deepEqual(orderContainedFirst([appended, board]), [board, appended]);
   const folded = { ...space, path_case: "insensitive" };
   assert.deepEqual(orderContainedFirst([folded, board]), [board, folded]);
-  // Editing the contained adapter keeps the container's built-in pages its own.
+  // An edited contained adapter is the user's own rule: ordinary order too.
   const editedBoard = { ...board, match: [{ path: "/s/{space:name}/{board:name}/{*}" }] };
-  assert.deepEqual(orderContainedFirst([editedBoard, space]), [space, editedBoard]);
+  assert.deepEqual(orderContainedFirst([space, editedBoard]), [editedBoard, space]);
   // The evaluated document agrees: the space's built-in page is the space.
   const doc = compileDocument({ format: 1, artifacts: orderContainedFirst([board, space]) });
   assert.equal(doc.ok, true);
@@ -167,6 +173,11 @@ test("reviewableOverlaps hides only a declared container_first rule pair, unedit
   assert.deepEqual(reviewableOverlaps([declared], [space, edited]), [declared]);
   const folded = { ...space, path_case: "insensitive" };
   assert.deepEqual(reviewableOverlaps([declared], [folded, board]), [declared]);
+  // So is the declared pair once any other rule of either adapter is edited.
+  const widenedRoot = { ...space, match: [{ path: "/s/{space:name}/{*}" }, space.match[1]] };
+  assert.deepEqual(reviewableOverlaps([declared], [widenedRoot, board]), [declared]);
+  const appended = { ...space, match: [...space.match, { path: "/s/{space:name}/(trash)" }] };
+  assert.deepEqual(reviewableOverlaps([declared], [appended, board]), [declared]);
   // Off the family's origin the declaration does not apply.
   const elsewhere = [{ ...space, origin: "https://elsewhere.example.test" }, { ...board, origin: "https://elsewhere.example.test" }];
   assert.deepEqual(reviewableOverlaps([declared], elsewhere), [declared]);
