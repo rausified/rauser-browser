@@ -309,6 +309,8 @@ test("a summarized page's re-summarize icon sits in the Summary card, named and 
     assert.ok((await page.locator("#summarize .summarize-icon").boundingBox())?.width > 1, "the icon shows");
     await activate(page, "#summarize");
     await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_run"));
+    await page.locator("#summary-activity-label").waitFor();
+    await activate(page, "#summary-activity-label", "Enter");
     await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
     await audit(t, page, `panel/summary-card-${colorScheme}`);
   }
@@ -361,16 +363,57 @@ test("task Run, Tasks and Summarize activate without a mouse and expose failure 
   await activate(page, "#task-run");
   await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_task"));
   await page.locator("#task-run:enabled").waitFor();
-  await page.locator("#task-run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
+  await page.locator("#task-activity-label").waitFor();
   await focused(page, "#task-input");
+  await activate(page, "#task-activity-label", "Enter");
+  await page.locator("#task-run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
   await activate(page, "#task-open");
   await page.waitForFunction(() => fixture.actions.some((action) => action.includes("/tasks.html")));
   await activate(page, "#summarize");
   await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_run"));
   await page.locator("#summarize:enabled").waitFor();
-  await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
+  await page.locator("#summary-activity-label").waitFor();
   await focused(page, "#summarize");
+  await activate(page, "#summary-activity-label", "Enter");
+  await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
   await audit(t, page, "panel/agent-start-error");
+});
+
+test("activity dock stays at the bottom and caps expanded output", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => {
+    const card = document.createElement("div");
+    card.className = "run-card";
+    const title = document.createElement("p");
+    title.className = "run-card-title";
+    title.textContent = "Astryx";
+    const state = document.createElement("p");
+    state.className = "run-card-state";
+    state.textContent = "Running";
+    const stream = document.createElement("pre");
+    stream.className = "run-card-stream";
+    stream.textContent = "Long agent output\n".repeat(300);
+    card.append(title, state, stream);
+    document.querySelector("#run-area").append(card);
+  });
+  await page.locator("#summary-activity-label").filter({ hasText: "Astryx · Running" }).waitFor();
+  assert.equal(await page.locator("#run-area").isVisible(), false);
+  const before = await page.locator("#page-area").boundingBox();
+  await activate(page, "#summary-activity-label", "Enter");
+  assert.equal(await page.locator("#run-area").isVisible(), true);
+  const layout = await page.evaluate(() => {
+    const dock = document.querySelector("#activity-dock").getBoundingClientRect();
+    const strip = document.querySelector(".capture-bar").getBoundingClientRect();
+    const main = document.querySelector("main").getBoundingClientRect();
+    return { dockHeight: dock.height, stripTop: strip.top, dockBottom: dock.bottom,
+      mainBottom: main.bottom, viewport: window.innerHeight };
+  });
+  assert.ok(layout.dockHeight <= layout.viewport * .38 + 2, JSON.stringify(layout));
+  assert.ok(layout.dockBottom <= layout.stripTop + 1, JSON.stringify(layout));
+  assert.ok(layout.stripTop < layout.mainBottom, JSON.stringify(layout));
+  const after = await page.locator("#page-area").boundingBox();
+  assert.ok(before && after && Math.abs(before.y - after.y) <= 1, "page content does not jump");
 });
 
 test("task page scope can be changed by keyboard without submitting or losing a draft", async (t) => {

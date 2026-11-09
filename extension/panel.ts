@@ -271,6 +271,27 @@ const taskAnnounce = element<HTMLParagraphElement>("task-announce");
 const taskRunArea = element<HTMLDivElement>("task-run-area");
 const taskOpenButton = element<HTMLButtonElement>("task-open");
 
+// Keep the dock's closed rows useful while the existing run renderers update.
+// A row stays closed when a run starts; opening it is always the user's choice.
+for (const [area, label, fallback] of [
+  [status, element<HTMLElement>("notice-activity-label"), "Notice"],
+  [runArea, element<HTMLElement>("summary-activity-label"), "Summary activity"],
+  [taskRunArea, element<HTMLElement>("task-activity-label"), "Task activity"],
+  [element<HTMLElement>("capture-site-agent-run"), element<HTMLElement>("site-activity-label"), "Site draft activity"],
+] as const) {
+  const update = (): void => {
+    const title = area.querySelector(".run-card-title")?.textContent?.trim();
+    const state = area.querySelector(".run-card-state")?.textContent?.trim().split(" · ")[0];
+    const line = (area === status ? area.textContent : area.querySelector(".run-line, .run-notice, .warning")?.textContent)?.trim();
+    const next = title || state ? `${title || fallback}${state ? ` · ${state}` : ""}` : line || fallback;
+    if (label.textContent !== next) label.textContent = next;
+  };
+  update();
+  if (typeof MutationObserver !== "undefined") {
+    new MutationObserver(update).observe(area, { childList: true, characterData: true, subtree: true });
+  }
+}
+
 const session = new ConfigSession(render);
 const taskRecall = new TaskRecall(session.host);
 const runCards = new RunCards(runArea, {

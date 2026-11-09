@@ -1830,3 +1830,7 @@ ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
 formatting, protocol generation, typecheck, lint, script tests, Markdown safety
 and queue consistency pass. Development tools pass 254 tests with 94 skips;
 accessibility passes two tests with 55 Chromium sandbox skips.
+
+## 2026-11-09 — Keep run activity in a compact bottom dock
+
+The side panel now scrolls its page content independently of a bottom activity area. General notices, summary runs, task runs, and Capture Site AI draft progress or notices appear there as collapsed rows with a title and current state. Expanding a row reveals its existing details and actions. The dock and streamed text have bounded heights, and the capture strip remains below it. Setup and permission banners remain visible in the page content when action is required.
