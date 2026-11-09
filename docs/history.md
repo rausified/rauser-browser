@@ -1764,3 +1764,17 @@ model now uses real exact URL rules and changes coverage on edit, checking both
 order and history guards over 2,000 sequences of up to 12 attempted steps. It
 checks full identities and requires safe narrowing/widening acceptance plus
 unsafe-edit rejection. All 149 configuration tests and host lib/tests Clippy pass.
+
+Independent review found that compiling an appended suffix as a standalone
+adapter can reject a valid scoped adapter: a scoped `mode` value may be
+supported only by the retained prefix. The overlap proof now compiles both
+complete adapters and checks only the candidate suffix's rule indices through
+the existing `may_overlap` API. A revision-checked save regression reproduces
+the original `scope_bad_value` refusal and verifies the existing page key stays
+unchanged after the safe addition.
+
+Review validation: the full Rust workspace reports 1,674 passed and two ignored;
+workspace build, formatting and Clippy pass. Type checking, lint, all 50 extension
+test files, Markdown neutralization and 13 script test files pass. Development
+tools report 254 tests with 94 sandbox skips; accessibility reports two passed
+and 53 explicit browser skips. The external driver retains browser acceptance.

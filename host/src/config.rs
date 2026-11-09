@@ -3500,11 +3500,7 @@ fn preserves_preceding_recognition(
     // Appending rules is safe only where the new suffix cannot intersect
     // this protected contract. Never infer inclusion from sampled URLs.
     let old_len = earlier["match"].as_array().expect("valid contract").len();
-    let mut suffix = candidate.clone();
-    suffix["match"] = serde_json::Value::Array(
-        candidate["match"].as_array().expect("valid contract")[old_len..].to_vec(),
-    );
-    Ok(!adapter_contracts_overlap(protected, &suffix)?)
+    Ok(!adapter_rules_overlap(protected, candidate, old_len)?)
 }
 
 /// Refuse `candidate` when it overlaps a contract in `earlier` on its origin
@@ -3767,6 +3763,14 @@ fn adapter_contracts_overlap(
     previous: &serde_json::Value,
     candidate: &serde_json::Value,
 ) -> Result<bool> {
+    adapter_rules_overlap(previous, candidate, 0)
+}
+
+fn adapter_rules_overlap(
+    previous: &serde_json::Value,
+    candidate: &serde_json::Value,
+    first_candidate_rule: usize,
+) -> Result<bool> {
     let config = ConfigSnapshot {
         adapters: AdapterDocument {
             format: 1,
@@ -3776,7 +3780,13 @@ fn adapter_contracts_overlap(
     };
     // Every shared URL counts here, declared container fall-throughs included:
     // the history guard has its own, narrower container allowance.
-    Ok(!compile_adapters(&config)?.overlapping_rules().is_empty())
+    // Compile complete adapters: a suffix alone may not produce all scope
+    // values supported by the prefix, even though the full adapter is valid.
+    let document = compile_adapters(&config)?;
+    Ok((0..document.adapters()[0].rule_count()).any(|old_rule| {
+        (first_candidate_rule..document.adapters()[1].rule_count())
+            .any(|new_rule| document.may_overlap((0, old_rule), (1, new_rule)))
+    }))
 }
 
 fn updated_adapter_history(
@@ -6698,6 +6708,43 @@ mod tests {
                 .unwrap()
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn disjoint_growth_keeps_scope_values_supported_by_the_existing_prefix() {
+        let mut leading = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}/{mode:(view)}",
+            "item:{host}/{id}",
+        );
+        leading["modes"] = json!({"view":"view", "files":"review"});
+        leading["scope"] = json!({"mode":["view"]});
+        let later = adapter(
+            "https://work.example",
+            "work.page",
+            "/items/{id:int}/{_}",
+            "page:{host}/{id}",
+        );
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = ConfigStore::for_test(folder.path().join("config.toml"));
+        let revision = store
+            .update(
+                adapter_config(vec![leading.clone(), later.clone()]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        leading["match"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":"/docs/{id:int}/{mode:(files)}"}));
+        let next = adapter_config(vec![leading, later]);
+        validate(&next).unwrap();
+        let url = "https://work.example/items/42/view";
+        let old_key = store.adapter_match(url, None).unwrap().artifact_id;
+        store.update(next, &revision).unwrap().unwrap();
+        assert_eq!(store.adapter_match(url, None).unwrap().artifact_id, old_key);
     }
 
     #[test]
