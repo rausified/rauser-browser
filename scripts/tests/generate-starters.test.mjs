@@ -8,10 +8,10 @@ import test from "node:test";
 
 import {
   appendLock, catalogTypeOrder, checkLock, checkPolicy, checkRegistry, familyClaims, loadFamilies, loadFamilyEntries,
-  renderAdaptersIndex, renderCatalogLine, renderTs, validateFamily,
+  renderAdaptersIndex, renderCatalogLine, renderStarterVectors, renderTs, validateFamily,
 } from "../generate-starters.mjs";
-import { ORIGIN_CASES, STRICT_ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
-import { EXAMPLE_STRICT_FAMILY } from "../../extension/tests/starter-fixtures.mjs";
+import { ORIGIN_CASES, SHIPPED_STRICT_ORIGIN_CASES, STRICT_ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
+import { EXAMPLE_CONTAINER_FIRST_FAMILY, EXAMPLE_STRICT_FAMILY } from "../../extension/tests/starter-fixtures.mjs";
 import { ipcDenied } from "./ipc-guard.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -605,6 +605,49 @@ test("familyClaims agrees with starterKind on the strict-subdomain origins", () 
   }
 });
 
+test("familyClaims agrees with starterKind on the shipped strict-family origins", () => {
+  const families = loadFamilies(REPO);
+  for (const [origin, expected] of SHIPPED_STRICT_ORIGIN_CASES) {
+    const claimants = families.filter((family) => familyClaims(family.origin, origin));
+    assert.ok(claimants.length <= 1, `${origin}: more than one family claims it: ${claimants.map((f) => f.family)}`);
+    assert.equal(claimants[0]?.family ?? null, expected, origin);
+  }
+});
+
+test("an exclude entry ending in * skips every first label with that prefix", () => {
+  const origin = { kind: "subdomain", suffix: ".example.com", labels: 1, exclude: ["www", "up-*"] };
+  assert.equal(familyClaims(origin, "https://up-1.example.com"), false);
+  assert.equal(familyClaims(origin, "https://up.example.com"), true);
+  assert.equal(familyClaims(origin, "https://acme-up-1.example.com"), true);
+  assert.equal(familyClaims(origin, "https://www.example.com"), false);
+  const permissive = { kind: "subdomain", suffix: ".example.com", exclude: ["up-*"] };
+  assert.equal(familyClaims(permissive, "https://up-1.x.example.com"), false); // first label only
+  assert.equal(familyClaims(permissive, "https://x.up-1.example.com"), true);
+});
+
+for (const [bad, why] of [
+  [["*"], "a bare *"],
+  [["fupload-**"], "two stars"],
+  [["f*upload"], "a star not at the end"],
+  [["*fupload"], "a leading star"],
+  [["FUPLOAD-*"], "upper case"],
+  [["fup_load-*"], "a character no DNS label has"],
+  [["-x*"], "a leading hyphen"],
+]) {
+  test(`origin.exclude refuses ${why}`, (t) => {
+    const root = tmpRoot(t);
+    const atlassian = readFamily(root, "atlassian");
+    atlassian.origin.exclude = bad;
+    writeFamily(root, "atlassian", atlassian);
+    const result = run(["--check", "--root", root]);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stdout + result.stderr,
+      /protocol\/starters\/atlassian\.json: origin\.exclude must be a list of lowercase DNS labels or label prefixes ending in a single "\*"/,
+    );
+  });
+}
+
 test("origin.labels must be 1", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
@@ -626,7 +669,7 @@ test("origin.exclude must be a list of lowercase DNS labels", async (t) => {
   assert.equal(result.status, 1);
   assert.match(
     result.stdout + result.stderr,
-    /protocol\/starters\/atlassian\.json: origin\.exclude must be a list of lowercase DNS labels/,
+    /protocol\/starters\/atlassian\.json: origin\.exclude must be a list of lowercase DNS labels or label prefixes ending in a single "\*"/,
   );
 });
 
@@ -719,7 +762,7 @@ test("sample_origin must be on the family's own origin", async (t) => {
   );
 });
 
-test('overlaps[].expect must be "disjoint"', async (t) => {
+test('overlaps[].expect must be "disjoint" or "container_first"', async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
@@ -729,7 +772,7 @@ test('overlaps[].expect must be "disjoint"', async (t) => {
   assert.equal(result.status, 1);
   assert.match(
     result.stdout + result.stderr,
-    /protocol\/starters\/atlassian\.json: overlaps\[0\]\.expect must be "disjoint"/,
+    /protocol\/starters\/atlassian\.json: overlaps\[0\]\.expect must be "disjoint" or "container_first"/,
   );
 });
 
@@ -773,6 +816,136 @@ test("a within container is exempt from the pair-coverage check", async (t) => {
   assert.match(output, /protocol\/starters\/github\.json: github\.pr and github\.issue have no overlaps entry/);
   assert.doesNotMatch(output, /github\.pr and github\.repo have no overlaps entry/);
   assert.doesNotMatch(output, /github\.issue and github\.repo have no overlaps entry/);
+});
+
+// --- Declared container-first overlaps ---------------------------------------
+
+/** The container-first fixture with `edit` applied to a deep copy, and the
+ * problems `validateFamily` reports for it. */
+function containerFirstProblems(edit) {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  edit(family);
+  const problems = [];
+  validateFamily(problems, "nest.json", family);
+  return problems;
+}
+
+test("a container_first pair passes validation", () => {
+  assert.deepEqual(containerFirstProblems(() => {}), []);
+});
+
+test("a container_first pair becomes the family's expected overlap_report pairs, winner first", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  const vectors = JSON.parse(renderStarterVectors([family], family.types.map((type) => type.type)));
+  const report = vectors.cases.find((entry) => entry.id === "overlap_report.starter.nest");
+  assert.deepEqual(report.expect, { pairs: [{ first: [0, 1], second: [1, 0] }] });
+  assert.match(report.why, /container_first/);
+  // A family with only disjoint entries still expects no pair at all.
+  const strict = JSON.parse(renderStarterVectors([EXAMPLE_STRICT_FAMILY], ["strict.item"]));
+  assert.deepEqual(strict.cases.find((entry) => entry.id === "overlap_report.starter.strict").expect, { pairs: [] });
+});
+
+test("a container_first pair re-runs the contained type's own vectors with that type alone", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  const board = {
+    id: "eval.nest.board.roadmap", kind: "evaluate", why: "a board", impls: ["rust", "ts"],
+    url: "https://nest.example.test/s/acme/roadmap",
+    expect: {
+      match: true, adapter: 1, rule: 0, type: "nest.board", captures: { space: "acme", board: "roadmap" },
+      artifact_id: "nest.board:nest.example.test/acme/roadmap", mode: null,
+      within: { type: "nest.space", artifact_id: "nest.space:nest.example.test/s/acme" },
+    },
+  };
+  const winner = {
+    id: "eval.nest.space.settings", kind: "evaluate", why: "a space's built-in page", impls: ["rust", "ts"],
+    url: "https://nest.example.test/s/acme/settings",
+    expect: {
+      match: true, adapter: 0, rule: 1, type: "nest.space", captures: { space: "acme" },
+      artifact_id: "nest.space:nest.example.test/s/acme", mode: null,
+    },
+  };
+  const miss = { id: "eval.nest.board.miss", kind: "evaluate", why: "no board", impls: ["rust", "ts"],
+    url: "https://nest.example.test/x", expect: { match: false, reason: "no_rule" } };
+  family.types[0].vectors = [winner];
+  family.types[1].vectors = [board, miss];
+  const vectors = JSON.parse(renderStarterVectors([family], family.types.map((type) => type.type)));
+  // The fixture holds only the contained type, without its within: the
+  // runtime drops a within whose container is not configured.
+  assert.deepEqual(vectors.fixtures["starter:nest/nest.board"], {
+    format: 1,
+    artifacts: [{ type: "nest.board", origin: "https://nest.example.test", match: [{ path: "/s/{space:name}/{board:name}" }],
+      id: "nest.board:{host}/{space}/{board}" }],
+  });
+  const alone = vectors.cases.filter((entry) => entry.doc?.$fixture === "starter:nest/nest.board");
+  assert.deepEqual(alone.map((entry) => entry.id), ["eval.nest.board.roadmap.alone"]);
+  const { within: _within, ...unlinked } = board.expect;
+  assert.deepEqual(alone[0].expect, { ...unlinked, adapter: 0 });
+  assert.deepEqual(alone[0].impls, ["rust", "ts"]);
+  assert.match(alone[0].why, /without nest\.space/);
+  // A family without a container_first entry gets no extra fixture.
+  const strict = JSON.parse(renderStarterVectors([EXAMPLE_STRICT_FAMILY], ["strict.item"]));
+  assert.deepEqual(Object.keys(strict.fixtures), ["starter:strict"]);
+});
+
+test("expected pairs are sorted by first, then second, and span several entries", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  family.types[0].adapter.match.push({ path: "/s/{space:name}/(trash)" });
+  family.overlaps[0].pairs = [[2, 0], [1, 0]];
+  const vectors = JSON.parse(renderStarterVectors([family], family.types.map((type) => type.type)));
+  const report = vectors.cases.find((entry) => entry.id === "overlap_report.starter.nest");
+  assert.deepEqual(report.expect.pairs, [{ first: [0, 1], second: [1, 0] }, { first: [0, 2], second: [1, 0] }]);
+});
+
+test('container_first needs b within a', () => {
+  const problems = containerFirstProblems((family) => { delete family.types[1].adapter.within; });
+  assert.ok(problems.includes('nest.json: overlaps[0].expect "container_first" needs nest.board within nest.space'), problems.join("\n"));
+  // The contained type winning is today's within fall-through, never declared.
+  const reversed = containerFirstProblems((family) => {
+    family.overlaps[0] = { a: "nest.board", b: "nest.space", expect: "container_first", pairs: [[0, 1]] };
+  });
+  assert.ok(reversed.includes('nest.json: overlaps[0].expect "container_first" needs nest.space within nest.board'), reversed.join("\n"));
+});
+
+test("container_first needs b's within.id to be a's own id template", () => {
+  const problems = containerFirstProblems((family) => { family.types[1].adapter.within.id = "nest.space:{host}/{space}"; });
+  assert.ok(problems.includes('nest.json: overlaps[0].expect "container_first" needs nest.board\'s within.id to be nest.space\'s adapter.id'), problems.join("\n"));
+});
+
+test("container_first needs a before b", () => {
+  const problems = containerFirstProblems((family) => { family.types.reverse(); });
+  assert.ok(problems.includes('nest.json: overlaps[0].expect "container_first" needs nest.space before nest.board'), problems.join("\n"));
+});
+
+test("container_first rule pairs must name real rules", () => {
+  const outOfRange = containerFirstProblems((family) => { family.overlaps[0].pairs = [[2, 0]]; });
+  assert.ok(outOfRange.includes("nest.json: overlaps[0].pairs[0] names no rule"), outOfRange.join("\n"));
+  const malformed = containerFirstProblems((family) => { family.overlaps[0].pairs = [[1]]; });
+  assert.ok(malformed.includes("nest.json: overlaps[0].pairs[0] must be [<a rule>, <b rule>]"), malformed.join("\n"));
+  const empty = containerFirstProblems((family) => { family.overlaps[0].pairs = []; });
+  assert.ok(empty.includes('nest.json: overlaps[0].pairs must list at least one rule pair for "container_first"'), empty.join("\n"));
+  const missing = containerFirstProblems((family) => { delete family.overlaps[0].pairs; });
+  assert.ok(missing.includes('nest.json: overlaps[0].pairs must list at least one rule pair for "container_first"'), missing.join("\n"));
+  const repeated = containerFirstProblems((family) => { family.overlaps[0].pairs = [[1, 0], [1, 0]]; });
+  assert.ok(repeated.includes("nest.json: overlaps[0].pairs[1] repeats a rule pair"), repeated.join("\n"));
+});
+
+test('a disjoint entry may not carry pairs', () => {
+  const problems = containerFirstProblems((family) => { family.overlaps[0].expect = "disjoint"; });
+  assert.ok(problems.includes('nest.json: overlaps[0].pairs is only for "container_first"'), problems.join("\n"));
+});
+
+test("a type pair is declared at most once", () => {
+  const problems = containerFirstProblems((family) => {
+    family.overlaps.push({ a: "nest.board", b: "nest.space", expect: "disjoint" });
+  });
+  assert.ok(problems.includes("nest.json: overlaps[1] declares nest.board and nest.space again"), problems.join("\n"));
+});
+
+test("renderTs carries each family's overlaps for the runtime order and the settings warnings", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  const text = renderTs([family], family.types.map((type) => type.type));
+  assert.match(text, /"overlaps": \[\s*\{\s*"a": "nest.space",\s*"b": "nest.board",\s*"expect": "container_first",\s*"pairs": \[/);
+  assert.match(text, /overlaps\?: StarterOverlapData\[\];/);
 });
 
 test('a vector must not carry "doc"', async (t) => {
@@ -913,6 +1086,117 @@ test("a suffix nested inside another suffix always collides (check 6)", async (t
     /protocol\/starters\/sharepoint\.json: origin overlaps protocol\/starters\/onedrive\.json/,
   );
 });
+
+/** A one-type development family on `origin`, for the collision tests below. */
+function originFamily(name, origin, sampleOrigin) {
+  return {
+    family: name,
+    display_name: name,
+    review_prompt: null,
+    origin,
+    scope: null,
+    sample_origin: sampleOrigin,
+    sample_scope: [],
+    overlaps: [],
+    types: [{
+      type: `${name}.page`,
+      key: `${name}.page:{origin}`,
+      label: "Pages",
+      label_variants: [],
+      description: "An example page.",
+      record_label: null,
+      example_path: null,
+      adapter: { type: `${name}.page`, match: [{ path: "/p/{id:int}" }], id: `${name}.page:{host}/{id}` },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: `docs/adapters/${name}.page.md`,
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    }],
+  };
+}
+
+/** checkPolicy's collision problems for two synthetic families. */
+function collisions(a, b) {
+  return checkPolicy([{ file: "a.json", family: a }, { file: "b.json", family: b }], { shared_origins: {} })
+    .filter((problem) => problem.includes("origin overlaps"));
+}
+
+test("a labels: 1 family coexists with a family on a deeper suffix (check 6)", () => {
+  const shallow = originFamily("shallow", { kind: "subdomain", suffix: ".example.com", labels: 1 }, "https://acme.example.com");
+  const deep = originFamily("deep", { kind: "subdomain", suffix: ".ideas.example.com", labels: 1 }, "https://acme.ideas.example.com");
+  assert.deepEqual(collisions(shallow, deep), []);
+  assert.deepEqual(collisions(deep, shallow), []);
+  // The deeper family need not itself be strict: every host it claims has
+  // at least two labels before the shallow suffix.
+  const deepPermissive = { ...deep, origin: { kind: "subdomain", suffix: ".ideas.example.com" } };
+  assert.deepEqual(collisions(shallow, deepPermissive), []);
+});
+
+test("a permissive family still collides with a deeper suffix, whatever exclude says (check 6)", () => {
+  const shallow = originFamily("shallow", { kind: "subdomain", suffix: ".example.com", exclude: ["ideas"] }, "https://acme.example.com");
+  const deep = originFamily("deep", { kind: "subdomain", suffix: ".ideas.example.com", labels: 1 }, "https://acme.ideas.example.com");
+  assert.deepEqual(collisions(shallow, deep), ["b.json: origin overlaps a.json"]);
+  // labels: 1 only on the deeper family proves nothing about the shallow one.
+  assert.deepEqual(collisions(deep, shallow), ["b.json: origin overlaps a.json"]);
+});
+
+test("two families on the same suffix always collide, even both labels: 1 (check 6)", () => {
+  const one = originFamily("one", { kind: "subdomain", suffix: ".example.com", labels: 1, exclude: ["www"] }, "https://acme.example.com");
+  const two = originFamily("two", { kind: "subdomain", suffix: ".example.com", labels: 1 }, "https://acme.example.com");
+  assert.deepEqual(collisions(one, two), ["b.json: origin overlaps a.json"]);
+});
+
+test("a multi-origin family collides through any of its members (check 6)", () => {
+  const multi = originFamily("multi", {
+    kind: "any",
+    of: [
+      { kind: "exact", origin: "https://app.example.com" },
+      { kind: "subdomain", suffix: ".ent.example.com", labels: 1 },
+    ],
+  }, "https://app.example.com");
+  const exact = originFamily("exact", { kind: "exact", origin: "https://app.example.com" }, "https://app.example.com");
+  assert.deepEqual(collisions(multi, exact), ["b.json: origin overlaps a.json"]);
+  const nested = originFamily("nested", { kind: "subdomain", suffix: ".x.ent.example.com" }, "https://acme.x.ent.example.com");
+  assert.deepEqual(collisions(multi, nested), []); // labels: 1 on the member proves it
+  const unrelated = originFamily("unrelated", { kind: "subdomain", suffix: ".other.example" }, "https://acme.other.example");
+  assert.deepEqual(collisions(multi, unrelated), []);
+});
+
+test("a multi-origin family claims an origin any member claims", () => {
+  const origin = {
+    kind: "any",
+    of: [
+      { kind: "exact", origin: "https://app.example.com" },
+      { kind: "subdomain", suffix: ".app.example.com", labels: 1, exclude: ["up-*"] },
+    ],
+  };
+  assert.equal(familyClaims(origin, "https://app.example.com"), true);
+  assert.equal(familyClaims(origin, "https://acme.app.example.com"), true);
+  assert.equal(familyClaims(origin, "https://up-1.app.example.com"), false);
+  assert.equal(familyClaims(origin, "https://example.com"), false);
+});
+
+for (const [origin, message, why] of [
+  [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }] }, /origin\.of must list 2 or more origins/, "one member"],
+  [{ kind: "any", of: "x" }, /origin\.of must list 2 or more origins/, "a non-array"],
+  [{ kind: "any" }, /origin\.of is required/, "no of"],
+  [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }, { kind: "any", of: [] }] }, /origin\.of\[1\]\.kind must be "exact" or "subdomain"/, "a nested any"],
+  [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }, { kind: "subdomain", suffix: "bad" }] }, /origin\.of\[1\]\.suffix must start with/, "a bad member"],
+  [{ kind: "any", of: [{ kind: "subdomain", suffix: ".example.com" }, { kind: "subdomain", suffix: ".a.example.com", labels: 1 }] }, /origin\.of\[1\] overlaps origin\.of\[0\]/, "overlapping members"],
+  [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }, { kind: "exact", origin: "https://b.example.com" }], extra: 1 }, /origin unknown field "extra"/, "an unknown key"],
+]) {
+  test(`a multi-origin family refuses ${why}`, (t) => {
+    const root = tmpRoot(t);
+    const atlassian = readFamily(root, "atlassian");
+    atlassian.origin = origin;
+    writeFamily(root, "atlassian", atlassian);
+    const result = run(["--check", "--root", root]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout + result.stderr, new RegExp(`protocol/starters/atlassian\\.json: ${message.source}`));
+  });
+}
 
 test("an exact origin collides with a subdomain family that would claim it (check 6)", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;

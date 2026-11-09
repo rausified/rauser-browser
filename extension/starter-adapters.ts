@@ -1,3 +1,4 @@
+import type { AdapterWarning } from "../protocol/ts/generated.js";
 import type { AdapterObject } from "./adapter-review.js";
 import { canonicalCapture, compileDocument } from "./adapter-templates.js";
 import { canonicalJson } from "./capture-site-handoff.js";
@@ -6,6 +7,8 @@ import {
   STARTER_FAMILY_IDS,
   type StarterFamilyData,
   type StarterFamilyId,
+  type StarterOriginData,
+  type StarterOverlapData,
   type StarterTypeData,
 } from "./starter-families.generated.js";
 
@@ -45,13 +48,16 @@ const GITHUB_ORIGIN = "https://github.com";
 
 // Derived from STARTER_FAMILIES rather than hardcoded: the GitHub family's
 // container type (today, "github.repo") and the sibling types that declare a
-// `within` naming it (today, github.pr and github.issue). Falls back to
-// nothing if no family declares a `within`, so `linkPlan` below simply finds
-// no containers to link.
+// `within` naming it (today, github.pr and github.issue). Only the GitHub
+// family is read: linking existing rules, and its settings copy, are about
+// pull requests, issues and repositories, and another family's container
+// (Splunk's apps) must not replace GitHub's. Falls back to nothing if GitHub
+// declares no `within`, so `linkPlan` below simply finds no containers to link.
 const { linkableToContainer: LINKABLE_TO_REPOSITORY, containerType: GITHUB_REPOSITORY_TYPE } = (() => {
   const linkableToContainer = new Set<string>();
   let containerType: string | null = null;
   for (const family of STARTER_FAMILIES) {
+    if (family.family !== "github") continue;
     for (const type of family.types) {
       const within = (type.adapter as Record<string, unknown>).within;
       if (!within || typeof within !== "object" || Array.isArray(within)) continue;
@@ -76,6 +82,19 @@ function secureHostname(origin: string): string | null {
   }
 }
 
+/** Whether a subdomain origin's `exclude` list refuses a host whose first
+ * label is `label`: an entry is a whole label (`www`) or a label prefix
+ * ending in one `*` (`fupload-*`). Same rule as the generator's `excludes`. */
+function excludes(exclude: readonly string[], label: string): boolean {
+  return exclude.some((entry) => (entry.endsWith("*") ? label.startsWith(entry.slice(0, -1)) : label === entry));
+}
+
+/** The single-kind origins `family` is offered on: a multi-origin family's
+ * (`kind: "any"`) `of` members, otherwise its one `origin`. */
+function originMembers(family: StarterFamilyData): readonly StarterOriginData[] {
+  return family.origin.kind === "any" ? family.origin.of : [family.origin];
+}
+
 /** The starter family `origin` belongs to, from the test-seam-aware
  * `families` list: today's private `familyFor`, exported so Capture Site and
  * the gallery (Tasks 2-4) can build their UI from the family's own data
@@ -84,25 +103,33 @@ function secureHostname(origin: string): string | null {
  * permissive rule holds, `prefix` is the host's labels before the suffix.
  * `labels: 1` refuses a `prefix` with more than one label (a dot in it);
  * `exclude` refuses a `prefix` whose first label names an excluded product
- * host (`www`, `signin`). Same rule as the generator's `familyClaims`. */
+ * host (`www`, `signin`) or starts with an excluded prefix (`fupload-*`).
+ * A multi-origin family (`kind: "any"`, e.g. Box's personal, company and
+ * enterprise hosts) is tried through each of its members. Exact origins
+ * win first, then the longest matching suffix. Same rule as the
+ * generator's `familyClaims`. */
 export function starterFamily(origin: string): StarterFamilyData | null {
   for (const family of families) {
-    if (family.origin.kind === "exact" && origin === family.origin.origin) return family;
+    for (const member of originMembers(family)) {
+      if (member.kind === "exact" && origin === member.origin) return family;
+    }
   }
   const host = secureHostname(origin);
   if (!host) return null;
   let best: StarterFamilyData | null = null;
   let bestSuffixLength = -1;
   for (const family of families) {
-    if (family.origin.kind !== "subdomain") continue;
-    const { suffix, labels, exclude } = family.origin;
-    if (!(host.endsWith(suffix) && host !== suffix.slice(1))) continue;
-    const prefix = host.slice(0, -suffix.length);
-    if (labels && prefix.includes(".")) continue;
-    if (exclude && exclude.includes(prefix.split(".")[0] ?? prefix)) continue;
-    if (suffix.length > bestSuffixLength) {
-      best = family;
-      bestSuffixLength = suffix.length;
+    for (const member of originMembers(family)) {
+      if (member.kind !== "subdomain") continue;
+      const { suffix, labels, exclude } = member;
+      if (!(host.endsWith(suffix) && host !== suffix.slice(1))) continue;
+      const prefix = host.slice(0, -suffix.length);
+      if (labels && prefix.includes(".")) continue;
+      if (exclude && excludes(exclude, prefix.split(".")[0] ?? prefix)) continue;
+      if (suffix.length > bestSuffixLength) {
+        best = family;
+        bestSuffixLength = suffix.length;
+      }
     }
   }
   return best;
@@ -573,6 +600,37 @@ export function linkedToPresentContainers<T extends AdapterObject>(additions: T[
   });
 }
 
+/** The `"container_first"` overlap (protocol/starters/README.md) the starter
+ * family claiming `origin` declares for `container` over `contained`, or
+ * `null`. Keyed on the family's own origins and types, so an adapter that
+ * merely reuses a starter's type name on another site is unaffected. */
+function containerFirst(origin: unknown, container: unknown, contained: unknown): StarterOverlapData | null {
+  if (typeof origin !== "string") return null;
+  return starterFamily(origin)?.overlaps?.find((entry) =>
+    entry.expect === "container_first" && entry.a === container && entry.b === contained) ?? null;
+}
+
+/** Whether the starter family claiming `origin` declares any
+ * `"container_first"` overlap. */
+export function declaresContainerFirst(origin: string): boolean {
+  return starterFamily(origin)?.overlaps?.some((entry) => entry.expect === "container_first") ?? false;
+}
+
+/** Whether `container` ahead of `contained` is a starter family's declared
+ * `"container_first"` pair as the family ships it: same origin, the
+ * family's own types, and both adapters' rules exactly as shipped, every
+ * `match` rule and `path_case` (`shippedRules`). `orderContainedFirst` keeps
+ * such a pair container first, and `reviewableOverlaps` hides its declared
+ * rule pairs. Once the user edits either adapter (widening any app rule to a
+ * catch-all, adding a rule, editing the dashboard rule), the declaration no
+ * longer describes it, and the ordinary contained-first order and warnings
+ * apply. */
+export function isContainerFirstPair(container: AdapterObject, contained: AdapterObject): boolean {
+  if (container.origin !== contained.origin) return false;
+  return containerFirst(container.origin, container.type, contained.type) !== null
+    && shippedRules(container) && shippedRules(contained);
+}
+
 /** A stable reorder so that, on each origin, every adapter declaring
  * `within.type` T comes before every adapter of type T. First match wins
  * (adapter-templates.md §3), so a container catch-all placed first would
@@ -580,12 +638,23 @@ export function linkedToPresentContainers<T extends AdapterObject>(additions: T[
  * except that a contained adapter found after its container moves up to just
  * ahead of it (recursively, for nested containers). Adapters on other
  * origins, and an already-ordered list, are untouched. Members of a cycle of
- * `within` declarations, which cannot all be satisfied, keep their order. */
+ * `within` declarations, which cannot all be satisfied, keep their order.
+ *
+ * The one exception is a starter family's declared `"container_first"` pair
+ * (Splunk's apps and dashboards): there the container's own listed pages
+ * must win, so on that family's origins the container goes ahead of the
+ * contained type instead, whether or not the contained adapter still carries
+ * its `within` (a dashboard saved before its app has none), while the
+ * container's declared rules are unedited (`isContainerFirstPair`). */
 export function orderContainedFirst<T extends AdapterObject>(artifacts: T[]): T[] {
   const containers = artifacts.map(containerType);
-  // inside[i]: the adapters that sit directly within adapter i on its origin.
-  const inside = artifacts.map((adapter) => artifacts.flatMap((other, at) =>
-    containers[at] === adapter.type && other.origin === adapter.origin ? [at] : []));
+  // ahead[i]: the adapters on adapter i's origin that must come before it.
+  const ahead = artifacts.map((adapter, index) => artifacts.flatMap((other, at) => {
+    if (at === index || other.origin !== adapter.origin) return [];
+    if (isContainerFirstPair(other, adapter)) return [at];
+    const inside = containers[at] === adapter.type && !isContainerFirstPair(adapter, other);
+    return inside ? [at] : [];
+  }));
   const reaches = (from: number, to: number): boolean => {
     const seen = new Set<number>();
     const stack = [from];
@@ -594,7 +663,7 @@ export function orderContainedFirst<T extends AdapterObject>(artifacts: T[]): T[
       if (at === to) return true;
       if (seen.has(at)) continue;
       seen.add(at);
-      stack.push(...inside[at]!);
+      stack.push(...ahead[at]!);
     }
     return false;
   };
@@ -603,11 +672,41 @@ export function orderContainedFirst<T extends AdapterObject>(artifacts: T[]): T[
   const place = (index: number): void => {
     if (placed[index]) return;
     placed[index] = true;
-    // A contained adapter that also (transitively) contains this one is in a
-    // cycle; it is not pulled ahead, so the cycle keeps its order.
-    for (const at of inside[index]!) if (!reaches(at, index)) place(at);
+    // An adapter that must come first but also (transitively) needs this one
+    // first is in a cycle; it is not pulled ahead, so the cycle keeps its order.
+    for (const at of ahead[index]!) if (!reaches(at, index)) place(at);
     ordered.push(artifacts[index]!);
   };
   artifacts.forEach((_adapter, index) => place(index));
   return ordered;
+}
+
+/** `warnings` without the overlaps a starter family declares on purpose: a
+ * `"container_first"` rule pair, with the container's rule first (so it
+ * wins), both rules exactly as the starter ships them (rule text and
+ * `path_case`), on the family's own origin. Anything else, including the
+ * same pair after either rule is edited, is still a warning to review. */
+export function reviewableOverlaps(
+  warnings: readonly AdapterWarning[],
+  adapters: readonly AdapterObject[],
+): AdapterWarning[] {
+  return warnings.filter((warning) => !declaredOverlap(warning, adapters));
+}
+
+function declaredOverlap(warning: AdapterWarning, adapters: readonly AdapterObject[]): boolean {
+  const first = adapters[warning.first_adapter];
+  const second = adapters[warning.second_adapter];
+  if (!first || !second || !isContainerFirstPair(first, second)) return false;
+  const entry = containerFirst(first.origin, first.type, second.type);
+  return entry?.pairs.some(([a, b]) => a === warning.first_rule && b === warning.second_rule) ?? false;
+}
+
+/** Whether `adapter`'s `match` rules and `path_case` are exactly what its
+ * starter type ships. Other keys (a `within` dropped because the container
+ * was not chosen, say) do not change which URLs it claims. */
+function shippedRules(adapter: AdapterObject): boolean {
+  const shipped = typeof adapter.type === "string" ? starterType(adapter.type)?.adapter : undefined;
+  if (!shipped || !Array.isArray(adapter.match)) return false;
+  return (adapter.path_case ?? "sensitive") === (shipped.path_case ?? "sensitive")
+    && canonicalJson(adapter.match) === canonicalJson(shipped.match);
 }

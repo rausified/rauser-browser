@@ -22,8 +22,17 @@ source of truth for the current shape.
   // "labels": 1, "exclude": ["www", "signin"] } claims exactly one label before the
   // suffix (not "a.b.strict.test") and skips the named product hosts (not
   // "www.strict.test" or "signin.strict.test"); both keys are optional and only
-  // allowed on a subdomain origin. Atlassian and SharePoint stay permissive (any
-  // prefix, any number of labels) — strict matching is opt-in per family.
+  // allowed on a subdomain origin. An exclude entry ending in one "*" is a
+  // first-label prefix: "fupload-*" skips "fupload-12.strict.test" (but not
+  // "fupload.strict.test"). The prefix must be non-empty and the "*" may only
+  // come last ("*", "*wss" and "f*load" are refused). Atlassian and SharePoint
+  // stay permissive (any prefix, any number of labels) — strict matching is
+  // opt-in per family.
+  // or, for a product served on several hosts, a multi-origin family:
+  // { "kind": "any", "of": [{ "kind": "exact", "origin": "https://app.box.com" },
+  //   { "kind": "subdomain", "suffix": ".app.box.com", "labels": 1 }, ...] }
+  // claims an origin when any member does. `of` lists two or more exact or
+  // subdomain origins (no nested "any"), none overlapping another.
   "scope": null,
   // or one of the three scope kinds below
   "sample_origin": "https://acme.atlassian.net",  // must sit on the family's own origin
@@ -119,11 +128,68 @@ same rule a recorded sample's `url` follows, and `sample_scope` is non-empty
 exactly when `scope` needs account values (`github_org` or `tenant_name`).
 
 `overlaps` declares, for every pair of the family's types that is not one the
-other's `within` container, whether their rules may overlap: today, only
-`"disjoint"` is accepted. The generator refuses a missing pair, naming both
-types, and refuses an `a`/`b` that does not name a type in the family. Each
-declared pair becomes the family's single `overlap_report.starter.<family>`
-case, expecting `{"pairs": []}`.
+other's `within` container, whether their rules may overlap. The generator
+refuses a missing pair, naming both types, and refuses an `a`/`b` that does
+not name a type in the family or a pair declared twice. `expect` is one of:
+
+- `"disjoint"`: no URL matches both types' rules.
+- `"container_first"`: `b` declares `within` `a` with `a`'s own ID template,
+  `a` is listed before `b` in `types`, and `pairs` lists every
+  `[<a rule>, <b rule>]` that may overlap. Each listed pair is intended, and
+  `a` wins it: the container has pages of its own that `b`'s rule would
+  otherwise claim. Splunk is the case: `/<locale>/app/<app>/search` is the
+  app's Search page, but `splunk.dashboard`'s `/{_}/app/{app}/{view:name}`
+  matches it too, and format 1 has no negation.
+
+The declared pairs become the family's single `overlap_report.starter.<family>`
+case: `{"pairs": []}` for a family with only disjoint entries, otherwise
+exactly the container-first pairs, container first, in the engine's order.
+Any other rule pair that may overlap fails the engine vectors, so an
+undeclared overlap is refused when the family is built. For each
+container-first entry the generator also writes a `starter:<family>/<b>`
+fixture with `b` alone (no `within`, as the runtime saves it when the
+container is not chosen) and re-runs each of `b`'s matching `evaluate`
+vectors against it as `<id>.alone`: `b`'s own pages stay `b`'s.
+
+At runtime the declaration is read from the bundled family, keyed on the
+family's own origins (an adapter that reuses the type name elsewhere is
+unaffected):
+
+- `orderContainedFirst` (`extension/starter-adapters.ts`) puts `a` ahead of
+  `b` on that origin on every save, whether or not `b` still carries its
+  `within`, so `a` wins in both engines (first match wins,
+  `adapter-templates.md` §3). Settings refuses a move that would reverse
+  them. This holds only while `a`'s rules named in `pairs` are exactly as
+  shipped: once the user edits one (widening it to a catch-all, say), the
+  ordinary contained-first order applies, so `b`'s own pages stay `b`'s.
+- Settings leaves the host's warning for a declared pair out of the overlap
+  list, but only while both adapters are exactly as the starter ships them
+  (every `match` rule and `path_case`) and `a` comes first. One predicate,
+  `isContainerFirstPair`, decides both this and the order above. An edited
+  rule on either adapter, a pair not in `pairs`, or the pair on another
+  origin is warned about and ordered as before.
+- Restoring recorded rules (`site_restore`) still refuses any overlap, a
+  declared pair included, because recorded contracts carry no family. On a
+  family that declares `"container_first"`, Capture Site treats that one
+  refusal as "offer the starter instead": it says why, and offers the
+  shipped starter. The host checks the starter against every recorded
+  contract before saving and again on save, so a recorded identity the
+  starter would change is still refused. Any other restore refusal still
+  blocks the starter. Re-adding a removed container and its contained type
+  in one save is allowed, because the host treats a recorded contract that
+  the save puts back exactly as live again, not retired.
+- Nothing else changes: user-written adapters keep the ordinary §10.3
+  warning, and agent drafts still drop an overlapping rule.
+- A contained adapter saved before its container has no `within`, and
+  adding the container later does not link it: existing-rule linking is
+  GitHub's only. Its time does not roll up into the container until it is
+  removed and chosen again with the container.
+
+Why a declaration in the family file, not in the format: the overlap is a
+property of how one vendor lays out its URLs, reviewed when the family is
+reviewed. Putting it in the format (an adapter-level `precedence` key, say)
+would let any saved or drafted adapter claim a winner, which is what the
+overlap warning exists to stop.
 
 Each type's own `vectors` are `protocol/adapter-templates/vectors.json`
 (`adapter-templates.md` §12) cases for that type, minus `doc`: the generator
@@ -183,11 +249,18 @@ so a real cross-file collision is never hidden behind an unrelated typo.
 **Shared-origin policy** (a family's `origin` against
 `protocol/capture-site/catalog.json`'s `shared_origins`):
 
-- **Origin collisions.** Two families' origins may not overlap: a subdomain
-  suffix inside another suffix always collides, whatever `labels` or
-  `exclude` say; an exact origin collides with a suffix family only when
-  that family would claim it (`familyClaims`); a repeated exact origin
-  always collides. The problem is reported on whichever file sorts later:
+- **Origin collisions.** Two families' origins may not overlap. Two
+  subdomain families on the same suffix always collide, whatever `labels`
+  or `exclude` say. A suffix nested inside another (`.ideas.aha.io` inside
+  `.aha.io`) collides unless the shallower family has `labels: 1`: every
+  host the deeper family claims has at least two labels before the
+  shallower suffix, which `labels: 1` refuses, so the two are provably
+  disjoint (`aha` and `aha-ideas` rely on this). `exclude` never proves it,
+  and `labels: 1` on only the deeper family proves nothing. An exact origin
+  collides with a suffix family only when that family would claim it
+  (`familyClaims`); a repeated exact origin always collides. A multi-origin
+  family collides when any one of its members does. The problem is
+  reported on whichever file sorts later:
   `<file>: origin overlaps <other file>`.
 - **A shared origin always needs account values.** Any `shared_origins` entry
   this family's `origin` claims — its own exact origin, or, for a subdomain

@@ -48,6 +48,9 @@ export type StarterScopeData =
   | { kind: "github_org" }
   | { kind: "tenant_name"; max: number; label: string; placeholder: string }
   | { kind: "unscoped"; notice: string };
+export type StarterOriginData =
+  | { kind: "exact"; origin: string }
+  | { kind: "subdomain"; suffix: string; labels?: 1; exclude?: string[] };
 export interface StarterTypeData {
   type: string; key: string; label: string;
   label_variants: { host_suffix: string; label: string }[];
@@ -59,12 +62,17 @@ export interface StarterTypeData {
   status: { state: "certified" | "development"; method: "live" | "history" | null; checked_on: string | null; checked_by: string | null };
   docs: string;
 }
+/** A declared container-first overlap (protocol/starters/README.md): a (the
+ * container) is ordered before b (a type within it) on every origin, and each
+ * [a rule, b rule] in pairs is an intended overlap that a wins. */
+export interface StarterOverlapData { a: string; b: string; expect: "container_first"; pairs: [number, number][] }
 export interface StarterFamilyData {
   family: StarterFamilyId;
   display_name: string;
   review_prompt: string | null;
-  origin: { kind: "exact"; origin: string } | { kind: "subdomain"; suffix: string; labels?: 1; exclude?: string[] };
+  origin: StarterOriginData | { kind: "any"; of: StarterOriginData[] };
   scope: StarterScopeData | null;
+  overlaps?: StarterOverlapData[];
   types: StarterTypeData[];
 }
 `;
@@ -117,9 +125,15 @@ function isPlainObject(value) {
  * -suffix.length)`, the labels between the host and the suffix. `labels: 1`
  * refuses a `prefix` with more than one label (a dot in it); `exclude`
  * refuses a `prefix` whose first label (its leftmost, nearest the host's
- * start) names one of the excluded product hosts (`www`, `signin`). */
+ * start) names one of the excluded product hosts (`www`, `signin`), or
+ * starts with an excluded prefix (an entry ending in `*`, `fupload-*`;
+ * `excludes`). A multi-origin family (`kind: "any"`) claims `origin` when
+ * any one of its `of` members does. */
 export function familyClaims(familyOrigin, origin) {
   if (!isPlainObject(familyOrigin)) return false;
+  if (familyOrigin.kind === "any") {
+    return Array.isArray(familyOrigin.of) && familyOrigin.of.some((member) => familyClaims(member, origin));
+  }
   if (familyOrigin.kind === "exact") return origin === familyOrigin.origin;
   if (familyOrigin.kind !== "subdomain") return false;
   let url;
@@ -134,8 +148,24 @@ export function familyClaims(familyOrigin, origin) {
   if (!(host.endsWith(suffix) && host !== suffix.slice(1))) return false;
   const prefix = host.slice(0, -suffix.length);
   if (familyOrigin.labels && prefix.includes(".")) return false;
-  if (familyOrigin.exclude && familyOrigin.exclude.includes(prefix.split(".")[0])) return false;
+  if (familyOrigin.exclude && excludes(familyOrigin.exclude, prefix.split(".")[0])) return false;
   return true;
+}
+
+/** Whether a subdomain origin's `exclude` list refuses a host whose first
+ * label is `label`: an entry is either a whole label (`www`, equal) or a
+ * label prefix ending in a single `*` (`fupload-*`, `label` starts with
+ * `fupload-`). Same rule as `excludes` in extension/starter-adapters.ts. */
+export function excludes(exclude, label) {
+  return exclude.some((entry) => (entry.endsWith("*") ? label.startsWith(entry.slice(0, -1)) : label === entry));
+}
+
+/** The single-kind origins a family's `origin` is made of: its `of` members
+ * for a multi-origin (`kind: "any"`) family, otherwise just `origin`. */
+function originMembers(origin) {
+  if (!isPlainObject(origin)) return [];
+  if (origin.kind === "any") return Array.isArray(origin.of) ? origin.of.filter(isPlainObject) : [];
+  return [origin];
 }
 
 /** The canonical origin of `url`, or `null` when `url` is not a valid,
@@ -148,9 +178,12 @@ function originOf(url) {
   }
 }
 
-const ORIGIN_KEYS = { exact: ["kind", "origin"], subdomain: ["kind", "suffix", "labels", "exclude"] };
-const ORIGIN_REQUIRED = { exact: ["kind", "origin"], subdomain: ["kind", "suffix"] };
-const DNS_LABEL_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const ORIGIN_KEYS = { exact: ["kind", "origin"], subdomain: ["kind", "suffix", "labels", "exclude"], any: ["kind", "of"] };
+const ORIGIN_REQUIRED = { exact: ["kind", "origin"], subdomain: ["kind", "suffix"], any: ["kind", "of"] };
+// An `exclude` entry: a whole lowercase DNS label (`www`), or a non-empty
+// label prefix followed by one trailing `*` (`fupload-*`, `cdn*`). No other
+// `*` and no empty prefix: `*`, `*cdn`, `f*load` and `fupload-**` are refused.
+const EXCLUDE_ENTRY_RE = /^[a-z0-9]+(-[a-z0-9]+)*(-?\*)?$/;
 const SCOPE_KEYS_BY_KIND = {
   github_org: ["kind"],
   tenant_name: ["kind", "max", "label", "placeholder"],
@@ -172,7 +205,9 @@ const STATUS_KEYS = ["state", "method", "checked_on", "checked_by"];
 const STATUS_STATES = ["certified", "development"];
 const STATUS_METHODS = ["live", "history", null];
 const SAMPLE_KEYS = ["url", "title", "shape", "note"];
-const OVERLAP_KEYS = ["a", "b", "expect"];
+const OVERLAP_KEYS = ["a", "b", "expect", "pairs"];
+const OVERLAP_REQUIRED = ["a", "b", "expect"];
+const OVERLAP_EXPECTS = ["disjoint", "container_first"];
 // The engines' own vectors.rs run_case match arm names every kind they
 // accept; a vector naming any other kind fails inside the engine harness
 // with "unknown kind <k>", not a file-and-field generator message.
@@ -211,26 +246,48 @@ export function isCanonicalHttpsOrigin(origin) {
   }
 }
 
-/** Validates a family's `origin`: `kind` is `"exact"` or `"subdomain"`, with
- * the fields `ORIGIN_KEYS` allows for that kind. A subdomain origin's
+/** Validates a family's `origin`: `kind` is `"exact"`, `"subdomain"` or
+ * `"any"` (a multi-origin family: `of` lists two or more exact or subdomain
+ * origins, none of them overlapping another, each validated the same way;
+ * an `any` cannot nest), with the fields `ORIGIN_KEYS` allows for that kind. A subdomain origin's
  * `labels` and `exclude` (Task 4) are optional, so they are checked for
  * shape, not required: `labels`, when present, must be exactly `1` (the
  * spec allows no other count), and `exclude`, when present, must be an
- * array of single lowercase DNS labels (`www`, not `www.sub` or `WWW`).
+ * array of single lowercase DNS labels (`www`, not `www.sub` or `WWW`) or
+ * label prefixes ending in one `*` (`fupload-*`, `EXCLUDE_ENTRY_RE`).
  * Neither key is allowed on an exact origin; `checkKeys` already reports
  * one there as an unknown field. */
-function validateOrigin(problems, file, origin, where) {
+function validateOrigin(problems, file, origin, where, member = false) {
   if (!isPlainObject(origin)) {
     fail(problems, file, `${where} must be an object`);
     return;
   }
-  const allowed = ORIGIN_KEYS[origin.kind];
+  const allowed = member && origin.kind === "any" ? undefined : ORIGIN_KEYS[origin.kind];
   if (!allowed) {
-    fail(problems, file, `${at(where, "kind")} must be "exact" or "subdomain"`);
+    fail(problems, file, `${at(where, "kind")} must be ${member ? '"exact" or "subdomain"' : '"exact", "subdomain" or "any"'}`);
     return;
   }
   checkKeys(problems, file, origin, allowed, where);
   requireKeys(problems, file, origin, ORIGIN_REQUIRED[origin.kind], where);
+  if (origin.kind === "any" && "of" in origin) {
+    if (!Array.isArray(origin.of) || origin.of.length < 2) {
+      fail(problems, file, `${at(where, "of")} must list 2 or more origins`);
+      return;
+    }
+    const clean = origin.of.map((entry, index) => {
+      const probe = [];
+      validateOrigin(probe, file, entry, `${at(where, "of")}[${index}]`, true);
+      problems.push(...probe);
+      return probe.length === 0;
+    });
+    for (let j = 1; j < origin.of.length; j += 1) {
+      for (let i = 0; i < j; i += 1) {
+        if (clean[i] && clean[j] && originsCollide(origin.of[i], origin.of[j])) {
+          fail(problems, file, `${at(where, "of")}[${j}] overlaps ${at(where, "of")}[${i}]`);
+        }
+      }
+    }
+  }
   if (origin.kind === "subdomain") {
     if ("suffix" in origin && !isValidSubdomainSuffix(origin.suffix)) {
       fail(problems, file, `${at(where, "suffix")} must start with "." and have at least two labels (e.g. ".example.com")`);
@@ -239,8 +296,10 @@ function validateOrigin(problems, file, origin, where) {
       fail(problems, file, `${at(where, "labels")} must be 1`);
     }
     if ("exclude" in origin) {
-      const isValid = Array.isArray(origin.exclude) && origin.exclude.every((label) => typeof label === "string" && DNS_LABEL_RE.test(label));
-      if (!isValid) fail(problems, file, `${at(where, "exclude")} must be a list of lowercase DNS labels`);
+      const isValid = Array.isArray(origin.exclude) && origin.exclude.every((entry) => typeof entry === "string" && EXCLUDE_ENTRY_RE.test(entry));
+      if (!isValid) {
+        fail(problems, file, `${at(where, "exclude")} must be a list of lowercase DNS labels or label prefixes ending in a single "*"`);
+      }
     }
   }
   if (origin.kind === "exact" && "origin" in origin && !isCanonicalHttpsOrigin(origin.origin)) {
@@ -549,7 +608,7 @@ function validateType(problems, file, type, where, origin) {
     fail(problems, file, `${where} must be an object`);
     return;
   }
-  const originKind = isPlainObject(origin) ? origin.kind : null;
+  const hasSubdomain = originMembers(origin).some((member) => member.kind === "subdomain");
   checkKeys(problems, file, type, TYPE_KEYS, where);
   requireKeys(problems, file, type, TYPE_KEYS, where);
   if ("label_variants" in type) validateLabelVariants(problems, file, type.label_variants, at(where, "label_variants"));
@@ -562,7 +621,7 @@ function validateType(problems, file, type, where, origin) {
   if ("docs" in type && typeof type.docs !== "string") fail(problems, file, `${at(where, "docs")} must be a string`);
   if ("key" in type) {
     if (typeof type.key !== "string") fail(problems, file, `${at(where, "key")} must be a string`);
-    else if (originKind === "subdomain" && !type.key.includes("{origin}")) {
+    else if (hasSubdomain && !type.key.includes("{origin}")) {
       fail(problems, file, `${at(where, "key")} must contain "{origin}"`);
     }
   }
@@ -621,11 +680,18 @@ function validateSampleScope(problems, file, family) {
 }
 
 /** `family.overlaps` (Open decision 3; spec §4 check 5): each entry names
- * two of the family's own types and declares the only permitted `expect`,
- * `"disjoint"`. Every unordered pair of the family's types that is not one
- * the other's `within` container (github.repo and the types that declare a
- * `within` naming it, for example) needs exactly one entry naming it, in
- * either order; a pair with no entry is reported `<a> and <b> have no
+ * two of the family's own types and declares how their rules relate.
+ * `"disjoint"`: no URL matches both. `"container_first"`: `b` declares
+ * `within` `a` with `a`'s own ID template, `a` comes before `b` in `types`,
+ * and `pairs` lists every `[a rule, b rule]` pair that may overlap, each one
+ * intended and won by `a` (the container's own pages, such as Splunk's
+ * built-in app views, that `b`'s rule would otherwise claim). The family's
+ * generated `overlap_report` case expects exactly those pairs, so the engine
+ * refuses the family if any other rule pair may overlap. Every unordered pair
+ * of the family's types that is not one the other's `within` container
+ * (github.repo and the types that declare a `within` naming it, for example)
+ * needs exactly one entry naming it, in either order; a container-first pair
+ * may have one. A pair with no entry is reported `<a> and <b> have no
  * overlaps entry`, `<a>` and `<b>` in the family's own type order. */
 function validateOverlaps(problems, file, family) {
   if (!("overlaps" in family)) return;
@@ -643,7 +709,7 @@ function validateOverlaps(problems, file, family) {
       return;
     }
     checkKeys(problems, file, entry, OVERLAP_KEYS, where);
-    requireKeys(problems, file, entry, OVERLAP_KEYS, where);
+    requireKeys(problems, file, entry, OVERLAP_REQUIRED, where);
     if ("a" in entry) {
       if (typeof entry.a !== "string") fail(problems, file, `${at(where, "a")} must be a string`);
       else if (!typeNames.has(entry.a)) fail(problems, file, `${at(where, "a")} "${entry.a}" is not a type in this family`);
@@ -652,10 +718,15 @@ function validateOverlaps(problems, file, family) {
       if (typeof entry.b !== "string") fail(problems, file, `${at(where, "b")} must be a string`);
       else if (!typeNames.has(entry.b)) fail(problems, file, `${at(where, "b")} "${entry.b}" is not a type in this family`);
     }
-    if ("expect" in entry && entry.expect !== "disjoint") {
-      fail(problems, file, `${at(where, "expect")} must be "disjoint"`);
+    if ("expect" in entry && !OVERLAP_EXPECTS.includes(entry.expect)) {
+      fail(problems, file, `${at(where, "expect")} must be "disjoint" or "container_first"`);
     }
+    if (entry.expect === "container_first") validateContainerFirst(problems, file, types, entry, where);
+    else if ("pairs" in entry) fail(problems, file, `${at(where, "pairs")} is only for "container_first"`);
     if (typeof entry.a === "string" && typeof entry.b === "string") {
+      if (declared.has(`${entry.a}\u0000${entry.b}`)) {
+        fail(problems, file, `${where} declares ${entry.a} and ${entry.b} again`);
+      }
       declared.add(`${entry.a}\u0000${entry.b}`);
       declared.add(`${entry.b}\u0000${entry.a}`);
     }
@@ -671,6 +742,45 @@ function validateOverlaps(problems, file, family) {
       }
     }
   }
+}
+
+/** A `"container_first"` entry's own rules (`validateOverlaps`): `b` within
+ * `a` under `a`'s own ID template, so a URL `a` wins is still recorded as
+ * the very container `b`'s artifact would roll up into; `a` listed first,
+ * the order the fixture and the runtime (`orderContainedFirst`) evaluate
+ * in; and a non-empty `pairs` of distinct, in-range rule indices. */
+function validateContainerFirst(problems, file, types, entry, where) {
+  const typeA = types.find((type) => type.type === entry.a);
+  const typeB = types.find((type) => type.type === entry.b);
+  if (typeA && typeB) {
+    const quoted = `${at(where, "expect")} "container_first"`;
+    if (withinTarget(typeB) !== entry.a) {
+      fail(problems, file, `${quoted} needs ${entry.b} within ${entry.a}`);
+    } else if (typeB.adapter.within.id !== typeA.adapter?.id) {
+      fail(problems, file, `${quoted} needs ${entry.b}'s within.id to be ${entry.a}'s adapter.id`);
+    }
+    if (types.indexOf(typeA) > types.indexOf(typeB)) {
+      fail(problems, file, `${quoted} needs ${entry.a} before ${entry.b}`);
+    }
+  }
+  if (!Array.isArray(entry.pairs) || entry.pairs.length === 0) {
+    fail(problems, file, `${at(where, "pairs")} must list at least one rule pair for "container_first"`);
+    return;
+  }
+  const rules = (type) => (Array.isArray(type?.adapter?.match) ? type.adapter.match.length : 0);
+  const seen = new Set();
+  entry.pairs.forEach((pair, index) => {
+    const pairAt = `${at(where, "pairs")}[${index}]`;
+    if (!Array.isArray(pair) || pair.length !== 2 || !pair.every(Number.isInteger)) {
+      fail(problems, file, `${pairAt} must be [<a rule>, <b rule>]`);
+      return;
+    }
+    if (typeA && typeB && (pair[0] < 0 || pair[0] >= rules(typeA) || pair[1] < 0 || pair[1] >= rules(typeB))) {
+      fail(problems, file, `${pairAt} names no rule`);
+    }
+    if (seen.has(`${pair[0]},${pair[1]}`)) fail(problems, file, `${pairAt} repeats a rule pair`);
+    seen.add(`${pair[0]},${pair[1]}`);
+  });
 }
 
 /** `npm run new:starter` (`scripts/new-starter.mjs`) writes the literal
@@ -853,8 +963,19 @@ const TS_EXCLUDED_TYPE_KEYS = ["samples", "samples_shape", "vectors"];
 /** Test-only family-level keys (Open decision 10): the sample origin and
  * scope `synthesizeFixture` uses, and the overlap declarations check 5
  * reads, live in the family file and in `starter-vectors.json`, not in the
- * bundle the extension ships. */
+ * bundle the extension ships. The one exception is a `"container_first"`
+ * overlap, which the extension needs at runtime (`tsOverlaps`). */
 const TS_EXCLUDED_FAMILY_KEYS = ["sample_origin", "sample_scope", "overlaps"];
+
+/** A family's `"container_first"` overlaps, the only ones the extension
+ * reads (`extension/starter-adapters.ts`: `orderContainedFirst` puts the
+ * container first, and `reviewableOverlaps` keeps their intended rule pairs
+ * out of the settings warnings), or `null` when it has none, so families
+ * without one keep their bundle unchanged. */
+function tsOverlaps(family) {
+  const entries = (family.overlaps ?? []).filter((entry) => entry.expect === "container_first");
+  return entries.length ? entries.map(({ a, b, expect, pairs }) => ({ a, b, expect, pairs })) : null;
+}
 
 function omit(obj, keys) {
   const copy = { ...obj };
@@ -874,10 +995,15 @@ export function renderTs(families, starterTypes) {
   const order = starterTypes ?? families.flatMap((family) => family.types.map((type) => type.type));
   const familyIds = familyCatalogOrder(families, order);
   const idsLine = `export const STARTER_FAMILY_IDS = [${familyIds.map((id) => JSON.stringify(id)).join(", ")}] as const; // catalog order\nexport type StarterFamilyId = (typeof STARTER_FAMILY_IDS)[number];\n`;
-  const bundled = families.map((family) => ({
-    ...omit(family, TS_EXCLUDED_FAMILY_KEYS),
-    types: family.types.map((type) => omit(type, TS_EXCLUDED_TYPE_KEYS)),
-  }));
+  const bundled = families.map((family) => {
+    const { types, ...rest } = omit(family, TS_EXCLUDED_FAMILY_KEYS);
+    const overlaps = tsOverlaps(family);
+    return {
+      ...rest,
+      ...(overlaps ? { overlaps } : {}),
+      types: types.map((type) => omit(type, TS_EXCLUDED_TYPE_KEYS)),
+    };
+  });
   return `${HEADER}\n${idsLine}${INTERFACES}\nexport const STARTER_FAMILIES: readonly StarterFamilyData[] = ${JSON.stringify(bundled, null, 2)};\n`;
 }
 
@@ -952,6 +1078,54 @@ function withFixtureDoc(vector, fixtureName) {
   return { id, kind, why, impls, doc: { "$fixture": fixtureName }, ...rest };
 }
 
+/** The `overlap_report` pairs `family`'s fixture must report: one
+ * `{first: [<a's index>, <a rule>], second: [<b's index>, <b rule>]}` per
+ * `"container_first"` rule pair, sorted by `first` then `second` (the
+ * engine's own order). The fixture lists types in source order, and the
+ * container comes first there, so its rule is `first`: the one that wins. */
+function expectedOverlapPairs(family) {
+  const index = new Map(family.types.map((type, at) => [type.type, at]));
+  const pairs = (family.overlaps ?? [])
+    .filter((entry) => entry.expect === "container_first")
+    .flatMap((entry) => entry.pairs.map(([ruleA, ruleB]) => ({
+      first: [index.get(entry.a), ruleA],
+      second: [index.get(entry.b), ruleB],
+    })));
+  const key = (pair) => [...pair.first, ...pair.second];
+  return pairs.sort((x, y) => {
+    const [kx, ky] = [key(x), key(y)];
+    const at = kx.findIndex((value, i) => value !== ky[i]);
+    return at === -1 ? 0 : kx[at] - ky[at];
+  });
+}
+
+/** A `"container_first"` entry's contained type `b` configured alone, as
+ * when a user chooses it without its container: a `starter:<family>/<b>`
+ * fixture holding only `b`'s adapter, with no `within` (the runtime drops a
+ * `within` whose container is not configured, `linkedToPresentContainers`),
+ * and each of `b`'s own matching `evaluate` vectors re-run against it, as
+ * `<id>.alone`. Those URLs must still be `b`'s, from its only adapter and
+ * with no container: the declared order changes which rule wins the
+ * container's pages, never `b`'s own pages. */
+function containedAlone(family, entry) {
+  const fixtureName = `starter:${family.family}/${entry.b}`;
+  const typeB = family.types.find((type) => type.type === entry.b);
+  const { within: _within, ...unlinked } = typeB.adapter;
+  const fixture = synthesizeFixture({ ...family, types: [{ ...typeB, adapter: unlinked }] });
+  const cases = typeB.vectors
+    .filter((vector) => vector.kind === "evaluate" && vector.expect?.match === true && vector.expect.type === entry.b)
+    .map((vector) => {
+      const { within: _vectorWithin, ...expect } = vector.expect;
+      return withFixtureDoc({
+        ...vector,
+        id: `${vector.id}.alone`,
+        why: `generated: ${vector.why}, with ${entry.b} configured without ${entry.a} (${STARTERS_DIR}/${family.family}.json container_first), so no within`,
+        expect: { ...expect, adapter: 0 },
+      }, fixtureName);
+    });
+  return { fixtureName, fixture, cases };
+}
+
 /** The JSON text of `protocol/adapter-templates/starter-vectors.json`: one
  * synthesized `starter:<family>` fixture per family (`synthesizeFixture`),
  * in catalog family order (`familyCatalogOrder`). Per family, the cases are
@@ -959,7 +1133,8 @@ function withFixtureDoc(vector, fixtureName) {
  * document), `overlap_report.starter.<family>` (the family's declared
  * `overlaps`, Open decision 3, are the whole set of pairs that may
  * overlap), then each type's own `vectors`, in source order, each pointed
- * at the family's fixture. */
+ * at the family's fixture, then, per `"container_first"` entry, the
+ * contained type alone (`containedAlone`). */
 export function renderStarterVectors(families, starterTypes) {
   const order = familyCatalogOrder(families, starterTypes);
   const byFamily = new Map(families.map((family) => [family.family, family]));
@@ -977,16 +1152,25 @@ export function renderStarterVectors(families, starterTypes) {
       doc: { "$fixture": fixtureName },
       expect: { ok: true },
     });
+    const pairs = expectedOverlapPairs(family);
     cases.push({
       id: `overlap_report.starter.${familyId}`,
       kind: "overlap_report",
-      why: `generated: ${familyId}'s declared overlaps (${STARTERS_DIR}/${familyId}.json) are the whole set of rule pairs that may overlap`,
+      why: pairs.length
+        ? `generated: ${familyId}'s declared overlaps (${STARTERS_DIR}/${familyId}.json) are the whole set of rule pairs that may overlap; each container_first pair is reported with its container first, so the container wins`
+        : `generated: ${familyId}'s declared overlaps (${STARTERS_DIR}/${familyId}.json) are the whole set of rule pairs that may overlap`,
       impls: ["rust"],
       doc: { "$fixture": fixtureName },
-      expect: { pairs: [] },
+      expect: { pairs },
     });
     for (const type of family.types) {
       for (const vector of type.vectors) cases.push(withFixtureDoc(vector, fixtureName));
+    }
+    for (const entry of family.overlaps ?? []) {
+      if (entry.expect !== "container_first") continue;
+      const alone = containedAlone(family, entry);
+      fixtures[alone.fixtureName] = alone.fixture;
+      cases.push(...alone.cases);
     }
   }
   const body = { vectors_format: 1, generated: HEADER_SENTENCE, fixtures, cases };
@@ -1096,16 +1280,28 @@ export function appendLock(families, lock) {
   return { lock: updated, appended };
 }
 
-/** Whether two families' `origin` fields collide (Open decision 5): a
- * subdomain suffix nested inside another suffix always collides, whatever
- * `labels` or `exclude` say; an exact origin collides with a subdomain
- * family only when that family would actually claim it (`familyClaims`);
- * two identical exact origins always collide. */
+/** Whether two families' `origin` fields collide (Open decision 5). Two
+ * subdomain families on the same suffix always collide, whatever `labels`
+ * or `exclude` say. A suffix nested inside another (`.ideas.aha.io` inside
+ * `.aha.io`) collides unless the shallower family has `labels: 1`: every
+ * host the deeper family claims has at least two labels before the
+ * shallower suffix (`acme.ideas` before `.aha.io`), which `labels: 1`
+ * always refuses, so that proves the two disjoint. `exclude` proves
+ * nothing here, since the deeper family's own first label varies. An exact
+ * origin collides with a subdomain family only when that family would
+ * actually claim it (`familyClaims`); two identical exact origins always
+ * collide. A multi-origin family (`kind: "any"`) collides when any one of
+ * its members does. */
 function originsCollide(a, b) {
   if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  if (a.kind === "any") return originMembers(a).some((member) => originsCollide(member, b));
+  if (b.kind === "any") return originMembers(b).some((member) => originsCollide(a, member));
   if (a.kind === "exact" && b.kind === "exact") return a.origin === b.origin;
   if (a.kind === "subdomain" && b.kind === "subdomain") {
-    return a.suffix === b.suffix || a.suffix.endsWith(b.suffix) || b.suffix.endsWith(a.suffix);
+    if (a.suffix === b.suffix) return true;
+    const [shallow, deep] = a.suffix.length < b.suffix.length ? [a, b] : [b, a];
+    if (!deep.suffix.endsWith(shallow.suffix)) return false;
+    return shallow.labels !== 1;
   }
   if (a.kind === "exact" && b.kind === "subdomain") return familyClaims(b, a.origin);
   if (a.kind === "subdomain" && b.kind === "exact") return familyClaims(a, b.origin);

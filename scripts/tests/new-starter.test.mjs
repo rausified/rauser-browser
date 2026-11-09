@@ -116,6 +116,16 @@ test("a new type on a scoped family gets the family's own scope marker key (Mino
   assert.deepEqual(discussion.adapter.scope, { owner: { "$scope": true } });
 });
 
+test("a new type on a multi-origin family gets an origin-qualified key", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const result = runScaffold(["box", "box.hub", "--root", root]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.doesNotMatch(result.stdout + result.stderr, /key must contain/);
+  const hub = readFamily(root, "box").types.find((type) => type.type === "box.hub");
+  assert.equal(hub.key, "box.hub:{origin}");
+});
+
 test("acceptance: a filled-in family changes only its file, its doc and generated files (spec task 10)", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);

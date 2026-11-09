@@ -31,5 +31,9 @@
   "servicenow.incident": "servicenow.incident:{host}/{id}",
   "servicenow.ritm": "servicenow.ritm:{host}/{id}",
   "servicenow.change": "servicenow.change:{host}/{id}",
-  "servicenow.kb": "servicenow.kb:{host}/{number}"
+  "servicenow.kb": "servicenow.kb:{host}/{number}",
+  "aha.portalidea": "aha.portalidea:{host}/{ref}",
+  "splunk.app": "splunk.app:{host}/app/{app}",
+  "splunk.dashboard": "splunk.dashboard:{host}/{app}/{view}",
+  "splunk.app#within": "splunk.app:{host}/app/{app}"
 }
