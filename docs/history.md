@@ -1672,3 +1672,20 @@ and updated the recovered references. `brwr-tcd5` records shared disabled-focus
 modeling, reinforcing the existing improvement-feed entry. The assigned
 Re-learn chain's open decisions remain unchanged, and the existing gate ask
 plus repair status were sent through the authorized Wardroom outbox.
+
+
+## 2026-11-09 — Browser-local named sharing drafts
+
+`brwr-1b6o` adds immutable UUID snapshots of selected-work previews, scoped by exact home root/profile. `extension/sharing-drafts.ts` validates bounded records, shares preview formatting with the live worklog and compares original identities through existing revision-bound worklog requests. At most 50 all-work pages are traversed with one snapshot hash; truncated, omitted or unavailable coverage yields unreached rather than missing. Session headings and gap footers are retained as rendered text and reviewed separately when changed.
+
+`extension/sharing-draft-panel.ts` owns a separate frozen viewer and refresh review. Reopening restores no live checkboxes and copies nothing. Changed rows begin unchecked; Copy and creating another immutable version require explicit gestures, including separate approval of changed session/gap context. Policy reload, home/revision changes, selected-record changes and host exit invalidate pending comparisons. Storage read failures clear the catalog/viewer; write, quota and clipboard failures remain retryable. No note, recovery, log, adapter or host protocol contract changes. Browser-local lifetime and limits are current rules in DESIGN.md §5.1.
+
+Independent complete-diff review found and reproduced a pagination coverage error (`brwr-74bl`): an unpaged continuation after a snapshot-bound page could falsely establish that a saved item was missing. The comparison now rejects that transition, with first-response legacy support retained. Twenty-four new offline tests include this regression; all 86 focused sharing/worklog cases pass. The supplementary gate also surfaced 36 pre-existing generator CLI callbacks missing the required IPC guard (`brwr-sivz`); their assertions are unchanged and strict CI denial still fails.
+
+Final verification after review fixes passed the complete required gate and
+supplementary Markdown, script and Python tooling checks: 24 new offline cases; 86 focused sharing/worklog cases; 50 extension files; 1,641 Rust-reported passes, two intentionally ignored cases; both Clippy modes; accessibility two fixture passes/53 sandbox browser skips; 10,696 inert Markdown renderings; 13 script files; Python tooling 252 cases/92 platform skips.
+Rust IPC guards may return early in this sandbox, so reported passes do not
+prove real IPC execution. Real Chromium/strict IPC acceptance, queue
+sync/export/consistency, independent driver review and publication remain
+driver-owned. Complete feature diff and the small review/guard fixes were
+read afresh; no further confirmed findings remain.

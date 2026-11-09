@@ -317,6 +317,10 @@ for (const [title, opts, phase] of [
   ["Waiting for queue conditions", { status: "IN_PROGRESS" }, "waiting"],
   ["Queued · estimated merge in 25 minutes", { status: "IN_PROGRESS" }, "queued"],
   ["Running merge queue checks", { status: "IN_PROGRESS" }, "queued"],
+  // Live on #329 and #343 (batch position) and #351 (bare), 2026-11-09.
+  ["In merge queue — waiting for batch (1/3)", { status: "IN_PROGRESS" }, "queued"],
+  ["In merge queue — waiting for batch (2/3)", { status: "IN_PROGRESS" }, "queued"],
+  ["In merge queue", { status: "IN_PROGRESS" }, "queued"],
   ["Merged via merge queue", { conclusion: "SUCCESS" }, "merged"],
   ["The pull request has been removed from the queue", { conclusion: "FAILURE" }, "dequeued"],
   ["Something new", { status: "IN_PROGRESS" }, "unknown"],
@@ -327,6 +331,14 @@ for (const [title, opts, phase] of [
     assert.equal(analyzeChecks(latestChecks([mq(title, opts)])).inQueue, phase === "queued");
   });
 }
+
+test('labeled and green at "In merge queue — waiting for batch": in the queue, not awaiting admission (#329, #343)', () => {
+  const contexts = rollup([mq("In merge queue — waiting for batch (1/3)", { status: "IN_PROGRESS" })]);
+  const d = decide(snap({ contexts }), { now: NOW, admitWaitSince: NOW });
+  assert.equal(d.exitCode, EXIT.WAITING);
+  assert.match(d.action, /^queued:/);
+  assert.match(d.message, /in the Mergify queue/);
+});
 
 test("the embedded state outranks an unfamiliar title", () => {
   const queued = mq("Some future wording", { status: "IN_PROGRESS", meta: { version: 1, state: "queued", queued_at: "2026-11-03T16:00:00Z" } });

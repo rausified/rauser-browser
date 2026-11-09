@@ -52,9 +52,10 @@ export const EXIT = Object.freeze({
 // PR into main, queued or not. The label is a request; membership is the
 // check's title (and the state Mergify embeds in its summary), never its
 // status: "Merge queue is ready" (not queued), "Waiting for queue conditions
-// to match" (labeled, not admitted), "Queued · estimated merge …" or "Running
-// merge queue checks" (in the queue), "Merged via merge queue". Seen live
-// 2026-11-03 (#265, #268, #276-#289).
+// to match" (labeled, not admitted), "Queued · estimated merge …", "In merge
+// queue" (bare, or "— waiting for batch (1/3)") or "Running merge queue checks"
+// (in the queue), "Merged via merge queue". Seen live 2026-11-03 (#265, #268,
+// #276-#289) and 2026-11-09 (#329, #343, #351).
 export const QUEUE_LABEL = "queue";
 // worker-contract.json merge.comment: posted after the label, it queues the PR
 // even where label-only auto-queue is off (Mergify's Merge Protections are not
@@ -138,7 +139,7 @@ export function mergifyQueueStatus(check) {
   let phase = "unknown";
   if (FAILED.has(check.state)) phase = "dequeued";
   else if (/^Merged\b/i.test(title)) phase = "merged";
-  else if (meta?.queued_at || /^(Queued\b|Running merge queue checks)/i.test(title)) phase = "queued";
+  else if (meta?.queued_at || /^(Queued\b|In merge queue\b|Running merge queue checks)/i.test(title)) phase = "queued";
   // Before the payload's state: Mergify embeds state "waiting" (nothing
   // unmet) under a "Merge queue is ready" title too (#265, 2026-11-04).
   else if (/^Merge queue is ready/i.test(title)) phase = "ready";
