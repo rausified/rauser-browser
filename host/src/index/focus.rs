@@ -8,6 +8,7 @@ const MAX_ROWS: usize = 200;
 pub(crate) struct FocusChoices {
     pub sessions: Vec<brauser_protocol::FocusSession>,
     pub sessions_truncated: bool,
+    pub sessions_page: Option<brauser_protocol::WorklogChoicesPageInfo>,
     pub selected_session: Option<brauser_protocol::FocusSession>,
     pub name_changed: bool,
     pub choices: Vec<WorklogChoice>,
@@ -23,11 +24,16 @@ pub(super) fn choices(
     start: Date,
     end: Date,
     session_id: Option<&str>,
+    paging: Option<(&[u8], &brauser_protocol::WorklogChoicesPageRequest)>,
 ) -> Result<FocusChoices> {
+    if let Some((_, page)) = paging {
+        anyhow::ensure!(valid_page_request(page), StaleWorklogPage);
+    }
     let (gaps, gaps_truncated) = query::worklog_gaps(tx, start, end)?;
     let mut result = FocusChoices {
         sessions: Vec::new(),
         sessions_truncated: false,
+        sessions_page: None,
         selected_session: None,
         name_changed: false,
         choices: Vec::new(),
@@ -36,6 +42,18 @@ pub(super) fn choices(
         gaps_truncated,
     };
     let mut days = BTreeMap::<(String, String), query::ChoiceDay>::new();
+    let mut seen = BTreeSet::new();
+    let mut positions = BTreeMap::new();
+    let offset = paging.map_or(0, |(_, page)| page.offset as usize);
+    let mut digest = Sha256::new();
+    digest.update(serde_json::to_vec(&(
+        "focus-session-catalog-v1",
+        paging.map(|(scope, _)| scope),
+        start.to_string(),
+        end.to_string(),
+        &result.gaps,
+        result.gaps_truncated,
+    ))?);
     // `visits` holds direct activity only. Use its resolved ID, but the
     // selected event's own title/URL, never global artifact metadata.
     // Newest first also determines the bounded catalog's stable order.
@@ -47,9 +65,13 @@ pub(super) fn choices(
     )?;
     let mut rows = statement.query([start.to_string(), end.to_string()])?;
     while let Some(row) = rows.next()? {
-        let EventData::Activity(event) =
-            serde_json::from_str::<CachedEvent>(&row.get::<_, String>(2)?)?.data
-        else {
+        let local_date: String = row.get(0)?;
+        let artifact_id: String = row.get(1)?;
+        let body: String = row.get(2)?;
+        // Frame every row, including activity outside the chosen session:
+        // changing earlier pages must never shift a continuation silently.
+        digest.update(serde_json::to_vec(&(&local_date, &artifact_id, &body))?);
+        let EventData::Activity(event) = serde_json::from_str::<CachedEvent>(&body)?.data else {
             continue;
         };
         let Some(session) = event
@@ -59,12 +81,14 @@ pub(super) fn choices(
         else {
             continue;
         };
-        if let Some(known) = result.sessions.iter_mut().find(|s| s.id == session.id) {
-            newest_name(known, session);
-        } else if result.sessions.len() < MAX_SESSIONS {
+        if let Some(&position) = positions.get(&session.id) {
+            newest_name(&mut result.sessions[position], session);
+        } else if seen.insert(session.id.clone())
+            && seen.len() > offset
+            && result.sessions.len() < MAX_SESSIONS
+        {
+            positions.insert(session.id.clone(), result.sessions.len());
             result.sessions.push(session.clone());
-        } else {
-            result.sessions_truncated = true;
         }
         if session_id != Some(session.id.as_str()) {
             continue;
@@ -76,7 +100,7 @@ pub(super) fn choices(
             result.selected_session = Some(session.clone());
         }
         let day = days
-            .entry((row.get(0)?, row.get(1)?))
+            .entry((local_date, artifact_id))
             .or_insert_with(|| query::ChoiceDay {
                 focused: 0,
                 background: 0,
@@ -90,6 +114,27 @@ pub(super) fn choices(
             .background
             .saturating_add(event.background_seconds.into());
         day.opens = day.opens.saturating_add(event.opens.into());
+    }
+    result.sessions_truncated = seen.len() > offset.saturating_add(result.sessions.len());
+    if let Some((_, page)) = paging {
+        let snapshot = hex::encode(digest.finalize());
+        anyhow::ensure!(
+            offset <= seen.len()
+                && page
+                    .snapshot
+                    .as_ref()
+                    .is_none_or(|expected| expected == &snapshot),
+            StaleWorklogPage
+        );
+        result.sessions_page = Some(brauser_protocol::WorklogChoicesPageInfo {
+            snapshot,
+            offset: page.offset,
+            next_offset: result
+                .sessions_truncated
+                .then(|| u32::try_from(offset + result.sessions.len()))
+                .transpose()?,
+            omitted: false,
+        });
     }
     (result.choices, result.truncated) = query::choice_rows(days)?;
     Ok(result)

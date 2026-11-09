@@ -122,10 +122,15 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       };
       case "worklog_focus_choices": {
         const session = { id: "10000000-0000-4000-8000-000000000001", name: "Release", revision: 1 };
-        const selected = request.focus_session_id === session.id ? session : null;
+        const sessions = fixture.focusPages ? [session, { ...session, id: "10000000-0000-4000-8000-000000000002" }] : [session];
+        const offset = request.sessions_page?.offset ?? 0;
+        if (offset && fixture.focusPageConflict) return { type: "error", code: "conflict", message: "Recorded sessions changed" };
+        const next = fixture.focusPages && offset === 0 ? 1 : null;
+        const selected = sessions.find((s) => s.id === request.focus_session_id) ?? null;
         return {
           type: "worklog_focus_choices_result", start_date: request.start_date, end_date: request.end_date,
-          focus_session_id: request.focus_session_id, sessions: [session], sessions_truncated: false,
+          focus_session_id: request.focus_session_id, sessions: sessions.slice(offset, offset + 1), sessions_truncated: next !== null,
+          ...(request.sessions_page ? { sessions_page: { snapshot: "a".repeat(64), offset, next_offset: next, omitted: false } } : {}),
           selected_session: selected, name_changed: false,
           choices: selected ? [{ artifact_id: "doc:0", local_date: request.start_date,
             text: "Release update — focused 2 min · opened 1×", url: "https://work.example/0" }] : [],

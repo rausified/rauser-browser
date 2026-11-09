@@ -538,7 +538,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     case "worklog_focus_choices_result":
       return hasExactKeys(value, ["type", "protocol_version", "request_id", "start_date", "end_date",
         "focus_session_id", "sessions", "sessions_truncated", "selected_session", "name_changed",
-        "choices", "truncated", "gaps", "gaps_truncated"]) &&
+        "choices", "truncated", "gaps", "gaps_truncated", ...(Object.hasOwn(value, "sessions_page") ? ["sessions_page"] : [])]) &&
+        (!Object.hasOwn(value, "sessions_page") || isWorklogChoicesPage(value.sessions_page)) &&
         typeof value.start_date === "string" && typeof value.end_date === "string" &&
         (value.focus_session_id === null || typeof value.focus_session_id === "string" &&
           /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.focus_session_id)) &&

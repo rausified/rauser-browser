@@ -1830,3 +1830,33 @@ ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
 formatting, protocol generation, typecheck, lint, script tests, Markdown safety
 and queue consistency pass. Development tools pass 254 tests with 94 skips;
 accessibility passes two tests with 55 Chromium sandbox skips.
+
+## 2026-11-09 — Page through recorded focus sessions (brwr-t4gf)
+
+The One focus session sharing catalog now offers explicit More sessions instead
+of hiding every session after the first 64. Additive protocol-v8 sessions_page
+metadata reuses the worklog paging shapes; legacy requests still receive the
+original bounded catalog without metadata. One index read streams the complete
+activity snapshot, retains at most 64 session records plus deduplication IDs,
+and binds the continuation to its home identity, adapter policy and date range.
+Tied timestamps follow the existing durable event order. Paging requests no
+selected work and never broadens a selected session's direct activity.
+
+The panel preserves the selected ID, checked work and preview while extending
+the catalog. It retains loaded pages on a matching refresh, drops them when the
+snapshot changes, discards replies after context changes and explicitly reloads
+a stale catalog. The final paging action returns keyboard focus to the select.
+Original note identity, Re-learn gates and browser-local recovery are unchanged.
+
+## 2026-11-09 — Review: retain session paging focus after refresh
+
+The independent review found that delivery refresh and Reload sessions hid the
+focused paging button but never restored focus. `loadWorklog` now returns focus
+to More sessions, or the session selector when the catalog is exhausted, unless
+the user moved elsewhere while waiting. Reload restores focus even when it has
+cleared the previous session selection. Offline regressions reproduce the lost
+focus and cover moved focus; the browser keyboard journey covers refresh and
+reload with the real DOM.
+The same review found that crossing midnight made More sessions silently
+ignore an expired Today catalog. The action now starts a fresh catalog for
+the current dates; a simulated-clock regression covers the rollover.

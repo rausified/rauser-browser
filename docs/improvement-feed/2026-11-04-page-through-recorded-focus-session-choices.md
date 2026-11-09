@@ -10,3 +10,5 @@ Extend `worklog_focus_choices` with a stable host-controlled session cursor and
 add a named More sessions control in `extension/panel.ts`. Keep entry selection
 explicit, preserve the selected session independently of catalog paging, and
 test equal timestamps, same-name sessions and a changing history snapshot.
+
+- Done 2026-11-09: brwr-t4gf adds snapshot-bound catalog paging and explicit More sessions, retaining selected identity and checked work; focused host/wire/panel gates pass.

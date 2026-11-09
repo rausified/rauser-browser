@@ -416,6 +416,8 @@ pub struct WorklogFocusChoicesRequest {
     pub start_date: String,
     pub end_date: String,
     pub expected_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions_page: Option<WorklogChoicesPageRequest>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub focus_session_id: Option<String>,
 }
@@ -430,6 +432,8 @@ pub struct WorklogFocusChoicesResult {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub focus_session_id: Option<String>,
     pub sessions: Vec<FocusSession>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions_page: Option<WorklogChoicesPageInfo>,
     pub sessions_truncated: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub selected_session: Option<FocusSession>,

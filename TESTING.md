@@ -1858,9 +1858,13 @@ separate; this feature adds no dialog and changes no scripted-dialog count.
 before aggregation: an artifact shared by two sessions and untagged work keeps
 only the chosen session's seconds, title and URL. It also covers rename versus
 same-name IDs, multi-day and absent sessions, direct container activity,
-summary exclusion, log-only rebuild, 64-session catalog omission and the shared
+summary exclusion, log-only rebuild, the legacy 64-session catalog limit and the shared
 200-entry/escaped-JSON byte limits. `cargo test --locked -p brauser --lib
 focus_worklog_refuses` checks dates, canonical UUIDs and locked config revisions.
+Catalog paging additionally covers 140 sessions with equal timestamps and duplicate
+names, multiple snapshots per session, selected activity beyond the first page,
+exhausted/invalid offsets, cache-independent continuation, changed measures,
+different home folders, date ranges and malformed continuation snapshots.
 `cargo test --locked -p brauser-protocol --test wire_focus_worklog` checks the
 new additive request/result shapes without altering existing worklog messages.
 
@@ -1871,6 +1875,17 @@ and unavailable sessions, separate omission notices, unsupported hosts and
 malformed responses. Held replies cannot restore old choices after session,
 period, scope, revision, home or host changes. Policy-change signals clear the
 preview before the debounced reload, including when the home path is unchanged.
+**More sessions** appends only catalog entries, keeps the chosen identity and
+checked work, preserves pages on unchanged refreshes, and refuses stale or malformed
+continuations with explicit reload. A changed snapshot drops later catalog pages
+without choosing a different same-name session. The keyboard journey verifies
+that the exhausted paging control gives focus back to the session selector.
+Delivery refresh and Reload sessions also restore the paging control's focus,
+unless the user moved elsewhere while the host answered. Offline cases model
+Chrome dropping focus to the body when the control is hidden during loading;
+the browser journey checks the actual focus transition.
+An open Today catalog crossing local midnight refreshes from offset zero on
+the next More sessions action instead of silently ignoring the click.
 
 The accessibility suite includes a native-select keyboard journey through
 the session catalog, repeated session choices without losing focus, entry

@@ -1343,6 +1343,7 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "sessions_page": { "$ref": "#/$defs/WorklogChoicesPageRequest" },
         "focus_session_id": {
           "oneOf": [
             {
@@ -1418,6 +1419,7 @@
             "$ref": "#/$defs/FocusSession"
           }
         },
+        "sessions_page": { "$ref": "#/$defs/WorklogChoicesPageInfo" },
         "sessions_truncated": {
           "type": "boolean"
         },
