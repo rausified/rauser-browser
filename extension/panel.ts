@@ -280,15 +280,15 @@ for (const [area, label, fallback] of [
   [element<HTMLElement>("capture-site-agent-run"), element<HTMLElement>("site-activity-label"), "Site draft activity"],
 ] as const) {
   const update = (): void => {
-    const title = area.querySelector(".run-card-title")?.textContent?.trim();
-    const state = area.querySelector(".run-card-state")?.textContent?.trim().split(" · ")[0];
-    const line = (area === status ? area.textContent : area.querySelector(".run-line, .run-notice, .warning")?.textContent)?.trim();
+    const title = area.querySelector(".run-card:not([hidden]) .run-card-title")?.textContent?.trim();
+    const state = area.querySelector(".run-card:not([hidden]) .run-card-state")?.textContent?.trim().split(" · ")[0];
+    const line = (area === status ? area.textContent : area.querySelector(":scope > .run-line:not([hidden]), :scope > .run-notice:not([hidden]), :scope > .warning:not([hidden]), :scope > .setup-warning:not([hidden])")?.textContent)?.trim();
     const next = title || state ? `${title || fallback}${state ? ` · ${state}` : ""}` : line || fallback;
     if (label.textContent !== next) label.textContent = next;
   };
   update();
   if (typeof MutationObserver !== "undefined") {
-    new MutationObserver(update).observe(area, { childList: true, characterData: true, subtree: true });
+    new MutationObserver(update).observe(area, { childList: true, characterData: true, attributes: true, attributeFilter: ["hidden"], subtree: true });
   }
 }
 

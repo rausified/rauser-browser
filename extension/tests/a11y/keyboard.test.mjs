@@ -383,6 +383,14 @@ test("activity dock stays at the bottom and caps expanded output", async (t) => 
   const page = await browserFixture(t, "panel");
   if (!page) return;
   await page.evaluate(() => {
+    const hidden = document.createElement("div");
+    hidden.className = "run-card";
+    hidden.hidden = true;
+    const staleTitle = document.createElement("p");
+    staleTitle.className = "run-card-title";
+    staleTitle.textContent = "Previous page";
+    hidden.append(staleTitle);
+    document.querySelector("#run-area").append(hidden);
     const card = document.createElement("div");
     card.className = "run-card";
     const title = document.createElement("p");
@@ -414,6 +422,20 @@ test("activity dock stays at the bottom and caps expanded output", async (t) => 
   assert.ok(layout.stripTop < layout.mainBottom, JSON.stringify(layout));
   const after = await page.locator("#page-area").boundingBox();
   assert.ok(before && after && Math.abs(before.y - after.y) <= 1, "page content does not jump");
+  await page.evaluate(() => { document.querySelector("#run-area .run-card:not([hidden])").hidden = true; });
+  await page.locator("#summary-activity-label").waitFor({ state: "hidden" });
+  await page.locator(".activity-empty:visible").waitFor();
+  await page.setViewportSize({ width: 400, height: 320 });
+  await activate(page, "#capture-strip-summary", "Enter");
+  const strip = await page.evaluate(() => {
+    const bar = document.querySelector(".capture-bar");
+    bar.scrollTop = bar.scrollHeight;
+    const last = document.querySelector("#discard-pending").getBoundingClientRect();
+    return { scrollHeight: bar.scrollHeight, clientHeight: bar.clientHeight,
+      lastBottom: last.bottom, barBottom: bar.getBoundingClientRect().bottom };
+  });
+  assert.ok(strip.scrollHeight > strip.clientHeight, JSON.stringify(strip));
+  assert.ok(strip.lastBottom <= strip.barBottom + 1, JSON.stringify(strip));
 });
 
 test("task page scope can be changed by keyboard without submitting or losing a draft", async (t) => {
