@@ -88,7 +88,12 @@ ambiguity.
   meeting UUID, so recording it under this type would split one meeting
   into two IDs;
 - `j.php?MTID=`, `j.php?RGID=`, and `/meet/<name>` (join links and personal
-  rooms);
+  rooms). `MTID` is the join link's token, and nothing shows it is the meeting
+  instance ID this type keys; `j.php` hands straight on to the join launcher,
+  `/wbxmjs/joinservice/sites/<site>/meeting/download/<id>?MTID=<token>`,
+  which opens the desktop app. In real browsing (2026-11-09, 2 URLs) both
+  pages carried only the brand as their title, so neither names the meeting
+  and neither is recorded;
 - `/meeting/scheduler`, `/meeting/register/<uuid>`, `/weblink/register/...`,
   `/meeting/surveyPage/<id>?token=` (carries a JWT), `/dashboard/*`,
   `/webinar/*`, `/report/*`, and settings and profile routes;
@@ -96,7 +101,12 @@ ambiguity.
   evidence shows meeting pages exist there;
 - a token shorter than the 32-character minimum;
 - `web.webex.com` and `help.webex.com`: excluded product hosts, not Webex
-  Meetings sites, so they are outside this family's origin entirely.
+  Meetings sites, so they are outside this family's origin entirely. The
+  `web.webex.com` app's meeting summary page,
+  `/meetingcontainer/<base64>/summary`, keys the meeting by a base64 copy of
+  an internal API URL that includes a regional server name, so it is not a
+  stable meeting ID, and in real browsing (2026-11-09, 1 visit) its title
+  was only the brand. No family offers it.
 
 ## Known limits
 
