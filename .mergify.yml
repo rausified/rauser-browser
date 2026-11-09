@@ -45,9 +45,8 @@
 # Mergify checks one batch at a time and bisection degrades (N = 1).
 #
 # Main's branch protection (required checks today: Build and check, PR owner,
-# Rust dependency policy, merge-hold) is also injected by Mergify as queue and
-# merge conditions, so the list below names the real checks and leaves the
-# retired merge-hold (always green) to the injection.
+# Rust dependency policy) is also injected by Mergify as queue and merge
+# conditions; the list below names the same checks explicitly.
 
 merge_queue:
   max_parallel_checks: 2
