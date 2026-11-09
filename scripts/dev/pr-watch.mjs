@@ -105,6 +105,28 @@ function unmetFromMarkdown(summary) {
   return [...new Set([...(summary ?? "").matchAll(/^\s*- \[ \] `([^`]+)`/gm)].map((m) => m[1]))];
 }
 
+const CHECK_CONDITION = /^check-(success|neutral|skipped)\s*=\s*(.+)$/;
+/** The unmet queue conditions Mergify has wrong: every one names a check
+ * (`check-success = Build and check`, or "a or b" alternatives) and, for each
+ * check named, the rollup already satisfies one of the conditions listed for
+ * it. Mergify missed those check-run completions (#329, #343 on 2026-11-09);
+ * `@Mergifyio refresh` makes it re-evaluate. Returns them, or [] when any
+ * condition is not a check, names a check the rollup lacks, or is really unmet.
+ * Per check, not per condition: the summary repeats each branch-protection
+ * check as an "any of" group whose neutral/skipped lines stay unchecked. */
+export function staleQueueConditions(unmet, checks) {
+  if (!unmet?.length) return [];
+  const states = new Map(checks.map((check) => [check.name, check.state]));
+  const named = new Map();
+  for (const atom of unmet.flatMap((condition) => condition.split(" or "))) {
+    const match = CHECK_CONDITION.exec(atom.trim());
+    if (!match || !states.has(match[2].trim())) return [];
+    const name = match[2].trim();
+    named.set(name, named.get(name) || states.get(name) === match[1].toUpperCase());
+  }
+  return [...named.values()].every(Boolean) ? unmet : [];
+}
+
 /** Where the "Mergify Merge Queue" check says the PR is: phase is one of none,
  * ready, waiting, queued, merged, dequeued or unknown; `unmet` lists the queue
  * conditions Mergify reports unmet while it waits. */
@@ -394,6 +416,12 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
     if (admitWaitSince && minutesBetween(admitWaitSince, now) >= grace && phase === "ready") {
       return act(EXIT.QUEUE_BLOCKED, "queue-ready-not-admitted",
         `#${n} is green and labeled ${QUEUE_LABEL}, and Mergify says "${title}" but has not queued it after ${grace}+ minutes: label-only auto-queue needs Mergify's Merge Protections activated in the dashboard. Queue it with the contract's comment: gh pr comment ${n} --body "${QUEUE_COMMENT}"`);
+    }
+    const stale = waiting ? staleQueueConditions(unmet, snap.checks) : [];
+    if (admitWaitSince && minutesBetween(admitWaitSince, now) >= grace && stale.length) {
+      const passed = [...new Set(stale.flatMap((c) => c.split(" or ")).map((atom) => CHECK_CONDITION.exec(atom.trim())[2].trim()))];
+      return act(EXIT.QUEUE_BLOCKED, "queue-stale-refresh",
+        `#${n} is green and labeled ${QUEUE_LABEL}, but Mergify still says "${title}" after ${grace}+ minutes and lists ${short(passed, 6)} as unmet, which already passed: Mergify missed the check results. Make it re-evaluate: gh pr comment ${n} --body "@Mergifyio refresh"`);
     }
     if (admitWaitSince && minutesBetween(admitWaitSince, now) >= grace) {
       const verdict = waiting

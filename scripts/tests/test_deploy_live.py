@@ -63,6 +63,8 @@ class FakeRunner:
         self.lock_after_pull = None  # new package-lock.json text the pull brings
         self.script_after_pull = None  # new scripts/dev/deploy-live text the pull brings
         self.npm_hook = None  # optional callable(argv) -> Result or None for npm calls
+        self.node_version = "v24.14.0"
+        self.node_import_error = None
 
     # Calls whose first words match one of these act on the system.
     ACTING = ("pull", "cargo", "npm", "node", "binary", "hygiene-apply", "publish")
@@ -76,6 +78,8 @@ class FakeRunner:
             return "hygiene-apply" if "--apply" in argv else "hygiene"
         if argv[0].endswith("target/debug/brauser"):
             return "binary"
+        if argv[0] == "node" and argv[1] in ("--version", "--input-type=module"):
+            return "node-preflight"
         return argv[0]
 
     def acting_calls(self):
@@ -115,6 +119,12 @@ class FakeRunner:
             return dl.Result(0, b"Updating\n")
         if k == "diff":
             return dl.Result(0, self.changed_files.encode())
+        if k == "node-preflight":
+            if argv[1] == "--version":
+                return dl.Result(0, (self.node_version + "\n").encode())
+            if self.node_import_error:
+                return dl.Result(1, b"", self.node_import_error.encode())
+            return dl.Result(0)
         if k == "cargo":
             target = Path(argv[argv.index("--target-dir") + 1]) if "--target-dir" in argv \
                 else self.repo / "target"
@@ -257,6 +267,10 @@ class HappyPath(Fixture):
         acting = [self.runner.kind(c["argv"]) for c in self.runner.acting_calls()]
         self.assertEqual(acting, ["hygiene-apply", "pull", "cargo", "npm", "publish", "node",
                                   "binary"], out)
+        kinds = self.kinds()
+        self.assertEqual(kinds.count("node-preflight"), 2)
+        self.assertLess(kinds.index("pull"), kinds.index("node-preflight"))
+        self.assertLess(kinds.index("node-preflight"), kinds.index("cargo"))
         self.assertIn(f"{OLD[:12]}..{NEW[:12]}", out)
         self.assertIn(f"0.1.0+{NEW[:12]}", out)
 
@@ -483,6 +497,29 @@ class Refusals(Fixture):
         code, out = self.deploy()
         self.assertNotEqual(code, 0, out)
         self.assertNotIn("binary", self.kinds())
+
+
+class NodePreflight(Fixture):
+    def test_unsupported_typescript_import_stops_before_builds(self):
+        self.runner.node_version = "v22.15.0"
+        self.runner.node_import_error = "ERR_UNKNOWN_FILE_EXTENSION: .ts"
+        code, out = self.deploy()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("v22.15.0", out)
+        self.assertIn("ERR_UNKNOWN_FILE_EXTENSION", out)
+        self.assertIn("nvm use 24.14.0", out)
+        self.assertNotIn("cargo", self.kinds())
+        self.assertNotIn("npm", self.kinds())
+        self.assertEqual(self.live.read_text(), "old binary")
+        self.assertEqual((self.repo / "extension" / "dist" / "build.txt").read_text(), OLD)
+
+    def test_missing_node_stops_before_builds(self):
+        self.runner.fail.add("node-preflight")
+        code, out = self.deploy()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("Node preflight failed", out)
+        self.assertIn("nvm install 24.14.0", out)
+        self.assertNotIn("cargo", self.kinds())
 
 
 class NpmCi(Fixture):

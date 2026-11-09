@@ -4,7 +4,7 @@ import { Buffer } from "node:buffer";
 
 import {
   ADMIT_GRACE_MINUTES, CONDITIONS_GRACE_MINUTES, QUEUE_COMMENT, DOCTOR_GRACE_MINUTES, EXIT, analyzeChecks, classifyConflicts, decide, decideConflict,
-  doctorComment, enqueueCommand, mergifyMeta, mergifyQueueStatus, unmetConditions, latestChecks, parseArgs, snapshotFromGraphql, statusLine,
+  doctorComment, enqueueCommand, mergifyMeta, mergifyQueueStatus, staleQueueConditions, unmetConditions, latestChecks, parseArgs, snapshotFromGraphql, statusLine,
 } from "../dev/pr-watch.mjs";
 
 // --- Fixtures in the recorded shape of the GraphQL query (PR #243, 2026-11-02) --
@@ -362,12 +362,13 @@ test('labeled and green but stuck at "Waiting for queue conditions to match": ex
 });
 
 test("stuck waiting with no embedded state falls back to the summary's unchecked lines", () => {
-  const markdown = "### Queue entry conditions\n\n- [X] `base = main`\n- [ ] `check-success = PR owner`\n";
+  // An unmet check the rollup does not have (a passed one is stale Mergify state: refresh).
+  const markdown = "### Queue entry conditions\n\n- [X] `base = main`\n- [ ] `check-success = @mergify/Configuration changed`\n";
   const contexts = rollup([mq("Waiting for queue conditions to match", { markdown })]);
   const since = new Date(Date.parse(NOW) - (CONDITIONS_GRACE_MINUTES + 1) * 60000).toISOString();
   const d = decide(snap({ contexts }), { now: NOW, admitWaitSince: since });
   assert.equal(d.action, "queue-conditions-unmet");
-  assert.match(d.message, /Unmet: `check-success = PR owner`\./);
+  assert.match(d.message, /Unmet: `check-success = @mergify\/Configuration changed`\./);
 });
 
 test("queued and running titles keep the watcher waiting in the queue", () => {
@@ -423,6 +424,63 @@ test('labeled, green and stuck at "Merge queue is ready": advise the contract\'s
 const READY_REAL = () => mq("Merge queue is ready", {
   meta: WAITING_META([]),
   markdown: "This pull request can be added to the merge queue.\n\nUse `@Mergifyio queue` or the [Mergify dashboard](https://dashboard.mergify.com) to queue this pull request for merging.\n",
+});
+
+// The "Waiting for queue conditions" check Mergify left on #329 and #343
+// (2026-11-09): every required check had passed, but Mergify missed those
+// check-run completions and still listed them unchecked until a refresh.
+const STALE_WAITING_MARKDOWN = [
+  "### ⏳ Waiting for queue conditions",
+  "",
+  "This pull request is waiting for the following conditions to be met before it can enter the queue:",
+  "",
+  "- [ ] `check-success = Build and check`",
+  "- [ ] `check-success = PR owner`",
+  "- [ ] `check-success = Rust dependency policy`",
+  "- [ ] any of · required by GitHub branch protection:",
+  "  - [ ] `check-neutral = Build and check`",
+  "  - [ ] `check-skipped = Build and check`",
+  "  - [ ] `check-success = Build and check`",
+  "- [x] `-draft`",
+  "- [x] `base = main`",
+  "- [x] `label = queue`",
+  "- [x] `-label = needs-merge`",
+  "- [x] `-label = pr-doctor:skip`",
+  "",
+].join("\n");
+const STALE_WAITING = () => mq("Waiting for queue conditions", { markdown: STALE_WAITING_MARKDOWN });
+const AFTER_CONDITIONS_GRACE = new Date(Date.parse(NOW) - (CONDITIONS_GRACE_MINUTES + 1) * 60000).toISOString();
+
+test("Mergify still waiting on checks that already passed: advise @Mergifyio refresh (#329, #343)", () => {
+  const d = decide(snap({ contexts: rollup([STALE_WAITING()]) }), { now: NOW, admitWaitSince: AFTER_CONDITIONS_GRACE });
+  assert.equal(d.exitCode, EXIT.QUEUE_BLOCKED);
+  assert.equal(d.action, "queue-stale-refresh");
+  assert.match(d.message, /gh pr comment 243 --body "@Mergifyio refresh"/);
+  assert.match(d.message, /missed/);
+  assert.match(d.message, /Build and check/);
+});
+
+test("staleQueueConditions: unmet check conditions Mergify lists although the rollup has them passed", () => {
+  const status = mergifyQueueStatus(latestChecks([STALE_WAITING()])[0]);
+  assert.deepEqual(status.unmet, ["check-success = Build and check", "check-success = PR owner", "check-success = Rust dependency policy",
+    "check-neutral = Build and check", "check-skipped = Build and check"]);
+  assert.deepEqual(staleQueueConditions(status.unmet, latestChecks(GREEN)), status.unmet);
+  const running = latestChecks(rollup([run("Rust dependency policy", "IN_PROGRESS", null, { required: true })]));
+  assert.deepEqual(staleQueueConditions(status.unmet, running), []);
+  // Not only checks, or a check the rollup lacks: Mergify is right to wait.
+  assert.deepEqual(staleQueueConditions([...status.unmet, "label = queue"], latestChecks(GREEN)), []);
+  assert.deepEqual(staleQueueConditions(["check-success = @mergify/Configuration changed"], latestChecks(GREEN)), []);
+  // A skipped check does not satisfy check-success.
+  const skipped = latestChecks(rollup([done("PR owner", "SKIPPED", { required: true })]));
+  assert.deepEqual(staleQueueConditions(["check-success = PR owner"], skipped), []);
+});
+
+test("Mergify waiting on a check that is still running: no refresh advice", () => {
+  const contexts = rollup([STALE_WAITING(), run("Rust dependency policy", "IN_PROGRESS", null, { required: true })]);
+  const d = decide(snap({ contexts }), { now: NOW, admitWaitSince: AFTER_CONDITIONS_GRACE });
+  assert.equal(d.exitCode, EXIT.WAITING);
+  assert.match(d.action, /^pending:/);
+  assert.doesNotMatch(d.message, /refresh/i);
 });
 
 test('a real-shaped "Merge queue is ready" check with a "waiting" payload is phase ready', () => {

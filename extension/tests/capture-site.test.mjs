@@ -124,6 +124,24 @@ test("capture plan puts PR and issue before repo", () => {
   assert.deepEqual(result.examples.map((row) => row.result.type), ["github.pr", "github.issue", "github.repo"]);
 });
 
+test("a Splunk plan keeps apps ahead of dashboards, so built-in pages are app time", () => {
+  const splunk = { types: new Set(["splunk.dashboard", "splunk.app"]), scopes: {} };
+  const result = plan("https://acme.splunkcloud.com/en-US/app/search/search?q=index%3D_internal", CONFIG, splunk);
+  // The declared container_first overlap reverses the usual contained-first order.
+  assert.deepEqual(result.document.artifacts.map((adapter) => adapter.type), ["splunk.app", "splunk.dashboard"]);
+  assert.equal(result.current.result.type, "splunk.app");
+  assert.equal(result.current.result.artifact_id, "splunk.app:acme.splunkcloud.com/app/search");
+  const dashboard = match(result, "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview");
+  assert.equal(dashboard.type, "splunk.dashboard");
+  assert.deepEqual(dashboard.within, { type: "splunk.app", artifact_id: "splunk.app:acme.splunkcloud.com/app/search" });
+  assert.ok(result.probes.every((row) => !row.result.match));
+  // Dashboards alone have no app rule ahead of them and no container to roll up into.
+  const alone = plan("https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview", CONFIG,
+    { types: new Set(["splunk.dashboard"]), scopes: {} });
+  assert.deepEqual(alone.document.artifacts.map((adapter) => adapter.type), ["splunk.dashboard"]);
+  assert.equal(alone.document.artifacts[0].within, undefined);
+});
+
 test("unchecking repositories leaves pull requests and issues unlinked", () => {
   const result = plan("https://github.com/acme-corp/widget/pull/12", CONFIG,
     choiceOf({ organizations: "acme-corp", repositories: false, pullRequests: true, issues: true }));

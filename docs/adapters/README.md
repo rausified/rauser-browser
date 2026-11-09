@@ -35,3 +35,6 @@
 | [servicenow.ritm](servicenow.ritm.md) | servicenow | development | — | — | — |
 | [servicenow.change](servicenow.change.md) | servicenow | development | — | — | — |
 | [servicenow.kb](servicenow.kb.md) | servicenow | development | — | — | — |
+| [aha.portalidea](aha.portalidea.md) | aha-ideas | development | — | — | — |
+| [splunk.app](splunk.app.md) | splunk | development | — | — | — |
+| [splunk.dashboard](splunk.dashboard.md) | splunk | development | — | — | — |

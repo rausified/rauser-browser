@@ -18,35 +18,36 @@ first failure:
      --resumed-from <starting commit>, so every later step (and the summary's
      commit range) is the new code's; a resumed run neither pulls again nor
      re-executes, so the code it runs is always the code it deploys;
-  e. cargo build --locked -p brauser --target-dir <repo>/target/deploy-staging,
+  e. check Node can import extension/brand.ts before either build changes a live artifact;
+  f. cargo build --locked -p brauser --target-dir <repo>/target/deploy-staging,
      so the live target/debug/brauser is not replaced yet (opening the panel
      starts the live binary, and a new host restarts the service);
-  f. npm ci --ignore-scripts, when package-lock.json's sha256 differs from the
+  g. npm ci --ignore-scripts, when package-lock.json's sha256 differs from the
      one recorded after the last successful npm ci (in
      <git dir>/deploy-live-state.json, never committed) or node_modules is
      missing; the record is dropped before npm ci starts and written only
      after it succeeds, so an interrupted install runs again next time;
-  g. npm run build:extension (replacing extension/dist restarts nothing); a
+  h. npm run build:extension (replacing extension/dist restarts nothing); a
      build that changed extension/dist records a pending extension reload in
      the same state file, so a deploy refused after this point still prints
      the reload instruction when a later one completes;
-  h. check runs again (b): one queued or started during the builds refuses
+  i. check runs again (b): one queued or started during the builds refuses
      here, with the live binary untouched;
-  i. publish the staged binary: copy it to a temporary file in target/debug,
+  j. publish the staged binary: copy it to a temporary file in target/debug,
      check runs once more, then os.replace it onto target/debug/brauser;
-  j. node scripts/register-dev-host.mjs <extension id> <repo>/target/debug/brauser
+  k. node scripts/register-dev-host.mjs <extension id> <repo>/target/debug/brauser
      (the ID comes from the existing native host manifest's single
      allowed_origins entry unless --extension-id is given);
-  k. send the new binary a framed native-messaging hello and check its
+  l. send the new binary a framed native-messaging hello and check its
      protocol_version and that host_version ends with +<new HEAD, 12 chars>;
-  l. print a summary, including "Reload Brauser at chrome://extensions" when
+  m. print a summary, including "Reload Brauser at chrome://extensions" when
      extension/dist changed in this deploy or a refused one before it, then
      clear the pending reload.
 
 Only macOS: the live install is a LaunchAgent and the macOS Chrome
 native-messaging manifest; on any other platform it refuses before acting.
 
---dry-run runs only the read-only checks (a, b, the extension ID, the npm ci
+--dry-run runs only the read-only checks (a, b, e, the extension ID, the npm ci
 decision, and the lock step without --apply) and prints the rest. Every child runs with
 GIT_OPTIONAL_LOCKS=0, so this tool's own `git status` calls (and those of the
 build scripts it starts) never take the index lock.
@@ -84,6 +85,24 @@ HELLO_TIMEOUT = 30.0
 STAGING = Path("target") / "deploy-staging"  # cargo --target-dir, relative to the repo
 SELF = Path("scripts") / "dev" / "deploy-live"  # this script, relative to the repo
 STATE_FILE = "deploy-live-state.json"  # in the git dir, so never committed or dirty
+NODE_VERSION = "24.14.0"  # pinned by CI; supports direct TypeScript imports
+
+
+def check_node(runner: Runner, repo: Path) -> str:
+    """Verify the Node on PATH can run the TypeScript entry used by the build."""
+    version = runner(["node", "--version"], cwd=repo)
+    found = version.text.strip() if version.returncode == 0 else "unavailable"
+    help_text = (f"select Node {NODE_VERSION} (for nvm: nvm install {NODE_VERSION} && "
+                 f"nvm use {NODE_VERSION}), then rerun deploy-live")
+    if version.returncode != 0:
+        raise DeployError(f"Node preflight failed: {found}; {help_text}")
+    probe = runner(["node", "--input-type=module", "-e",
+                    "import('./extension/brand.ts')"], cwd=repo)
+    if probe.returncode != 0:
+        detail = probe.err.strip() or probe.text.strip() or f"exit {probe.returncode}"
+        raise DeployError(f"Node preflight failed under {found}: TypeScript import: "
+                          f"{detail}; {help_text}")
+    return found
 
 
 class DeployError(RuntimeError):
@@ -513,6 +532,10 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
                 (reexec or exec_script)([sys.executable, str(pulled), *argv,
                                          "--resumed-from", old])
                 return 0
+
+        d.step("Node TypeScript import preflight")
+        found_node = check_node(runner, repo)
+        d.say(f"    {found_node}: extension/brand.ts imports successfully")
 
         d.step(f"cargo build --locked -p brauser (into {STAGING}; the live binary waits)")
         d.act(["cargo", "build", "--locked", "-p", "brauser", "--target-dir", str(staging)],
