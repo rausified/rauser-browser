@@ -158,10 +158,13 @@ unaffected):
 - `orderContainedFirst` (`extension/starter-adapters.ts`) puts `a` ahead of
   `b` on that origin on every save, whether or not `b` still carries its
   `within`, so `a` wins in both engines (first match wins,
-  `adapter-templates.md` §3). Settings refuses a move that would reverse
-  them. This holds only while `a`'s rules named in `pairs` are exactly as
-  shipped: once the user edits one (widening it to a catch-all, say), the
-  ordinary contained-first order applies, so `b`'s own pages stay `b`'s.
+  `adapter-templates.md` §3), while both adapters are exactly as shipped.
+  Once the user edits either one, the pair is not reordered at all
+  (`isDeclaredPair`). Whichever comes first records the pages both match, so
+  reordering on an edit, or on reverting it, would move recorded pages from
+  one to the other. Settings holds a move that would put `b` above `a`,
+  edited or not. An edit that makes `b`'s rule unreachable (widening an `a`
+  rule to a catch-all) shows as an overlap to review.
 - Settings leaves the host's warning for a declared pair out of the overlap
   list, but only while both adapters are exactly as the starter ships them
   (every `match` rule and `path_case`) and `a` comes first. One predicate,
@@ -188,15 +191,20 @@ unaffected):
   rules) is refused when it would leave a `b` adapter with no `a` adapter
   on the same origin: `b` alone, or `a` removed under `b`. The refusal reads
   "Splunk dashboards need Splunk apps saved with them on <origin>; add
-  Splunk apps, or remove Splunk dashboards too." The order stays the
-  extension's (`orderContainedFirst` above), so an edited pair may save
-  contained first; edited rules are the user's own, and such a pair can
-  re-key as any user-written container can. A config that already has the
-  gap is not blocked from unrelated saves. This is a check on the type names, so it applies on any
-  origin, as starter type names are reserved.
+  Splunk apps, or remove Splunk dashboards too." A save that puts `b` above
+  `a` is refused too, whether the rules are shipped or edited, in a first
+  save of both or by a move: "Splunk apps must stay above Splunk dashboards
+  on <origin>. ... Move Splunk apps back above Splunk dashboards; to change
+  it, remove Splunk dashboards first." So the order a pair becomes live in,
+  container first, is the order it keeps. A config that already has either
+  problem on an origin is not blocked from other saves there, edits of
+  those adapters included. The host's tests check the catalog line against
+  the families' own `overlaps`. The check is on type names, so it applies on
+  any origin: starter type names are reserved for drafts, and a hand-written
+  adapter that reuses one is held to it too.
 
-  Why: alone, `b`'s rule records `a`'s own pages (Splunk's built-in views)
-  under `b`'s identity. Adding `a` later would then re-key those records
+  Why: alone or first, `b`'s rule records `a`'s own pages (Splunk's built-in
+  views) under `b`'s identity. Adding `a`, or moving it first, later would then re-key those records
   without a migration, live or retired. The host's history guard lets a
   container take a retired contained contract's routes (`declares_container`,
   as a repository takes a removed pull request's pages), so the guarantee

@@ -52,7 +52,7 @@ import {
   isContainerType,
   linkedToPresentContainers,
   orderContainedFirst,
-  isContainerFirstPair,
+  isDeclaredPair,
   matchingStarter,
   reviewableOverlaps,
   STARTER_STATUS_TEXT,
@@ -1200,7 +1200,7 @@ const CONTAINER_FIRST_MOVE_HELD = "This starter's container rule must stay ahead
  * rule that must stay ahead of its container. */
 function heldMoveText(adapters: AdapterDocument["artifacts"], index: number, target: number): string {
   const [a, b] = [adapters[index], adapters[target]];
-  return a && b && (isContainerFirstPair(a, b) || isContainerFirstPair(b, a))
+  return a && b && (isDeclaredPair(a, b) || isDeclaredPair(b, a))
     ? CONTAINER_FIRST_MOVE_HELD
     : CONTAINED_MOVE_HELD;
 }
@@ -1219,7 +1219,14 @@ function moveHeldByContainer(adapters: AdapterDocument["artifacts"], index: numb
   [swapped[index], swapped[target]] = [swapped[target]!, swapped[index]!];
   // A document that is already out of order is reordered by any save, so
   // only a move that newly breaks the order is held.
-  return misordered(swapped) && !misordered(adapters);
+  return (misordered(swapped) && !misordered(adapters))
+    || (declaredPairBroken(swapped) && !declaredPairBroken(adapters));
+}
+
+/** Whether a declared container_first pair (`isDeclaredPair`) has its
+ * contained adapter above its container, which the host refuses to save. */
+function declaredPairBroken(adapters: AdapterDocument["artifacts"]): boolean {
+  return adapters.some((contained, at) => adapters.slice(at + 1).some((container) => isDeclaredPair(container, contained)));
 }
 
 function misordered(adapters: AdapterDocument["artifacts"]): boolean {

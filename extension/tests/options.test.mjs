@@ -1468,6 +1468,10 @@ test("a starter's declared container-first overlap is not listed for review, and
   await openSettings();
   assert.match(statusText(), /1 adapter rule overlap needs review/);
   assert.match(nodeText(env.elements.get("adapter-overlaps")), /rule 2 may overlap .* rule 1; .* wins/);
+  // Edited or not, the pair keeps apps first: the move stays held.
+  assert.equal(buttons()[2].disabled, true, "edited apps cannot move below dashboards");
+  assert.equal(buttons()[2].title, held);
+  assert.equal(buttons()[5].disabled, true, "dashboards cannot move above edited apps");
 });
 
 test("a pull request or issue rule cannot be moved below its repository rule", async () => {

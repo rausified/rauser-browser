@@ -1203,6 +1203,67 @@ mod tests {
     use super::{CATALOG, catalog, container_first_pairs, parse, parse_container_first};
     use std::collections::BTreeSet;
 
+    /// The catalog's `container_first` line is exactly what the starter
+    /// families declare (protocol/starters/*.json `overlaps` entries with
+    /// `expect: "container_first"`, labels from their types): an empty line
+    /// while a family declares one, a typo, or a stale label fails here, in
+    /// the host's own tests, not only in the generator's `--check`.
+    #[test]
+    fn container_first_matches_the_starter_families() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../protocol/starters");
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension().is_some_and(|ext| ext == "json")
+                    && path.file_name().is_some_and(|name| name != "ids.lock.json")
+            })
+            .collect();
+        files.sort();
+        let mut expected = Vec::new();
+        for path in files {
+            let family: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let label = |name: &str| {
+                family["types"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|ty| ty["type"] == name)
+                    .and_then(|ty| ty["label"].as_str())
+                    .unwrap_or_else(|| panic!("{}: no type {name}", path.display()))
+                    .to_owned()
+            };
+            for entry in family["overlaps"].as_array().into_iter().flatten() {
+                if entry["expect"] != "container_first" {
+                    continue;
+                }
+                let (a, b) = (entry["a"].as_str().unwrap(), entry["b"].as_str().unwrap());
+                expected.push((a.to_owned(), b.to_owned(), label(a), label(b)));
+            }
+        }
+        assert!(
+            !expected.is_empty(),
+            "a family declares container_first (Splunk)"
+        );
+        let shipped: Vec<_> = container_first_pairs()
+            .iter()
+            .map(|pair| {
+                (
+                    pair.container.clone(),
+                    pair.contained.clone(),
+                    pair.container_label.clone(),
+                    pair.contained_label.clone(),
+                )
+            })
+            .collect();
+        let sorted = |mut pairs: Vec<(String, String, String, String)>| {
+            pairs.sort();
+            pairs
+        };
+        assert_eq!(sorted(shipped), sorted(expected));
+    }
+
     /// The shipped catalog's generated `container_first` line parses to
     /// Splunk's pair; a damaged line is refused, never half-read.
     #[test]

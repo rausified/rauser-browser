@@ -102,8 +102,8 @@ capture, so the structural drafter cannot learn this shape.
   built-in view, such as Enterprise Security's `incident_review`, is
   recorded as a dashboard. An app's own dashboard whose ID is one of the
   listed words (most often `home`) is recorded as app time instead.
-- **Dashboards need apps.** Brauser refuses to save Splunk dashboards
-  without Splunk apps on the stack, or to remove apps while
+- **Dashboards need apps, above them.** Brauser refuses to save Splunk
+  dashboards without Splunk apps on the stack, above them, or to remove apps while
   dashboards stay. Without the app rule, Search and the other built-in
   pages would be recorded as dashboards named `search`, `reports`, and so
   on, and adding apps later would move those records without a migration.

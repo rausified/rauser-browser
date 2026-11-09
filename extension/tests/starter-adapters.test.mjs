@@ -134,21 +134,23 @@ test("orderContainedFirst puts a declared container_first container ahead of its
   const elsewhereBoard = { ...board, origin: "https://elsewhere.example.test" };
   assert.deepEqual(orderContainedFirst([elsewhereSpace, elsewhereBoard]), [elsewhereBoard, elsewhereSpace]);
   // Once either adapter differs from what the starter ships in any rule or
-  // in path_case, the declaration no longer describes it: the ordinary
-  // contained-first order returns, so the board's own pages stay boards.
+  // in path_case, the pair keeps whatever order it already has: whichever
+  // comes first records the pages both match, so reordering on an edit (or
+  // on reverting one) would move recorded pages from one to the other. The
+  // host refuses a save that puts the contained type first.
   const widened = { ...space, match: [space.match[0], { path: "/s/{space:name}/{_}" }] };
-  assert.deepEqual(orderContainedFirst([widened, board]), [board, widened]);
-  // A container rule the declaration does not name, widened to a catch-all.
+  assert.deepEqual(orderContainedFirst([widened, board]), [widened, board]);
+  assert.deepEqual(orderContainedFirst([board, widened]), [board, widened]);
   const widenedRoot = { ...space, match: [{ path: "/s/{space:name}/{*}" }, space.match[1]] };
-  assert.deepEqual(orderContainedFirst([widenedRoot, board]), [board, widenedRoot]);
-  // An extra, broader container rule appended after the shipped ones.
+  assert.deepEqual(orderContainedFirst([widenedRoot, board]), [widenedRoot, board]);
   const appended = { ...space, match: [...space.match, { path: "/s/{space:name}/{_}" }] };
-  assert.deepEqual(orderContainedFirst([appended, board]), [board, appended]);
+  assert.deepEqual(orderContainedFirst([appended, board]), [appended, board]);
   const folded = { ...space, path_case: "insensitive" };
-  assert.deepEqual(orderContainedFirst([folded, board]), [board, folded]);
-  // An edited contained adapter is the user's own rule: ordinary order too.
+  assert.deepEqual(orderContainedFirst([folded, board]), [folded, board]);
   const editedBoard = { ...board, match: [{ path: "/s/{space:name}/{board:name}/{*}" }] };
-  assert.deepEqual(orderContainedFirst([space, editedBoard]), [editedBoard, space]);
+  assert.deepEqual(orderContainedFirst([space, editedBoard]), [space, editedBoard]);
+  // Reverting an edit (shipped again) never flips a container-first pair.
+  assert.deepEqual(orderContainedFirst([space, board]), [space, board]);
   // The evaluated document agrees: the space's built-in page is the space.
   const doc = compileDocument({ format: 1, artifacts: orderContainedFirst([board, space]) });
   assert.equal(doc.ok, true);

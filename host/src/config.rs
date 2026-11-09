@@ -2194,7 +2194,6 @@ pub fn validate(config: &ConfigSnapshot) -> Result<()> {
 /// authoritative adapter validation.
 pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     validate_base(next)?;
-    refuse_new_container_first_gap(current, next)?;
     if let Some(storage) = &next.storage {
         layout::require_fixed(storage)?;
     }
@@ -2204,20 +2203,32 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
     if !preserving_inert_adapters {
         compile_validated_adapters(next)?;
     }
+    // After compilation, so an invalid document gets its own error first and
+    // origins compare as canonical strings.
+    refuse_new_container_first_problem(current, next)?;
     Ok(())
 }
 
-/// Each contained adapter in `config` whose catalog `container_first`
-/// container type has no adapter on its origin
-/// (`crate::capture_site::container_first_pairs`), with that entry. Where
-/// the container sits is the extension's call (`orderContainedFirst`:
-/// container first while both are as shipped, contained first once the user
-/// edits either), so only its presence is checked.
-fn container_first_gaps(
+/// How a catalog `container_first` pair stands on one origin of a config
+/// (`container_first_problems`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContainerFirstProblem {
+    /// A contained adapter with no container adapter on its origin.
+    Missing,
+    /// The first contained adapter sits ahead of the first container adapter.
+    Behind,
+}
+
+/// Each `(origin, pair, problem)` in `config`: an origin with a contained
+/// adapter of a catalog `container_first` pair
+/// (`crate::capture_site::container_first_pairs`) whose container is
+/// missing there or not ahead of it.
+fn container_first_problems(
     config: &ConfigSnapshot,
 ) -> Vec<(
-    &serde_json::Value,
+    String,
     &'static crate::capture_site::ContainerFirstPair,
+    ContainerFirstProblem,
 )> {
     let adapters = &config.adapters.artifacts;
     let field = |adapter: &serde_json::Value, key: &str| {
@@ -2226,55 +2237,76 @@ fn container_first_gaps(
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
     };
-    let mut gaps = Vec::new();
-    for adapter in adapters {
-        let (Some(artifact_type), Some(origin)) =
-            (field(adapter, "type"), field(adapter, "origin"))
-        else {
-            continue;
-        };
-        for pair in crate::capture_site::container_first_pairs() {
-            if pair.contained != artifact_type {
-                continue;
-            }
-            let present = adapters.iter().any(|other| {
-                field(other, "type").as_deref() == Some(pair.container.as_str())
-                    && field(other, "origin").as_deref() == Some(origin.as_str())
-            });
-            if !present {
-                gaps.push((adapter, pair));
+    let first = |artifact_type: &str, origin: &str| {
+        adapters.iter().position(|adapter| {
+            field(adapter, "type").as_deref() == Some(artifact_type)
+                && field(adapter, "origin").as_deref() == Some(origin)
+        })
+    };
+    let mut problems = Vec::new();
+    for pair in crate::capture_site::container_first_pairs() {
+        let origins: std::collections::BTreeSet<String> = adapters
+            .iter()
+            .filter(|adapter| field(adapter, "type").as_deref() == Some(pair.contained.as_str()))
+            .filter_map(|adapter| field(adapter, "origin"))
+            .collect();
+        for origin in origins {
+            let contained = first(&pair.contained, &origin);
+            let problem = match first(&pair.container, &origin) {
+                None => Some(ContainerFirstProblem::Missing),
+                Some(container) if contained.is_some_and(|at| at < container) => {
+                    Some(ContainerFirstProblem::Behind)
+                }
+                Some(_) => None,
+            };
+            if let Some(problem) = problem {
+                problems.push((origin, pair, problem));
             }
         }
     }
-    gaps
+    problems
 }
 
-/// Refuse a save that leaves a container_first contained adapter (Splunk
-/// dashboards) live without its container (Splunk apps) on its origin,
-/// unless `current` already had that gap: dashboards alone, or apps removed
-/// while dashboards stay. Every save reaches this through `validate_update`
-/// (settings, Capture Site and its preflight, and saving restored rules).
-/// Alone, the contained rule records the container's own pages (the
-/// built-in views) under its identity, and adding the container later would
-/// re-key them without a migration. With the shipped pair the extension
-/// keeps the container ahead, so a contained contract never holds those
-/// pages, and the container may take a retired contained contract's routes
-/// (`declares_container`) safely.
-fn refuse_new_container_first_gap(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
-    let existing = container_first_gaps(current);
-    for (adapter, pair) in container_first_gaps(next) {
-        if existing.iter().any(|(had, _)| *had == adapter) {
+/// Refuse a save that leaves a catalog `container_first` pair (Splunk apps
+/// and dashboards) wrong on an origin where `current` had it right: the
+/// contained adapter without its container (dashboards alone, or apps
+/// removed under them), or ahead of it (dashboards above apps, in a first
+/// save of both or by moving one). Every save reaches this through
+/// `validate_update` (settings, Capture Site and its preflight, saving
+/// restored rules, adapter repair).
+///
+/// Why: whichever comes first wins the pages both rules match (the app's
+/// built-in views). With dashboards first, or alone, those pages are
+/// recorded as dashboards, and putting apps first later would move them to
+/// the app without a migration. Keeping the container present and ahead
+/// whenever the contained type is live means the contained contract never
+/// holds those pages, so the container may also take a retired contained
+/// contract's routes (`declares_container`). Rule edits do not change the
+/// order: the extension keeps an edited pair where it is.
+///
+/// A config that already had the problem on an origin (written by hand, or
+/// saved before this rule) is not blocked from other saves, including edits
+/// of those adapters; only a save that introduces one is refused.
+fn refuse_new_container_first_problem(
+    current: &ConfigSnapshot,
+    next: &ConfigSnapshot,
+) -> Result<()> {
+    let existing = container_first_problems(current);
+    for (origin, pair, problem) in container_first_problems(next) {
+        if existing.iter().any(|(had_origin, had_pair, had)| {
+            *had_origin == origin && std::ptr::eq(*had_pair, pair) && *had == problem
+        }) {
             continue;
         }
-        let origin = adapter
-            .get("origin")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        bail!(
-            "{contained} need {container} saved with them on {origin}; add {container}, or remove {contained} too.",
-            contained = pair.contained_label,
-            container = pair.container_label,
-        );
+        let (contained, container) = (&pair.contained_label, &pair.container_label);
+        match problem {
+            ContainerFirstProblem::Missing => bail!(
+                "{contained} need {container} saved with them on {origin}; add {container}, or remove {contained} too."
+            ),
+            ContainerFirstProblem::Behind => bail!(
+                "{container} must stay above {contained} on {origin}. Whichever comes first records the pages both match, so changing the order would move pages already recorded under one to the other. Move {container} back above {contained}; to change it, remove {contained} first."
+            ),
+        }
     }
     Ok(())
 }
@@ -4034,10 +4066,6 @@ mod tests {
             // Apps alone, and apps with dashboards after them, save.
             save_adapters(&mut store, vec![app.clone()]).unwrap();
             save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
-            // An edited app is ordered after the dashboard (contained first).
-            let mut edited = app.clone();
-            edited["match"] = json!([{"path": "/{_}/app/{app:name}/{*}"}]);
-            save_adapters(&mut store, vec![dashboard.clone(), edited]).unwrap();
             // Apps and dashboards together in a first save.
             let folder = tempfile::tempdir().unwrap();
             let mut store = loaded(&folder.path().join("config.toml"));
@@ -4060,6 +4088,82 @@ mod tests {
                 format!("{error:#}").contains("Splunk dashboards need Splunk apps saved with them"),
                 "{error:#}"
             );
+        }
+
+        fn edited(app: &serde_json::Value) -> serde_json::Value {
+            let mut edited = app.clone();
+            edited["match"][1]["path"] =
+                json!("/{_}/app/{app:name}/(search|dashboards|reports|alerts|incident_review)");
+            edited
+        }
+
+        fn order_refusal(error: &anyhow::Error) -> bool {
+            let message = format!("{error:#}");
+            message.contains("Splunk apps must stay above Splunk dashboards")
+                && message.contains("Move Splunk apps back above Splunk dashboards")
+        }
+
+        /// Whichever of a container_first pair comes first records the pages
+        /// both match, so the order the pair became live in is kept: apps
+        /// first. Rule edits, and reverting them, keep it; any save that
+        /// puts dashboards above apps is refused, whether the rules are as
+        /// shipped or edited, in a first save of both or by moving one.
+        #[test]
+        fn a_container_first_pair_keeps_the_container_ahead() {
+            let [app, dashboard] = splunk();
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            // A first save of both, dashboards first.
+            let error =
+                save_adapters(&mut store, vec![dashboard.clone(), app.clone()]).unwrap_err();
+            assert!(order_refusal(&error), "{error:#}");
+            let mut proposal = store.snapshot().adapters.clone();
+            proposal.artifacts = vec![dashboard.clone(), app.clone()];
+            assert!(order_refusal(
+                &store.check_capture_site(&proposal).unwrap_err()
+            ));
+            // Shipped order; edit, then revert; revert, then edit: all keep apps first.
+            save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
+            save_adapters(&mut store, vec![edited(&app), dashboard.clone()]).unwrap();
+            save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
+            save_adapters(&mut store, vec![edited(&app), dashboard.clone()]).unwrap();
+            // Flipping an edited pair, or a shipped one, is refused.
+            for flipped in [
+                vec![dashboard.clone(), edited(&app)],
+                vec![dashboard.clone(), app.clone()],
+            ] {
+                let error = save_adapters(&mut store, flipped).unwrap_err();
+                assert!(order_refusal(&error), "{error:#}");
+            }
+            // Dashboards added under live apps, in the right place, save.
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            save_adapters(&mut store, vec![app.clone()]).unwrap();
+            save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
+            // Removing dashboards and adding them back above apps is refused too.
+            save_adapters(&mut store, vec![app.clone()]).unwrap();
+            assert!(order_refusal(
+                &save_adapters(&mut store, vec![dashboard, app]).unwrap_err()
+            ));
+        }
+
+        /// A config that already has dashboards above apps (written by hand,
+        /// or saved before this rule) is not blocked from other saves on it,
+        /// edits of those adapters included.
+        #[test]
+        fn an_existing_order_problem_does_not_block_other_saves() {
+            let [app, dashboard] = splunk();
+            let mut current = empty_config();
+            current.adapters.artifacts = vec![dashboard.clone(), app.clone()];
+            let mut next = current.clone();
+            next.strip_params.push("ref".into());
+            validate_update(&current, &next).unwrap();
+            let mut edit = current.clone();
+            edit.adapters.artifacts = vec![dashboard.clone(), edited(&app)];
+            validate_update(&current, &edit).unwrap();
+            let mut fixed = current.clone();
+            fixed.adapters.artifacts = vec![app, dashboard];
+            validate_update(&current, &fixed).unwrap();
         }
 
         /// A config that already has dashboards without apps (written by
