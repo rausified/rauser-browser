@@ -150,7 +150,9 @@ unaffected):
   `b` on that origin on every save, whether or not `b` still carries its
   `within`, so `a` wins in both engines (first match wins,
   `adapter-templates.md` §3). Settings refuses a move that would reverse
-  them.
+  them. This holds only while `a`'s rules named in `pairs` are exactly as
+  shipped: once the user edits one (widening it to a catch-all, say), the
+  ordinary contained-first order applies, so `b`'s own pages stay `b`'s.
 - Settings leaves the host's warning for a declared pair out of the overlap
   list, but only while both rules are exactly as the starter ships them
   (rule text and `path_case`) and `a` comes first. An edited rule, a pair

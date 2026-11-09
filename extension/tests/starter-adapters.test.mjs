@@ -133,6 +133,16 @@ test("orderContainedFirst puts a declared container_first container ahead of its
   const elsewhereSpace = { ...space, origin: "https://elsewhere.example.test" };
   const elsewhereBoard = { ...board, origin: "https://elsewhere.example.test" };
   assert.deepEqual(orderContainedFirst([elsewhereSpace, elsewhereBoard]), [elsewhereBoard, elsewhereSpace]);
+  // Once the container's declared rule is edited (widened to a catch-all,
+  // say), the declaration no longer describes it: the ordinary
+  // contained-first order returns, so the board's own pages stay boards.
+  const widened = { ...space, match: [space.match[0], { path: "/s/{space:name}/{_}" }] };
+  assert.deepEqual(orderContainedFirst([widened, board]), [board, widened]);
+  const folded = { ...space, path_case: "insensitive" };
+  assert.deepEqual(orderContainedFirst([folded, board]), [board, folded]);
+  // Editing the contained adapter keeps the container's built-in pages its own.
+  const editedBoard = { ...board, match: [{ path: "/s/{space:name}/{board:name}/{*}" }] };
+  assert.deepEqual(orderContainedFirst([editedBoard, space]), [space, editedBoard]);
   // The evaluated document agrees: the space's built-in page is the space.
   const doc = compileDocument({ format: 1, artifacts: orderContainedFirst([board, space]) });
   assert.equal(doc.ok, true);

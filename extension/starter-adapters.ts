@@ -588,12 +588,17 @@ function containerFirst(origin: unknown, container: unknown, contained: unknown)
     entry.expect === "container_first" && entry.a === container && entry.b === contained) ?? null;
 }
 
-/** Whether `container` and `contained` are, by type and origin, a starter
- * family's declared `"container_first"` pair, which `orderContainedFirst`
- * keeps container first. */
+/** Whether `container` ahead of `contained` is a starter family's declared
+ * `"container_first"` pair as the family ships it: same origin, the
+ * family's own types, and every container rule the declaration names
+ * (`pairs`) still exactly as shipped (`shippedRule`). `orderContainedFirst`
+ * keeps such a pair container first. Once the user edits one of those rules
+ * (widening a built-in list to a catch-all, say), the declaration no longer
+ * describes it, and the ordinary contained-first order applies. */
 export function isContainerFirstPair(container: AdapterObject, contained: AdapterObject): boolean {
-  return container.origin === contained.origin
-    && containerFirst(container.origin, container.type, contained.type) !== null;
+  if (container.origin !== contained.origin) return false;
+  const entry = containerFirst(container.origin, container.type, contained.type);
+  return entry !== null && entry.pairs.every(([rule]) => shippedRule(container, rule));
 }
 
 /** A stable reorder so that, on each origin, every adapter declaring
@@ -609,14 +614,15 @@ export function isContainerFirstPair(container: AdapterObject, contained: Adapte
  * (Splunk's apps and dashboards): there the container's own listed pages
  * must win, so on that family's origins the container goes ahead of the
  * contained type instead, whether or not the contained adapter still carries
- * its `within` (a dashboard saved before its app has none). */
+ * its `within` (a dashboard saved before its app has none), while the
+ * container's declared rules are unedited (`isContainerFirstPair`). */
 export function orderContainedFirst<T extends AdapterObject>(artifacts: T[]): T[] {
   const containers = artifacts.map(containerType);
   // ahead[i]: the adapters on adapter i's origin that must come before it.
   const ahead = artifacts.map((adapter, index) => artifacts.flatMap((other, at) => {
     if (at === index || other.origin !== adapter.origin) return [];
-    if (containerFirst(adapter.origin, other.type, adapter.type)) return [at];
-    const inside = containers[at] === adapter.type && !containerFirst(adapter.origin, adapter.type, other.type);
+    if (isContainerFirstPair(other, adapter)) return [at];
+    const inside = containers[at] === adapter.type && !isContainerFirstPair(adapter, other);
     return inside ? [at] : [];
   }));
   const reaches = (from: number, to: number): boolean => {

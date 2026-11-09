@@ -49,8 +49,8 @@ The design agent's open decisions, settled:
    overlap: `b` is within `a` under `a`'s own ID template, `a` is listed first, and `a` wins
    those pairs. The generated `overlap_report` case expects exactly those pairs, so any other
    overlap still fails the build. At runtime `orderContainedFirst` keeps `a` ahead of `b` on the
-   family's own origins, and settings hides only the declared pairs while both rules are
-   unedited. Why in the family file and not the format: it records how one vendor lays out its
+   family's own origins while the container's declared rules are unedited, and settings hides only
+   the declared pairs while both rules are unedited. Why in the family file and not the format: it records how one vendor lays out its
    URLs, reviewed with the family; a format-level precedence key would let any saved or drafted
    adapter declare a winner, which the overlap warning exists to stop. User-written adapters,
    agent drafts and recorded-rule restore keep today's overlap handling
