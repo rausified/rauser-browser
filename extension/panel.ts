@@ -2227,7 +2227,7 @@ async function loadWorklog(): Promise<void> {
       if (response.focus_session_id !== sessionId) throw new Error("The host returned a different focus session. Try again.");
       if (response.sessions_page) validateSessionPage(response, 0);
       const catalog = worklogSessionCatalog;
-      const catalogScope = sessionCatalogScope();
+      const catalogScope = sessionCatalogScope(range);
       if (catalog?.scope === catalogScope && catalog.page && response.sessions_page?.snapshot === catalog.page.snapshot) {
         response.sessions = catalog.sessions;
         response.sessions_page = catalog.page;
@@ -2240,11 +2240,16 @@ async function loadWorklog(): Promise<void> {
     worklogValidated = response.type === "worklog_choices_result" ? { scope, report: response } : null;
     // A delivery refresh removes the old checkbox. Restore its stable identity
     // only if the user has not moved focus elsewhere while the host answered.
-    const restoreFocus = focusedScope === scope &&
-      (document.activeElement === focused || document.activeElement === document.body);
+    const focusUnmoved = document.activeElement === focused || document.activeElement === document.body;
+    const restoreFocus = focusedScope === scope && focusUnmoved;
     renderWorklogChoices(restoreFocus ? focusedKey : null);
     renderWorklog();
     if (restoreFocus && focused === worklogMore && !worklogMore.hidden) worklogMore.focus();
+    // Refresh and Reload sessions hide the paging button while loading. Restore
+    // its focus even when reload cleared the previously selected session.
+    if (focusOnly && focused === worklogFocusMore && focusUnmoved) {
+      (worklogFocusMore.hidden ? worklogFocusSession : worklogFocusMore).focus();
+    }
   } catch (error) {
     if (seq !== worklogLoadSeq || closed) return;
     worklogValidated = null;
@@ -2257,8 +2262,7 @@ async function loadWorklog(): Promise<void> {
   }
 }
 
-function sessionCatalogScope(): string {
-  const range = worklogRange();
+function sessionCatalogScope(range = worklogRange()): string {
   return JSON.stringify([session.config?.storage, session.revision, range.start, range.end]);
 }
 
@@ -2281,7 +2285,11 @@ async function loadMoreSessions(): Promise<void> {
     await loadWorklog();
     return;
   }
-  if (!catalog.page || catalog.page.next_offset === null || catalog.scope !== sessionCatalogScope() || !session.connected) return;
+  if (catalog.scope !== sessionCatalogScope()) {
+    await loadWorklog();
+    return;
+  }
+  if (!catalog.page || catalog.page.next_offset === null || !session.connected) return;
   const seq = worklogLoadSeq;
   const offset = catalog.page.next_offset;
   const snapshot = catalog.page.snapshot;

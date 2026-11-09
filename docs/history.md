@@ -1847,3 +1847,16 @@ the catalog. It retains loaded pages on a matching refresh, drops them when the
 snapshot changes, discards replies after context changes and explicitly reloads
 a stale catalog. The final paging action returns keyboard focus to the select.
 Original note identity, Re-learn gates and browser-local recovery are unchanged.
+
+## 2026-11-09 — Review: retain session paging focus after refresh
+
+The independent review found that delivery refresh and Reload sessions hid the
+focused paging button but never restored focus. `loadWorklog` now returns focus
+to More sessions, or the session selector when the catalog is exhausted, unless
+the user moved elsewhere while waiting. Reload restores focus even when it has
+cleared the previous session selection. Offline regressions reproduce the lost
+focus and cover moved focus; the browser keyboard journey covers refresh and
+reload with the real DOM.
+The same review found that crossing midnight made More sessions silently
+ignore an expired Today catalog. The action now starts a fresh catalog for
+the current dates; a simulated-clock regression covers the rollover.

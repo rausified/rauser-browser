@@ -1880,6 +1880,12 @@ checked work, preserves pages on unchanged refreshes, and refuses stale or malfo
 continuations with explicit reload. A changed snapshot drops later catalog pages
 without choosing a different same-name session. The keyboard journey verifies
 that the exhausted paging control gives focus back to the session selector.
+Delivery refresh and Reload sessions also restore the paging control's focus,
+unless the user moved elsewhere while the host answered. Offline cases model
+Chrome dropping focus to the body when the control is hidden during loading;
+the browser journey checks the actual focus transition.
+An open Today catalog crossing local midnight refreshes from offset zero on
+the next More sessions action instead of silently ignoring the click.
 
 The accessibility suite includes a native-select keyboard journey through
 the session catalog, repeated session choices without losing focus, entry

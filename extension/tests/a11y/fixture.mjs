@@ -124,6 +124,7 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
         const session = { id: "10000000-0000-4000-8000-000000000001", name: "Release", revision: 1 };
         const sessions = fixture.focusPages ? [session, { ...session, id: "10000000-0000-4000-8000-000000000002" }] : [session];
         const offset = request.sessions_page?.offset ?? 0;
+        if (offset && fixture.focusPageConflict) return { type: "error", code: "conflict", message: "Recorded sessions changed" };
         const next = fixture.focusPages && offset === 0 ? 1 : null;
         const selected = sessions.find((s) => s.id === request.focus_session_id) ?? null;
         return {

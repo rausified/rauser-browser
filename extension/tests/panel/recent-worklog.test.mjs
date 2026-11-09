@@ -996,6 +996,80 @@ test("More sessions reaches every duplicate-named session and preserves selected
   assert.equal(page.el("copy-worklog").disabled, true);
 });
 
+for (const movedAway of [false, true]) {
+  test(`session catalog delivery refresh ${movedAway ? "respects moved" : "restores paging-button"} keyboard focus`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    let waiting, release;
+    let delay = false;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const page = await focusCuration((request) => {
+      if (delay) { waiting = request; return pending; }
+      return pagedFocusReply(request);
+    });
+    const more = page.el("worklog-focus-more");
+    document.body = new FakeElement("body");
+    document.activeElement = more;
+    delay = true;
+    page.state.workerStatus.delivered_batches = 1;
+    t.mock.timers.tick(30_000);
+    await until(() => waiting, "catalog delivery refresh");
+    // Hiding a focused button sends Chrome's focus to the body. The shared
+    // fake DOM needs that transition modeled explicitly.
+    document.activeElement = movedAway ? page.el("recent-title") : document.body;
+    release(pagedFocusReply(waiting));
+    await until(() => page.el("worklog-focus-status").textContent !== "Loading recorded sessions…", "refreshed catalog");
+    assert.equal(more.focused ?? false, !movedAway);
+  });
+}
+
+test("Reload sessions returns keyboard focus to the refreshed paging control", async () => {
+  let fail = true;
+  const page = await focusCuration((request) => request.sessions_page?.offset && fail
+    ? { type: "error", code: "conflict", message: "history changed" } : pagedFocusReply(request));
+  chooseFocus(page, FOCUS_ONE.id);
+  await until(() => choiceRows(page).length === 1, "selected session work");
+  const more = page.el("worklog-focus-more");
+  more.click();
+  await until(() => more.textContent === "Reload sessions", "reload action");
+  fail = false;
+  document.body = new FakeElement("body");
+  document.activeElement = more;
+  more.click();
+  document.activeElement = document.body;
+  await until(() => more.textContent === "More sessions", "reloaded catalog");
+  assert.equal(page.el("worklog-focus-session").value, "");
+  assert.equal(more.focused, true);
+});
+
+for (const duringLoad of [false, true]) {
+  test(`More sessions refreshes Today when midnight passes ${duringLoad ? "during" : "after"} catalog loading`, async (t) => {
+    const before = new Date(2026, 10, 9, 23, 59).getTime();
+    t.mock.timers.enable({ apis: ["Date"], now: before });
+    let waiting, release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const opening = focusCuration((request) => {
+      if (duringLoad && !waiting) { waiting = request; return pending; }
+      return pagedFocusReply(request);
+    });
+    if (duringLoad) {
+      await until(() => waiting, "pending catalog");
+      t.mock.timers.tick(120_000);
+      release(pagedFocusReply(waiting));
+    }
+    const page = await opening;
+    const requests = page.sent("worklog_focus_choices").length;
+    assert.equal(page.sent("worklog_focus_choices").at(-1).start_date, "2026-11-09");
+    if (!duringLoad) t.mock.timers.tick(120_000);
+    page.el("worklog-focus-more").click();
+    assert.equal(page.sent("worklog_focus_choices").length, requests + 1, "refresh starts immediately");
+    const request = page.sent("worklog_focus_choices").at(-1);
+    assert.equal(request.start_date, "2026-11-10");
+    assert.equal(request.end_date, "2026-11-10");
+    assert.deepEqual(request.sessions_page, { offset: 0 });
+    assert.equal(page.el("copy-worklog").disabled, true);
+  });
+}
+
 test("a changed catalog refresh keeps the selected identity and checked work while dropping later pages", async () => {
   let snapshot = "a".repeat(64);
   const page = await focusCuration((request) => pagedFocusReply(request, snapshot));
