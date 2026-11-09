@@ -85,8 +85,11 @@ export function mergifyStatus(comments) {
     try { payload = JSON.parse(PAYLOAD.exec(body)?.[1] ?? "null"); } catch { /* not a status comment */ }
     if (payload?.version === 1) {
       const fromList = [...body.split("<details>")[0].matchAll(/^\s*- \[ \] `([^`]+)`/gm)].map((m) => m[1]);
-      const unmet = payload.state === "waiting" ? [...new Set(leaves(payload.required_conditions).concat(fromList))] : [];
-      status = { state: payload.state, step: payload.step ?? null, unmet, reason: payload.dequeue_reason?.message ?? null };
+      // A dequeue quotes the conditions that failed under **Reason** (#349): "> - [ ] `-label = needs-merge`".
+      const quoted = [...body.matchAll(/^>[\s>]*- \[ \] `([^`]+)`/gm)].map((m) => m[1]);
+      const unmet = payload.state === "waiting" ? [...new Set(leaves(payload.required_conditions).concat(fromList))]
+        : payload.state === "dequeued" ? [...new Set(quoted)] : [];
+      status = { state: payload.state, step: payload.step ?? null, unmet, reason: payload.dequeue_reason?.message ?? null, code: payload.dequeue_reason?.code ?? null };
     } else if (/request has been cancelled|Queue command cancelled/.test(body)) status = { state: "cancelled", unmet: [] };
     else if (/already running/.test(body) && status.state === "requested") status = live;
   }
@@ -153,7 +156,7 @@ const disarmCommand = (snap) => `gh pr merge --disable-auto ${snap.number}`;
  * when the PR was first seen green with no queue run (it times the 12 and 16 exits). */
 export function decide(snap, { until = "merged", now = new Date().toISOString(), dirtySince = null, idleSince = null } = {}) {
   const n = snap.number;
-  const { state, step, unmet, reason } = snap.mergify;
+  const { state, step, unmet, reason, code } = snap.mergify;
   if (snap.state === "MERGED") return act(EXIT.DONE, "merged", `#${n} merged`);
   if (snap.state === "CLOSED") return act(EXIT.CLOSED, "closed", `#${n} was closed without merging; reopen it or ask the coordinator`);
   const checks = analyzeChecks(snap.checks);
@@ -176,6 +179,14 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
   if (snap.autoMerge) return act(EXIT.ENQUEUE, "auto-merge-armed", `#${n} has GitHub auto-merge armed, which merges around the Mergify queue: ${disarmCommand(snap)}`);
   if (snap.blockers.length && (snap.labeled || queued)) {
     return act(EXIT.QUEUE_BLOCKED, `queue-blocked:${snap.blockers[0]}`, `#${n} is queued but Mergify will not take it while it carries ${snap.blockers.join(", ")} (.mergify.yml queue_conditions; pr-doctor clears ${NEEDS_MERGE_LABEL} once the PR merges cleanly): ${snap.blockers.map((l) => `gh pr edit ${n} --remove-label ${l}`).join(" && ")}`);
+  }
+  if (state === "dequeued") {
+    const requeue = `push it, and once gh pr view ${n} --json headRefOid shows the new head: gh pr comment ${n} --body "${QUEUE_COMMENT}"`;
+    if (code === "CONFLICT_WITH_BASE_BRANCH") return act(EXIT.CHECK_FAILED, "dequeued:conflict", `#${n} left the Mergify queue: ${reason}. Merge main in yourself, or wait for pr-doctor's merge push if the conflict is in its scope (pr-watch says which once GitHub reports the PR conflicting); then ${requeue}`);
+    if (code === "PR_DEQUEUED" && /conditions/i.test(reason ?? "")) {
+      const which = unmet.length ? ` Failed: ${short(unmet.map((c) => `\`${c}\``), 6)}.` : " Mergify's comment quotes the condition that failed.";
+      return act(EXIT.CHECK_FAILED, "dequeued:conditions", `#${n} left the Mergify queue: ${reason}.${which} Fix that; then ${requeue}`);
+    }
   }
   if (state === "dequeued") return act(EXIT.CHECK_FAILED, "dequeued", `#${n} left the Mergify queue: ${reason ?? "see Mergify's comment"}. Fix and push, then comment "${QUEUE_COMMENT}" (a new head does not requeue it); for a flake comment "@mergifyio requeue".`);
   if (state === "requested") {

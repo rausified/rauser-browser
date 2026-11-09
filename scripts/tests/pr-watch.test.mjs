@@ -88,13 +88,14 @@ test("mergifyStatus: #339 waiting reads the unmet checklist, since the waiting p
 });
 
 test("mergifyStatus: #339 in the queue is checking with its step and no unmet list", () => {
-  assert.deepEqual(mergifyStatus([FX.checking339, FX.ignored339, FX.refreshed339]), { state: "checking", step: "checks_running", unmet: [], reason: null });
+  assert.deepEqual(mergifyStatus([FX.checking339, FX.ignored339, FX.refreshed339]), { state: "checking", step: "checks_running", unmet: [], reason: null, code: null });
 });
 
 test("mergifyStatus: #299 dequeued carries Mergify's reason", () => {
   const s = mergifyStatus([FX.dequeued299]);
   assert.equal(s.state, "dequeued");
   assert.equal(s.reason, "The pull request conflicts with main");
+  assert.equal(s.code, "CONFLICT_WITH_BASE_BRANCH");
 });
 
 test("mergifyStatus: a push cancels the request until a later status comment (#329)", () => {
@@ -235,10 +236,33 @@ test("waiting on a non-check condition past the grace names it; unlabeled says a
   assert.match(d.message, /`label = queue`.*gh pr edit 243 --add-label queue/);
 });
 
-test("dequeued: exit 10 with Mergify's reason and the requeue comment", () => {
-  const d = decide(snap({ comments: [FX.dequeued299] }));
+test("dequeued for a conflict (#299): merge main in or wait for pr-doctor, push, then requeue on the new head", () => {
+  // GitHub has not recomputed mergeability yet, so the DIRTY branch does not run.
+  const d = decide(snap({ pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" }, comments: [FX.dequeued299] }));
   assert.equal(d.exitCode, EXIT.CHECK_FAILED);
-  assert.match(d.message, /conflicts with main.*"@Mergifyio queue".*@mergifyio requeue/);
+  assert.equal(d.action, "dequeued:conflict");
+  assert.match(d.message, /conflicts with main/);
+  assert.match(d.message, /merge main in/i);
+  assert.match(d.message, /pr-doctor/);
+  assert.match(d.message, /new head.*gh pr comment 243 --body "@Mergifyio queue"/);
+});
+
+test("dequeued for queue conditions (#349): name the condition that failed, then requeue on the new head", () => {
+  assert.deepEqual(mergifyStatus([FX.dequeued349]).unmet, ["-label = needs-merge"]);
+  const d = decide(snap({ comments: [FX.dequeued349] }));
+  assert.equal(d.exitCode, EXIT.CHECK_FAILED);
+  assert.equal(d.action, "dequeued:conditions");
+  assert.match(d.message, /Queue conditions are not satisfied/);
+  assert.match(d.message, /`-label = needs-merge`/);
+  assert.match(d.message, /new head.*gh pr comment 243 --body "@Mergifyio queue"/);
+});
+
+test("dequeued for another reason keeps the generic advice, including requeue for a flake", () => {
+  const body = FX.dequeued299.body.replace("CONFLICT_WITH_BASE_BRANCH", "CHECKS_FAILED").replace("conflict with base branch", "checks failed")
+    .replace("The pull request conflicts with main", "Checks failed in the queue");
+  const d = decide(snap({ comments: [{ ...FX.dequeued299, body }] }));
+  assert.equal(d.action, "dequeued");
+  assert.match(d.message, /Checks failed in the queue.*"@Mergifyio queue".*@mergifyio requeue/);
 });
 
 test("not queued while checks run: keep waiting, and print the queue commands now", () => {
