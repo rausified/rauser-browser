@@ -25259,6 +25259,49 @@
       "expect": {"pairs": [{"first": [0, 0], "second": [1, 0]}]}
     },
     {
+      "id": "overlap_report.container_first_declared",
+      "kind": "overlap_report",
+      "why": "§10.3, protocol/starters/README.md container_first: a container listed ahead of a type within it, with its own built-in pages, reports exactly that rule pair, container first, so the container wins it",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "nest.space", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}"}, {"path": "/s/{space:name}/(settings|members)"}], "id": "nest.space:{host}/s/{space}"}, {"type": "nest.board", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}/{board:name}"}], "id": "nest.board:{host}/{space}/{board}", "within": {"type": "nest.space", "id": "nest.space:{host}/s/{space}"}}]},
+      "expect": {"pairs": [{"first": [0, 1], "second": [1, 0]}]}
+    },
+    {
+      "id": "eval.container_first.winner",
+      "kind": "evaluate",
+      "why": "§3, protocol/starters/README.md container_first: on the overlapping URL the container listed first wins, in both engines",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "nest.space", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}"}, {"path": "/s/{space:name}/(settings|members)"}], "id": "nest.space:{host}/s/{space}"}, {"type": "nest.board", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}/{board:name}"}], "id": "nest.board:{host}/{space}/{board}", "within": {"type": "nest.space", "id": "nest.space:{host}/s/{space}"}}]},
+      "url": "https://nest.example.test/s/acme/settings",
+      "expect": {"match": true, "adapter": 0, "rule": 1, "type": "nest.space", "captures": {"space": "acme"}, "artifact_id": "nest.space:nest.example.test/s/acme", "mode": null}
+    },
+    {
+      "id": "eval.container_first.contained_page",
+      "kind": "evaluate",
+      "why": "§3, §8.3, protocol/starters/README.md container_first: a page only the contained type matches is still its own, rolled up into the container",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "nest.space", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}"}, {"path": "/s/{space:name}/(settings|members)"}], "id": "nest.space:{host}/s/{space}"}, {"type": "nest.board", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}/{board:name}"}], "id": "nest.board:{host}/{space}/{board}", "within": {"type": "nest.space", "id": "nest.space:{host}/s/{space}"}}]},
+      "url": "https://nest.example.test/s/acme/roadmap",
+      "expect": {"match": true, "adapter": 1, "rule": 0, "type": "nest.board", "captures": {"space": "acme", "board": "roadmap"}, "artifact_id": "nest.board:nest.example.test/acme/roadmap", "mode": null, "within": {"type": "nest.space", "artifact_id": "nest.space:nest.example.test/s/acme"}}
+    },
+    {
+      "id": "eval.container_first.loser_alone",
+      "kind": "evaluate",
+      "why": "§3, protocol/starters/README.md container_first: the contained type configured alone, without its within, matches its own pages",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "nest.board", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}/{board:name}"}], "id": "nest.board:{host}/{space}/{board}"}]},
+      "url": "https://nest.example.test/s/acme/roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "nest.board", "captures": {"space": "acme", "board": "roadmap"}, "artifact_id": "nest.board:nest.example.test/acme/roadmap", "mode": null}
+    },
+    {
+      "id": "overlap_report.container_first_undeclared",
+      "kind": "overlap_report",
+      "why": "§10.3, protocol/starters/README.md container_first: a further rule pair a family did not declare is reported beside the declared one, so the family's generated overlap_report case (which expects only declared pairs) refuses it",
+      "impls": ["rust"],
+      "doc": {"format": 1, "artifacts": [{"type": "nest.space", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}"}, {"path": "/s/{space:name}/(settings|members)"}, {"path": "/s/{space:name}/(roadmap)"}], "id": "nest.space:{host}/s/{space}"}, {"type": "nest.board", "origin": "https://nest.example.test", "match": [{"path": "/s/{space:name}/{board:name}"}], "id": "nest.board:{host}/{space}/{board}", "within": {"type": "nest.space", "id": "nest.space:{host}/s/{space}"}}]},
+      "expect": {"pairs": [{"first": [0, 1], "second": [1, 0]}, {"first": [0, 2], "second": [1, 0]}]}
+    },
+    {
       "id": "overlap_report.basic",
       "kind": "overlap_report",
       "why": "§10.3: overlapping adapters on one origin, naming the earlier rule as the winner",

@@ -207,3 +207,40 @@ for (const history of ["retired", "hand-removed"]) {
     assert.equal(updates(page).length, 0);
   });
 }
+
+// A container_first starter family (Splunk) records two contracts that
+// overlap on purpose, so the host refuses to restore them as recorded. The
+// shipped starter is still offered, re-checked by the host against every
+// recorded identity before saving; any other refusal still blocks it.
+const SPLUNK_URL = "https://acme.splunkcloud.com/en-US/app/search/search";
+const RECORDED_OVERLAP = "Recorded capture rules overlap, so Brauser cannot choose which to restore. Review the rules in settings; existing notes are unchanged.";
+
+test("a refused restore of a container-first starter's own overlap still offers the starter", async () => {
+  const page = await captureReview(SPLUNK_URL, { intercept(request) {
+    if (request.type === "get_site_restore") return { type: "error", code: "invalid_config", message: RECORDED_OVERLAP };
+  } });
+  await until(() => !page.el("capture-site-save").disabled, "the Splunk starter preflight");
+  assert.doesNotMatch(page.el("capture-site-message").textContent, /Could not review recorded rules/);
+  assert.match(page.el("capture-site-preview").textContent, /cannot be restored as recorded/);
+  assert.equal(page.sent("check_capture_site").length, 1);
+  await saveCapture(page);
+  assert.deepEqual(updates(page)[0].config.adapters.artifacts.map((adapter) => adapter.type), ["splunk.app", "splunk.dashboard"]);
+});
+
+test("other restore refusals still block a container-first starter", async () => {
+  for (const message of [
+    "Brauser's recorded adapters cannot be read for this site. Fix adopted-contracts.json or choose Forget recorded adapters in settings, then review again.",
+    "Recorded capture rules for this site need repair in config.toml. Repair adapter_id_history in that file before restoring capture.",
+  ]) {
+    const page = await captureReview(SPLUNK_URL, { intercept: (request) =>
+      request.type === "get_site_restore" ? { type: "error", code: "invalid_config", message } : undefined });
+    assert.match(page.el("capture-site-message").textContent, /Could not review recorded rules/);
+    assert.equal(page.el("capture-site-save").disabled, true);
+    assert.equal(page.sent("check_capture_site").length, 0);
+  }
+  // The overlap allowance is the declaring family's: GitHub keeps the block.
+  const page = await captureReview(GITHUB_URL, { intercept: (request) =>
+    request.type === "get_site_restore" ? { type: "error", code: "invalid_config", message: RECORDED_OVERLAP } : undefined });
+  assert.match(page.el("capture-site-message").textContent, /Could not review recorded rules/);
+  assert.equal(page.sent("check_capture_site").length, 0);
+});

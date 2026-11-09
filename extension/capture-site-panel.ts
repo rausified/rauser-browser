@@ -13,13 +13,31 @@ import {
 } from "./capture-site.js";
 import { httpOrigin, type SampledShape } from "./site-patterns.js";
 import {
-  choiceNoun, displayTypes, parseTenantList, recordLabel, scopedValuesOf, starterFamily, starterOffers, starterStatus,
+  choiceNoun, declaresContainerFirst, displayTypes, parseTenantList, recordLabel, scopedValuesOf, starterFamily, starterOffers,
+  starterStatus,
 } from "./starter-adapters.js";
 import { scopeInput } from "./starter-scopes.js";
 import { renderStarterChoice, type StarterChoiceView } from "./starter-choice-view.js";
 import { SitePatternPanel, collectPagePatterns } from "./site-pattern-panel.js";
 import { draftHandoff, handoffKey, storeDraftHandoff } from "./capture-site-handoff.js";
 import { joinRecordedTypes } from "./site-coverage.js";
+
+/** The host's `site_restore` refusal for recorded rules that overlap
+ * (`host/src/config.rs`). */
+const RECORDED_OVERLAP_REFUSAL = "Recorded capture rules overlap";
+const RESTORE_OVERLAP_NOTICE = "This site's recorded rules overlap on purpose, as this starter's do, so they cannot be restored as recorded. Choose the starter rules below instead: Brauser checks them against every recorded identity before saving, and existing notes keep theirs.";
+
+/** Whether a refused restore may still offer the starter: the starter
+ * family claiming the origin declares a `"container_first"` overlap
+ * (protocol/starters/README.md), whose own recorded contracts the host
+ * refuses to restore like any overlap, and the refusal is that overlap and
+ * nothing else. The host re-checks the starter plan against every recorded
+ * contract (`check_capture_site`) and again on save, so a recorded identity
+ * the starter would change is still refused there. */
+function overlapRefusalAllowsStarter(error: unknown, target: { mode: string; origin: string }): boolean {
+  return target.mode === "starter" && error instanceof HostError
+    && error.message.includes(RECORDED_OVERLAP_REFUSAL) && declaresContainerFirst(target.origin);
+}
 
 export interface CapturePage {
   url: string;
@@ -213,6 +231,9 @@ export class CaptureSitePanel {
   // Fresh rules require a successful review reporting no recorded contracts.
   // A failed review must stay blocked when starter inputs change.
   private freshRulesAllowed = false;
+  /** Why recorded rules were not restored when the starter is offered anyway
+   * (`overlapRefusalAllowsStarter`), shown above the starter preview. */
+  private restoreNotice: string | null = null;
   private starterCheck = 0;
   // The drafted flow. The link shapes (in `draftInput`) and the draft live
   // only here and are cleared by close().
@@ -387,6 +408,7 @@ export class CaptureSitePanel {
    * host reports no recorded rules. */
   private async startReview(target: NonNullable<CaptureSitePanel["target"]>): Promise<void> {
     this.freshRulesAllowed = false;
+    this.restoreNotice = null;
     this.previewMessage = "Checking saved site identities…";
     this.updateControls(this.actions.isBusy());
     try {
@@ -435,6 +457,12 @@ export class CaptureSitePanel {
     } catch (error) {
       if (this.target !== target) return;
       this.restorePlan = null;
+      if (overlapRefusalAllowsStarter(error, target)) {
+        this.freshRulesAllowed = true;
+        this.restoreNotice = RESTORE_OVERLAP_NOTICE;
+        this.updatePreview();
+        return;
+      }
       this.previewMessage = `Could not review recorded rules: ${describe(error)}`;
     }
     if (this.target === target) this.updateControls(this.actions.isBusy());
@@ -455,6 +483,7 @@ export class CaptureSitePanel {
     this.restorePlan = null;
     this.restored = null;
     this.freshRulesAllowed = false;
+    this.restoreNotice = null;
     this.draft = null;
     this.draftInput = null;
     this.draftPlan = null;
@@ -920,6 +949,12 @@ export class CaptureSitePanel {
     }
     if (result.ok) {
       const plan = result.plan;
+      if (this.restoreNotice) {
+        const notice = document.createElement("p");
+        notice.className = "warning";
+        notice.textContent = this.restoreNotice;
+        this.preview.append(notice);
+      }
       const summary = document.createElement("p");
       summary.textContent = `Remember: ${plan.offers.map((offer) => offer.label).join(" and ")}. Recognized pages contribute titles, opens and measured focused/background time to your local worklog.`;
       this.preview.append(summary);
