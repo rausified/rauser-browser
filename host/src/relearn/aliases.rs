@@ -18,7 +18,7 @@ pub(crate) enum Action {
 
 /// Endpoints here have already been derived by the host, including type and
 /// scope. Native messages must never deserialize directly into this type.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct Event {
     pub(crate) event_id: String,
     pub(crate) action: Action,
