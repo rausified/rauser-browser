@@ -135,6 +135,24 @@ impl Rule {
         out
     }
 
+    /// §4.1: the query anchors the rule when it has a literal condition and
+    /// binds an identifier capture (`int`, `hex`, `uuid`, `jira_key` or
+    /// `token`, not `name` or an alternation) that `counts` accepts: the
+    /// validator passes "the ID uses it and no scope key names it". The literal
+    /// routes the page the way a path word would, and the identifier names
+    /// the artifact, so the path may be left `{_}` where customers rename it.
+    pub(crate) fn query_anchored(&self, counts: impl Fn(&str) -> bool) -> bool {
+        let literal = self
+            .query
+            .iter()
+            .any(|(_, c)| matches!(c, QueryCond::Literal(_)));
+        literal
+            && self.query.iter().any(|(_, c)| {
+                matches!(c, QueryCond::Capture { name, ctype: CType::Typed { base, .. } }
+                    if *base != BaseType::Name && counts(name))
+            })
+    }
+
     /// Where the first capture with this name is written.
     fn site(&self, name: &str) -> (Field, Option<usize>) {
         self.capture_sites()
@@ -733,12 +751,15 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
     }
     // 7.9. Anchors (§4.1): each rule needs one among its required path
     // segments. A required path capture named by a scope key anchors too:
-    // the scope list pins it the way a literal would. A query binding never
-    // anchors, and an unscoped adapter gets no scope anchor.
+    // the scope list pins it the way a literal would, and an unscoped adapter
+    // gets no scope anchor. A query anchors only as a literal condition plus
+    // an identifier capture the ID uses (`Rule::query_anchored`); a scoped
+    // capture bound from the query is never one.
     for (r, rule) in rules.iter().enumerate() {
         let anchored = rule.path.segments[..rule.path.required]
             .iter()
-            .any(|s| is_anchor(s) || is_scope_anchor(s, scoped));
+            .any(|s| is_anchor(s) || is_scope_anchor(s, scoped))
+            || rule.query_anchored(|n| !scoped(n) && id.names().any(|m| m == n));
         if !anchored {
             return Err(at
                 .rule(r)
