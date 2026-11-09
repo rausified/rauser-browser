@@ -898,7 +898,7 @@ impl ConfigStore {
         }
         if revision != MISSING_REVISION {
             let backup = adopted_contracts_backup_path(&parent)?;
-            fs::rename(&path, &backup).with_context(|| {
+            crate::fsutil::rename_or_copy(&path, &backup).with_context(|| {
                 format!("moving {} aside to {}", path.display(), backup.display())
             })?;
             sync_parent(&parent).context("syncing config directory after backup")?;

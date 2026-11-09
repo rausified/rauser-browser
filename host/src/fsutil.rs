@@ -1,14 +1,32 @@
-//! Shared helper for Brauser's "write a temp file beside the target, then
-//! put it in place" writers (`config.rs`'s `publish_config`, `capture.rs`'s
-//! batch-intent publish, `index/mod.rs`'s `atomic_write`, and
-//! `service/record.rs`'s `atomic_write`). Every one of those creates its
-//! temporary file in the target's own parent directory, so today the
-//! rename below is always same-volume and always the plain, atomic
-//! `fs::rename` branch.
+//! Shared helpers for every place in this crate that renames a file into
+//! its final, published place: `config.rs`'s `publish_config` and its
+//! `forget_adopted_contracts` backup, `capture.rs`'s batch-intent and log-
+//! relocations publish, `diag.rs`'s log rotation, `index/mod.rs`'s
+//! `atomic_write`, `service/record.rs`'s `atomic_write`, and `vault.rs`'s
+//! two cap_std `Dir`-sandboxed note/page publishes. Every one of those
+//! renames a file within one directory (a sibling temporary, or a sibling
+//! backup/rotated name), so today the rename is always same-volume and
+//! always takes the plain, atomic branch below.
+//!
+//! `layout.rs`'s one-time content-folder migration is the one rename in
+//! this crate that does not go through here: it needs `RENAME_NOREPLACE`'s
+//! atomic refuse-if-the-destination-exists guarantee, which a copy
+//! fallback cannot give (a copy would silently overwrite it), and it is
+//! always a rename within one root `Dir`, never a temp file from
+//! elsewhere, so it is in no more danger of crossing volumes than this
+//! module's own fallback copy would be.
+//!
+//! `every_other_rename_into_place_goes_through_the_shared_helper` (below)
+//! statically checks that no other file under `host/src` calls
+//! `fs::rename` or a `Dir::rename` directly, so a future writer that
+//! bypasses these helpers fails the test suite instead of silently
+//! joining the ones already found missing one (#377 review).
 
 use std::fs;
 use std::io;
 use std::path::Path;
+
+use cap_std::fs::Dir;
 
 /// Put `temporary` at `path`. Tries a plain, atomic `fs::rename` first; a
 /// temporary file created beside `path` (every caller's pattern today)
@@ -35,6 +53,28 @@ pub(crate) fn rename_or_copy(temporary: &Path, path: &Path) -> io::Result<()> {
     }
 }
 
+/// [`rename_or_copy`], for the cap_std-sandboxed `Dir` API `vault.rs` uses
+/// instead of plain `std::fs` (every path here stays relative to a capture
+/// of an already-open directory, never an absolute path cap_std would have
+/// to re-validate). `from_dir` and `to_dir` are the same `Dir` at every
+/// call site today, the same way `temporary` and `path` are always
+/// siblings for [`rename_or_copy`].
+pub(crate) fn rename_or_copy_in_dir(
+    from_dir: &Dir,
+    temporary: &Path,
+    to_dir: &Dir,
+    to: &Path,
+) -> io::Result<()> {
+    match from_dir.rename(temporary, to_dir, to) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+            from_dir.copy(temporary, to_dir, to)?;
+            from_dir.remove_file(temporary)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,6 +88,107 @@ mod tests {
         rename_or_copy(&temporary, &path).unwrap();
         assert!(!temporary.exists());
         assert_eq!(fs::read(&path).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn same_volume_rename_in_dir_moves_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap_dir = Dir::open_ambient_dir(dir.path(), cap_std::ambient_authority()).unwrap();
+        cap_dir.write("a.tmp", b"hello").unwrap();
+        rename_or_copy_in_dir(&cap_dir, Path::new("a.tmp"), &cap_dir, Path::new("a")).unwrap();
+        assert!(!dir.path().join("a.tmp").exists());
+        assert_eq!(fs::read(dir.path().join("a")).unwrap(), b"hello");
+    }
+
+    /// Every production-code rename-into-place must go through
+    /// `rename_or_copy` or `rename_or_copy_in_dir` above, not a bare
+    /// `fs::rename`/`Dir::rename` — `capture.rs`'s `publish_log_relocations`
+    /// still called `fs::rename` directly until the #377 review caught it.
+    /// This walks every other file under `host/src`, skips each file's own
+    /// trailing `#[cfg(test)] mod tests { ... }` block (every file in this
+    /// crate keeps its tests there, to the end of the file, so a test
+    /// fixture's own direct rename is never checked), and fails if a bare
+    /// rename call remains outside `layout.rs`'s documented exception (see
+    /// the module doc comment above).
+    #[test]
+    fn every_other_rename_into_place_goes_through_the_shared_helper() {
+        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offending = Vec::new();
+        visit_rust_files(&src_dir, &mut offending);
+        assert!(
+            offending.is_empty(),
+            "these renames bypass fsutil::rename_or_copy/rename_or_copy_in_dir: {offending:#?}"
+        );
+    }
+
+    /// Every `.rs` file under `dir`, recursively, except this module's own
+    /// file (which legitimately calls `fs::rename`/`Dir::rename` directly,
+    /// both in the helpers above and in this very test's probes),
+    /// `layout.rs` (the documented folder-migration exception), and a
+    /// whole file or directory devoted to tests — a `#[cfg(test)] mod
+    /// tests;` external submodule, such as `index/tests/` or
+    /// `relearn/journal/tests.rs` — which this function never descends
+    /// into or reads at all, rather than trying to truncate test code out
+    /// of it the way `check_file_for_bypassed_renames` does for a file
+    /// that mixes production code with one trailing inline test module.
+    fn visit_rust_files(dir: &Path, offending: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().and_then(|name| name.to_str()) == Some("tests") && path.is_dir() {
+                continue;
+            }
+            if path.is_dir() {
+                visit_rust_files(&path, offending);
+                continue;
+            }
+            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+                continue;
+            }
+            if path.ends_with("fsutil.rs")
+                || path.ends_with("layout.rs")
+                || path.ends_with("tests.rs")
+            {
+                continue;
+            }
+            check_file_for_bypassed_renames(&path, offending);
+        }
+    }
+
+    /// One of the two markers a file's trailing inline test module starts
+    /// with, found in every file under `host/src` that has rename calls of
+    /// its own to check (a handful of files put their tests in a separate
+    /// `tests/` submodule instead, with no bare rename of their own to
+    /// hide; those are scanned in full since nothing here would truncate
+    /// them wrongly).
+    const TEST_MODULE_MARKERS: &[&str] = &[
+        "#[cfg(test)]\nmod tests",
+        "#[cfg(test)]\npub(crate) mod tests {",
+        "#[cfg(test)]\npub mod tests",
+    ];
+
+    fn check_file_for_bypassed_renames(path: &Path, offending: &mut Vec<String>) {
+        let text = fs::read_to_string(path).unwrap();
+        let production_text = TEST_MODULE_MARKERS
+            .iter()
+            .filter_map(|marker| text.find(marker))
+            .min()
+            .map_or(text.as_str(), |index| &text[..index]);
+        for (zero_based_line, line) in production_text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            let bypasses = (line.contains("fs::rename(") || line.contains(".rename("))
+                && !line.contains("rename_or_copy");
+            if bypasses {
+                offending.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    zero_based_line + 1,
+                    line.trim()
+                ));
+            }
+        }
     }
 
     /// The drive letter prefix of an absolute Windows path (`"C:"` from

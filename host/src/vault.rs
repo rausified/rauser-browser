@@ -660,9 +660,13 @@ impl Vault {
         drop(file);
         write_result?;
 
-        pages
-            .rename(&temporary, &pages, &filename)
-            .with_context(|| format!("replacing page note: {filename}"))?;
+        crate::fsutil::rename_or_copy_in_dir(
+            &pages,
+            Path::new(&temporary),
+            &pages,
+            Path::new(&filename),
+        )
+        .with_context(|| format!("replacing page note: {filename}"))?;
         cleanup.disarm();
         drop(cleanup);
 
@@ -856,8 +860,13 @@ fn replace_owned_file_with(
     drop(file);
     let mut warnings = Vec::new();
     if existed {
-        dir.rename(&temporary, &dir, filename)
-            .with_context(|| format!("replacing {kind} file"))?;
+        crate::fsutil::rename_or_copy_in_dir(
+            &dir,
+            Path::new(&temporary),
+            &dir,
+            Path::new(filename),
+        )
+        .with_context(|| format!("replacing {kind} file"))?;
         cleanup.disarm();
     } else {
         match dir.hard_link(&temporary, &dir, filename) {

@@ -268,9 +268,12 @@ impl Rotating {
             return Ok(());
         }
         for index in (1..KEPT_ROTATIONS).rev() {
-            let _ = fs::rename(rotated(&self.path, index), rotated(&self.path, index + 1));
+            let _ = crate::fsutil::rename_or_copy(
+                &rotated(&self.path, index),
+                &rotated(&self.path, index + 1),
+            );
         }
-        let _ = fs::rename(&self.path, rotated(&self.path, 1));
+        let _ = crate::fsutil::rename_or_copy(&self.path, &rotated(&self.path, 1));
         (self.file, self.written) = open_append(&self.path)?;
         Ok(())
     }
