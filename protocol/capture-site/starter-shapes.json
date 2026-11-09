@@ -237,12 +237,12 @@
     {
       "note": "Drive folder opened from a share link (docs/adapters/google.drivefolder.md)",
       "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345?usp=sharing",
-      "shape": "/drive/folders/{id}"
+      "shape": "/drive/folders/{id}?usp={slug}"
     },
     {
       "note": "Drive folder in a second signed-in account (docs/adapters/google.drivefolder.md)",
       "url": "https://drive.google.com/drive/u/1/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
-      "shape": "/drive/u/{_}/folders/{id}"
+      "shape": "/drive/u/{num}/folders/{id}"
     }
   ],
   "reject": []
