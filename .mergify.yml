@@ -68,10 +68,14 @@ queue_rules:
       - check-success = Rust dependency policy
       - check-success = PR owner
 
-# Auto-queueing: Mergify queues a PR that carries the `queue` label once it
-# passes queue_conditions above. (A pull_request_rules `queue` action does
-# not queue anything on current Mergify; auto_merge_conditions is the
-# documented setting: docs.mergify.com/merge-protections/auto-merge.)
+# The `queue` label makes a PR eligible (queue_conditions above); it does not
+# queue it. Queue with an `@Mergifyio queue` comment, posted after the PR's
+# latest push: a push after the request cancels it, label or not. Observed
+# 2026-11-05 on #318: with this setting and Merge Protections active, a green
+# labelled PR sat at "Merge queue is ready" for an hour until commented.
+# auto_merge_conditions stays as documented (docs.mergify.com/merge-protections/
+# auto-merge) in case Mergify starts honouring it; a pull_request_rules `queue`
+# action does not queue anything on current Mergify (#271).
 merge_protections_settings:
   auto_merge_conditions:
     - label = queue
