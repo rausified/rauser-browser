@@ -1,0 +1,7 @@
+## 2026-11-09 — State the invariant before patching guard cases
+
+Change: When a review finds a hole in a history or ownership guard (which adapter records a URL, which contract owns a route), write down the invariant the guard protects as one sentence first. Then implement it as one pure function, checked by a seeded randomized test over sequences of saves. Do this before patching the specific case the review found. Add this as a rule under AGENTS.md "Review and merge cadence", and to the review brief for any PR that changes `host/src/config.rs` guards.
+
+Why: PR #362 (brwr-qps4, Splunk container-first order) took five review rounds. Each round fixed the case the last review named: a flip, then a reverse flip, a sandwich, adding apps above lone dashboards, then an extra app on a legacy order. Each time the next review found a neighbouring case. The fix that held stated the invariant once ("an accepted save never changes which type wins an already-recorded URL") as `container_first_violation`. A randomized test (2000×12 sequences, fixed seed) checked it, and an independent model check confirmed the generator reached each earlier failure. Even then, the model check found the test's edit step never changed coverage, which is the widening gap now filed as brwr-nhwb. So the brief should also ask: does the generator produce every kind of change the invariant covers?
+
+Where: `AGENTS.md` "Review and merge cadence"; the reviewer brief convention for guard changes; `host/src/config.rs` test conventions.
