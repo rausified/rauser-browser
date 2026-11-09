@@ -10,3 +10,5 @@ should see which recorded identities would move before saving. Where:
 Tracked as `brwr-qbub`, discovered from `brwr-obqb`; reproduce with a real
 revision-checked save before implementing, retaining disjoint reorder and
 contained-before-container behavior.
+
+- Done 2026-11-09: brwr-qbub guards existing-adapter reversals, including edited and consolidated siblings; insertion/expansion follow-up is brwr-98mo.

@@ -3101,6 +3101,9 @@ fn validate_adapter_transition_with_history(
             .chain(&by_hand.contracts),
         &next_contracts,
     )?;
+    if current_is_valid {
+        validate_adapter_precedence(&current_contracts, &next_contracts)?;
+    }
     // Every contract this save adds or reshapes: widening its match can claim
     // a retired route under its own ID just as an addition can.
     let changed: Vec<_> = next_contracts
@@ -3157,6 +3160,75 @@ fn validate_adapter_transition_with_history(
     if !superseded.is_empty() {
         for candidate in &unchanged {
             refuse_rekeyed_routes(candidate, next, &superseded)?;
+        }
+    }
+    Ok(())
+}
+
+/// Preserve first-match precedence between existing differently keyed
+/// adapters. Contract membership alone cannot detect a live-rule reversal.
+fn validate_adapter_precedence(
+    current: &[serde_json::Value],
+    next: &[serde_json::Value],
+) -> Result<()> {
+    let same_identity = |a: &serde_json::Value, b: &serde_json::Value| {
+        adapter_contract_identity(a) == adapter_contract_identity(b)
+            && adapter_contract_type(a) == adapter_contract_type(b)
+    };
+    let mut positions = vec![None; current.len()];
+    let mut claimed = vec![false; next.len()];
+    // Reserve exact occurrences before edited siblings can consume them.
+    // Prefix-preserving edits come next, then other edits with the same key
+    // contract. Consume each occurrence once, including duplicate contracts.
+    for pass in 0..3 {
+        for (old_at, old) in current.iter().enumerate() {
+            if positions[old_at].is_some() {
+                continue;
+            }
+            let found = next.iter().enumerate().find(|(at, new)| {
+                !claimed[*at]
+                    && match pass {
+                        0 => old == *new,
+                        1 => preserves_recognition(old, new),
+                        _ => same_identity(old, new),
+                    }
+            });
+            if let Some((at, _)) = found {
+                positions[old_at] = Some(at);
+                claimed[at] = true;
+            }
+        }
+    }
+    for (old_at, previous) in current.iter().enumerate() {
+        // One surviving sibling can preserve several old contracts. Prefer
+        // its earliest proven position so consolidation cannot hide a move.
+        // Other recognition edits retain their matched occurrence's position;
+        // the superseded-contract guard separately checks lost recognition.
+        let Some(previous_at) = next
+            .iter()
+            .position(|new| preserves_recognition(previous, new))
+            .or(positions[old_at])
+        else {
+            continue;
+        };
+        for candidate_at in positions.iter().skip(old_at + 1).flatten().copied() {
+            let candidate = &next[candidate_at];
+            if candidate_at >= previous_at || same_identity(previous, candidate) {
+                continue;
+            }
+            let (Some((origin, previous_id)), Some((candidate_origin, candidate_id))) = (
+                adapter_contract_identity(previous),
+                adapter_contract_identity(candidate),
+            ) else {
+                continue;
+            };
+            if origin == candidate_origin && adapter_contracts_overlap(previous, candidate)? {
+                let previous_type = adapter_contract_type(previous).unwrap_or_default();
+                let candidate_type = adapter_contract_type(candidate).unwrap_or_default();
+                bail!(
+                    "the order of adapters on {origin:?} cannot change until artifact migrations are available: moving {candidate_type:?} ({candidate_id:?}) ahead of {previous_type:?} ({previous_id:?}) may change recorded artifact keys. Keep their earlier order in settings."
+                );
+            }
         }
     }
     Ok(())
@@ -5662,6 +5734,263 @@ mod tests {
         let reordered = adapter_config(vec![second, first]);
         validate(&reordered).unwrap();
         validate_adapter_transition(&current, &reordered).unwrap();
+    }
+
+    #[test]
+    fn reordering_live_adapters_cannot_change_the_winning_identity() {
+        for (second_type, second_id) in [
+            ("work.page", "page:{host}/{id}"),
+            ("work.item", "page:{host}/{id}"),
+            ("work.page", "item:{host}/{id}"),
+        ] {
+            for edit in ["none", "display", "append", "rewrite", "winner-rewrite"] {
+                let first = adapter(
+                    "https://work.example",
+                    "work.item",
+                    "/items/{id:int}",
+                    "item:{host}/{id}",
+                );
+                let second = adapter(
+                    "https://work.example",
+                    second_type,
+                    "/items/{id:int}",
+                    second_id,
+                );
+                let folder = tempfile::tempdir().unwrap();
+                let path = folder.path().join("config.toml");
+                let mut store = ConfigStore::for_test(path.clone());
+                let revision = store
+                    .update(
+                        adapter_config(vec![first.clone(), second.clone()]),
+                        MISSING_REVISION,
+                    )
+                    .unwrap()
+                    .unwrap();
+                let before = fs::read(&path).unwrap();
+                let mut promoted = second;
+                match edit {
+                    "display" => promoted["title"] = json!("{title} - Work"),
+                    "append" => promoted["match"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"path": "/docs/{id:int}"})),
+                    "rewrite" => promoted["match"][0]["path"] = json!("/items/{id:int}/{*}"),
+                    _ => {}
+                }
+                let mut retained = first.clone();
+                if edit == "winner-rewrite" {
+                    retained["match"][0]["path"] = json!("/items/{id:int}/{*}");
+                }
+                let next = adapter_config(vec![promoted, retained]);
+                let url = "https://work.example/items/42";
+                let old_key = store
+                    .adapter_document()
+                    .unwrap()
+                    .evaluate(url, None)
+                    .unwrap();
+                let new_key = compile_adapters(&next)
+                    .unwrap()
+                    .evaluate(url, None)
+                    .unwrap();
+                assert_ne!(
+                    (&old_key.artifact_type, &old_key.artifact_id),
+                    (&new_key.artifact_type, &new_key.artifact_id)
+                );
+                let error = store.update(next, &revision).unwrap_err().to_string();
+                assert!(
+                    error.contains("order"),
+                    "{second_type}, {second_id}, {edit}: {error}"
+                );
+                assert!(error.contains("artifact migrations"), "{error}");
+                assert_eq!(fs::read(&path).unwrap(), before);
+                assert_eq!(store.revision(), revision);
+                assert_eq!(store.snapshot().adapters.artifacts[0], first);
+                assert_eq!(
+                    store
+                        .adapter_document()
+                        .unwrap()
+                        .evaluate(url, None)
+                        .unwrap()
+                        .artifact_id,
+                    old_key.artifact_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reordering_disjoint_and_same_identity_adapters_stays_usable() {
+        let first = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        for second in [
+            adapter(
+                "https://work.example",
+                "work.page",
+                "/docs/{id:int}",
+                "page:{host}/{id}",
+            ),
+            adapter(
+                "https://other.example",
+                "work.page",
+                "/items/{id:int}",
+                "page:{host}/{id}",
+            ),
+            adapter(
+                "https://work.example",
+                "work.item",
+                "/items/{id:int}/{*}",
+                "item:{host}/{id}",
+            ),
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = ConfigStore::for_test(folder.path().join("config.toml"));
+            let revision = store
+                .update(
+                    adapter_config(vec![first.clone(), second.clone()]),
+                    MISSING_REVISION,
+                )
+                .unwrap()
+                .unwrap();
+            let next = adapter_config(vec![second, first.clone()]);
+            store.update(next.clone(), &revision).unwrap().unwrap();
+            assert_eq!(store.snapshot().adapters, next.adapters);
+        }
+    }
+
+    #[test]
+    fn precedence_checks_preserve_interleaved_duplicates_and_their_removal() {
+        let first = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        let second = adapter(
+            "https://work.example",
+            "work.page",
+            "/items/{id:int}",
+            "page:{host}/{id}",
+        );
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = ConfigStore::for_test(folder.path().join("config.toml"));
+        let revision = store
+            .update(
+                adapter_config(vec![first.clone(), second.clone(), first.clone()]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        let mut display = store.snapshot().clone();
+        display.capture_enabled = false;
+        display.adapters.artifacts[0]["title"] = json!("{title} - Work");
+        let revision = store.update(display, &revision).unwrap().unwrap();
+        store
+            .update(adapter_config(vec![first, second]), &revision)
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn reordering_containers_cannot_change_primary_identity() {
+        let pr = within_github_repo(github_pr_adapter(&["a"]));
+        let repo = github_repo_adapter(&["a"]);
+        for current in [
+            vec![pr.clone(), repo.clone()],
+            vec![repo.clone(), pr.clone()],
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("config.toml");
+            let mut store = ConfigStore::for_test(path.clone());
+            let revision = store
+                .update(adapter_config(current.clone()), MISSING_REVISION)
+                .unwrap()
+                .unwrap();
+            let before = fs::read(&path).unwrap();
+            let next = adapter_config(current.into_iter().rev().collect());
+            let url = "https://github.com/a/widgets/pull/4";
+            assert_ne!(
+                store
+                    .adapter_document()
+                    .unwrap()
+                    .evaluate(url, None)
+                    .unwrap()
+                    .artifact_id,
+                compile_adapters(&next)
+                    .unwrap()
+                    .evaluate(url, None)
+                    .unwrap()
+                    .artifact_id
+            );
+            let error = store.update(next, &revision).unwrap_err().to_string();
+            assert!(error.contains("order"), "{error}");
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert_eq!(store.revision(), revision);
+        }
+
+        // A third adapter can move while the contained-before-container order
+        // stays intact. This is also the valid starter order on first save.
+        let unrelated = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = ConfigStore::for_test(folder.path().join("config.toml"));
+        let revision = store
+            .update(
+                adapter_config(vec![pr.clone(), repo.clone(), unrelated.clone()]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .update(adapter_config(vec![unrelated, pr, repo]), &revision)
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn consolidating_recognition_cannot_hide_a_precedence_reversal() {
+        let first = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        let second = adapter(
+            "https://work.example",
+            "work.page",
+            "/items/{id:int}",
+            "page:{host}/{id}",
+        );
+        let mut wider = first.clone();
+        wider["match"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path": "/docs/{id:int}"}));
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let revision = store
+            .update(
+                adapter_config(vec![first, second.clone(), wider.clone()]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+        let error = store
+            .update(adapter_config(vec![second, wider]), &revision)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("order"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(store.revision(), revision);
     }
 
     #[test]

@@ -1767,3 +1767,24 @@ probe before creating fixtures. Real validation assertions remain intact;
 restricted runs explicitly skip affected CLI cases, pure validation still runs,
 and strict IPC mode still fails rather than treating skipped integration as
 successful validation.
+
+
+## 2026-11-09 — Preserve recorded identity when adapters trade places
+
+Settings now refuses a reorder that could give previously recorded pages a
+different artifact identity. The previous guard compared which contracts were
+present, so two unchanged overlapping adapters could trade places and silently
+change which key won. The host now matches existing contract occurrences across
+the save and checks reversed precedence with the existing overlap engine. It
+reserves exact matches before edited siblings, handles simultaneous rule edits
+and consolidation, and preserves unchanged duplicate configurations. The refusal
+names the competing types and ID templates and asks to retain their earlier
+order; it leaves the file bytes, revision and active matching policy intact.
+Disjoint and same-identity reorders still save, as does moving an unrelated
+adapter around a correctly ordered contained/container pair. Reversing that pair
+is refused because it changes the primary identity even with declared containment.
+Five new tests exercise these cases through real ConfigStore saves; all 138
+configuration tests and four capture-site module tests pass, alongside host
+Clippy and the fast static gates. Independent diff review found no P1/P2 issues.
+New leading adapters and expansion without a reorder remain a separate review
+item, brwr-98mo. Re-learn apply remains blocked on its documented open decisions.
