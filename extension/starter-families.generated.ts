@@ -907,6 +907,16 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "google.drivefolder:{host}/{id}",
+          "generic_titles": [
+            "Service Not Allowed",
+            "Page Not Found",
+            "Access Denied",
+            "Redirecting",
+            "Sign in - Google Accounts",
+            "Sign in – Google Accounts",
+            "Google Drive: Sign-in",
+            "Login"
+          ],
           "title": [
             "{title} - Google Drive",
             "{title} – Google Drive"

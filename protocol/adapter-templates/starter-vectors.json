@@ -1167,6 +1167,16 @@
             }
           ],
           "id": "google.drivefolder:{host}/{id}",
+          "generic_titles": [
+            "Service Not Allowed",
+            "Page Not Found",
+            "Access Denied",
+            "Redirecting",
+            "Sign in - Google Accounts",
+            "Sign in – Google Accounts",
+            "Google Drive: Sign-in",
+            "Login"
+          ],
           "title": [
             "{title} - Google Drive",
             "{title} – Google Drive"
@@ -14301,7 +14311,7 @@
     {
       "id": "eval.google.drivefolder.generic_title",
       "kind": "evaluate",
-      "why": "access-denied page: whole tab title recorded",
+      "why": "access-denied page: its title is generic, ASCII case aside (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -14319,7 +14329,7 @@
         },
         "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
         "mode": null,
-        "title": "Access denied",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -14411,6 +14421,35 @@
         "reason": "no_rule"
       },
       "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/extra"
+    },
+    {
+      "id": "eval.google.drivefolder.generic_title_error_page",
+      "kind": "evaluate",
+      "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      "title": "Service not allowed"
     }
   ]
 }
