@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{APP_NAME}} settings</title>
     <link rel="stylesheet" href="panel.css" />
+    <link rel="stylesheet" href="options.css" />
   </head>
   <body class="settings-page">
     <main>
@@ -107,23 +108,27 @@
         <div id="adapter-editor" class="adapter-editor" hidden>
           <h3 id="adapter-editor-heading" tabindex="-1">Review adapter</h3>
           <div id="adapter-editor-review" hidden></div>
-          <p>Edit one adapter as JSON. The review below translates its capture behavior into examples, and the host validates it again before saving.</p>
-          <label for="adapter-json">Adapter definition</label>
-          <textarea id="adapter-json" rows="14" spellcheck="false" autocomplete="off"></textarea>
-          <output id="adapter-validation" class="adapter-validation" aria-live="polite"></output>
-
-          <div class="preview-grid">
-            <div class="field">
-              <label for="adapter-preview-url">Example URL</label>
-              <input id="adapter-preview-url" type="url" spellcheck="false" autocomplete="off" />
-            </div>
-            <div class="field">
-              <label for="adapter-preview-title">Example tab title (optional)</label>
-              <input id="adapter-preview-title" type="text" spellcheck="false" autocomplete="off" />
-            </div>
+          <div id="site-bundle-review" hidden></div>
+          <div id="adapter-technical-review">
+            <p>Edit one adapter as JSON. The review below translates its capture behavior into examples, and the host validates it again before saving.</p>
+            <label for="adapter-json">Adapter definition</label>
+            <textarea id="adapter-json" rows="14" spellcheck="false" autocomplete="off"></textarea>
           </div>
-          <p><strong>Match preview</strong> — your example plus fixed search, login, dashboard, auth, sharing, and capability probes. A probe match is highlighted for review.</p>
-          <ul id="adapter-preview" class="plain-list adapter-preview" tabindex="0" aria-label="Match preview"><li>Enter a valid adapter to preview it.</li></ul>
+          <output id="adapter-validation" class="adapter-validation" aria-live="polite"></output>
+          <div id="adapter-technical-preview">
+            <div class="preview-grid">
+              <div class="field">
+                <label for="adapter-preview-url">Example URL</label>
+                <input id="adapter-preview-url" type="url" spellcheck="false" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="adapter-preview-title">Example tab title (optional)</label>
+                <input id="adapter-preview-title" type="text" spellcheck="false" autocomplete="off" />
+              </div>
+            </div>
+            <p><strong>Match preview</strong> — your example plus fixed search, login, dashboard, auth, sharing, and capability probes. A probe match is highlighted for review.</p>
+            <ul id="adapter-preview" class="plain-list adapter-preview" tabindex="0" aria-label="Match preview"><li>Enter a valid adapter to preview it.</li></ul>
+          </div>
 
           <button id="save-adapter" type="button" disabled>Save</button>
           <button id="cancel-adapter" type="button" class="secondary">Cancel</button>

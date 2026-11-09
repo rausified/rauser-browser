@@ -265,6 +265,15 @@ choices even when they share an Atlassian Cloud origin. The trial's JSON-array
 editor and single example preview expose a review gap for multi-kind sites;
 these are not yet replaced by a readable per-kind review.
 
+**Site-level review built (2026-11-09).** The Settings gallery now shows one
+card per GitHub, Box, or Google Workspace site, with individual starter choices
+inside a disclosure. The site review has a checkbox and an example match
+preview for every missing kind, with a plain warning when a selected catch-all
+claims an unchecked kind's example. The editor's JSON and one-example preview
+are hidden in this flow. The host still validates the same typed adapters in
+one revision-checked save, and adding GitHub repositories links compatible
+existing pull request and issue adapters to the repository container.
+
 **Starter rule updates (2026-10-28).** The rule this record introduced is now stated in DESIGN.md §7.2, “Starter rule updates”.
 
 *Saving an adapter:* Before v6, enabling or widening an adapter requested the origin's optional Chrome grant and a native confirmation.
