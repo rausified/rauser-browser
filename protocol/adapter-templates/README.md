@@ -60,7 +60,7 @@ JSON strings in the file escape invisible and combining characters (` `, `́`, 
 | `impls` | `["rust", "ts"]` or `["rust"]`. The worker does not validate everything, overlap-check, or judge drafts, so host-only kinds are `["rust"]`. |
 | `sq` | Optional. Spec-question tags whose reading this case depends on. See "Spec questions". |
 | `pending` | Optional. A spec-question tag. The harness skips the case, but must still parse it, until that question is settled. |
-| `budget_ms` | Optional. Bounds cases (§12): the call must complete within this many milliseconds on CI hardware. |
+| `budget_ms` | Optional. Bounds cases (§12): the call must complete within this many milliseconds on CI hardware. Only `evaluate` cases carry one, and it times the evaluate call alone: compiling the fixture document happens once per document, not per visit, and stays outside the timer in both harnesses. |
 | `expect` | Kind-specific expected result. Compare it by deep equality. Object key order is not significant. |
 
 ## Kinds
