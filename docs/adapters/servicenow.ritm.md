@@ -77,11 +77,15 @@ the held-back browsing, so this type's rules are graded only by the
 research's synthetic vectors, re-verified against this family's own fixture
 through both adapter-template engines.
 
-`samples_shape` is `false`: the structural drafter reads the table name
-`sc_req_item`, which contains underscores, as a slug
-(`/now/sow/record/{slug}/{hex32}`), so a rule drafted from this sample would
-not keep the table literal and does not match it. The incident and change
-samples keep their table names and stay `true`.
+`samples_shape` is `false`: the in-page shaper keeps a path segment as a
+route word only when it is at most 20 characters of `a-z`, `-` and `_` with
+at most one `-` or `_` (`literal` in `inspectSitePatterns`,
+`extension/site-patterns.ts`). `sc_req_item` has two underscores, so the
+sample's shape is `/now/sow/record/{slug}/{hex32}`: the table name becomes a
+`{slug}` placeholder, a rule drafted from that shape would not keep the
+table literal, and the shape cannot tell requested items from any other
+workspace record. `incident` and `change_request` (one underscore) stay
+route words, so those samples keep their table names and stay `true`.
 
 ## What the draft does not record
 
@@ -105,12 +109,17 @@ samples keep their table names and stay `true`.
   This is the biggest gap for users who open records from classic lists.
 - **Ticket pages on a customer-renamed portal are not recorded.** The portal
   rules list only `/sp` and `/esc`; an instance that serves its portal under
-  its own path (`/helpzone?id=ticket&table=sc_req_item&sys_id=…`) gets no match.
-  The format cannot anchor a rule on the query alone. A follow-up is listed
-  in the D3 pull request, with a bead to follow. Until then, add the
-  instance's portal name to the portal rules' `(sp|esc)` alternation in
-  settings' advanced rule editor, for example `/(sp|esc|helpzone)`; the
-  literal names anchor the rule.
+  its own path (`/helpzone?id=ticket&table=sc_req_item&sys_id=…`) gets no match,
+  and a vector (`eval.servicenow.ritm.neg.renamed_portal_ticket_page`) pins
+  that. The format now lets a literal query condition plus the `sys_id`
+  capture anchor a `{_}` portal rule (`adapter-templates.md` §4.1), as the
+  knowledge-article rules do, but a `{_}` ticket rule also covers every
+  other type's classic `/<table>.do?sys_id=…` path. Proving the two disjoint
+  needs `absent = ["id"]` on the classic rules, which already list the eight
+  export processors, the most `absent` allows. The follow-up is bead
+  `brwr-e1m3`. Until then, add the instance's portal name to the portal
+  rules' `(sp|esc)` alternation in settings' advanced rule editor, for
+  example `/(sp|esc|helpzone)`; the literal names anchor the rule.
 - The workspace rules accept any one- or two-segment workspace and any
   trailing segments. A workspace sub-route that opens a related record would
   be attributed to this one (medium risk; the trailing shape is assumed).
