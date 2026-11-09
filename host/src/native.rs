@@ -6020,6 +6020,352 @@ id = "jira.board:{host}/{id}"
                 board_bytes
             );
         }
+
+        /// brwr-nre: the note-recovery edge cases an earlier, dropped fix
+        /// (fix/note-routing-on-main, 2026-10-26) tested against its union
+        /// recovery. Main keys notes by recorded contracts (current, inert,
+        /// `[[adapter_id_history]]` and the host's adopted contracts) and
+        /// gives an origin no contract covers its URL key, so each case is
+        /// asserted against that design.
+        mod recovery_edge_cases {
+            use super::*;
+
+            const SITE: &str = "{ origin = \"https://acme.atlassian.net\", path_prefix = \"/\" }";
+            const PLANS: &str = "\n[[artifacts]]\ntype = \"jira.plan\"\norigin = \"https://acme.atlassian.net\"\nmatch = [{ path = \"/plans/{id:int}\" }]\nid = \"jira.plan:{host}/{id}\"\n";
+            const BROWSE_ONLY: &str = "[[artifacts]]\ntype = \"jira.issue\"\norigin = \"https://acme.atlassian.net\"\nmatch = [{ path = \"/browse/{key:jira_key}\" }]\nid = \"jira:{host}/{key}\"\n";
+            const MODAL_ONLY: &str = "[[artifacts]]\ntype = \"jira.issue\"\norigin = \"https://acme.atlassian.net\"\nmatch = [{ path = \"/jira/{*}\", query = { selectedIssue = \"{key:jira_key}\" } }]\nid = \"jira:{host}/{key}\"\n";
+
+            /// Rewrite config.toml as an editor would: no settings save, so
+            /// no `[[adapter_id_history]]` entry is recorded.
+            fn hand_edit(
+                folder: &tempfile::TempDir,
+                config: &mut ConfigStore,
+                sites: &str,
+                tables: &str,
+            ) {
+                config::fixtures::write(
+                    &folder.path().join("config.toml"),
+                    &folder.path().join("notes"),
+                    "artifacts_dir = \"artifacts\"",
+                    &format!(
+                        "capture_enabled = true\nsites = [{sites}]\nstrip_params = [\"selectedIssue\"]"
+                    ),
+                    tables,
+                );
+                config.refresh().unwrap();
+            }
+
+            fn adapters(tables: &str) -> String {
+                format!("[adapters]\nformat = 1\n\n{tables}")
+            }
+
+            fn remove_by_settings(config: &mut ConfigStore) {
+                let mut next = config.snapshot().clone();
+                next.adapters.artifacts.clear();
+                let revision = config.revision().to_owned();
+                config.update(next, &revision).unwrap().unwrap();
+            }
+
+            /// Case 1: narrowing the adapter to /browse by hand must not hide
+            /// the modal note the narrowed adapter no longer maps.
+            #[test]
+            fn a_hand_narrowed_adapter_keeps_the_modal_note_it_no_longer_maps() {
+                let folder = tempfile::tempdir().unwrap();
+                let (_, mut config) = jira_store(&folder);
+                save(&mut config, ABC_123, "ABC-123 text");
+                save(&mut config, BOARD, "board text");
+                hand_edit(&folder, &mut config, SITE, &adapters(BROWSE_ONLY));
+                assert!(config.adapter_issue().is_none());
+                assert!(config.adapter_match(ABC_123, None).is_err());
+
+                let loaded = note_load(&mut config, ABC_123);
+                assert_eq!(loaded.key.value, "jira:acme.atlassian.net/ABC-123");
+                assert_eq!(loaded.body, "ABC-123 text");
+                let board = note_load(&mut config, BOARD);
+                assert_eq!(board.key.kind, RecordKeyKind::Url);
+                assert_eq!(board.body, "board text");
+            }
+
+            /// Case 1, the other way: narrowed to the modal rule, which still
+            /// reads the stripped parameter, /browse keeps its note.
+            #[test]
+            fn a_hand_narrowed_adapter_keeps_the_note_on_routes_it_can_no_longer_match() {
+                let folder = tempfile::tempdir().unwrap();
+                let (_, mut config) = jira_store(&folder);
+                save(&mut config, BROWSE_123, "ABC-123 from browse");
+                record_modal_activity(&mut config, ABC_123, "ABC-123");
+                hand_edit(&folder, &mut config, SITE, &adapters(MODAL_ONLY));
+                assert!(config.adapter_issue().is_none());
+                assert!(config.adapter_match(BROWSE_123, None).is_err());
+
+                let loaded = note_load(&mut config, BROWSE_123);
+                assert_eq!(loaded.key.value, "jira:acme.atlassian.net/ABC-123");
+                assert_eq!(loaded.body, "ABC-123 from browse");
+                assert_eq!(note_load(&mut config, ABC_123).body, "ABC-123 from browse");
+                assert_eq!(note_load(&mut config, BOARD).key.kind, RecordKeyKind::Url);
+            }
+
+            /// Case 2: a plans adapter removed by hand beside the live Jira
+            /// adapter keeps its note, and the URL note /plans/5 had before
+            /// the plans adapter existed stays an older note of it.
+            #[test]
+            fn a_hand_removed_adapter_beside_a_live_one_keeps_its_notes_reachable() {
+                let plan = "https://acme.atlassian.net/plans/5";
+                let folder = tempfile::tempdir().unwrap();
+                let (_, mut config) = jira_store(&folder);
+                save(&mut config, plan, "old plan URL note");
+                hand_edit(
+                    &folder,
+                    &mut config,
+                    SITE,
+                    &adapters(&format!("{JIRA}{PLANS}")),
+                );
+                assert_eq!(
+                    note_load(&mut config, plan).key.kind,
+                    RecordKeyKind::Artifact
+                );
+                save(&mut config, plan, "plan 5 text");
+                hand_edit(&folder, &mut config, SITE, &adapters(JIRA));
+                assert!(config.adapter_issue().is_none());
+                assert!(config.adapter_match(plan, None).is_err());
+
+                let loaded = note_load(&mut config, plan);
+                assert_eq!(loaded.key.value, "jira.plan:acme.atlassian.net/5");
+                assert_eq!(loaded.body, "plan 5 text");
+                assert_eq!(older(&mut config, plan), vec![plan.to_owned()]);
+                // The live adapter is unaffected.
+                assert_eq!(
+                    note_load(&mut config, BROWSE_123).key.kind,
+                    RecordKeyKind::Artifact
+                );
+            }
+
+            /// Case 3: a route added by settings after a narrower shape was
+            /// retired keeps its note when the adapter is then removed by
+            /// hand, with or without the retired-only shape reading the
+            /// stripped parameter.
+            #[test]
+            fn an_older_retired_shape_does_not_hide_routes_added_later() {
+                let issues = "https://acme.atlassian.net/issues/ABC-123";
+                for first in [BROWSE_ONLY, JIRA] {
+                    let folder = tempfile::tempdir().unwrap();
+                    let (_, mut config) = jira_store(&folder);
+                    hand_edit(&folder, &mut config, SITE, &adapters(first));
+                    let mut next = config.snapshot().clone();
+                    next.adapters.artifacts[0]["match"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!({ "path": "/issues/{key:jira_key}" }));
+                    let revision = config.revision().to_owned();
+                    config.update(next, &revision).unwrap().unwrap();
+                    save(&mut config, issues, "ABC-123 text");
+                    if first == JIRA {
+                        save(&mut config, ABC_456, "ABC-456 text");
+                    }
+
+                    let path = folder.path().join("config.toml");
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let start = text.find("[[artifacts]]").expect("live adapter");
+                    let end = text.find("[[adapter_id_history]]").expect("history");
+                    assert!(start < end, "{text}");
+                    std::fs::write(&path, format!("{}{}", &text[..start], &text[end..])).unwrap();
+                    config.refresh().unwrap();
+                    assert!(config.snapshot().adapters.artifacts.is_empty());
+
+                    let loaded = note_load(&mut config, issues);
+                    assert_eq!(
+                        loaded.key.value, "jira:acme.atlassian.net/ABC-123",
+                        "{first}"
+                    );
+                    assert_eq!(loaded.body, "ABC-123 text", "{first}");
+                    assert_eq!(
+                        note_load(&mut config, BROWSE_123).body,
+                        "ABC-123 text",
+                        "{first}"
+                    );
+                    let board = note_load(&mut config, BOARD);
+                    assert_eq!(board.key.kind, RecordKeyKind::Url, "{first}");
+                    assert!(!board.exists, "{first}");
+                    if first == JIRA {
+                        assert_eq!(note_load(&mut config, ABC_456).body, "ABC-456 text");
+                    }
+                }
+            }
+
+            /// Case 4: a format-1 document that fails validation (its site
+            /// removed by hand, or an adapter added on an origin with no
+            /// site) is inert, not unsupported: its contracts still name
+            /// this origin's artifacts.
+            #[test]
+            fn an_invalid_format_1_document_keeps_its_contracts_notes() {
+                let other = "\n[[artifacts]]\ntype = \"work.issue\"\norigin = \"https://other.example\"\nmatch = [{ path = \"/issues/{id:int}\" }]\nid = \"work.issue:{host}/{id}\"\n";
+                let edits = [
+                    (
+                        "site removed",
+                        "{ origin = \"https://other.example\", path_prefix = \"/\" }".to_owned(),
+                        adapters(JIRA),
+                    ),
+                    (
+                        "siteless adapter beside it",
+                        SITE.to_owned(),
+                        adapters(&format!("{JIRA}{other}")),
+                    ),
+                    (
+                        "only a siteless adapter elsewhere",
+                        SITE.to_owned(),
+                        adapters(other),
+                    ),
+                ];
+                for (edit, sites, tables) in edits {
+                    let folder = tempfile::tempdir().unwrap();
+                    let (_, mut config) = jira_store(&folder);
+                    save(&mut config, ABC_123, "ABC-123 text");
+                    save(&mut config, BOARD, "board text");
+                    hand_edit(&folder, &mut config, &sites, &tables);
+
+                    for page in [ABC_123, BROWSE_123] {
+                        let loaded = note_load(&mut config, page);
+                        assert_eq!(
+                            loaded.key.value, "jira:acme.atlassian.net/ABC-123",
+                            "{edit}: {page}"
+                        );
+                        assert_eq!(loaded.body, "ABC-123 text", "{edit}: {page}");
+                    }
+                    let other_issue = note_load(&mut config, ABC_456);
+                    assert_eq!(
+                        other_issue.key.value, "jira:acme.atlassian.net/ABC-456",
+                        "{edit}"
+                    );
+                    assert!(!other_issue.exists, "{edit}");
+                    let board = note_load(&mut config, BOARD);
+                    assert_eq!(board.key.kind, RecordKeyKind::Url, "{edit}");
+                    assert_eq!(board.body, "board text", "{edit}");
+                }
+            }
+
+            /// Case 4, unsupported documents. A newer format may recognize
+            /// pages differently, so main refuses note identity on the
+            /// origins its contracts name rather than guess (the earlier
+            /// branch fell back to union recovery); the note stays on disk.
+            /// An unknown key pauses capture, but the host's adopted record
+            /// of the last valid contracts still names the artifact, so its
+            /// routes keep the note and the bare board keeps its URL key.
+            #[test]
+            fn an_unsupported_document_refuses_rather_than_picking_a_note() {
+                for edit in ["format = 2", "format = 1\nfuture_key = true"] {
+                    let folder = tempfile::tempdir().unwrap();
+                    let (_, mut config) = jira_store(&folder);
+                    save(&mut config, ABC_123, "ABC-123 text");
+                    let path = folder.path().join("config.toml");
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    std::fs::write(&path, text.replacen("format = 1", edit, 1)).unwrap();
+                    config.refresh().unwrap();
+
+                    for page in [ABC_123, BROWSE_123, BOARD] {
+                        let response = load_note(
+                            brauser_protocol::LoadNoteRequest {
+                                protocol_version: PROTOCOL_VERSION,
+                                request_id: "load".into(),
+                                url: page.into(),
+                            },
+                            &mut config,
+                        );
+                        match (edit, page, response) {
+                            ("format = 2", _, Response::Error(reply)) => {
+                                assert_eq!(reply.code, ErrorCode::Internal, "{page}")
+                            }
+                            (_, BOARD, Response::NoteLoaded(board)) if edit != "format = 2" => {
+                                assert_eq!(board.key.kind, RecordKeyKind::Url);
+                                assert!(!board.exists);
+                            }
+                            (_, _, Response::NoteLoaded(loaded)) if edit != "format = 2" => {
+                                assert_eq!(
+                                    loaded.key.value, "jira:acme.atlassian.net/ABC-123",
+                                    "{page}"
+                                );
+                                assert_eq!(loaded.body, "ABC-123 text", "{page}");
+                            }
+                            (_, _, other) => panic!("{edit:?}: {page}: {other:?}"),
+                        }
+                    }
+                }
+            }
+
+            /// Case 5: a tracking parameter on the URL never changes which
+            /// note a retired route gets, nor its older notes.
+            #[test]
+            fn a_tracking_parameter_does_not_change_which_note_a_retired_route_gets() {
+                let folder = tempfile::tempdir().unwrap();
+                let root = folder.path().join("notes");
+                std::fs::create_dir(&root).unwrap();
+                let path = folder.path().join("config.toml");
+                config::fixtures::write(
+                    &path,
+                    &root,
+                    "artifacts_dir = \"artifacts\"",
+                    &format!(
+                        "capture_enabled = true\nsites = [{SITE}]\nstrip_params = [\"utm_source\"]"
+                    ),
+                    "[adapters]\nformat = 1\n",
+                );
+                let mut config = loaded(&path);
+                save(&mut config, BROWSE_123, "URL note from before the adapter");
+                let mut next = config.snapshot().clone();
+                next.adapters.artifacts = vec![
+                    toml::from_str::<toml::Value>(JIRA).unwrap()["artifacts"][0]
+                        .clone()
+                        .try_into()
+                        .unwrap(),
+                ];
+                let revision = config.revision().to_owned();
+                config.update(next, &revision).unwrap().unwrap();
+                assert!(config.adapter_match(BROWSE_123, None).is_ok());
+                let tracked = format!("{BROWSE_123}?utm_source=mail");
+                let live = (
+                    note_load(&mut config, BROWSE_123),
+                    note_load(&mut config, &tracked),
+                );
+                remove_by_settings(&mut config);
+
+                let bare = note_load(&mut config, BROWSE_123);
+                let with_tracking = note_load(&mut config, &tracked);
+                assert_eq!(bare.key, with_tracking.key);
+                assert_eq!(bare.key, live.0.key);
+                assert_eq!(live.0.key, live.1.key);
+                assert_eq!(bare.key.value, "jira:acme.atlassian.net/ABC-123");
+                assert_eq!(bare.older_notes, with_tracking.older_notes);
+                assert_eq!(bare.older_notes.len(), 1, "{:?}", bare.older_notes);
+                assert_eq!(bare.older_notes[0].canonical_url, BROWSE_123);
+            }
+
+            /// Case 6: with neither route's note written yet, a retired
+            /// contract keys both routes to its artifact, so they share one
+            /// note instead of splitting into URL notes, and an issue with no
+            /// note never takes the board's (stripped) URL key.
+            #[test]
+            fn a_retired_route_without_notes_joins_the_artifact_instead_of_splitting() {
+                let folder = tempfile::tempdir().unwrap();
+                let (_, mut config) = jira_store(&folder);
+                record_modal_activity(&mut config, ABC_123, "ABC-123");
+                save(&mut config, BOARD, "board text");
+                remove_by_settings(&mut config);
+
+                for page in [BROWSE_123, ABC_123] {
+                    let loaded = note_load(&mut config, page);
+                    assert_eq!(
+                        loaded.key.value, "jira:acme.atlassian.net/ABC-123",
+                        "{page}"
+                    );
+                    assert!(!loaded.exists, "{page}");
+                }
+                save(&mut config, BROWSE_123, "shared text");
+                assert_eq!(note_load(&mut config, ABC_123).body, "shared text");
+                let other = note_load(&mut config, ABC_456);
+                assert_eq!(other.key.value, "jira:acme.atlassian.net/ABC-456");
+                assert!(!other.exists);
+                assert_eq!(note_load(&mut config, BOARD).body, "board text");
+            }
+        }
     }
 
     /// get_config records adopted contracts under the config lock; when it
