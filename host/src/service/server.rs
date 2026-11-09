@@ -95,29 +95,40 @@ pub fn env_source(paths: &ServicePaths) -> EnvSource {
 
 /// The supervisor's [`CwdCheck`]: when a queued or resumed run starts, under
 /// the config lock, the folder it was queued for must still be the
-/// configured knowledge base folder with the identity recorded when the user
-/// picked it. A task also brings the protected paths its prompt names, which
+/// configured knowledge base or selected task folder, with the identity recorded
+/// when the user picked it. A custom task also retains its immutable entry ID. A task also brings the protected paths its prompt names, which
 /// must still be the ones the configuration gives now ([`protected_paths`]),
 /// so a home folder changed while it waited is never left unprotected.
 /// `config` is the service's own store for this check.
 pub fn cwd_check(config: ConfigStore) -> CwdCheck {
     let config = Mutex::new(config);
-    Arc::new(move |cwd: &Path, protected: Option<&[String]>| {
-        let mut config = lock(&config);
-        let (_config_lock, knowledge_base) =
-            locked_knowledge_base(&mut config).map_err(|(_, message)| message.to_owned())?;
-        if knowledge_base != cwd {
-            return Err(KNOWLEDGE_BASE_CHANGED.to_owned());
-        }
-        if let Some(protected) = protected {
-            match configured_protected(&config) {
-                Ok(now) if now == protected => {}
-                Ok(_) => return Err(HOME_FOLDER_CHANGED.to_owned()),
-                Err((_, message)) => return Err(message.to_owned()),
+    Arc::new(
+        move |cwd: &Path, protected: Option<&[String]>, task_folder_id: Option<&str>| {
+            let mut config = lock(&config);
+            let _config_lock =
+                locked_config(&mut config).map_err(|(_, message)| message.to_owned())?;
+            if task_folder_id.is_some() && protected.is_none() {
+                return Err("A task folder is only valid for a task.".into());
             }
-        }
-        Ok(())
-    })
+            let knowledge_base = match task_folder_id {
+                Some(id) => config.task_folder(id).map_err(|err| err.to_string())?,
+                None => {
+                    checked_knowledge_base(&config).map_err(|(_, message)| message.to_owned())?
+                }
+            };
+            if knowledge_base != cwd {
+                return Err(KNOWLEDGE_BASE_CHANGED.to_owned());
+            }
+            if let Some(protected) = protected {
+                match configured_protected(&config) {
+                    Ok(now) if now == protected => {}
+                    Ok(_) => return Err(HOME_FOLDER_CHANGED.to_owned()),
+                    Err((_, message)) => return Err(message.to_owned()),
+                }
+            }
+            Ok(())
+        },
+    )
 }
 
 /// Serve the socket until the service is idle.
@@ -549,10 +560,17 @@ impl Server {
         {
             return error(&id, ErrorCode::InvalidRequest, message);
         }
+        if value.task_folder_id.is_some() && kind != RunKind::Task {
+            return error(
+                &id,
+                ErrorCode::InvalidRequest,
+                "task_folder_id is only for a task",
+            );
+        }
         let setup = match kind {
             RunKind::Summary => self.run_setup(value.harness, &value.url),
             RunKind::SiteDraft => self.site_draft_setup(value.harness),
-            RunKind::Task => self.task_setup(value.harness),
+            RunKind::Task => self.task_setup(value.harness, value.task_folder_id.as_deref()),
         };
         let setup = match setup {
             Ok(setup) => setup,
@@ -565,6 +583,7 @@ impl Server {
         }
         let task = value.instruction.map(|instruction| TaskStatus {
             start_request_id: Some(value.request_id.clone()),
+            task_folder_id: value.task_folder_id,
             no_page,
             instruction,
             protected: setup.protected,
@@ -654,17 +673,23 @@ impl Server {
         })
     }
 
-    /// As [`Server::run_setup`], for a task: the same harness and knowledge
-    /// base, a time limit of at least [`TASK_MIN_TIMEOUT_SECS`]
+    /// As [`Server::run_setup`], for a task: the same harness, either the
+    /// default knowledge base or a host-owned selected folder, a time limit of at least [`TASK_MIN_TIMEOUT_SECS`]
     /// ([`task_timeout`]), plus the folders its prompt names as Brauser's
     /// own, all read under the same config lock. A configuration or cache
     /// folder that cannot be found refuses the task (fails closed).
     fn task_setup(
         &self,
         requested: Option<HarnessId>,
+        task_folder_id: Option<&str>,
     ) -> Result<RunSetup, (ErrorCode, &'static str)> {
         let mut config = lock(&self.config);
-        let (_config_lock, knowledge_base) = locked_knowledge_base(&mut config)?;
+        let _config_lock = locked_config(&mut config)?;
+        let knowledge_base = match task_folder_id {
+            Some(id) => config.task_folder(id).map_err(|_| (ErrorCode::Conflict,
+                "The selected task folder was removed, changed or is unavailable. Choose a working folder again in settings."))?,
+            None => checked_knowledge_base(&config)?,
+        };
         let (harness, timeout) = agent_setup(&config, requested)?;
         let protected = configured_protected(&config)?;
         Ok(RunSetup {
@@ -1096,6 +1121,7 @@ mod tests {
 
         fn start_run(&self, record_key: Option<RecordKey>) -> Response {
             self.call(&Request::StartRun(StartRunRequest {
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "start".into(),
@@ -1181,6 +1207,151 @@ mod tests {
     /// the shell expands.
     fn answering(description: &str) -> String {
         format!("echo '{TEST_ANSWER}' | /usr/bin/sed \"s|A page.|{description}|\"\n")
+    }
+
+    #[test]
+    fn task_folder_runs_a_fake_harness_in_the_selected_project_without_a_socket() {
+        let world = World::new(&task_reporter());
+        let kb = world.support.join("knowledge");
+        std::fs::create_dir(&kb).unwrap();
+        world.configure(Some(""), Some(&kb));
+        std::fs::rename(&kb, world.support.join("offline-knowledge")).unwrap();
+        let project = world.support.join("project");
+        std::fs::create_dir(&project).unwrap();
+        let project = std::fs::canonicalize(project).unwrap();
+        let mut config = world.config();
+        config.refresh().unwrap();
+        let rev = config.revision().to_owned();
+        config
+            .add_task_folder(
+                project.display().to_string(),
+                selected_root_identity(&project).unwrap(),
+                &rev,
+            )
+            .unwrap();
+        let folder_id = config.task_folder_choices()[0].id.clone();
+        let options = World::options(
+            &world.paths,
+            &config,
+            Duration::from_secs(1),
+            DEFAULT_RUN_TIMEOUT,
+        );
+        let registry = HarnessRegistry::from_lookup(|name| {
+            (name == FAKE_HARNESS_ENV).then(|| world.program.clone().into_os_string())
+        });
+        let server = Server {
+            paths: world.paths.clone(),
+            config: Mutex::new(config),
+            build_id: "test".into(),
+            last_arrival: Mutex::new(Instant::now()),
+            opener: crate::open::default_opener(),
+            supervisor: Supervisor::new(
+                RunStore::open(world.paths.runs()).unwrap(),
+                registry,
+                Box::new(KindFinisher::new(SummaryFinisher::new(
+                    world.support.join("config.toml"),
+                ))),
+                options,
+            ),
+        };
+        assert!(
+            server.task_setup(None, None).is_err(),
+            "default knowledge base is offline"
+        );
+        let mut request = task_start(Some(INSTRUCTION));
+        request.task_folder_id = Some("forged".into());
+        assert_eq!(
+            error_of(server.start_run(request.clone())).0,
+            ErrorCode::Conflict
+        );
+        assert!(runs_are_empty(&world));
+        request.kind = Some(RunKind::Summary);
+        request.instruction = None;
+        assert_eq!(
+            error_of(server.start_run(request.clone())).0,
+            ErrorCode::InvalidRequest
+        );
+        request.kind = Some(RunKind::Task);
+        request.instruction = Some(INSTRUCTION.into());
+        request.task_folder_id = Some(folder_id.clone());
+        let run_id = match server.start_run(request) {
+            Response::RunStarted(started) => {
+                assert_eq!(
+                    started.run.task_folder_id.as_deref(),
+                    Some(folder_id.as_str())
+                );
+                uuid::Uuid::parse_str(&started.run.run_id).unwrap()
+            }
+            other => panic!("unexpected response: {other:?}"),
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let finished = loop {
+            let (run, _) = server.supervisor.get_run(run_id, 0).unwrap();
+            if matches!(
+                run.state,
+                RunState::Succeeded | RunState::Failed | RunState::Canceled
+            ) {
+                break run;
+            }
+            assert!(Instant::now() < deadline, "fake task did not finish");
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(finished.state, RunState::Succeeded, "{finished:?}");
+        assert_eq!(finished.cwd.as_deref(), project.to_str());
+        assert_eq!(
+            finished.task_report.as_deref(),
+            Some(format!("Ran in {}.", project.display()).as_str())
+        );
+        let prompt = std::fs::read_to_string(world.program.with_extension("prompt")).unwrap();
+        assert!(prompt.contains(&format!("Your working directory is {}.", project.display())));
+        for path in expected_protected(&world, &world.notes) {
+            assert!(prompt.contains(&path));
+        }
+    }
+
+    #[test]
+    fn task_folder_launch_checks_the_original_id_identity_and_protected_paths_without_ipc() {
+        let world = World::new("");
+        let project = world.support.join("project");
+        std::fs::create_dir(&project).unwrap();
+        let project = std::fs::canonicalize(project).unwrap();
+        let mut config = world.config();
+        config.refresh().unwrap();
+        let rev = config.revision().to_owned();
+        config
+            .add_task_folder(
+                project.display().to_string(),
+                selected_root_identity(&project).unwrap(),
+                &rev,
+            )
+            .unwrap();
+        let id = config.task_folder_choices()[0].id.clone();
+        let protected = expected_protected(&world, &world.notes);
+        let check = cwd_check(config.reopen());
+        assert_eq!(check(&project, Some(&protected), Some(&id)), Ok(()));
+        assert!(check(&project, None, Some(&id)).is_err());
+        assert!(check(&world.notes, Some(&protected), Some(&id)).is_err());
+        assert!(check(&project, Some(&protected), Some("forged")).is_err());
+        assert!(check(&project, Some(&[]), Some(&id)).is_err());
+        let rev = config.revision().to_owned();
+        config.remove_task_folder(&id, &rev).unwrap();
+        let rev = config.revision().to_owned();
+        config
+            .add_task_folder(
+                project.display().to_string(),
+                selected_root_identity(&project).unwrap(),
+                &rev,
+            )
+            .unwrap();
+        assert!(check(&project, Some(&protected), Some(&id)).is_err());
+        let replacement_id = config.task_folder_choices()[0].id.clone();
+        assert_eq!(
+            check(&project, Some(&protected), Some(&replacement_id)),
+            Ok(())
+        );
+        std::fs::rename(&project, world.support.join("original-project")).unwrap();
+        std::fs::create_dir(&project).unwrap();
+        assert!(check(&project, Some(&protected), Some(&replacement_id)).is_err());
     }
 
     #[test]
@@ -1313,6 +1484,7 @@ mod tests {
         let lines = capture(|| {
             let service = world.start(Duration::from_millis(300));
             let started = world.call(&Request::StartRun(StartRunRequest {
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "req-start-1".into(),
@@ -1523,6 +1695,7 @@ mod tests {
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.call(&Request::StartRun(StartRunRequest {
+            task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "big".into(),
@@ -1597,33 +1770,33 @@ mod tests {
         config.refresh().unwrap();
         let queued_cwd = checked_knowledge_base(&config).unwrap();
         let check = cwd_check(world.config());
-        assert_eq!(check(&queued_cwd, None), Ok(()));
+        assert_eq!(check(&queued_cwd, None, None), Ok(()));
 
         // Replaced at the same path while the run waited: fails closed.
         let moved = world._temp.path().join("kb-old");
         std::fs::rename(&knowledge_base, &moved).unwrap();
         std::fs::create_dir(&knowledge_base).unwrap();
         assert_eq!(
-            check(&queued_cwd, None),
+            check(&queued_cwd, None, None),
             Err(KNOWLEDGE_BASE_CHANGED.to_owned())
         );
         // Missing: fails closed.
         std::fs::remove_dir(&knowledge_base).unwrap();
         assert_eq!(
-            check(&queued_cwd, None),
+            check(&queued_cwd, None, None),
             Err(KNOWLEDGE_BASE_CHANGED.to_owned())
         );
         // The picked folder back at its path passes again.
         std::fs::rename(&moved, &knowledge_base).unwrap();
-        assert_eq!(check(&queued_cwd, None), Ok(()));
+        assert_eq!(check(&queued_cwd, None, None), Ok(()));
         // A run queued for another folder than the one now configured.
         assert_eq!(
-            check(&world.notes, None),
+            check(&world.notes, None, None),
             Err(KNOWLEDGE_BASE_CHANGED.to_owned())
         );
         // No notes folder at all.
         std::fs::remove_file(world.support.join("config.toml")).unwrap();
-        assert!(check(&queued_cwd, None).is_err());
+        assert!(check(&queued_cwd, None, None).is_err());
     }
 
     #[test]
@@ -1736,7 +1909,7 @@ mod tests {
                 super::super::summary_style::HOME_ERROR
             ))
         ));
-        assert_eq!(server.task_setup(None).unwrap().summary_style, None);
+        assert_eq!(server.task_setup(None, None).unwrap().summary_style, None);
         assert_eq!(server.site_draft_setup(None).unwrap().summary_style, None);
     }
 
@@ -1793,6 +1966,7 @@ mod tests {
 
     fn named_start_run(harness: HarnessId) -> StartRunRequest {
         StartRunRequest {
+            task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "named".into(),
@@ -1817,6 +1991,7 @@ mod tests {
 
     fn site_draft_start(origin: &str) -> StartRunRequest {
         StartRunRequest {
+            task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "site".into(),
@@ -2216,6 +2391,7 @@ mod tests {
     /// A start_run for a task, as the native host forwards one.
     fn task_start(instruction: Option<&str>) -> StartRunRequest {
         StartRunRequest {
+            task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "task".into(),
@@ -2375,6 +2551,7 @@ mod tests {
         world.start(Duration::from_secs(600));
         let request = Request::StartTask(brauser_protocol::StartTaskRequest {
             command_revision: None,
+            task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
             request_id: "direct-task".into(),
@@ -2535,12 +2712,15 @@ mod tests {
         world.configure(Some(""), Some(&knowledge_base));
         let protected = expected_protected(&world, &world.notes);
         let check = cwd_check(world.config());
-        assert_eq!(check(&knowledge_base, Some(protected.as_slice())), Ok(()));
-        assert_eq!(check(&knowledge_base, None), Ok(()));
+        assert_eq!(
+            check(&knowledge_base, Some(protected.as_slice()), None),
+            Ok(())
+        );
+        assert_eq!(check(&knowledge_base, None, None), Ok(()));
         // Another protected set than the one now configured.
         let other = expected_protected(&world, &world._temp.path().join("elsewhere"));
         assert_eq!(
-            check(&knowledge_base, Some(other.as_slice())),
+            check(&knowledge_base, Some(other.as_slice()), None),
             Err(HOME_FOLDER_CHANGED.to_owned())
         );
         // The home folder changed while the task waited; the knowledge base
@@ -2549,14 +2729,15 @@ mod tests {
         std::fs::create_dir(&home).unwrap();
         world.configure_home(&home, Some(""), Some(&knowledge_base));
         assert_eq!(
-            check(&knowledge_base, Some(protected.as_slice())),
+            check(&knowledge_base, Some(protected.as_slice()), None),
             Err(HOME_FOLDER_CHANGED.to_owned())
         );
-        assert_eq!(check(&knowledge_base, None), Ok(()));
+        assert_eq!(check(&knowledge_base, None, None), Ok(()));
         assert_eq!(
             check(
                 &knowledge_base,
-                Some(expected_protected(&world, &home).as_slice())
+                Some(expected_protected(&world, &home).as_slice()),
+                None
             ),
             Ok(())
         );
@@ -2672,6 +2853,7 @@ mod tests {
         let url = format!("https://example.com/{PATH}?q={PATH}");
         let request = |request_id: &str, instruction: &str| {
             Request::StartRun(StartRunRequest {
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: request_id.into(),

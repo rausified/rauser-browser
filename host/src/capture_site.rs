@@ -986,6 +986,7 @@ pub fn start_site_draft(
         return error(id, ErrorCode::InvalidRequest, message);
     }
     let request = Request::StartRun(StartRunRequest {
+        task_folder_id: None,
         no_page: None,
         protocol_version: PROTOCOL_VERSION,
         request_id: value.request_id.clone(),
@@ -2797,6 +2798,7 @@ mod handler_tests {
                 value: origin.into(),
             };
             RunView {
+                task_folder_id: None,
                 run_id: RUN_ID.into(),
                 state: RunState::Succeeded,
                 url: origin.into(),
@@ -2828,6 +2830,7 @@ mod handler_tests {
                         protocol_version: PROTOCOL_VERSION,
                         request_id: value.request_id.clone(),
                         run: RunView {
+                            task_folder_id: None,
                             kind: value.kind,
                             url: value.url.clone(),
                             ..fake::run_view(value.record_key.clone().unwrap())
@@ -3101,6 +3104,7 @@ mod handler_tests {
                 (
                     "summary",
                     RunView {
+                        task_folder_id: None,
                         kind: None,
                         site_draft: None,
                         ..good.clone()
@@ -3122,6 +3126,7 @@ mod handler_tests {
                 (
                     "another run",
                     RunView {
+                        task_folder_id: None,
                         run_id: "00000000-0000-4000-8000-0000000000bb".into(),
                         ..good.clone()
                     },
@@ -3130,6 +3135,7 @@ mod handler_tests {
                 (
                     "queued",
                     RunView {
+                        task_folder_id: None,
                         state: RunState::Queued,
                         site_draft: None,
                         ..good.clone()
@@ -3139,6 +3145,7 @@ mod handler_tests {
                 (
                     "running",
                     RunView {
+                        task_folder_id: None,
                         state: RunState::Running,
                         site_draft: None,
                         ..good.clone()
@@ -3148,6 +3155,7 @@ mod handler_tests {
                 (
                     "failed",
                     RunView {
+                        task_folder_id: None,
                         state: RunState::Failed,
                         site_draft: None,
                         error_kind: Some(brauser_protocol::RunErrorKind::InvalidOutput),
@@ -4147,6 +4155,7 @@ mod handler_tests {
             assert!(crate::site_draft_answer::parse_site_draft_answer(text, TOOLS).is_err());
             let mut s = setup("");
             let failed = RunView {
+                task_folder_id: None,
                 state: RunState::Failed,
                 error_kind: Some(brauser_protocol::RunErrorKind::InvalidOutput),
                 site_draft: None,

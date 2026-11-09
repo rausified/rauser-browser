@@ -1673,8 +1673,7 @@
               "sysparm_article": "{number:token(3,40)|upper}"
             },
             "absent": [
-              "sys_id",
-              "sys_kb_id"
+              "sys_id"
             ]
           },
           {
@@ -1684,8 +1683,7 @@
               "sysparm_article": "{number:token(3,40)|upper}"
             },
             "absent": [
-              "sys_id",
-              "sys_kb_id"
+              "sys_id"
             ]
           }
         ],
@@ -2123,18 +2121,46 @@
           "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035&sys_id=0123456789abcdef0123456789abcdef"
         },
         {
-          "id": "eval.servicenow.kb.neg.number_with_version_sys_kb_id",
+          "id": "eval.servicenow.kb.number_with_sys_kb_id_view",
           "kind": "evaluate",
-          "why": "portal article view naming a version by sys_kb_id as well as the number: not recorded",
+          "why": "portal article view with the number and a sys_kb_id: recorded by the number, as kb_view.do is",
           "impls": [
             "rust",
             "ts"
           ],
           "expect": {
-            "match": false,
-            "reason": "no_rule"
+            "match": true,
+            "adapter": 3,
+            "rule": 2,
+            "type": "servicenow.kb",
+            "captures": {
+              "number": "KB0010035"
+            },
+            "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+            "mode": null
           },
           "url": "https://acme.service-now.com/esc?id=kb_article_view&sysparm_article=KB0010035&sys_kb_id=0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.servicenow.kb.number_with_sys_kb_id_article",
+          "kind": "evaluate",
+          "why": "portal article page with the number and a sys_kb_id: recorded by the number",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": true,
+            "adapter": 3,
+            "rule": 1,
+            "type": "servicenow.kb",
+            "captures": {
+              "number": "KB0010035"
+            },
+            "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+            "mode": null
+          },
+          "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035&sys_kb_id=0123456789abcdef0123456789abcdef"
         },
         {
           "id": "eval.servicenow.kb.neg.renamed_portal_home",

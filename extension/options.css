@@ -1,0 +1,8 @@
+.site-starter-card { grid-column: 1 / -1; }
+.site-starter-card details { margin: 10px 0; }
+.site-starter-card details > summary { cursor: pointer; }
+.site-starter-card details .starter-card { margin-top: 8px; }
+.site-kind-review { border-top: 1px solid #8885; padding: 10px 0; }
+.site-kind-review label { font-weight: 650; }
+.site-kind-review p { margin: 5px 0; overflow-wrap: anywhere; }
+.site-kind-preview { font-size: 0.9em; }

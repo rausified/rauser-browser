@@ -257,6 +257,31 @@ are still prompt-level. Settings and README explain examples, limits and edits.
 
 ## §7.2 Artifact adapters — history
 
+**Configured-site scope versus format (2026-11-09).** A configured GitHub
+repository outside the selected owner list is an `out_of_scope` match of the
+existing repository rule. The panel no longer treats that verdict, on the
+current page or on a sampled URL shape, as evidence of a new page format for
+the recurring-pages drafter. A genuinely unmatched route can still offer a
+new draft after three visits. The existing capture explanation directs scope
+changes to Settings.
+
+**Site-level setup trial (2026-11-09).** Settings can review the missing GitHub,
+Box, or Google Workspace starter kinds together and save them in one config
+revision. The first trial keeps the existing typed adapter document and its
+first-match behavior. It leaves Jira and Confluence as separate product
+choices even when they share an Atlassian Cloud origin. The trial's JSON-array
+editor and single example preview expose a review gap for multi-kind sites;
+these are not yet replaced by a readable per-kind review.
+
+**Site-level review built (2026-11-09).** The Settings gallery now shows one
+card per GitHub, Box, or Google Workspace site, with individual starter choices
+inside a disclosure. The site review has a checkbox and an example match
+preview for every missing kind, with a plain warning when a selected catch-all
+claims an unchecked kind's example. The editor's JSON and one-example preview
+are hidden in this flow. The host still validates the same typed adapters in
+one revision-checked save, and adding GitHub repositories links compatible
+existing pull request and issue adapters to the repository container.
+
 **Starter rule updates (2026-10-28).** The rule this record introduced is now stated in DESIGN.md §7.2, “Starter rule updates”.
 
 *Saving an adapter:* Before v6, enabling or widening an adapter requested the origin's optional Chrome grant and a native confirmation.
@@ -1830,6 +1855,30 @@ ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
 formatting, protocol generation, typecheck, lint, script tests, Markdown safety
 and queue consistency pass. Development tools pass 254 tests with 94 skips;
 accessibility passes two tests with 55 Chromium sandbox skips.
+## 2026-11-03 — Per-task project folders
+
+`brwr-zla` adds native-picked, host-owned task destinations, a per-task selector,
+and recorded working-folder context in history/Reuse. A queued task carries the
+immutable entry ID so removing and re-adding the same path never revives its
+prior authorization. The service checks the folder's recorded identity and the
+unchanged protected paths before launch. The default knowledge-base behavior
+and non-resumable task recovery remain in force; summaries are unchanged.
+
+## 2026-11-03 — Keep task-folder config errors repairable
+
+`brwr-pf8o` routes typed but invalid task-folder entries through the existing
+invalid-config repair state. They previously escaped as read errors, losing
+the actual revision and preventing picker-confirmed repair. Invalid entries
+now expose no task destinations, retain a revision of the original bytes and
+require the normal explicit repair, which backs those bytes up before saving.
+The service-only task-folder resolver is compiled on Unix and in tests.
+
+The regression covers invalid UUIDs, relative paths and empty identities,
+including exact backup contents. Workspace Rust tests report 1,563 passes
+(94 explicit sandbox IPC skips included) and two ignored tests. Frontend
+validation remains pending: the sandbox could not reinstall the locked npm
+dependencies after an offline cache miss. The external driver must reinstall,
+rebuild and run its complete gate before this repair is marked shipped.
 
 ## 2026-11-09 — Page through recorded focus sessions (brwr-t4gf)
 

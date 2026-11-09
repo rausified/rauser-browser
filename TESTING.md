@@ -2059,3 +2059,19 @@ Settings-change regressions also hold `get_config` across the reload debounce:
 both initial and continuation replies must be discarded as soon as the policy
 notice arrives. Even an unchanged revision must restart at offset zero after
 the reload completes.
+## Task working folders
+
+`cargo test --locked -p brauser task_folder --lib` checks bounded host-owned
+allowlist entries, purpose-bound picker grants, stale revisions, ordinary-save
+preservation, immutable IDs after remove/re-add, filesystem replacement and
+queued launch checks. Malformed task-folder entries must retain a usable config
+revision and allow a picker-confirmed repair that backs up the original bytes.
+Its direct service test runs the existing fake harness in
+a temporary selected project with the default knowledge base unavailable,
+checks the prompt's protected paths, and uses no socket or real harness.
+`protocol/tests/wire_tasks.rs` refuses client paths in list/add/remove/start
+messages. The built settings and task-bar cases cover native-picker management,
+cancellation, explicit choice/default, and removed-folder Reuse;
+`extension/tests/task-folders.test.mjs` exercises reordered list replies and
+older hosts. The a11y fixture includes the new list reply. Real native-picker,
+Chrome selector and platform acceptance remain separate human checks.

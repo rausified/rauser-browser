@@ -35,5 +35,6 @@
   "aha.portalidea": "aha.portalidea:{host}/{ref}",
   "splunk.app": "splunk.app:{host}/app/{app}",
   "splunk.dashboard": "splunk.dashboard:{host}/{app}/{view}",
-  "splunk.app#within": "splunk.app:{host}/app/{app}"
+  "splunk.app#within": "splunk.app:{host}/app/{app}",
+  "google.drivefolder": "google.drivefolder:{host}/{id}"
 }

@@ -1833,3 +1833,46 @@ and explicitly skips 56 browser cases. Re-learn apply still awaits its open
 coordinator decisions. Evidence comparison was marked blocked because its
 historically closed evidence-card prerequisite is absent from this checkout;
 brwr-n4ga requests publication reconciliation rather than a duplicate build.
+## 2026-11-03 — Choose a project folder for a task (brwr-zla)
+
+A task can now begin beside the project it is meant to work on. Settings lets
+you choose up to sixteen project folders through the native picker, and the task
+bar offers them under Working folder, with the knowledge base as the default.
+The Tasks page shows the folder recorded for each run, and Reuse carries the
+original choice back to the task bar. Removing a choice leaves its files alone;
+a reused task keeps its instruction and asks for another choice before Run.
+
+Brauser stores these destinations itself, separately from the configuration
+snapshot the browser may update. A task sends a folder ID, and the service checks
+that ID, its recorded filesystem identity and Brauser's protected locations
+before starting queued work. Removing and re-adding the same path creates a new
+ID, so an earlier task cannot inherit fresh authorization. Custom-folder tasks
+can run while the default knowledge base is unavailable. This changes the
+agent's starting folder; the existing full-access agent contract remains.
+
+Nine new Rust cases and eleven new offline extension cases pass, including a
+fake-harness project task and Tasks-to-Reuse handoff. The full required and README
+gates pass: 1,562 Rust-reported outcomes (94 explicit IPC skips, two ignored), all
+45 extension files and both Clippy builds. Accessibility transport fixtures pass;
+43 browser cases, including a new keyboard selection journey, skip explicitly
+inside this sandbox and remain for the driver's real-browser gate. The single
+independent review's two P2s and one P3 were reproduced first and fixed.
+
+## 2026-11-03 — Recover settings with an invalid task-folder entry (brwr-pf8o)
+
+The pending repair inherited by this cycle keeps a malformed project-folder
+entry from trapping settings in an unreadable state. Brauser now retains the
+configuration's actual revision, disables the invalid destinations and offers
+its existing picker-confirmed repair. Saving that repair first preserves the
+exact original file in a backup. A regression exercises an invalid folder ID,
+a relative path and an empty filesystem identity, then checks the repaired
+configuration and original backup. The Unix-only service helper is also gated
+so it does not create a Windows dead-code warning.
+
+Source review, the Rust build, formatting, workspace Clippy and all 1,563
+Rust-reported test outcomes pass, with 94 explicit IPC skips and two ignored
+tests. This is source ready, not marked shipped: an offline npm installation
+cleared node_modules before reporting a missing cache entry, and the sandbox
+blocks the reinstall. The outer driver must install the exact lockfile,
+rebuild the extension and pass its complete independent gate. No new feature
+was started from that failed health gate.

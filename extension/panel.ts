@@ -29,6 +29,7 @@ import {
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
 import { armTaskNotifications, taskNoticeSignal } from "./task-notifications.js";
+import { TaskFolderPicker } from "./task-folders.js";
 import { TaskRecall } from "./task-recall.js";
 import { literalTaskInstruction } from "./task-commands.js";
 import { readScopeText, recentSummaryText, summaryLine } from "./summary-text.js";
@@ -264,6 +265,8 @@ let commandLoading: Promise<void> | null = null;
 const taskRunButton = element<HTMLButtonElement>("task-run");
 const taskRunLabel = element<HTMLSpanElement>("task-run-label");
 const taskUsePage = element<HTMLInputElement>("task-use-page");
+const taskFolder = element<HTMLSelectElement>("task-folder");
+const taskFolderPicker = new TaskFolderPicker(taskFolder, renderTaskBar);
 const taskContext = element<HTMLParagraphElement>("task-context");
 const taskHint = element<HTMLParagraphElement>("task-hint");
 const taskHintText = element<HTMLSpanElement>("task-hint-text");
@@ -311,7 +314,10 @@ let changingNoteIdentity = false;
 // from a rebuilt binary, starts on the next call after it exits.
 session.host.onHostExit(() => { hostBuild.textContent = ""; });
 session.host.onHostRestart(() => {
-  void session.hello().then((hello) => showHostBuild(hello.host_version), () => undefined);
+  void session.hello().then((hello) => {
+    showHostBuild(hello.host_version);
+    if (!closed && session.config?.storage) void taskFolderPicker.refresh(session.host);
+  }, () => undefined);
 });
 let busy = false;
 let replaying = false;
@@ -1222,6 +1228,7 @@ async function reloadConfig(): Promise<void> {
   const response = await session.reload();
   draftPolicyPending = false;
   sharingDraftPanel?.render();
+  if (session.config?.storage) void taskFolderPicker.refresh(session.host);
   if (response.config_issue || response.adapter_issue) {
     show(response.config_issue ?? response.adapter_issue ?? "Adapter policy is invalid.", true);
   }
@@ -1462,6 +1469,7 @@ function taskBlocked(): { text: string; settings: boolean } | null {
   // The Brauser service runs on macOS (and Unix) only; settings cannot fix it.
   if (/^win/i.test(navigator.platform ?? "")) return { text: "Tasks are not supported on Windows yet.", settings: false };
   if (!harnessReady(session)) return { text: TASK_NEEDS_HARNESS_MESSAGE, settings: true };
+  if (taskFolderPicker.missing) return { text: "The reused task folder is unavailable. Choose a working folder.", settings: true };
   if (taskUsePage.checked && pageState === "site-access") {
     return { text: "Re-enable site access in Chrome so the agent can read this page.", settings: false };
   }
@@ -1521,6 +1529,7 @@ function renderTaskBar(): void {
     commandIssue !== null || taskCommand.children.length <= 1;
   taskCommandInsert.disabled = taskCommand.disabled || !taskCommand.value;
   taskCommandRefresh.disabled = taskStarting || commandLoading !== null;
+  taskFolder.disabled = taskStarting;
   taskUsePage.disabled = taskStarting || (currentPage === null && pageState !== "site-access");
   taskHint.hidden = blocked === null;
   if (taskHintText.textContent !== (blocked?.text ?? "")) taskHintText.textContent = blocked?.text ?? "";
@@ -1533,7 +1542,9 @@ function renderTaskBar(): void {
  * so the user sees which page a task will get. */
 function renderTaskContext(): void {
   const page = currentPage;
-  let text = "No page · Runs in your knowledge base";
+  let text = taskFolderPicker.selectedId === null ? "No page · Runs in your knowledge base"
+    : taskFolderPicker.selectedPath === null ? "No page · Choose a working folder"
+    : `No page · Runs in ${taskFolderPicker.selectedPath}`;
   if (taskUsePage.checked && pageState === "site-access") text = "Page access required · Uncheck Include this page to run without it";
   if (taskUsePage.checked && page !== null && page.tabId !== undefined) {
     const selected = taskSelection !== null && taskSelection.selected &&
@@ -1613,6 +1624,7 @@ async function runTask(): Promise<void> {
         const windowId = await panelWindowId;
         if (windowId !== null) await armTaskNotifications(windowId, requestId);
       },
+      taskFolderPicker.selectedId,
     );
     if (runLines.get(taskRunArea)?.tabId === tabId) clearRunLine(taskRunArea);
     if (run !== null) {
@@ -1722,6 +1734,7 @@ async function checkReuse(): Promise<void> {
     taskRecall.reset();
     taskInput.value = literalTaskInstruction(reused.instruction);
     taskUsePage.checked = !reused.no_page;
+    taskFolderPicker.choose(reused.task_folder_id ?? null);
     renderTaskBar();
     taskInput.focus();
   }
