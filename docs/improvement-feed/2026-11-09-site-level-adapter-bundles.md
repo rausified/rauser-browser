@@ -1,3 +1,5 @@
 ## 2026-11-09 — Offer site-level adapter bundles
 
 Change: let GitHub, Box, and Google Workspace be enabled and reviewed as one site-level bundle of ordered artifact rules, with optional per-kind selection in the review. Keep each rule's existing type, ID template, scope, title, mode, and `within` contract, and preview which routes and kinds the bundle covers. Why: these families each present one product experience with several artifact kinds, while setup exposes several separate choices. The 2026-11-09 Settings prototype shows one review and save can add those kinds together; it also exposes the need for a readable per-kind preview instead of one JSON array and one example. Jira and Confluence should remain separate product choices despite their shared Atlassian Cloud origin. Where: `extension/options.ts`, `extension/options.html`, the settings review, and `protocol/starters/README.md` if bundle metadata moves into the catalog.
+
+- Done 2026-11-09: a6e2285 adds the site card, per-kind selection, and example previews; typed adapter contracts remain the persisted format.
