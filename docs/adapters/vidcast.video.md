@@ -4,6 +4,12 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/vidcast/`, researched blind: public sources only, no
 browsing history, cookies or a Vidcast account.
 
+History check (2026-11-09): graded against a held-back sample of real
+browsing history (real URLs from eight researched sites): 11 real URLs
+(26 visits) matched, 2/3 rules confirmed, the recorded title right on
+8/11. Not every rule and title was confirmed, so this type stays a
+development draft.
+
 Brauser offers this draft on the exact origin `https://app.vidcast.io`,
 alongside Vidcast playlists and Vidcast pages (the `vidcast` family). Any
 combination can be chosen in Capture Site and in the settings gallery. The
