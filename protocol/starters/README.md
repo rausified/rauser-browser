@@ -24,10 +24,13 @@ source of truth for the current shape.
   // "www.strict.test" or "signin.strict.test"); both keys are optional and only
   // allowed on a subdomain origin. An exclude entry ending in one "*" is a
   // first-label prefix: "fupload-*" skips "fupload-12.strict.test" (but not
-  // "fupload.strict.test"). The prefix must be non-empty and the "*" may only
-  // come last ("*", "*wss" and "f*load" are refused). Atlassian and SharePoint
-  // stay permissive (any prefix, any number of labels) — strict matching is
-  // opt-in per family.
+  // "fupload.strict.test", which does not start with "fupload-"). A prefix
+  // without a trailing hyphen before the "*" also excludes the bare label
+  // itself: "cdn*" skips "cdn.strict.test" as well as "cdnx.strict.test",
+  // because "cdn" starts with "cdn" too. The prefix must be non-empty and
+  // the "*" may only come last ("*", "*wss" and "f*load" are refused).
+  // Atlassian and SharePoint stay permissive (any prefix, any number of
+  // labels) — strict matching is opt-in per family.
   // or, for a product served on several hosts, a multi-origin family:
   // { "kind": "any", "of": [{ "kind": "exact", "origin": "https://app.box.com" },
   //   { "kind": "subdomain", "suffix": ".app.box.com", "labels": 1 }, ...] }

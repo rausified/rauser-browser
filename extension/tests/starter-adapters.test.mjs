@@ -361,6 +361,26 @@ test("Miro draft keys boards by their padded board ID and ignores dashboards", (
   assert.equal(evaluate(doc, "https://miro.com/login/").match, false);
 });
 
+// box.json's own vectors only run the synthesized starter:box fixture
+// against its sample_origin, acme.app.box.com (a subdomain member); origin
+// matching for the family's other members, personal https://app.box.com
+// and a Box Zones enterprise host like acme.ent.box.com, is pinned by
+// SHIPPED_STRICT_ORIGIN_CASES (starter-origin-cases.mjs) but the IDs those
+// members' offered adapters actually produce were not (#340 review, Minor
+// 3). Pin the exact IDs docs/adapters/box.file.md gives as examples, end to
+// end through starterOffers and the compiled adapter.
+test("Box's personal and enterprise origins key files the same way its sample subdomain does", () => {
+  const personal = compiled(starterOffers("https://app.box.com", []));
+  const personalFile = evaluate(personal, "https://app.box.com/file/111122223333");
+  assert.equal(personalFile.match, true);
+  assert.equal(personalFile.artifact_id, "box.file:app.box.com/111122223333");
+
+  const enterprise = compiled(starterOffers("https://acme.ent.box.com", []));
+  const enterpriseFile = evaluate(enterprise, "https://acme.ent.box.com/file/444455556666");
+  assert.equal(enterpriseFile.match, true);
+  assert.equal(enterpriseFile.artifact_id, "box.file:acme.ent.box.com/444455556666");
+});
+
 test("GitHub drafts are scoped and preserve PR modes", () => {
   const offers = starterOffers("https://github.com", ["acme-corp"]);
   const doc = compiled(offers);
