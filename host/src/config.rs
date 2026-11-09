@@ -3909,6 +3909,46 @@ mod tests {
             save(&mut store, splunk().to_vec());
         }
 
+        /// Dashboards saved alone, removed, then saved with apps: the app's
+        /// built-in views move from the retired dashboard's routes to the
+        /// app. That is the established container allowance
+        /// (`declares_container`: a contract declaring `candidate` as its
+        /// container lets the container take its routes, as a repository
+        /// does a removed pull request's), not the re-added-contract rule:
+        /// the same save passes with the dashboard left out, and with the
+        /// app added first and the dashboard after.
+        #[test]
+        fn a_container_may_take_a_retired_contained_contracts_routes() {
+            let [app, dashboard] = splunk();
+            let saves: [&[Vec<serde_json::Value>]; 3] = [
+                &[
+                    vec![dashboard.clone()],
+                    Vec::new(),
+                    vec![app.clone(), dashboard.clone()],
+                ],
+                &[vec![dashboard.clone()], Vec::new(), vec![app.clone()]],
+                &[
+                    vec![dashboard.clone()],
+                    Vec::new(),
+                    vec![app.clone()],
+                    vec![app.clone(), dashboard.clone()],
+                ],
+            ];
+            for (case, steps) in saves.into_iter().enumerate() {
+                let folder = tempfile::tempdir().unwrap();
+                let mut store = loaded(&folder.path().join("config.toml"));
+                for (step, adapters) in steps.iter().enumerate() {
+                    let mut next = store.snapshot().clone();
+                    next.adapters.artifacts = adapters.clone();
+                    let revision = store.revision().to_owned();
+                    store
+                        .update(next, &revision)
+                        .unwrap_or_else(|error| panic!("case {case} step {step}: {error:#}"))
+                        .expect("no conflict");
+                }
+            }
+        }
+
         /// Re-adding a removed container and its contained type in one save
         /// is the same as re-adding the container first, then the contained
         /// type: the container's recorded routes keep its identity.
