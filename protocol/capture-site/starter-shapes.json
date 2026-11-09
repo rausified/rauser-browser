@@ -29,7 +29,8 @@
     "aha.idea",
     "aha.note",
     "servicenow.incident",
-    "servicenow.change"
+    "servicenow.change",
+    "aha.portalidea"
   ],
   "accept": [
     {
@@ -226,6 +227,11 @@
       "note": "Change request in Service Operations Workspace (docs/adapters/servicenow.change.md)",
       "url": "https://acme.service-now.com/now/sow/record/change_request/0123456789abcdef0123456789abcdef",
       "shape": "/now/sow/record/change_request/{hex32}"
+    },
+    {
+      "note": "Aha! portal idea (docs/adapters/aha.portalidea.md)",
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45",
+      "shape": "/ideas/{id}"
     }
   ],
   "reject": []

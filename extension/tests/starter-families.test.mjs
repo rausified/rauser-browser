@@ -23,7 +23,7 @@ const {
 } = await import("../dist/starter-adapters.js");
 const { compileDocument, evaluate } = await import("../dist/adapter-templates.js");
 const { EXAMPLE_TENANT_FAMILY, EXAMPLE_STRICT_FAMILY } = await import("./starter-fixtures.mjs");
-const { ORIGIN_CASES, STRICT_ORIGIN_CASES } = await import("./starter-origin-cases.mjs");
+const { ORIGIN_CASES, STRICT_ORIGIN_CASES, SHIPPED_STRICT_ORIGIN_CASES } = await import("./starter-origin-cases.mjs");
 const { loadFamilies } = await import("../../scripts/generate-starters.mjs");
 const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
 
@@ -64,6 +64,12 @@ test("strict subdomain families claim one label and skip excluded hosts", (t) =>
   }
   // Adding the strict family must not change what the real families claim.
   for (const [origin, expected] of ORIGIN_CASES) {
+    assert.equal(starterKind(origin), expected, origin);
+  }
+});
+
+test("shipped strict families: prefix excludes, a multi-origin family, nested suffixes", () => {
+  for (const [origin, expected] of SHIPPED_STRICT_ORIGIN_CASES) {
     assert.equal(starterKind(origin), expected, origin);
   }
 });
