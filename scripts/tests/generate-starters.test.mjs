@@ -198,7 +198,9 @@ test("checkLock flags an edited id and leaves an untouched lock clean", () => {
   const lock = JSON.parse(readFileSync(path.join(REPO, "protocol", "starters", "ids.lock.json"), "utf8"));
   assert.deepEqual(checkLock(families, lock), []);
   const edited = JSON.parse(JSON.stringify(families));
-  edited[0].types[0].adapter.id = "changed";
+  // Look jira.issue up by name: family files load in file-name order, so a
+  // family sorting before atlassian.json (aha.json) moves it off index 0.
+  edited.flatMap((family) => family.types).find((type) => type.type === "jira.issue").adapter.id = "changed";
   assert.deepEqual(checkLock(edited, lock), ["id template changed for jira.issue"]);
 });
 
@@ -1467,21 +1469,21 @@ const LOCK_TEST_FAMILY = {
   overlaps: [],
   types: [
     {
-      type: "aha.feature",
-      key: "aha.feature",
+      type: "ahalock.feature",
+      key: "ahalock.feature",
       label: "Aha feature",
       label_variants: [],
       description: "An example feature page.",
       record_label: null,
       example_path: null,
       adapter: {
-        type: "aha.feature",
+        type: "ahalock.feature",
         match: [{ path: "/features/{id:int}" }],
-        id: "aha.feature:{host}/{id}",
+        id: "ahalock.feature:{host}/{id}",
       },
       history: [],
       status: { state: "development", method: null, checked_on: null, checked_by: null },
-      docs: "docs/adapters/aha.feature.md",
+      docs: "docs/adapters/ahalock.feature.md",
       samples: [{ note: "Aha feature", url: "https://ahalock.example/features/1", title: null, shape: "/features/{id}" }],
       samples_shape: true,
       vectors: [],
@@ -1491,7 +1493,7 @@ const LOCK_TEST_FAMILY = {
 
 function installLockTestFamily(root) {
   writeFamily(root, "ahalock", LOCK_TEST_FAMILY);
-  writeFileSync(path.join(root, "docs", "adapters", "aha.feature.md"), "# aha.feature starter draft\n\nStatus: development draft.\n");
+  writeFileSync(path.join(root, "docs", "adapters", "ahalock.feature.md"), "# ahalock.feature starter draft\n\nStatus: development draft.\n");
 }
 
 test("write mode appends a missing lock entry and prints it; --check still refuses it", async (t) => {
@@ -1501,14 +1503,14 @@ test("write mode appends a missing lock entry and prints it; --check still refus
 
   const checkResult = run(["--check", "--root", root]);
   assert.equal(checkResult.status, 1);
-  assert.match(checkResult.stdout, /no lock entry for aha\.feature/);
+  assert.match(checkResult.stdout, /no lock entry for ahalock\.feature/);
 
   const writeResult = run(["--root", root]);
   assert.equal(writeResult.status, 0, writeResult.stdout + writeResult.stderr);
-  assert.match(writeResult.stdout, /appended lock entry aha\.feature → aha\.feature:\{host\}\/\{id\}/);
+  assert.match(writeResult.stdout, /appended lock entry ahalock\.feature → ahalock\.feature:\{host\}\/\{id\}/);
 
   const lock = JSON.parse(readFileSync(path.join(root, "protocol", "starters", "ids.lock.json"), "utf8"));
-  assert.equal(lock["aha.feature"], "aha.feature:{host}/{id}");
+  assert.equal(lock["ahalock.feature"], "ahalock.feature:{host}/{id}");
 
   const recheck = run(["--check", "--root", root]);
   assert.equal(recheck.status, 0, recheck.stdout + recheck.stderr);
@@ -1520,12 +1522,12 @@ test("an edited lock entry still fails in write mode, not only --check", async (
   installLockTestFamily(root);
   const lockPath = path.join(root, "protocol", "starters", "ids.lock.json");
   const lock = JSON.parse(readFileSync(lockPath, "utf8"));
-  lock["aha.feature"] = "aha.feature:{host}/{id}/changed";
+  lock["ahalock.feature"] = "ahalock.feature:{host}/{id}/changed";
   writeFileSync(lockPath, JSON.stringify(lock, null, 2));
 
   const result = run(["--root", root]);
   assert.equal(result.status, 1);
-  assert.match(result.stdout, /id template changed for aha\.feature/);
+  assert.match(result.stdout, /id template changed for ahalock\.feature/);
   assert.doesNotMatch(result.stdout, /appended lock entry/);
 });
 

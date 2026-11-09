@@ -21,7 +21,15 @@
     "box.folder",
     "box.share",
     "webex.recording",
-    "webex.meeting"
+    "webex.meeting",
+    "aha.feature",
+    "aha.requirement",
+    "aha.epic",
+    "aha.release",
+    "aha.idea",
+    "aha.note",
+    "servicenow.incident",
+    "servicenow.change"
   ],
   "accept": [
     {
@@ -178,6 +186,46 @@
       "note": "Webex Post Meeting Detail page (docs/adapters/webex.meeting.md)",
       "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
       "shape": "/webappng/sites/example/meeting/postinfo/{id}"
+    },
+    {
+      "note": "Aha! feature (docs/adapters/aha.feature.md)",
+      "url": "https://acme.aha.io/features/PRJ-123",
+      "shape": "/features/{key}"
+    },
+    {
+      "note": "Aha! requirement (docs/adapters/aha.requirement.md)",
+      "url": "https://acme.aha.io/requirements/PRJ-123-1",
+      "shape": "/requirements/{id}"
+    },
+    {
+      "note": "Aha! epic (docs/adapters/aha.epic.md)",
+      "url": "https://acme.aha.io/epics/PRJ-E-12",
+      "shape": "/epics/{id}"
+    },
+    {
+      "note": "Aha! release (docs/adapters/aha.release.md)",
+      "url": "https://acme.aha.io/releases/PRJ-R-3",
+      "shape": "/releases/{id}"
+    },
+    {
+      "note": "Aha! idea (docs/adapters/aha.idea.md)",
+      "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45",
+      "shape": "/ideas/ideas/{id}"
+    },
+    {
+      "note": "Aha! note (docs/adapters/aha.note.md)",
+      "url": "https://acme.aha.io/pages/PRJ-N-67",
+      "shape": "/pages/{id}"
+    },
+    {
+      "note": "Incident in Service Operations Workspace (docs/adapters/servicenow.incident.md)",
+      "url": "https://acme.service-now.com/now/sow/record/incident/0123456789abcdef0123456789abcdef",
+      "shape": "/now/sow/record/incident/{hex32}"
+    },
+    {
+      "note": "Change request in Service Operations Workspace (docs/adapters/servicenow.change.md)",
+      "url": "https://acme.service-now.com/now/sow/record/change_request/0123456789abcdef0123456789abcdef",
+      "shape": "/now/sow/record/change_request/{hex32}"
     }
   ],
   "reject": []

@@ -574,6 +574,335 @@
           "id": "webex.meeting:{host}/{id}"
         }
       ]
+    },
+    "starter:aha": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "aha.feature",
+          "origin": "https://acme.aha.io",
+          "match": [
+            {
+              "path": "/features/{ref:jira_key}"
+            },
+            {
+              "path": "/develop/features/{ref:jira_key}"
+            }
+          ],
+          "id": "aha.feature:{host}/{ref}",
+          "title": [
+            "{ref:jira_key} {title} | Aha!{~}",
+            "{title} | Aha!{~}"
+          ],
+          "refs": [
+            {
+              "type": "aha.feature",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "aha.requirement",
+          "origin": "https://acme.aha.io",
+          "match": [
+            {
+              "path": "/requirements/{ref:name(5,100)|upper}"
+            },
+            {
+              "path": "/develop/requirements/{ref:name(5,100)|upper}"
+            }
+          ],
+          "id": "aha.requirement:{host}/{ref}",
+          "title": [
+            "{ref:name} {title} | Aha!{~}",
+            "{title} | Aha!{~}"
+          ],
+          "refs": [
+            {
+              "type": "aha.feature",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "aha.epic",
+          "origin": "https://acme.aha.io",
+          "match": [
+            {
+              "path": "/epics/{ref:name(5,100)|upper}"
+            },
+            {
+              "path": "/develop/epics/{ref:name(5,100)|upper}"
+            }
+          ],
+          "id": "aha.epic:{host}/{ref}",
+          "title": [
+            "{ref:name} {title} | Aha!{~}",
+            "{title} | Aha!{~}"
+          ],
+          "refs": [
+            {
+              "type": "aha.feature",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "aha.release",
+          "origin": "https://acme.aha.io",
+          "match": [
+            {
+              "path": "/releases/{ref:name(5,100)|upper}"
+            }
+          ],
+          "id": "aha.release:{host}/{ref}",
+          "title": [
+            "{ref:name} {title} | Aha!{~}",
+            "{title} | Aha!{~}"
+          ],
+          "refs": [
+            {
+              "type": "aha.feature",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "aha.idea",
+          "origin": "https://acme.aha.io",
+          "match": [
+            {
+              "path": "/ideas/ideas/{ref:name(5,100)|upper}"
+            },
+            {
+              "path": "/develop/ideas/ideas/{ref:name(5,100)|upper}"
+            }
+          ],
+          "id": "aha.idea:{host}/{ref}",
+          "title": [
+            "{ref:name} {title} | Aha!{~}",
+            "{title} | Aha!{~}"
+          ],
+          "refs": [
+            {
+              "type": "aha.feature",
+              "find": "jira_key"
+            }
+          ]
+        },
+        {
+          "type": "aha.note",
+          "origin": "https://acme.aha.io",
+          "match": [
+            {
+              "path": "/pages/{ref:name(5,100)|upper}"
+            },
+            {
+              "path": "/products/{_}/pages/{ref:name(5,100)|upper}"
+            },
+            {
+              "path": "/develop/pages/{ref:name(5,100)|upper}"
+            }
+          ],
+          "id": "aha.note:{host}/{ref}",
+          "title": [
+            "{ref:name} {title} | Aha!{~}",
+            "{title} | Aha!{~}"
+          ],
+          "refs": [
+            {
+              "type": "aha.feature",
+              "find": "jira_key"
+            }
+          ]
+        }
+      ]
+    },
+    "starter:servicenow": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "servicenow.incident",
+          "origin": "https://acme.service-now.com",
+          "match": [
+            {
+              "path": "/incident.do",
+              "query": {
+                "sys_id": "{id:hex(32)}"
+              },
+              "absent": [
+                "XML",
+                "PDF",
+                "CSV",
+                "EXCEL",
+                "XLSX",
+                "JSON",
+                "JSONv2",
+                "UNL"
+              ]
+            },
+            {
+              "path": "/now/{_}/record/incident/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/now/{_}/{_}/record/incident/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "ticket",
+                "table": "incident",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "standard_ticket",
+                "table": "incident",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "form",
+                "table": "incident",
+                "sys_id": "{id:hex(32)}"
+              }
+            }
+          ],
+          "id": "servicenow.incident:{host}/{id}",
+          "title": "{title} | Incident | {~}"
+        },
+        {
+          "type": "servicenow.ritm",
+          "origin": "https://acme.service-now.com",
+          "match": [
+            {
+              "path": "/sc_req_item.do",
+              "query": {
+                "sys_id": "{id:hex(32)}"
+              },
+              "absent": [
+                "XML",
+                "PDF",
+                "CSV",
+                "EXCEL",
+                "XLSX",
+                "JSON",
+                "JSONv2",
+                "UNL"
+              ]
+            },
+            {
+              "path": "/now/{_}/record/sc_req_item/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/now/{_}/{_}/record/sc_req_item/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "ticket",
+                "table": "sc_req_item",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "standard_ticket",
+                "table": "sc_req_item",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "form",
+                "table": "sc_req_item",
+                "sys_id": "{id:hex(32)}"
+              }
+            }
+          ],
+          "id": "servicenow.ritm:{host}/{id}",
+          "title": "{title} | Requested Item | {~}"
+        },
+        {
+          "type": "servicenow.change",
+          "origin": "https://acme.service-now.com",
+          "match": [
+            {
+              "path": "/change_request.do",
+              "query": {
+                "sys_id": "{id:hex(32)}"
+              },
+              "absent": [
+                "XML",
+                "PDF",
+                "CSV",
+                "EXCEL",
+                "XLSX",
+                "JSON",
+                "JSONv2",
+                "UNL"
+              ]
+            },
+            {
+              "path": "/now/{_}/record/change_request/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/now/{_}/{_}/record/change_request/{id:hex(32)}/{*}"
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "ticket",
+                "table": "change_request",
+                "sys_id": "{id:hex(32)}"
+              }
+            },
+            {
+              "path": "/(sp|esc)",
+              "query": {
+                "id": "form",
+                "table": "change_request",
+                "sys_id": "{id:hex(32)}"
+              }
+            }
+          ],
+          "id": "servicenow.change:{host}/{id}",
+          "title": "{title} | Change Request | {~}"
+        },
+        {
+          "type": "servicenow.kb",
+          "origin": "https://acme.service-now.com",
+          "match": [
+            {
+              "path": "/kb_view.do",
+              "query": {
+                "sysparm_article": "{number:token(3,40)|upper}"
+              }
+            },
+            {
+              "path": "/(sp|esc|kb)",
+              "query": {
+                "id": "kb_article",
+                "sysparm_article": "{number:token(3,40)|upper}"
+              }
+            },
+            {
+              "path": "/(sp|esc|kb)",
+              "query": {
+                "id": "kb_article_view",
+                "sysparm_article": "{number:token(3,40)|upper}"
+              }
+            }
+          ],
+          "id": "servicenow.kb:{host}/{number}"
+        }
+      ]
     }
   },
   "cases": [
@@ -6965,6 +7294,3812 @@
         "reason": "no_rule"
       },
       "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/abc123"
+    },
+    {
+      "id": "validate.starter.aha",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:aha fixture (protocol/starters/aha.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.aha",
+      "kind": "overlap_report",
+      "why": "generated: aha's declared overlaps (protocol/starters/aha.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.aha.feature.basic",
+      "kind": "evaluate",
+      "why": "feature.basic",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null,
+        "title": "Checkout redesign",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/features/PRJ-123",
+      "title": "Checkout redesign | Aha!"
+    },
+    {
+      "id": "eval.aha.feature.ref_prefix_title",
+      "kind": "evaluate",
+      "why": "feature.ref_prefix_title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null,
+        "title": "Checkout redesign",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/features/PRJ-123",
+      "title": "PRJ-123 Checkout redesign | Aha!"
+    },
+    {
+      "id": "eval.aha.feature.product_suffix",
+      "kind": "evaluate",
+      "why": "feature.product_suffix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "APP1-7"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/APP1-7",
+        "mode": null,
+        "title": "Bulk export",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/features/APP1-7",
+      "title": "Bulk export | Aha! Roadmaps"
+    },
+    {
+      "id": "eval.aha.feature.trailing_slash",
+      "kind": "evaluate",
+      "why": "feature.trailing_slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/features/PRJ-123/"
+    },
+    {
+      "id": "eval.aha.feature.query_noise",
+      "kind": "evaluate",
+      "why": "feature.query_noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/features/PRJ-123?full_screen=1000000000000000001&utm_source=slack"
+    },
+    {
+      "id": "eval.aha.feature.fragment",
+      "kind": "evaluate",
+      "why": "feature.fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/features/PRJ-123#comments"
+    },
+    {
+      "id": "eval.aha.feature.lowercase_canonical",
+      "kind": "evaluate",
+      "why": "feature.lowercase_canonical",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/features/prj-123"
+    },
+    {
+      "id": "eval.aha.feature.develop",
+      "kind": "evaluate",
+      "why": "feature.develop",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "DEV-42"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/DEV-42",
+        "mode": null,
+        "title": "Fix login loop",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/develop/features/DEV-42",
+      "title": "Fix login loop | Aha! Develop"
+    },
+    {
+      "id": "eval.aha.feature.title_with_pipe",
+      "kind": "evaluate",
+      "why": "feature.title_with_pipe",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-9"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-9",
+        "mode": null,
+        "title": "A | B plan",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/features/PRJ-9",
+      "title": "A | B plan | Aha!"
+    },
+    {
+      "id": "eval.aha.feature.ref_mismatch_title",
+      "kind": "evaluate",
+      "why": "leading key differs from the path, so entry 1 does not apply",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-9"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-9",
+        "mode": null,
+        "title": "OPS-2 rollout",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": [
+          {
+            "type": "aha.feature",
+            "value": "OPS-2"
+          }
+        ]
+      },
+      "url": "https://acme.aha.io/features/PRJ-9",
+      "title": "OPS-2 rollout | Aha!"
+    },
+    {
+      "id": "eval.aha.feature.no_suffix_title",
+      "kind": "evaluate",
+      "why": "no entry matches; whole title kept",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-9"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-9",
+        "mode": null,
+        "title": "Untitled tab",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/features/PRJ-9",
+      "title": "Untitled tab"
+    },
+    {
+      "id": "eval.aha.neg.root",
+      "kind": "evaluate",
+      "why": "origin root",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/"
+    },
+    {
+      "id": "eval.aha.neg.login",
+      "kind": "evaluate",
+      "why": "login page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/session/new"
+    },
+    {
+      "id": "eval.aha.neg.features_list",
+      "kind": "evaluate",
+      "why": "no ref",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/features"
+    },
+    {
+      "id": "eval.aha.neg.features_word",
+      "kind": "evaluate",
+      "why": "route word is not a jira_key",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/features/board"
+    },
+    {
+      "id": "eval.aha.neg.feature_subpath",
+      "kind": "evaluate",
+      "why": "no rest segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/features/PRJ-123/edit"
+    },
+    {
+      "id": "eval.aha.neg.records_redirector",
+      "kind": "evaluate",
+      "why": "generic redirector, not matched",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/records/PRJ-123"
+    },
+    {
+      "id": "eval.aha.neg.api",
+      "kind": "evaluate",
+      "why": "API, not a page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/api/v1/features/PRJ-123"
+    },
+    {
+      "id": "eval.aha.neg.products_features",
+      "kind": "evaluate",
+      "why": "unverified workspace view, deliberately excluded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/products/PRJ/features/PRJ-123"
+    },
+    {
+      "id": "eval.aha.neg.whiteboard",
+      "kind": "evaluate",
+      "why": "whiteboards not in this starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/whiteboards/1000000000000000004?width=540&height=340"
+    },
+    {
+      "id": "eval.aha.neg.bookmarks",
+      "kind": "evaluate",
+      "why": "saved report",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/bookmarks/custom_pivots/1000000000000000005/1000000000000000006"
+    },
+    {
+      "id": "eval.aha.neg.settings",
+      "kind": "evaluate",
+      "why": "settings",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/settings/api_keys"
+    },
+    {
+      "id": "eval.aha.neg.uppercase_route",
+      "kind": "evaluate",
+      "why": "paths are case-sensitive",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/FEATURES/PRJ-123"
+    },
+    {
+      "id": "eval.aha.neg.encoded_slash",
+      "kind": "evaluate",
+      "why": "encoded slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://acme.aha.io/features/PRJ%2F123"
+    },
+    {
+      "id": "eval.aha.feature.host_in_id",
+      "kind": "evaluate",
+      "why": "rewritten from a different-host negative (other.aha.io): on the family's own permissive subdomain origin, the host just becomes part of the ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/features/PRJ-123"
+    },
+    {
+      "id": "eval.aha.feature.login_title",
+      "kind": "evaluate",
+      "why": "KNOWN LIMIT: a login tab's title on a record URL is recorded whole until the real title loads",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null,
+        "title": "Log in to your workspace",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/features/PRJ-123",
+      "title": "Log in to your workspace | Aha!"
+    },
+    {
+      "id": "eval.aha.requirement.basic",
+      "kind": "evaluate",
+      "why": "req.basic",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "PRJ-123-1"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/PRJ-123-1",
+        "mode": null,
+        "title": "Validate card number",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/requirements/PRJ-123-1",
+      "title": "Validate card number | Aha!"
+    },
+    {
+      "id": "eval.aha.requirement.ref_title",
+      "kind": "evaluate",
+      "why": "req.ref_title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "PRJ-123-1"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/PRJ-123-1",
+        "mode": null,
+        "title": "Validate card number",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/requirements/PRJ-123-1",
+      "title": "PRJ-123-1 Validate card number | Aha!"
+    },
+    {
+      "id": "eval.aha.requirement.full_screen_query",
+      "kind": "evaluate",
+      "why": "req.full_screen_query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "KNB-6438-2"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/KNB-6438-2",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/requirements/KNB-6438-2?full_screen=1000000000000000002#filter-your-report"
+    },
+    {
+      "id": "eval.aha.requirement.trailing_slash",
+      "kind": "evaluate",
+      "why": "req.trailing_slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "PRJ-5-12"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/PRJ-5-12",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/requirements/PRJ-5-12/"
+    },
+    {
+      "id": "eval.aha.requirement.lowercase",
+      "kind": "evaluate",
+      "why": "req.lowercase",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "PRJ-5-12"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/PRJ-5-12",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/requirements/prj-5-12"
+    },
+    {
+      "id": "eval.aha.requirement.develop",
+      "kind": "evaluate",
+      "why": "req.develop",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "DEV-42-3"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/DEV-42-3",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/develop/requirements/DEV-42-3"
+    },
+    {
+      "id": "eval.aha.requirement.fragment",
+      "kind": "evaluate",
+      "why": "req.fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "PRJ-5-12"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/PRJ-5-12",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/requirements/PRJ-5-12#top"
+    },
+    {
+      "id": "eval.aha.requirement.digits_prefix",
+      "kind": "evaluate",
+      "why": "req.digits_prefix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "PRJ1-1-1"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/PRJ1-1-1",
+        "mode": null,
+        "title": "Edge case",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/requirements/PRJ1-1-1",
+      "title": "Edge case | Aha! Roadmaps"
+    },
+    {
+      "id": "eval.aha.neg.short_word_requirement",
+      "kind": "evaluate",
+      "why": "shorter than the minimum length 5",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/requirements/new"
+    },
+    {
+      "id": "eval.aha.epic.basic",
+      "kind": "evaluate",
+      "why": "epic.basic",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "PRJ-E-12"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12",
+        "mode": null,
+        "title": "Payments platform",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/epics/PRJ-E-12",
+      "title": "Payments platform | Aha!"
+    },
+    {
+      "id": "eval.aha.epic.ref_title",
+      "kind": "evaluate",
+      "why": "epic.ref_title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "PRJ-E-12"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12",
+        "mode": null,
+        "title": "Payments platform",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/epics/PRJ-E-12",
+      "title": "PRJ-E-12 Payments platform | Aha!"
+    },
+    {
+      "id": "eval.aha.epic.trailing",
+      "kind": "evaluate",
+      "why": "epic.trailing",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "PRJ-E-12"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/epics/PRJ-E-12/"
+    },
+    {
+      "id": "eval.aha.epic.query",
+      "kind": "evaluate",
+      "why": "epic.query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "PRJ-E-12"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/epics/PRJ-E-12?tab=related"
+    },
+    {
+      "id": "eval.aha.epic.fragment",
+      "kind": "evaluate",
+      "why": "epic.fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "PRJ-E-12"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/epics/PRJ-E-12#x"
+    },
+    {
+      "id": "eval.aha.epic.lower",
+      "kind": "evaluate",
+      "why": "epic.lower",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "PRJ-E-12"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/epics/prj-e-12"
+    },
+    {
+      "id": "eval.aha.epic.develop",
+      "kind": "evaluate",
+      "why": "epic.develop",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "DEV-E-3"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/DEV-E-3",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/develop/epics/DEV-E-3"
+    },
+    {
+      "id": "eval.aha.epic.short",
+      "kind": "evaluate",
+      "why": "epic.short",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "A-E-1"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/A-E-1",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/epics/A-E-1"
+    },
+    {
+      "id": "eval.aha.neg.epic_features",
+      "kind": "evaluate",
+      "why": "sub-list of an epic",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/epics/PRJ-E-12/features"
+    },
+    {
+      "id": "eval.aha.release.basic",
+      "kind": "evaluate",
+      "why": "release.basic",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-3",
+        "mode": null,
+        "title": "2026.11",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/releases/PRJ-R-3",
+      "title": "2026.11 | Aha!"
+    },
+    {
+      "id": "eval.aha.release.ref_title",
+      "kind": "evaluate",
+      "why": "release.ref_title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-3",
+        "mode": null,
+        "title": "Winter launch",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/releases/PRJ-R-3",
+      "title": "PRJ-R-3 Winter launch | Aha!"
+    },
+    {
+      "id": "eval.aha.release.trailing",
+      "kind": "evaluate",
+      "why": "release.trailing",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-3",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/releases/PRJ-R-3/"
+    },
+    {
+      "id": "eval.aha.release.query",
+      "kind": "evaluate",
+      "why": "release.query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-3",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/releases/PRJ-R-3?utm_medium=email"
+    },
+    {
+      "id": "eval.aha.release.fragment",
+      "kind": "evaluate",
+      "why": "release.fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-3",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/releases/PRJ-R-3#features"
+    },
+    {
+      "id": "eval.aha.release.lower",
+      "kind": "evaluate",
+      "why": "release.lower",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-3",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/releases/prj-r-3"
+    },
+    {
+      "id": "eval.aha.release.long_prefix",
+      "kind": "evaluate",
+      "why": "release.long_prefix",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "INTSANDBOX-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/INTSANDBOX-R-3",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/releases/INTSANDBOX-R-3"
+    },
+    {
+      "id": "eval.aha.release.feature_mention",
+      "kind": "evaluate",
+      "why": "release.feature_mention",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-4"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-4",
+        "mode": null,
+        "title": "Ship PRJ-77",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": [
+          {
+            "type": "aha.feature",
+            "value": "PRJ-77"
+          }
+        ]
+      },
+      "url": "https://acme.aha.io/releases/PRJ-R-4",
+      "title": "Ship PRJ-77 | Aha!"
+    },
+    {
+      "id": "eval.aha.neg.products_releases",
+      "kind": "evaluate",
+      "why": "unverified workspace view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/products/PRJ/releases/PRJ-R-1"
+    },
+    {
+      "id": "eval.aha.neg.short_word_release",
+      "kind": "evaluate",
+      "why": "shorter than 5",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/releases/new"
+    },
+    {
+      "id": "eval.aha.idea.basic",
+      "kind": "evaluate",
+      "why": "idea.basic",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45",
+        "mode": null,
+        "title": "Dark mode",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45",
+      "title": "Dark mode | Aha!"
+    },
+    {
+      "id": "eval.aha.idea.ref_title",
+      "kind": "evaluate",
+      "why": "idea.ref_title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45",
+        "mode": null,
+        "title": "Dark mode",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45",
+      "title": "PRJ-I-45 Dark mode | Aha! Ideas"
+    },
+    {
+      "id": "eval.aha.idea.trailing",
+      "kind": "evaluate",
+      "why": "idea.trailing",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45/"
+    },
+    {
+      "id": "eval.aha.idea.query",
+      "kind": "evaluate",
+      "why": "idea.query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45?source=portal"
+    },
+    {
+      "id": "eval.aha.idea.fragment",
+      "kind": "evaluate",
+      "why": "idea.fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45#comments"
+    },
+    {
+      "id": "eval.aha.idea.lower",
+      "kind": "evaluate",
+      "why": "idea.lower",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/ideas/ideas/prj-i-45"
+    },
+    {
+      "id": "eval.aha.idea.develop",
+      "kind": "evaluate",
+      "why": "idea.develop",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 1,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "DEV-I-9"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/DEV-I-9",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/develop/ideas/ideas/DEV-I-9"
+    },
+    {
+      "id": "eval.aha.idea.short",
+      "kind": "evaluate",
+      "why": "idea.short",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "A-I-1"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/A-I-1",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/ideas/ideas/A-I-1"
+    },
+    {
+      "id": "eval.aha.neg.ideas_overview",
+      "kind": "evaluate",
+      "why": "ideas module page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/ideas/overview"
+    },
+    {
+      "id": "eval.aha.neg.ideas_single",
+      "kind": "evaluate",
+      "why": "in-app ideas need /ideas/ideas/",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/ideas/PRJ-I-45"
+    },
+    {
+      "id": "eval.aha.note.basic",
+      "kind": "evaluate",
+      "why": "note.basic",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null,
+        "title": "Q3 planning notes",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/pages/PRJ-N-67",
+      "title": "Q3 planning notes | Aha!"
+    },
+    {
+      "id": "eval.aha.note.products",
+      "kind": "evaluate",
+      "why": "note.products",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 1,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/products/PRJ/pages/PRJ-N-67"
+    },
+    {
+      "id": "eval.aha.note.products_other_ws",
+      "kind": "evaluate",
+      "why": "the workspace segment is skipped, so a moved note keeps its ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 1,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/products/OPS/pages/PRJ-N-67"
+    },
+    {
+      "id": "eval.aha.note.anchor",
+      "kind": "evaluate",
+      "why": "note.anchor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 1,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/products/PRJ/pages/PRJ-N-67#non-admin-user-roles"
+    },
+    {
+      "id": "eval.aha.note.trailing",
+      "kind": "evaluate",
+      "why": "note.trailing",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/pages/PRJ-N-67/"
+    },
+    {
+      "id": "eval.aha.note.query",
+      "kind": "evaluate",
+      "why": "note.query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/pages/PRJ-N-67?share=1"
+    },
+    {
+      "id": "eval.aha.note.develop",
+      "kind": "evaluate",
+      "why": "note.develop",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 2,
+        "type": "aha.note",
+        "captures": {
+          "ref": "DEV-N-5"
+        },
+        "artifact_id": "aha.note:acme.aha.io/DEV-N-5",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/develop/pages/DEV-N-5"
+    },
+    {
+      "id": "eval.aha.note.numeric_internal",
+      "kind": "evaluate",
+      "why": "known limit: internal numeric note id records a separate artifact",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "aha.note",
+        "captures": {
+          "ref": "1000000000000000003"
+        },
+        "artifact_id": "aha.note:acme.aha.io/1000000000000000003",
+        "mode": null
+      },
+      "url": "https://acme.aha.io/pages/1000000000000000003"
+    },
+    {
+      "id": "eval.aha.note.ref_title",
+      "kind": "evaluate",
+      "why": "note.ref_title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null,
+        "title": "Q3 planning notes",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/pages/PRJ-N-67",
+      "title": "PRJ-N-67 Q3 planning notes | Aha!"
+    },
+    {
+      "id": "eval.aha.neg.short_word_note",
+      "kind": "evaluate",
+      "why": "shorter than the minimum length 5",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/pages/new"
+    },
+    {
+      "id": "validate.starter.servicenow",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:servicenow fixture (protocol/starters/servicenow.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.servicenow",
+      "kind": "overlap_report",
+      "why": "generated: servicenow's declared overlaps (protocol/starters/servicenow.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.servicenow.incident.classic_form_direct",
+      "kind": "evaluate",
+      "why": "classic form, direct",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "INC0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "INC0010001 | Incident | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.incident.query_noise_product_name_containing_still",
+      "kind": "evaluate",
+      "why": "query noise; product name containing ' | ' still skipped from the end",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "INC0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=incident&sysparm_record_row=1",
+      "title": "INC0010001 | Incident | Acme IT | Portal"
+    },
+    {
+      "id": "eval.servicenow.incident.uppercase_sys_id_lowercased_fragment_ignored",
+      "kind": "evaluate",
+      "why": "uppercase sys_id lowercased; fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "abcdef0123456789abcdef0123456789"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/abcdef0123456789abcdef0123456789",
+        "mode": null,
+        "title": "INC0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+      "title": "INC0010001 | Incident | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.incident.service_operations_workspace",
+      "kind": "evaluate",
+      "why": "Service Operations Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.incident.sow_trailing_slash",
+      "kind": "evaluate",
+      "why": "SOW, trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210/"
+    },
+    {
+      "id": "eval.servicenow.incident.sow_with_trailing_params_segments",
+      "kind": "evaluate",
+      "why": "SOW with trailing params segments (shape assumed)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/incident/fedcba9876543210fedcba9876543210/params/selected-tab-index/1"
+    },
+    {
+      "id": "eval.servicenow.incident.legacy_agent_workspace",
+      "kind": "evaluate",
+      "why": "legacy Agent Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/workspace/agent/record/incident/00000000111111112222222233333333"
+    },
+    {
+      "id": "eval.servicenow.incident.csm_fsm_configurable_workspace_query_noise",
+      "kind": "evaluate",
+      "why": "CSM/FSM configurable workspace, query noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 2,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/cwf/agent/record/incident/00000000111111112222222233333333?foo=bar"
+    },
+    {
+      "id": "eval.servicenow.incident.service_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "Service Portal ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.employee_center_ticket_page_noise",
+      "kind": "evaluate",
+      "why": "Employee Center ticket page, noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 3,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef&view=sp"
+    },
+    {
+      "id": "eval.servicenow.incident.service_portal_form_page_param_order",
+      "kind": "evaluate",
+      "why": "Service Portal form page, param order varied",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 5,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=incident&id=form"
+    },
+    {
+      "id": "eval.servicenow.incident.employee_center_standard_ticket_page",
+      "kind": "evaluate",
+      "why": "Employee Center standard_ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 4,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=standard_ticket&table=incident&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.list",
+      "kind": "evaluate",
+      "why": "incident list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident_list.do?sysparm_query=active%3Dtrue"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.new_record_form",
+      "kind": "evaluate",
+      "why": "incident new-record form (sys_id=-1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=-1&sysparm_query="
+    },
+    {
+      "id": "eval.servicenow.incident.neg.opened_by_number_query_no_sys",
+      "kind": "evaluate",
+      "why": "incident opened by number query: no sys_id in URL",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?sysparm_query=number%3DINC0010001"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.xml_export_processor",
+      "kind": "evaluate",
+      "why": "incident XML export processor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?XML&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.duplicate_sys_id_is_ambiguous",
+      "kind": "evaluate",
+      "why": "incident duplicate sys_id is ambiguous",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.next_experience_classic_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "incident Next Experience classic wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/incident.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.nav_to_do_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "incident nav_to.do wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/nav_to.do?uri=incident.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.sow_new_record_placeholder",
+      "kind": "evaluate",
+      "why": "incident SOW new record placeholder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/record/incident/-1_uid_3"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.portal_ticket_page_without_sys_id",
+      "kind": "evaluate",
+      "why": "incident portal ticket page without sys_id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=incident"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.instance_root",
+      "kind": "evaluate",
+      "why": "instance root",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.ui16_frameset_home",
+      "kind": "evaluate",
+      "why": "UI16 frameset home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/navpage.do"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.next_experience_home",
+      "kind": "evaluate",
+      "why": "Next Experience home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/nav/ui/home"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.login",
+      "kind": "evaluate",
+      "why": "login",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/login.do"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.portal_home",
+      "kind": "evaluate",
+      "why": "portal home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.catalog_item_page",
+      "kind": "evaluate",
+      "why": "catalog item page (not a starter)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/esc?id=sc_cat_item&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.sow_home",
+      "kind": "evaluate",
+      "why": "SOW home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/home"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.sow_list",
+      "kind": "evaluate",
+      "why": "SOW list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/list/params/list-id/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.case_table_no_starter",
+      "kind": "evaluate",
+      "why": "case table: no starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=sn_customerservice_case&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.request_table_no_starter",
+      "kind": "evaluate",
+      "why": "request (REQ) table: no starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=sc_request&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.31_hex_sys_id",
+      "kind": "evaluate",
+      "why": "31-hex sys_id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcde"
+    },
+    {
+      "id": "eval.servicenow.incident.neg.problem_table_no_starter",
+      "kind": "evaluate",
+      "why": "problem table: no starter",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/record/problem/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.classic_form_direct",
+      "kind": "evaluate",
+      "why": "classic form, direct",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "RITM0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "RITM0010001 | Requested Item | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.ritm.query_noise_product_name_containing_still",
+      "kind": "evaluate",
+      "why": "query noise; product name containing ' | ' still skipped from the end",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "RITM0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=sc_req_item&sysparm_record_row=1",
+      "title": "RITM0010001 | Requested Item | Acme IT | Portal"
+    },
+    {
+      "id": "eval.servicenow.ritm.uppercase_sys_id_lowercased_fragment_ignored",
+      "kind": "evaluate",
+      "why": "uppercase sys_id lowercased; fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "abcdef0123456789abcdef0123456789"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/abcdef0123456789abcdef0123456789",
+        "mode": null,
+        "title": "RITM0010001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+      "title": "RITM0010001 | Requested Item | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.ritm.service_operations_workspace",
+      "kind": "evaluate",
+      "why": "Service Operations Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.ritm.sow_trailing_slash",
+      "kind": "evaluate",
+      "why": "SOW, trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210/"
+    },
+    {
+      "id": "eval.servicenow.ritm.sow_with_trailing_params_segments",
+      "kind": "evaluate",
+      "why": "SOW with trailing params segments (shape assumed)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/sc_req_item/fedcba9876543210fedcba9876543210/params/selected-tab-index/1"
+    },
+    {
+      "id": "eval.servicenow.ritm.legacy_agent_workspace",
+      "kind": "evaluate",
+      "why": "legacy Agent Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/workspace/agent/record/sc_req_item/00000000111111112222222233333333"
+    },
+    {
+      "id": "eval.servicenow.ritm.csm_fsm_configurable_workspace_query_noise",
+      "kind": "evaluate",
+      "why": "CSM/FSM configurable workspace, query noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 2,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/cwf/agent/record/sc_req_item/00000000111111112222222233333333?foo=bar"
+    },
+    {
+      "id": "eval.servicenow.ritm.service_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "Service Portal ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 3,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.employee_center_ticket_page_noise",
+      "kind": "evaluate",
+      "why": "Employee Center ticket page, noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 3,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef&view=sp"
+    },
+    {
+      "id": "eval.servicenow.ritm.service_portal_form_page_param_order",
+      "kind": "evaluate",
+      "why": "Service Portal form page, param order varied",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 5,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=sc_req_item&id=form"
+    },
+    {
+      "id": "eval.servicenow.ritm.employee_center_standard_ticket_page",
+      "kind": "evaluate",
+      "why": "Employee Center standard_ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 4,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=standard_ticket&table=sc_req_item&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.list",
+      "kind": "evaluate",
+      "why": "sc_req_item list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item_list.do?sysparm_query=active%3Dtrue"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.new_record_form",
+      "kind": "evaluate",
+      "why": "sc_req_item new-record form (sys_id=-1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=-1&sysparm_query="
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.opened_by_number_query_no_sys",
+      "kind": "evaluate",
+      "why": "sc_req_item opened by number query: no sys_id in URL",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sysparm_query=number%3DRITM0010001"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.xml_export_processor",
+      "kind": "evaluate",
+      "why": "sc_req_item XML export processor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?XML&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.duplicate_sys_id_is_ambiguous",
+      "kind": "evaluate",
+      "why": "sc_req_item duplicate sys_id is ambiguous",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.next_experience_classic_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "sc_req_item Next Experience classic wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/sc_req_item.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.nav_to_do_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "sc_req_item nav_to.do wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/nav_to.do?uri=sc_req_item.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.sow_new_record_placeholder",
+      "kind": "evaluate",
+      "why": "sc_req_item SOW new record placeholder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/record/sc_req_item/-1_uid_3"
+    },
+    {
+      "id": "eval.servicenow.ritm.neg.portal_ticket_page_without_sys_id",
+      "kind": "evaluate",
+      "why": "sc_req_item portal ticket page without sys_id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=sc_req_item"
+    },
+    {
+      "id": "eval.servicenow.change.classic_form_direct",
+      "kind": "evaluate",
+      "why": "classic form, direct",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "CHG0030001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "CHG0030001 | Change Request | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.change.query_noise_product_name_containing_still",
+      "kind": "evaluate",
+      "why": "query noise; product name containing ' | ' still skipped from the end",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": "CHG0030001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef&sysparm_view=ess&sysparm_record_target=change_request&sysparm_record_row=1",
+      "title": "CHG0030001 | Change Request | Acme IT | Portal"
+    },
+    {
+      "id": "eval.servicenow.change.uppercase_sys_id_lowercased_fragment_ignored",
+      "kind": "evaluate",
+      "why": "uppercase sys_id lowercased; fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "abcdef0123456789abcdef0123456789"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/abcdef0123456789abcdef0123456789",
+        "mode": null,
+        "title": "CHG0030001",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=ABCDEF0123456789ABCDEF0123456789#section_tab.abc",
+      "title": "CHG0030001 | Change Request | ServiceNow"
+    },
+    {
+      "id": "eval.servicenow.change.service_operations_workspace",
+      "kind": "evaluate",
+      "why": "Service Operations Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.change.sow_trailing_slash",
+      "kind": "evaluate",
+      "why": "SOW, trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210/"
+    },
+    {
+      "id": "eval.servicenow.change.sow_with_trailing_params_segments",
+      "kind": "evaluate",
+      "why": "SOW with trailing params segments (shape assumed)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 1,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "fedcba9876543210fedcba9876543210"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/fedcba9876543210fedcba9876543210",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/sow/record/change_request/fedcba9876543210fedcba9876543210/params/selected-tab-index/1"
+    },
+    {
+      "id": "eval.servicenow.change.legacy_agent_workspace",
+      "kind": "evaluate",
+      "why": "legacy Agent Workspace",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 2,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/workspace/agent/record/change_request/00000000111111112222222233333333"
+    },
+    {
+      "id": "eval.servicenow.change.csm_fsm_configurable_workspace_query_noise",
+      "kind": "evaluate",
+      "why": "CSM/FSM configurable workspace, query noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 2,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "00000000111111112222222233333333"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/00000000111111112222222233333333",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/now/cwf/agent/record/change_request/00000000111111112222222233333333?foo=bar"
+    },
+    {
+      "id": "eval.servicenow.change.service_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "Service Portal ticket page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 3,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.employee_center_ticket_page_noise",
+      "kind": "evaluate",
+      "why": "Employee Center ticket page, noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 3,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef&view=sp"
+    },
+    {
+      "id": "eval.servicenow.change.service_portal_form_page_param_order",
+      "kind": "evaluate",
+      "why": "Service Portal form page, param order varied",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 4,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?sys_id=0123456789abcdef0123456789abcdef&table=change_request&id=form"
+    },
+    {
+      "id": "eval.servicenow.change.neg.list",
+      "kind": "evaluate",
+      "why": "change_request list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request_list.do?sysparm_query=active%3Dtrue"
+    },
+    {
+      "id": "eval.servicenow.change.neg.new_record_form",
+      "kind": "evaluate",
+      "why": "change_request new-record form (sys_id=-1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=-1&sysparm_query="
+    },
+    {
+      "id": "eval.servicenow.change.neg.opened_by_number_query_no_sys",
+      "kind": "evaluate",
+      "why": "change_request opened by number query: no sys_id in URL",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request.do?sysparm_query=number%3DCHG0030001"
+    },
+    {
+      "id": "eval.servicenow.change.neg.xml_export_processor",
+      "kind": "evaluate",
+      "why": "change_request XML export processor",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request.do?XML&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.neg.duplicate_sys_id_is_ambiguous",
+      "kind": "evaluate",
+      "why": "change_request duplicate sys_id is ambiguous",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef&sys_id=fedcba9876543210fedcba9876543210"
+    },
+    {
+      "id": "eval.servicenow.change.neg.next_experience_classic_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "change_request Next Experience classic wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/nav/ui/classic/params/target/change_request.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.neg.nav_to_do_wrapper_grammar_gap",
+      "kind": "evaluate",
+      "why": "change_request nav_to.do wrapper: GRAMMAR GAP, not expressible",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/nav_to.do?uri=change_request.do%3Fsys_id%3D0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.neg.sow_new_record_placeholder",
+      "kind": "evaluate",
+      "why": "change_request SOW new record placeholder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/record/change_request/-1_uid_3"
+    },
+    {
+      "id": "eval.servicenow.change.neg.portal_ticket_page_without_sys_id",
+      "kind": "evaluate",
+      "why": "change_request portal ticket page without sys_id",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=ticket&table=change_request"
+    },
+    {
+      "id": "eval.servicenow.kb.platform_article_view",
+      "kind": "evaluate",
+      "why": "platform article view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB0010035"
+    },
+    {
+      "id": "eval.servicenow.kb.lowercase_number_folded_to_upper_language",
+      "kind": "evaluate",
+      "why": "lowercase number folded to upper; language noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=kb0010035&sysparm_language=en"
+    },
+    {
+      "id": "eval.servicenow.kb.service_portal_kb_article",
+      "kind": "evaluate",
+      "why": "Service Portal kb_article",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035"
+    },
+    {
+      "id": "eval.servicenow.kb.service_portal_kb_article_view_with",
+      "kind": "evaluate",
+      "why": "Service Portal kb_article_view with search-ranking noise",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article_view&sysparm_article=KB0010035&sysparm_rank=1&sysparm_tsqueryId=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.employee_center",
+      "kind": "evaluate",
+      "why": "Employee Center",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0012345"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0012345",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=kb_article_view&sysparm_article=KB0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.employee_center_fragment",
+      "kind": "evaluate",
+      "why": "Employee Center, fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0012345"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0012345",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/esc?id=kb_article&sysparm_article=KB0012345#comments"
+    },
+    {
+      "id": "eval.servicenow.kb.knowledge_portal",
+      "kind": "evaluate",
+      "why": "Knowledge portal (/kb suffix)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0099999"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0099999",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/kb?id=kb_article_view&sysparm_article=KB0099999"
+    },
+    {
+      "id": "eval.servicenow.kb.trailing_slash_on_kb_view_do",
+      "kind": "evaluate",
+      "why": "trailing slash on kb_view.do",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0099999"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0099999",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/kb_view.do/?sysparm_article=KB0099999"
+    },
+    {
+      "id": "eval.servicenow.kb.custom_prefix_param_order_varied",
+      "kind": "evaluate",
+      "why": "custom prefix, param order varied",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "HRKB0001001"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/HRKB0001001",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?sysparm_article=HRKB0001001&id=kb_article_view"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.kb_version_sys_id_form_deliberately",
+      "kind": "evaluate",
+      "why": "KB version sys_id form: deliberately not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sys_kb_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.portal_kb_version_sys_id_form",
+      "kind": "evaluate",
+      "why": "portal KB version sys_id form: not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article_view&sys_kb_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.portal_kb_sys_id_form_not",
+      "kind": "evaluate",
+      "why": "portal KB sys_id form: not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.sow_kb_view_by_sys_id",
+      "kind": "evaluate",
+      "why": "SOW KB view by sys_id: not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/now/sow/kb_view/kb_knowledge/0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.duplicate_sysparm_article",
+      "kind": "evaluate",
+      "why": "duplicate sysparm_article",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB0010035&sysparm_article=KB0010036"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.knowledge_home",
+      "kind": "evaluate",
+      "why": "knowledge home",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_home"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.knowledge_search",
+      "kind": "evaluate",
+      "why": "knowledge search",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_search&query=vpn"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.classic_knowledge_search",
+      "kind": "evaluate",
+      "why": "classic knowledge search",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/kb_find.do?sysparm_search=vpn"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.portal_article_page_with_no_article",
+      "kind": "evaluate",
+      "why": "portal article page with no article",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/esc?id=kb_article_view"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.value_with_is_not_a_token",
+      "kind": "evaluate",
+      "why": "value with '/' is not a token",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB%2F0001"
+    },
+    {
+      "id": "eval.servicenow.kb.renamed_portal_view",
+      "kind": "evaluate",
+      "why": "KB article on a customer-renamed portal: NOT RECORDED, a renamed portal path cannot anchor a rule (adapter-templates.md §4.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_article_view&sysparm_article=KB0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.renamed_portal_article",
+      "kind": "evaluate",
+      "why": "KB article on a customer-renamed portal (kb_article): NOT RECORDED, same anchor limit",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/policyhub?id=kb_article&sysparm_article=kb0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.renamed_portal_search",
+      "kind": "evaluate",
+      "why": "knowledge search on a renamed portal",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_search&query=vpn"
+    },
+    {
+      "id": "eval.servicenow.kb.version_link",
+      "kind": "evaluate",
+      "why": "version sys_id link on a renamed portal: names a version, not the article",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_article&sys_id=0123456789abcdef0123456789abcdef"
     }
   ]
 }
