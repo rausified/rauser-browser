@@ -756,6 +756,19 @@ test("hint appears only after three unrecognized visits of a candidate shape and
   assert.equal(calls, 0);
 });
 
+test("a GitHub repository outside the selected owners is an existing site format", () => {
+  const github = "https://github.com";
+  const lease = leaseOf(starterOffers(github, ["rausified"]).map((offer) => offer.adapter));
+  const repository = `${github}/anthropics/skills`;
+  assert.equal(evaluate(compileDocument(lease.adapters).doc, repository).reason, "out_of_scope");
+  assert.equal(recurringHint(lease, [sampled("/{slug}/{slug}", 9), sampled("/{slug}/{slug}/issues/{num}", 9)], repository), false);
+  // A new route on a configured origin can still be offered when its format
+  // does not match the existing rules at all.
+  const issueOnly = leaseOf(starterOffers(github, ["rausified"]).filter((offer) => offer.artifact_type === "github.issue").map((offer) => offer.adapter));
+  assert.equal(recurringHint(issueOnly, [sampled("/{slug}/{slug}/issues/{num}", 5)], `${github}/rausified/browser/discussions/5`), false);
+  assert.equal(recurringHint(issueOnly, [sampled("/{slug}/{slug}/discussions/{num}", 3)], `${github}/rausified/browser/discussions/5`), true);
+});
+
 test("drafting on a configured origin adds adapters and never changes existing ones", () => {
   // Existing definitions, including a custom one on the drafted origin with
   // unusual key order and extra settings, stay byte-identical.
