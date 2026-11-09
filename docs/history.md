@@ -1744,3 +1744,23 @@ tests and four capture-site module tests pass; host library/tests Clippy with
 warnings denied and all fast static gates pass. Full platform and extension
 suites are delegated to the driver's external commit gate. Complete fresh diff
 review and one independent session review found no P1/P2 issues.
+
+
+## 2026-11-09 — Guard live routes against leading insertions and expansion
+
+`brwr-98mo` and `brwr-nhwb`: the host's precedence check now examines every
+adapter before a retained recorded contract, including new adapters and in-place
+widening. It requires a same-identity complete prefix already present before that
+contract; appended suffixes pass only if disjoint from the protected routes.
+Scope, path case and other matching settings participate in the proof. Existing
+first-match occurrence matching, disjoint additions, unchanged overlaps and
+explicit declared-child additions/narrowing remain usable; containers gain no
+exemption to take live child routes. Refusals preserve exact config bytes,
+revision and active matching policy. No Re-learn apply is enabled.
+
+Six new tests exercise real revision-checked saves and concrete changed winning
+keys, including a widened Splunk app taking dashboard pages. The existing seeded
+model now uses real exact URL rules and changes coverage on edit, checking both
+order and history guards over 2,000 sequences of up to 12 attempted steps. It
+checks full identities and requires safe narrowing/widening acceptance plus
+unsafe-edit rejection. All 149 configuration tests and host lib/tests Clippy pass.

@@ -10,3 +10,5 @@ settle the intended policy for adding contained rules to a live container.
 Where: `host/src/config.rs` transition validation and revision-checked save
 regressions; tracked as `brwr-98mo`, discovered from `brwr-qbub`. Demonstrate
 the handoffs with real engine evaluations before choosing the review policy.
+
+- Done 2026-11-09: `brwr-98mo` and `brwr-nhwb` extend the positional host guard to every leading candidate with complete-prefix/disjoint-suffix proofs; 149 configuration tests pass, including real Splunk widening and coverage-changing save sequences. Driver publication pending.
