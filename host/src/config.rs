@@ -4090,10 +4090,13 @@ mod tests {
             Ok(())
         }
 
+        /// An app adapter edited in a way that keeps the pages it records (a
+        /// title template), so the history guard's narrowing check, which
+        /// refuses an edit that hands pages to another adapter, stays out of
+        /// these order tests.
         fn edited(app: &serde_json::Value) -> serde_json::Value {
             let mut edited = app.clone();
-            edited["match"][1]["path"] =
-                json!("/{_}/app/{app:name}/(search|dashboards|reports|alerts|incident_review)");
+            edited["title"] = json!(["{title} | Splunk"]);
             edited
         }
 
