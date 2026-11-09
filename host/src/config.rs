@@ -1751,6 +1751,9 @@ fn unused_artifacts_dir(occupied: &[&Path]) -> String {
 }
 
 impl StoredConfig {
+    // Each host-owned field the extension's snapshot cannot carry is passed
+    // explicitly, so no caller can forget one.
+    #[allow(clippy::too_many_arguments)]
     fn from_snapshot(
         value: &ConfigSnapshot,
         root_identity: Option<String>,

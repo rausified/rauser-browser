@@ -262,15 +262,18 @@ mod tests {
     #[test]
     fn task_folder_grants_are_purpose_bound_and_consumed_only_after_success() {
         let dir = tempfile::tempdir().unwrap();
+        // The native picker hands over a canonical path (`choose_folder`); on
+        // macOS the temp folder sits behind the /var -> /private/var symlink.
+        let picked = fs::canonicalize(dir.path()).unwrap();
         let mut authority = ConsentAuthority::new();
-        let home = mint(&mut authority, FolderPurpose::NotesFolder, dir.path());
+        let home = mint(&mut authority, FolderPurpose::NotesFolder, &picked);
         assert!(authority.task_folder_grant(&home, "rev").is_err());
-        let token = mint(&mut authority, FolderPurpose::TaskFolder, dir.path());
+        let token = mint(&mut authority, FolderPurpose::TaskFolder, &picked);
         assert!(authority.task_folder_grant(&token, "stale").is_err());
         // The existing test helper binds grants to the fixture revision.
         let revision = authority.picker_grants[&token].revision.clone();
         let (path, identity) = authority.task_folder_grant(&token, &revision).unwrap();
-        assert_eq!(Path::new(&path), fs::canonicalize(dir.path()).unwrap());
+        assert_eq!(Path::new(&path), picked);
         assert_eq!(identity, selected_root_identity(Path::new(&path)).unwrap());
         authority.consume_picker(&token);
         assert!(authority.task_folder_grant(&token, &revision).is_err());
