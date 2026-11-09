@@ -101,10 +101,10 @@ capture, so the structural drafter cannot learn this shape.
 
 ## Known limits
 
-- **Needs Splunk apps.** Brauser refuses to save this type without
-  Splunk apps on the stack, because alone it would record
-  Search and the other built-in pages as dashboards named `search`,
-  `reports`, and so on; see `docs/adapters/splunk.app.md`.
+- **Choose with Splunk apps.** Alone, this type records Search and the
+  other built-in pages as dashboards named `search`, `reports`, and so on,
+  so Capture Site offers it only with Splunk apps. Once saved, the two keep
+  their order; see `docs/adapters/splunk.app.md`.
 - **The built-in view list is Splunk apps'.** A built-in page missing from
   it, such as Enterprise Security's `incident_review`, is recorded as a
   dashboard; a dashboard whose ID is a listed word (most often `home`) is

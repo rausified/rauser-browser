@@ -55,9 +55,9 @@ The design agent's open decisions, settled:
    adapter declare a winner, which the overlap warning exists to stop. User-written adapters,
    agent drafts and recorded-rule restore keep today's overlap handling; on such a family Capture Site
    offers the starter after the restore overlap refusal, re-checked by the host. The host refuses
-   any save that leaves `b` live without `a` on its origin, or above it (the catalog's generated
-   `container_first` line), so a contained contract never holds the container's pages and a later
-   container cannot silently re-key them (`protocol/starters/README.md` "Test vectors and overlaps").
+   any save that would change which of `a` and `b` records a page it already recorded: one invariant,
+   `container_first_violation`, over the adapter lists before and after (the catalog's generated
+   `container_first` line names the pairs), pinned by a randomized test (`protocol/starters/README.md` "Test vectors and overlaps").
 
 ## Research method (from the blind test)
 

@@ -194,45 +194,61 @@ unaffected):
   the save puts back exactly as live again, not retired.
 - Nothing else changes: user-written adapters keep the ordinary §10.3
   warning, and agent drafts still drop an overlapping rule.
-- The host never lets `b` be live without `a` on its origin. `gen:starters`
-  writes every declared pair, with both types' labels, into the
-  `container_first` line of `protocol/capture-site/catalog.json`. That line
-  is generated only. A host that finds it malformed fails closed: the first save that needs it panics instead of saving unchecked, and the host's tests compare it with the families, so a damaged line never ships.
-  Every save (settings, Capture Site and its preflight, and saving restored
-  rules) is refused when it would leave a `b` adapter with no `a` adapter
-  on the same origin: `b` alone, or `a` removed under `b`. The refusal reads
-  "Splunk dashboards need Splunk apps saved with them on <origin>; add
-  Splunk apps, or remove Splunk dashboards too." The other rules:
+- The host never lets a save change which of `a` and `b` records a page
+  it already recorded. `gen:starters` writes every declared pair, with both
+  types' labels, into the `container_first` line of
+  `protocol/capture-site/catalog.json`. That line is generated only. A host
+  that finds it malformed fails closed: the first save that needs it panics
+  instead of saving unchecked, and the host's tests compare it with the
+  families, so a damaged line never ships.
 
-  - A pair goes live container first. A first save of both with `b` above
-    `a` is refused: "Splunk apps must come above Splunk dashboards on
-    <origin>: whichever comes first records the pages both match."
-  - A live pair never changes order, in either direction, shipped or edited:
-    "Splunk apps and Splunk dashboards can't change order on <origin> once
-    saved. To change it, remove Splunk dashboards, save, then add them
-    again." A site already saved dashboards first (by hand, or an edited
-    pair before this rule) stays that way, and other saves and edits there
-    are allowed.
-  - Apps are not added where dashboards are already live alone, above or
-    below them: "To add Splunk apps here, remove Splunk dashboards on
-    <origin>, save, then add both."
+  Every save (settings, Capture Site and its preflight, saving restored
+  rules, adapter repair) goes through one check,
+  `container_first_violation(before, after, pairs)` in `host/src/config.rs`.
+  Per origin and declared pair, it compares the adapter list before the save
+  with the list after it. An adapter after the save continues the one
+  before it that is exactly equal, or else the one with the same type and
+  `id` (a rule edit). The check enforces four rules:
 
-  Removing dashboards and saving is always allowed, and the history guard
-  checks the retired contract when they come back. The host's tests check the catalog line against
-  the families' own `overlaps`. The check is on type names, so it applies on
-  any origin: starter type names are reserved for drafts, and a hand-written
-  adapter that reuses one is held to it too.
+  1. An `a` and a `b` adapter live both before and after keep their
+     relative order: "Splunk apps and Splunk dashboards can't change order
+     on <origin> once saved. To change it, remove Splunk dashboards, save,
+     then add them again."
+  2. A newly live `a` adapter may not sit above an already-live `b` adapter:
+     "To add Splunk apps here, remove Splunk dashboards on <origin>, save,
+     then add both: ..."
+  3. A newly live `b` adapter may not sit above an already-live `a` adapter:
+     "Splunk dashboards can't go above Splunk apps on <origin>: ... Add
+     Splunk dashboards below Splunk apps."
+  4. When neither type was live before, every `a` adapter sits above every
+     `b` adapter (the shipped order): "Splunk apps must come above Splunk
+     dashboards on <origin> when added together: ..."
 
-  Why: alone or first, `b`'s rule records `a`'s own pages (Splunk's built-in
-  views) under `b`'s identity. Adding `a`, or moving it first, later would then re-key those records
-  without a migration, live or retired. The host's history guard lets a
-  container take a retired contained contract's routes (`declares_container`,
-  as a repository takes a removed pull request's pages), so the guarantee
-  has to come from `b` never holding them. Recording a per-contract
-  "was alone" flag would need an adopted-contracts format change, and the
-  record's order cannot tell, because it keeps each contract once. A family
-  without a `"container_first"` entry is unaffected: a pull request rule may
-  still stand alone.
+  Everything else is allowed: other adapters, edits that keep their place,
+  and removals, which the history guard checks. A site saved dashboards
+  first, or with dashboards alone, keeps working; apps can be added there
+  only below the dashboards, which then keep the pages they record. The
+  check is on type names, so it applies on any origin: starter type names
+  are reserved for drafts, and a hand-written adapter that reuses one is
+  held to it too.
+
+  The extension follows the same rule. `orderContainedFirst` never
+  re-sorts a declared pair, new adapters are appended below the live ones,
+  the starter offers `a` before `b`, and settings holds a move that would
+  swap an `a` and a `b`. Capture Site does not offer `b` without `a` on a
+  new site, because alone `b` records `a`'s own pages (Splunk's built-in
+  views) as its own.
+
+  Why one invariant: whichever of the two comes first records the pages
+  both match, so a page keeps its recorder exactly when no adapter of the
+  other type moves above the one recording it. Rules 1 to 3 say that, and
+  rule 4 fixes the order for a fresh pair. A randomized host test
+  (`container_first_violation_never_moves_a_recorded_page`, fixed seed,
+  2,000 sequences of add, remove, move, edit, unrelated and whole-list
+  saves) checks that every accepted save leaves each recorded page's type
+  unchanged unless its adapter was removed. It also checks that every kind
+  of save is accepted sometimes. A family without a `"container_first"`
+  entry is unaffected.
 
 Why a declaration in the family file, not in the format: the overlap is a
 property of how one vendor lays out its URLs, reviewed when the family is

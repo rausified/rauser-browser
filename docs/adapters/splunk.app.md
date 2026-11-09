@@ -108,14 +108,13 @@ capture, so the structural drafter cannot learn this shape.
   built-in view, such as Enterprise Security's `incident_review`, is
   recorded as a dashboard. An app's own dashboard whose ID is one of the
   listed words (most often `home`) is recorded as app time instead.
-- **Dashboards need apps, above them.** Brauser refuses to save Splunk
-  dashboards without Splunk apps on the stack, above them, or to remove apps while
-  dashboards stay. Without the app rule, Search and the other built-in
-  pages would be recorded as dashboards named `search`, `reports`, and so
-  on, and adding apps later would move those records without a migration.
-  Once saved, the two keep their order. To add apps on a stack that has
-  dashboards alone, or to change the order, remove dashboards, save, then
-  add both.
+- **Choose dashboards with apps.** Capture Site offers Splunk dashboards
+  only together with Splunk apps. Without the app rule, Search and the
+  other built-in pages are recorded as dashboards named `search`,
+  `reports`, and so on. Once saved, apps and dashboards keep their order,
+  and Brauser refuses a save that would move a page from one to the other.
+  On a stack with dashboards alone, apps can only be added below them. To
+  put apps first, remove dashboards, save, then add both.
 - **Prefixed search heads are not offered.** `labels: 1` claims
   `<stack>.splunkcloud.com` and one-label hosts such as
   `es-<stack>.splunkcloud.com`, but not `<prefix>.<stack>.splunkcloud.com`.
