@@ -88,8 +88,18 @@ function run(testCase) {
     case "evaluate": {
       const compiled = compileDocument(resolveDoc(testCase.doc));
       assert.ok(compiled.ok, `fixture invalid: ${JSON.stringify(compiled.error)}`);
+      const url = resolveString(testCase.url);
       const title = "title" in testCase ? resolveString(testCase.title) : undefined;
-      const result = evaluate(compiled.doc, resolveString(testCase.url), title);
+      // budget_ms bounds the evaluate call alone, as the Rust harness times
+      // only doc.evaluate (README "budget_ms"). Compiling the document, which
+      // the engine does once per document and not per visit, stays outside
+      // the timer: for bounds_64x16 it costs about 13 times the evaluation.
+      const started = performance.now();
+      const result = evaluate(compiled.doc, url, title);
+      const elapsed = performance.now() - started;
+      if (testCase.budget_ms !== undefined) {
+        assert.ok(elapsed <= testCase.budget_ms, `evaluate took ${elapsed.toFixed(1)} ms, over ${testCase.budget_ms} ms`);
+      }
       checkInvariants(result);
       return result;
     }
@@ -99,6 +109,14 @@ function run(testCase) {
 }
 
 const tsCases = vectors.cases.filter((testCase) => testCase.impls.includes("ts"));
+
+test("adapter_template_budgets_are_only_on_evaluate_cases", () => {
+  // run() times only the evaluate call, so a budget on any other kind would
+  // be silently ignored.
+  for (const testCase of vectors.cases) {
+    if (testCase.budget_ms !== undefined) assert.equal(testCase.kind, "evaluate", `${testCase.id} has a budget`);
+  }
+});
 
 test("adapter_template_vectors_have_unique_ids_and_known_disputes", () => {
   const ids = new Set(vectors.cases.map((testCase) => testCase.id));
@@ -112,13 +130,7 @@ for (const testCase of tsCases) {
     continue;
   }
   test(testCase.id, () => {
-    const started = performance.now();
-    const result = run(testCase);
-    const elapsed = performance.now() - started;
-    assert.deepEqual(result, resolveExpect(testCase.expect), testCase.why);
-    if (testCase.budget_ms !== undefined) {
-      assert.ok(elapsed <= testCase.budget_ms, `${elapsed.toFixed(1)} ms over ${testCase.budget_ms} ms`);
-    }
+    assert.deepEqual(run(testCase), resolveExpect(testCase.expect), testCase.why);
   });
 }
 
