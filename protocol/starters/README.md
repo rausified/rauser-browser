@@ -22,8 +22,17 @@ source of truth for the current shape.
   // "labels": 1, "exclude": ["www", "signin"] } claims exactly one label before the
   // suffix (not "a.b.strict.test") and skips the named product hosts (not
   // "www.strict.test" or "signin.strict.test"); both keys are optional and only
-  // allowed on a subdomain origin. Atlassian and SharePoint stay permissive (any
-  // prefix, any number of labels) — strict matching is opt-in per family.
+  // allowed on a subdomain origin. An exclude entry ending in one "*" is a
+  // first-label prefix: "fupload-*" skips "fupload-12.strict.test" (but not
+  // "fupload.strict.test"). The prefix must be non-empty and the "*" may only
+  // come last ("*", "*wss" and "f*load" are refused). Atlassian and SharePoint
+  // stay permissive (any prefix, any number of labels) — strict matching is
+  // opt-in per family.
+  // or, for a product served on several hosts, a multi-origin family:
+  // { "kind": "any", "of": [{ "kind": "exact", "origin": "https://app.box.com" },
+  //   { "kind": "subdomain", "suffix": ".app.box.com", "labels": 1 }, ...] }
+  // claims an origin when any member does. `of` lists two or more exact or
+  // subdomain origins (no nested "any"), none overlapping another.
   "scope": null,
   // or one of the three scope kinds below
   "sample_origin": "https://acme.atlassian.net",  // must sit on the family's own origin
@@ -183,11 +192,18 @@ so a real cross-file collision is never hidden behind an unrelated typo.
 **Shared-origin policy** (a family's `origin` against
 `protocol/capture-site/catalog.json`'s `shared_origins`):
 
-- **Origin collisions.** Two families' origins may not overlap: a subdomain
-  suffix inside another suffix always collides, whatever `labels` or
-  `exclude` say; an exact origin collides with a suffix family only when
-  that family would claim it (`familyClaims`); a repeated exact origin
-  always collides. The problem is reported on whichever file sorts later:
+- **Origin collisions.** Two families' origins may not overlap. Two
+  subdomain families on the same suffix always collide, whatever `labels`
+  or `exclude` say. A suffix nested inside another (`.ideas.aha.io` inside
+  `.aha.io`) collides unless the shallower family has `labels: 1`: every
+  host the deeper family claims has at least two labels before the
+  shallower suffix, which `labels: 1` refuses, so the two are provably
+  disjoint (`aha` and `aha-ideas` rely on this). `exclude` never proves it,
+  and `labels: 1` on only the deeper family proves nothing. An exact origin
+  collides with a suffix family only when that family would claim it
+  (`familyClaims`); a repeated exact origin always collides. A multi-origin
+  family collides when any one of its members does. The problem is
+  reported on whichever file sorts later:
   `<file>: origin overlaps <other file>`.
 - **A shared origin always needs account values.** Any `shared_origins` entry
   this family's `origin` claims — its own exact origin, or, for a subdomain

@@ -4,13 +4,15 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/box/`, researched blind: public sources only, no
 browsing history, cookies or a Box account.
 
-Brauser offers this draft on an enterprise's custom subdomain,
-`<company>.app.box.com` (the `box` family's strict subdomain origin,
-`exclude: ["www", "cloud"]`), alongside Box files and Box shared links. Any
-combination can be chosen in Capture Site and in the settings gallery. The
+Brauser offers this draft on every Box web-app host: personal
+`https://app.box.com`, `<company>.app.box.com` and `<company>.ent.box.com`
+(the `box` family's multi-origin `origin`; `box.file`'s page lists its
+members), alongside Box files and Box shared links. Any combination can be
+chosen in Capture Site and in the settings gallery. The
 draft records one artifact per folder, however it was opened:
 
-`box.folder:<company>.app.box.com/<folder ID>`
+`box.folder:<host>/<folder ID>`, for example
+`box.folder:acme.app.box.com/123456789`
 
 The ID is Box's permanent folder ID (API `folders/<id>`, typed `d_<id>`).
 
@@ -84,12 +86,8 @@ per-type, since none of those 5 real visits happened to be a folder.
 
 ## Known limits
 
-- **This draft does not cover personal `https://app.box.com` or
-  `<company>.ent.box.com`**, the same gap `box.file`'s
-  page states in full.
-- **This starter is also offered, unintentionally, on Box's upload hosts**
-  (`fupload-<n>.app.box.com`), the same `exclude`-is-whole-label-only limit
-  `box.file`'s page states in full.
+- **The same folder on two Box hosts is two artifacts**, since the ID
+  carries `{host}`; `box.file`'s page states this in full.
 - **Shared-subfolder titles may carry the share root's name**, not the
   subfolder's own name: the one rendered sample observed showed the share
   root's title on a subfolder page.

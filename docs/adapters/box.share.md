@@ -4,15 +4,18 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/box/`, researched blind: public sources only, no
 browsing history, cookies or a Box account.
 
-Brauser offers this draft on an enterprise's custom subdomain,
-`<company>.app.box.com` (the `box` family's strict subdomain origin,
-`exclude: ["www", "cloud"]`), alongside Box files and Box folders. Any
-combination can be chosen in Capture Site and in the settings gallery. The
+Brauser offers this draft on every Box web-app host: personal
+`https://app.box.com`, `<company>.app.box.com` and `<company>.ent.box.com`
+(the `box` family's multi-origin `origin`; `box.file`'s page lists its
+members), alongside Box files and Box folders. Any combination can be
+chosen in Capture Site and in the settings gallery. The
 draft records one artifact per shared link or custom ("vanity") URL root,
 however it was opened:
 
-`box.share:<company>.app.box.com/s/<shared name>` or
-`box.share:<company>.app.box.com/v/<vanity name>`
+`box.share:<host>/s/<shared name>` or `box.share:<host>/v/<vanity name>`,
+for example `box.share:app.box.com/s/<shared name>` (`www.box.com/s/…`
+redirects there) or `box.share:acme.app.box.com/v/<vanity name>` (a vanity
+URL lives only on its enterprise's host)
 
 The URL alone does not say whether a shared link names a file or a folder,
 and a rendered shared page carries no `<meta>` with the item's ID (only
@@ -90,12 +93,8 @@ the latter needs a rule, as researched.
 
 ## Known limits
 
-- **This draft does not cover personal `https://app.box.com` or
-  `<company>.ent.box.com`**, the same gap `box.file`'s
-  page states in full.
-- **This starter is also offered, unintentionally, on Box's upload hosts**
-  (`fupload-<n>.app.box.com`), the same `exclude`-is-whole-label-only limit
-  `box.file`'s page states in full.
+- **The same link on two Box hosts is two artifacts**, since the ID
+  carries `{host}`; `box.file`'s page states this in full.
 - **A shared name dies when its link is disabled or re-created; a vanity
   name can be edited or reused by the owner.** This ID names the link, not
   the item behind it.

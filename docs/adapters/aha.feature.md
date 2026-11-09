@@ -71,8 +71,9 @@ A synthetic equivalent of the recorded shape, on `acme.aha.io`:
 | `/features/<ref>` | `PRJ-123 Bulk export \| Aha! Roadmaps` | that reference number, title `Bulk export` |
 
 The blind research scored 90 synthetic vectors across its seven drafted
-types, including the deferred `aha.portalidea` (Known limits, below). This
-PR keeps six of those types and carries over 71 of the research's cases
+types. Six of them are this family's; the seventh, `aha.portalidea`, lives
+on the ideas portal host in its own `aha-ideas` family
+(`docs/adapters/aha.portalidea.md`). This family carries over 71 of the research's cases
 (13 `aha.feature` cases among them, including one rewritten onto this
 family's sample origin and one new vector pinning the login-title limit),
 all correctly classified by the research's own draft and re-verified

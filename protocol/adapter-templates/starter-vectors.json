@@ -903,6 +903,22 @@
           "id": "servicenow.kb:{host}/{number}"
         }
       ]
+    },
+    "starter:aha-ideas": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "aha.portalidea",
+          "origin": "https://acme.ideas.aha.io",
+          "match": [
+            {
+              "path": "/ideas/{ref:name(5,100)|upper}"
+            }
+          ],
+          "id": "aha.portalidea:{host}/{ref}",
+          "title": "{title} | {~}"
+        }
+      ]
     }
   },
   "cases": [
@@ -11100,6 +11116,407 @@
         "reason": "no_rule"
       },
       "url": "https://acme.service-now.com/helpzone?id=kb_article&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "validate.starter.aha-ideas",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:aha-ideas fixture (protocol/starters/aha-ideas.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.aha-ideas",
+      "kind": "overlap_report",
+      "why": "generated: aha-ideas's declared overlaps (protocol/starters/aha-ideas.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.aha.portalidea.basic",
+      "kind": "evaluate",
+      "why": "portal idea page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null,
+        "title": "Allow hiding unused fields",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45",
+      "title": "Allow hiding unused fields | Acme Ideas"
+    },
+    {
+      "id": "eval.aha.portalidea.observed_shape",
+      "kind": "evaluate",
+      "why": "the public portal's observed ref shape and portal title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "A-I-24044"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/A-I-24044",
+        "mode": null,
+        "title": "Allow hiding unused record types on the new features",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.ideas.aha.io/ideas/A-I-24044",
+      "title": "Allow hiding unused record types on the new features | Aha! Big Ideas"
+    },
+    {
+      "id": "eval.aha.portalidea.trailing",
+      "kind": "evaluate",
+      "why": "trailing slash serves the same idea",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45/"
+    },
+    {
+      "id": "eval.aha.portalidea.query",
+      "kind": "evaluate",
+      "why": "query string ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45?foo=1&sort=recent"
+    },
+    {
+      "id": "eval.aha.portalidea.fragment",
+      "kind": "evaluate",
+      "why": "fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45#comments"
+    },
+    {
+      "id": "eval.aha.portalidea.lower",
+      "kind": "evaluate",
+      "why": "a hand-typed lowercase ref folds to the same ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/prj-i-45"
+    },
+    {
+      "id": "eval.aha.portalidea.pipe_in_name",
+      "kind": "evaluate",
+      "why": "an idea name containing \" | \" is kept whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-46"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-46",
+        "mode": null,
+        "title": "Export | Import parity",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-46",
+      "title": "Export | Import parity | Acme Ideas"
+    },
+    {
+      "id": "eval.aha.portalidea.long",
+      "kind": "evaluate",
+      "why": "long workspace prefix and number",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "WORKSPACE1-I-123456"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/WORKSPACE1-I-123456",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/WORKSPACE1-I-123456"
+    },
+    {
+      "id": "eval.aha.portalidea.no_portal_suffix",
+      "kind": "evaluate",
+      "why": "a title with no \" | \" matches no entry and is kept whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-47"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-47",
+        "mode": null,
+        "title": "Loading",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-47",
+      "title": "Loading"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.new",
+      "kind": "evaluate",
+      "why": "new-idea form: too short for name(5,100)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/new"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.list",
+      "kind": "evaluate",
+      "why": "idea list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.list_page",
+      "kind": "evaluate",
+      "why": "idea list paging",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/?page=2"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.comments",
+      "kind": "evaluate",
+      "why": "comment form under an idea",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45/idea_comments/new?id=1"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.endorse",
+      "kind": "evaluate",
+      "why": "vote prompt under an idea",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45/idea_endorsements/prompt_login?count=1"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.session",
+      "kind": "evaluate",
+      "why": "portal login",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/portal_session/new?return_to=%2Fideas%2FPRJ-I-45"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.home",
+      "kind": "evaluate",
+      "why": "portal home list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/?category=1000000000000000007&sort=recent"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.app_path",
+      "kind": "evaluate",
+      "why": "the in-app path on a portal host",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/ideas/PRJ-I-45"
     }
   ]
 }
