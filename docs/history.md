@@ -257,6 +257,14 @@ are still prompt-level. Settings and README explain examples, limits and edits.
 
 ## §7.2 Artifact adapters — history
 
+**Configured-site scope versus format (2026-11-09).** A configured GitHub
+repository outside the selected owner list is an `out_of_scope` match of the
+existing repository rule. The panel no longer treats that verdict, on the
+current page or on a sampled URL shape, as evidence of a new page format for
+the recurring-pages drafter. A genuinely unmatched route can still offer a
+new draft after three visits. The existing capture explanation directs scope
+changes to Settings.
+
 **Site-level setup trial (2026-11-09).** Settings can review the missing GitHub,
 Box, or Google Workspace starter kinds together and save them in one config
 revision. The first trial keeps the existing typed adapter document and its

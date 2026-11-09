@@ -28,6 +28,19 @@ test("the recurring-pages hint shows only after three unrecognized visits and se
   }
 });
 
+test("a GitHub repository outside the configured organization does not offer new rules", async () => {
+  const github = "https://github.com";
+  const artifacts = starterOffersFor(github, ["rausified"]).map((offer) => offer.adapter);
+  const page = await configuredPage(`${github}/anthropics/skills`, {
+    artifacts,
+    current: "/{slug}/{slug}",
+    patterns: [sampleRow("/{slug}/{slug}/issues/{num}", 5)],
+  });
+  assert.equal(page.el("capture-site-area").hidden, true);
+  assert.equal(page.el("capture-site-recurring").hidden, true);
+  assert.deepEqual(page.sent("draft_site"), []);
+});
+
 test("the sample reaches the host only after the user asks", async () => {
   const patterns = [sampleRow("/notes/{num}", 3), sampleRow("/pages/{num}", 5)];
   const page = await configuredPage(NOTES_URL, { patterns });
