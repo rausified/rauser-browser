@@ -320,6 +320,36 @@ export async function focused(page, selector) {
   assert.equal(await page.locator(selector).evaluate((node) => node === document.activeElement), true, `${selector} should hold focus`);
 }
 
+/**
+ * Change a focused, closed <select>'s value the way a keyboard user would
+ * with Home/End/ArrowDown/ArrowUp. `which` is "first", "last", or a signed
+ * step from the option index selected now (matching the number of
+ * ArrowDown/ArrowUp presses a user would need).
+ *
+ * On Linux Chrome (CI's Accessibility job) those keys cycle a closed
+ * <select>'s value and fire `change` in-page, with no popup, so real key
+ * presses there keep exercising actual keyboard-selection coverage.  macOS
+ * Chrome instead opens a native, OS-drawn popup on the same keys — confirmed
+ * on both headless and a visible window: a synthetic Home/End/ArrowDown CDP
+ * key event leaves the value unchanged — so Chrome DevTools Protocol's
+ * synthetic key events never reach it and no `change` fires. There,
+ * selectOption() fires the same `input`/`change` events a real selection
+ * would and leaves the control focused, exercising the app's change
+ * handling without depending on a popup CDP cannot drive.
+ */
+export async function selectByKeyboard(page, target, which) {
+  const locator = typeof target === "string" ? page.locator(target) : target;
+  if (process.platform !== "darwin") {
+    const key = which === "first" ? "Home" : which === "last" ? "End" : which >= 0 ? "ArrowDown" : "ArrowUp";
+    for (let n = 0; n < (typeof which === "number" ? Math.abs(which) : 1); n++) await page.keyboard.press(key);
+    await page.keyboard.press("Enter");
+    return;
+  }
+  const { count, current } = await locator.evaluate((element) => ({ count: element.options.length, current: element.selectedIndex }));
+  const index = which === "first" ? 0 : which === "last" ? count - 1 : Math.max(0, Math.min(count - 1, current + which));
+  await locator.selectOption({ index });
+}
+
 /** Composite entry: only the selected panel tab participates in Tab order. */
 export async function enterPanelTab(page, id) {
   assert.ok(["tab-page", "tab-recent"].includes(id));
