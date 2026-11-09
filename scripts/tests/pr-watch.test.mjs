@@ -206,6 +206,41 @@ test("a failed Mergify queue run on a queued PR says it was dequeued", () => {
   assert.doesNotMatch(statusLine(snap({ contexts }), d), /non-blocking failures/);
 });
 
+// The NEUTRAL check Mergify leaves after dequeuing a PR (#346, 2026-11-09).
+const DEQUEUED_CONFLICT = () => mq("Dequeued — conflict with base branch", { markdown: [
+  "### 🚫 Left the queue · conflict with base branch", "",
+  "**Reason**", "", "The pull request conflicts with `main`", "",
+  "**Hint**", "", "If it was queued with a command, post a new `@mergifyio queue` comment to requeue it.", "",
+].join("\n") });
+const DEQUEUED_CONDITIONS = () => mq("Dequeued — queue conditions no longer match", { markdown: [
+  "### 🚫 Left the queue · queue conditions no longer match", "",
+  "- [ ] `check-success = @mergify/Configuration changed`",
+  "- [x] `label = queue`", "",
+].join("\n") });
+
+test('"Dequeued — conflict with base branch" (#346): merge main in or wait for pr-doctor, then requeue', () => {
+  // GitHub has not recomputed mergeability yet, so the conflict branch does not run.
+  const s = snap({ pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" }, contexts: rollup([DEQUEUED_CONFLICT()]) });
+  const d = decide(s, { now: NOW });
+  assert.equal(d.exitCode, EXIT.CHECK_FAILED);
+  assert.equal(d.action, "dequeued:conflict");
+  assert.match(d.message, /conflict with base branch/);
+  assert.match(d.message, /merge main/i);
+  assert.match(d.message, /pr-doctor/);
+  assert.match(d.message, /new head/);
+  assert.match(d.message, /gh pr comment 243 --body "@Mergifyio queue"/);
+});
+
+test('"Dequeued — queue conditions no longer match" (#349): name the failed condition, then requeue', () => {
+  const d = decide(snap({ contexts: rollup([DEQUEUED_CONDITIONS()]) }), { now: NOW });
+  assert.equal(d.exitCode, EXIT.CHECK_FAILED);
+  assert.equal(d.action, "dequeued:conditions");
+  assert.match(d.message, /queue conditions no longer match/);
+  assert.match(d.message, /`check-success = @mergify\/Configuration changed`/);
+  assert.match(d.message, /new head/);
+  assert.match(d.message, /gh pr comment 243 --body "@Mergifyio queue"/);
+});
+
 // --- decide: macOS starvation and cancellations -------------------------------------
 
 test("macos-15 cancelled while the starvation check runs: keep waiting, fallback expected", () => {
@@ -323,6 +358,9 @@ for (const [title, opts, phase] of [
   ["In merge queue", { status: "IN_PROGRESS" }, "queued"],
   ["Merged via merge queue", { conclusion: "SUCCESS" }, "merged"],
   ["The pull request has been removed from the queue", { conclusion: "FAILURE" }, "dequeued"],
+  // Live on #346 and #349 (2026-11-09): a dequeue that completes NEUTRAL.
+  ["Dequeued — conflict with base branch", {}, "dequeued"],
+  ["Dequeued — queue conditions no longer match", {}, "dequeued"],
   ["Something new", { status: "IN_PROGRESS" }, "unknown"],
 ]) {
   test(`Mergify title "${title}" is phase ${phase}`, () => {

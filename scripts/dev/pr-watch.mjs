@@ -29,7 +29,8 @@
 // (which merges around the queue); 13 closed without merging; 14 draft; 15 a
 // required check was cancelled and nothing replaced it; 16 labeled `queue` but
 // Mergify will not admit it (an exclusion label, or no admission within
-// ADMIT_GRACE_MINUTES). A failed Mergify queue run (dequeued) is 10.
+// ADMIT_GRACE_MINUTES). A failed Mergify queue run (dequeued) is 10, as is a
+// NEUTRAL "Dequeued — <reason>" check, whose reason picks the advice.
 //
 // Read-only on GitHub. Locally it runs only `git merge-tree` and `git cat-file`
 // (GIT_OPTIONAL_LOCKS=0; merge-tree may add objects, never touches the index,
@@ -137,14 +138,15 @@ export function mergifyQueueStatus(check) {
   const meta = mergifyMeta(check.summary);
   const unmet = meta?.required_conditions ? unmetConditions(meta.required_conditions) : unmetFromMarkdown(check.summary);
   let phase = "unknown";
-  if (FAILED.has(check.state)) phase = "dequeued";
+  // "Dequeued — <reason>" completes NEUTRAL, not FAILURE (#346, #349, 2026-11-09).
+  if (FAILED.has(check.state) || /^Dequeued\b/i.test(title)) phase = "dequeued";
   else if (/^Merged\b/i.test(title)) phase = "merged";
   else if (meta?.queued_at || /^(Queued\b|In merge queue\b|Running merge queue checks)/i.test(title)) phase = "queued";
   // Before the payload's state: Mergify embeds state "waiting" (nothing
   // unmet) under a "Merge queue is ready" title too (#265, 2026-11-04).
   else if (/^Merge queue is ready/i.test(title)) phase = "ready";
   else if (meta?.state === "waiting" || /^Waiting for queue conditions/i.test(title)) phase = "waiting";
-  return { phase, unmet: phase === "waiting" ? unmet : [], title };
+  return { phase, unmet: phase === "waiting" || phase === "dequeued" ? unmet : [], title };
 }
 
 // The work queue left git for bd's Dolt database; a PR that still edits it
@@ -395,6 +397,18 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
       `#${n} is labeled ${QUEUE_LABEL} but Mergify will not admit it while it carries ${snap.queueBlockers.join(", ")} (.mergify.yml queue_conditions). ${why}: ${snap.queueBlockers.map((l) => `gh pr edit ${n} --remove-label ${l}`).join(" && ")}`);
   }
   if (snap.queueRequested && checks.dequeued) {
+    const { title, unmet } = checks.queue;
+    const reason = /^Dequeued\s*[—–-]\s*(.+)$/i.exec(title)?.[1]?.trim() ?? "";
+    const requeue = `push the fix, and once gh pr view ${n} --json headRefOid shows the new head, requeue it: gh pr comment ${n} --body "${QUEUE_COMMENT}"`;
+    if (/conflict/i.test(reason)) {
+      return act(EXIT.CHECK_FAILED, "dequeued:conflict",
+        `#${n} was dequeued by Mergify: "${reason}". Merge main in yourself, or wait for pr-doctor's merge push if the conflict is in its scope (pr-watch says which once GitHub reports the PR as conflicting); then ${requeue}`);
+    }
+    if (/conditions/i.test(reason)) {
+      const which = unmet.length ? ` Unmet: ${short(unmet.map((c) => `\`${c}\``), 6)}.` : ` The ${MERGIFY_QUEUE_CHECK} check's summary says which condition failed.`;
+      return act(EXIT.CHECK_FAILED, "dequeued:conditions",
+        `#${n} was dequeued by Mergify: "${reason}".${which} Fix that condition; ${requeue}`);
+    }
     return act(EXIT.CHECK_FAILED, "dequeued",
       `#${n} failed in the Mergify queue (the ${MERGIFY_QUEUE_CHECK} check and Mergify's comment say why; its draft PR's CI tested it on top of main). Fix and push (a new head requeues it), or comment "@mergifyio requeue" for a flake.`);
   }
