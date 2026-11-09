@@ -39,7 +39,14 @@ match    = [
   { path = "/a/{_}/forms/d/e/{id:token(20,128)}/(viewform|formResponse|closedform)", mode = "view" },
 ]
 id       = "google.formresponse:{host}/{id}"
+generic_titles = ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"]
 ```
+
+`generic_titles` lists the titles shown by Google's sign-in, access and error
+pages instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 

@@ -40,6 +40,7 @@
         "unscoped": "acknowledged",
         "modes": {"edit": "edit", "view": "view", "preview": "view", "mobilebasic": "view"},
         "id": "google.doc:{host}/{id}",
+        "generic_titles": ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"],
         "title": ["{title} - Google Docs", "{title} – Google Docs"],
         "refs": [{"type": "jira.issue", "find": "jira_key"}]
       },
@@ -390,6 +391,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://docs.google.com/Document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit"
+        },
+        {
+          "id": "eval.google.doc.generic_title_error_page",
+          "kind": "evaluate",
+          "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 0, "type": "google.doc", "captures": {"id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa", "mode": "edit"}, "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa", "mode": "edit", "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+          "title": "Service not allowed"
         }
       ]
     },
@@ -411,6 +421,7 @@
         "unscoped": "acknowledged",
         "modes": {"edit": "edit", "view": "view", "preview": "view", "htmlview": "view"},
         "id": "google.sheet:{host}/{id}",
+        "generic_titles": ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"],
         "title": [
           "{title} - Google Sheets",
           "{title} – Google Sheets",
@@ -648,6 +659,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://docs.google.com/spreadsheet/ccc?key=1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b"
+        },
+        {
+          "id": "eval.google.sheet.generic_title_error_page",
+          "kind": "evaluate",
+          "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 1, "rule": 0, "type": "google.sheet", "captures": {"id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b", "mode": "edit"}, "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b", "mode": "edit", "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit",
+          "title": "Service not allowed"
         }
       ]
     },
@@ -673,6 +693,7 @@
         "unscoped": "acknowledged",
         "modes": {"edit": "edit", "view": "view", "preview": "view", "present": "view", "embed": "view"},
         "id": "google.slides:{host}/{id}",
+        "generic_titles": ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"],
         "title": ["{title} - Google Slides", "{title} – Google Slides"],
         "refs": [{"type": "jira.issue", "find": "jira_key"}]
       },
@@ -895,6 +916,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://docs.google.com/presentation/u/0/?tgif=d"
+        },
+        {
+          "id": "eval.google.slides.generic_title_error_page",
+          "kind": "evaluate",
+          "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 2, "rule": 0, "type": "google.slides", "captures": {"id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c", "mode": "edit"}, "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c", "mode": "edit", "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit",
+          "title": "Service not allowed"
         }
       ]
     },
@@ -916,6 +946,7 @@
         "unscoped": "acknowledged",
         "modes": {"edit": "edit", "viewform": "view"},
         "id": "google.form:{host}/{id}",
+        "generic_titles": ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"],
         "title": ["{title} - Google Forms", "{title} – Google Forms"]
       },
       "history": [],
@@ -1097,6 +1128,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://docs.google.com/forms/u/0/"
+        },
+        {
+          "id": "eval.google.form.generic_title_error_page",
+          "kind": "evaluate",
+          "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 3, "rule": 0, "type": "google.form", "captures": {"id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd", "mode": "edit"}, "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd", "mode": "edit", "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+          "title": "Service not allowed"
         }
       ]
     },
@@ -1125,7 +1165,8 @@
           }
         ],
         "unscoped": "acknowledged",
-        "id": "google.formresponse:{host}/{id}"
+        "id": "google.formresponse:{host}/{id}",
+        "generic_titles": ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"]
       },
       "history": [],
       "status": {"state": "development", "method": null, "checked_on": null, "checked_by": null},
@@ -1288,6 +1329,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        {
+          "id": "eval.google.formresponse.generic_title_error_page",
+          "kind": "evaluate",
+          "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 4, "rule": 0, "type": "google.formresponse", "captures": {"id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"}, "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe", "mode": "view", "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform",
+          "title": "Service not allowed"
         }
       ]
     }

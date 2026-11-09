@@ -33,7 +33,14 @@ match  = [
   { path = "/webappng/sites/{_}/postinfo/{id:token(32,128)}" },
 ]
 id     = "webex.meeting:{host}/{id}"
+generic_titles = ["Sign In - Webex"]
 ```
+
+`generic_titles` lists the titles shown by Webex's sign-in page and recording
+password gate instead of the item's own name (`adapter-templates.md` §9.4). A
+visit whose title is one of them, ASCII case aside, or is empty or the bare
+host, records no title, so the artifact keeps the title it already has
+("Untitled" for a new one).
 
 ## What each rule covers
 

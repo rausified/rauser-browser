@@ -38,7 +38,18 @@ origin = "https://acme.app.box.com"
 match  = [{ path = "/{kind:(s|v)}/{link:token(1,100)|lower}" }]
 id     = "box.share:{host}/{kind}/{link}"
 title  = "{title} | Powered by Box"
+generic_titles = ["Box | Login"]
 ```
+
+`generic_titles` lists the titles shown by Box's sign-in page instead of the
+item's own name (`adapter-templates.md` §9.4). A visit whose title is one of
+them, ASCII case aside, or is empty or the bare host, records no title, so the
+artifact keeps the title it already has ("Untitled" for a new one).
+
+Known limit: while a page loads, Box can title the tab with the enterprise's
+name, `Acme | Powered by Box`. The template extracts `Acme`, which no list
+can tell apart from an item that shares the enterprise's name, so that
+loading title is still recorded until the real one replaces it.
 
 ## What each rule covers
 

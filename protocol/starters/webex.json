@@ -69,6 +69,7 @@
           }
         ],
         "id": "webex.recording:{host}/{id}",
+        "generic_titles": ["Recorded Meeting Password", "Replay Recorded Meeting", "Sign In"],
         "title": "{title} - {~}"
       },
       "history": [],
@@ -171,7 +172,7 @@
         {
           "id": "eval.webex.recording.player_loading_title",
           "kind": "evaluate",
-          "why": "KNOWN LIMIT: pre-load router title recorded whole once the brand suffix is stripped",
+          "why": "pre-load router title, once the brand suffix is stripped, is generic (adapter-templates.md §9.4): no title",
           "impls": ["rust", "ts"],
           "expect": {
             "match": true,
@@ -181,8 +182,8 @@
             "captures": { "id": "0123456789abcdef0123456789abcdef" },
             "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
             "mode": null,
-            "title": "Replay Recorded Meeting",
-            "title_entry": 0,
+            "title": null,
+            "title_entry": null,
             "alias_id": null,
             "refs": []
           },
@@ -192,7 +193,7 @@
         {
           "id": "eval.webex.recording.share_recordingservice",
           "kind": "evaluate",
-          "why": "share link route; password-gate route title before the recording loads",
+          "why": "share link route; the password-gate route title before the recording loads is generic (adapter-templates.md §9.4): no title",
           "impls": ["rust", "ts"],
           "expect": {
             "match": true,
@@ -202,8 +203,8 @@
             "captures": { "id": "0123456789abcdef0123456789abcdef" },
             "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
             "mode": null,
-            "title": "Recorded Meeting Password",
-            "title_entry": 0,
+            "title": null,
+            "title_entry": null,
             "alias_id": null,
             "refs": []
           },
@@ -319,7 +320,7 @@
         {
           "id": "eval.webex.recording.password_title",
           "kind": "evaluate",
-          "why": "KNOWN LIMIT: interstitial password-gate title with no ' - ' brand suffix yet: kept whole (title_entry null)",
+          "why": "interstitial password-gate title with no ' - ' brand suffix yet matches no entry and is generic (adapter-templates.md §9.4): no title",
           "impls": ["rust", "ts"],
           "expect": {
             "match": true,
@@ -329,7 +330,7 @@
             "captures": { "id": "bbbbccccddddeeeeffff000011112222" },
             "artifact_id": "webex.recording:example.webex.com/bbbbccccddddeeeeffff000011112222",
             "mode": null,
-            "title": "Recorded Meeting Password",
+            "title": null,
             "title_entry": null,
             "alias_id": null,
             "refs": []
@@ -416,6 +417,15 @@
           "impls": ["rust", "ts"],
           "expect": { "match": false, "reason": "path_rejected" },
           "url": "https://example.webex.com/recordingservice/sites/example%2Fother/recording/0123456789abcdef0123456789abcdef/playback"
+        },
+        {
+          "id": "eval.webex.recording.generic_title_password_gate",
+          "kind": "evaluate",
+          "why": "a password gate's title is generic (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 0, "type": "webex.recording", "captures": {"id": "0123456789abcdef0123456789abcdef"}, "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+          "title": "Recorded Meeting Password - Webex"
         }
       ]
     },
@@ -437,7 +447,8 @@
             "path": "/webappng/sites/{_}/postinfo/{id:token(32,128)}"
           }
         ],
-        "id": "webex.meeting:{host}/{id}"
+        "id": "webex.meeting:{host}/{id}",
+        "generic_titles": ["Sign In - Webex"]
       },
       "history": [],
       "status": {
@@ -645,6 +656,15 @@
           "impls": ["rust", "ts"],
           "expect": { "match": false, "reason": "no_rule" },
           "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/abc123"
+        },
+        {
+          "id": "eval.webex.meeting.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 1, "rule": 0, "type": "webex.meeting", "captures": {"id": "0123456789abcdef0123456789abcdef_I_123456789012345678"}, "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+          "title": "Sign In - Webex"
         }
       ]
     }
