@@ -14,6 +14,8 @@ fn focus_worklog_catalog_and_selection_round_trip_with_explicit_bounds() {
     request["focus_session_id"] = json!(id);
     common::assert_request_round_trips("WorklogFocusChoicesRequest", &request);
     assert!(schema_subset::valid("WorklogFocusChoicesRequest", &request));
+    request["sessions_page"] = json!({"offset":64,"snapshot":"a".repeat(64)});
+    common::assert_request_round_trips("WorklogFocusChoicesRequest", &request);
     request["path"] = json!("/arbitrary/path");
     assert!(serde_json::from_value::<Request>(request).is_err());
     let session = json!({"id":id,"name":"Release","revision":2});
@@ -26,6 +28,9 @@ fn focus_worklog_catalog_and_selection_round_trip_with_explicit_bounds() {
         "truncated":false,"gaps":[],"gaps_truncated":false});
     common::assert_response_round_trips("WorklogFocusChoicesResult", &response);
     assert!(schema_subset::valid("WorklogFocusChoicesResult", &response));
+    response["sessions_page"] =
+        json!({"offset":64,"snapshot":"a".repeat(64),"next_offset":null,"omitted":false});
+    common::assert_response_round_trips("WorklogFocusChoicesResult", &response);
     response["sessions"] = json!(vec![session; 65]);
     assert!(!schema_subset::valid(
         "WorklogFocusChoicesResult",

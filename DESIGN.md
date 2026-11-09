@@ -739,7 +739,9 @@ storage/clipboard failures remain visible and retryable. This flow starts no
 agent and edits no source log, note, configuration or measured activity.
 
 **One focus session.** In the sharing area, **Choose from → One focus session**
-lists up to 64 recorded sessions in the period, newest activity first. Selecting
+lists recorded sessions in the period, newest activity first, in pages of 64.
+**More sessions** explicitly extends the catalog without selecting a session
+or changing checked work. Duplicate names remain separate session identities. Selecting
 one offers only its direct activity as unchecked artifact-day choices. Select
 individual entries or **Select all shown**, then copy the exact preview, whose
 heading names the session. Summary-only days, untagged work, global Why context
@@ -752,7 +754,13 @@ UUID. A null selection returns only the catalog; an unknown or outside-period
 ID returns no choices. The host selects activity by session ID before grouping
 artifact-days, using each matching day's newest event title/URL. A renamed
 session retains its ID; its highest recorded revision in this period names it,
-with an explicit name-change notice. Catalog and entry truncation are separate;
+with an explicit name-change notice. Optional `sessions_page` request/result
+metadata binds continuation offsets to the home identity, adapter policy, dates
+and scanned activity snapshot. Changed history refuses continuation and offers
+**Reload sessions** before sharing; late replies after context changes are discarded.
+A fresh same-snapshot refresh retains loaded catalog pages; changed history drops
+later catalog pages while retaining the selected ID and surviving checked work.
+Catalog and entry truncation are separate;
 an explicitly requested session remains readable even if its catalog entry was
 omitted. Entries reuse the 200-row/96-KiB limits, and capture gaps still describe
 the whole period. A missing selection, empty period, unavailable session and
