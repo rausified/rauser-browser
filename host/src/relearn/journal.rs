@@ -140,7 +140,7 @@ fn record_with(
     checkpoint: &dyn Fn(&str) -> Result<()>,
 ) -> Result<Receipt> {
     validate_request(request)?;
-    let _config_lock = config.lock_current()?;
+    let config_lock = config.lock_for_read()?;
     let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
     let revision = request_revision(request)?;
     // Inspect an existing journal before revalidation, without creating one
@@ -158,13 +158,13 @@ fn record_with(
             return Ok(entry.receipt());
         }
     }
-    let plan = plan_locked(config, &request.review)?;
+    let plan = plan_locked(config, &request.review, &config_lock)?;
     ensure!(
         plan.plan_revision == request.expected_plan_revision,
         "review evidence changed; review a fresh plan before recording"
     );
     validate_decision(request.decision, &plan)?;
-    let current = config.reopen();
+    let current = config.reopen_locked(&config_lock)?;
     ensure!(
         current.revision() == plan.config_revision,
         "configuration changed during review"
@@ -225,7 +225,7 @@ fn record_with(
 /// Inspection also completes an exact prepared append after a crash. It does
 /// not require the old home folder to be mounted and never opens its contents.
 pub fn inspect(config: &ConfigStore) -> Result<Vec<Entry>> {
-    let _config_lock = config.lock_current()?;
+    let _config_lock = config.lock_for_read()?;
     let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
     inspect_locked(config)
 }
