@@ -44,6 +44,17 @@ The design agent's open decisions, settled:
 8. **Offer keys** for new types default to `<type>:<origin>`; existing keys are frozen.
 9. **The eight research-built starters ship in their own PR** after the format lands (PR D),
    not inside PR C: PR C is already a final-stretch change to shared seams.
+10. **Declared container-first overlaps** (added 2026-11-09, for Splunk Cloud). An `overlaps`
+   entry may say `expect: "container_first"` with the exact `[a rule, b rule]` pairs that may
+   overlap: `b` is within `a` under `a`'s own ID template, `a` is listed first, and `a` wins
+   those pairs. The generated `overlap_report` case expects exactly those pairs, so any other
+   overlap still fails the build. At runtime `orderContainedFirst` keeps `a` ahead of `b` on the
+   family's own origins, and settings hides only the declared pairs while both rules are
+   unedited. Why in the family file and not the format: it records how one vendor lays out its
+   URLs, reviewed with the family; a format-level precedence key would let any saved or drafted
+   adapter declare a winner, which the overlap warning exists to stop. User-written adapters,
+   agent drafts and recorded-rule restore keep today's overlap handling
+   (`protocol/starters/README.md` "Test vectors and overlaps").
 
 ## Research method (from the blind test)
 
@@ -221,7 +232,7 @@ The generated TS has to sit under `extension/`. Every existing `protocol/ts/gene
 2. Reverse direction: every `starter_types` entry, every `docs/adapters/*.md`, and every `(docs/adapters/X.md)` note in either shapes file has a family type.
 3. The doc exists and its first `Status:` line agrees with `status` (state and date).
 4. Every `match` rule index is hit by at least one positive evaluate vector; every type has at least one negative vector and at least one sample whose title the type's title template accepts.
-5. Every pair of types in a family has an `overlaps` entry, unless one is the other's `within` container.
+5. Every pair of types in a family has an `overlaps` entry, unless one is the other's `within` container. A `within` pair may instead carry a `"container_first"` entry (Builder's call 10).
 6. No two families' origin models can claim the same origin: suffix inside suffix, an exact origin under a suffix, or a repeated exact origin.
 7. A family whose exact origin is in catalog `shared_origins` has a scope kind other than `null` (spec `adapter-templates.md:190-200`).
 8. `gen:starters --check` is clean.

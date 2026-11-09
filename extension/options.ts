@@ -1,5 +1,6 @@
 import type {
-  AdapterDocument, FolderPurpose, HarnessFound, HarnessId, RuleProvenance, ScopeChoiceView, StorageConfig,
+  AdapterDocument, AdapterWarning, ConfigSnapshot, FolderPurpose, HarnessFound, HarnessId, RuleProvenance, ScopeChoiceView,
+  StorageConfig,
 } from "../protocol/ts/generated.js";
 import { HOME_LAYOUT, isHttpUrl, type WorkerStatus } from "./model.js";
 import { taskNotificationSettings } from "./task-notification-settings.js";
@@ -51,7 +52,9 @@ import {
   isContainerType,
   linkedToPresentContainers,
   orderContainedFirst,
+  isContainerFirstPair,
   matchingStarter,
+  reviewableOverlaps,
   STARTER_STATUS_TEXT,
   starterFamilies,
   starterFamily,
@@ -218,8 +221,8 @@ function showConfigState(): void {
       true,
     );
   }
-  else if (session.adapterWarnings.length) {
-    const count = session.adapterWarnings.length;
+  else if (shownOverlaps(config).length) {
+    const count = shownOverlaps(config).length;
     show(
       `${captureStateText(config)} ${count} adapter rule overlap${count === 1 ? " needs" : "s need"} review. The earlier configured rule wins.`,
       true,
@@ -585,7 +588,7 @@ function renderStarterGallery(): void {
 function renderAdapters(): void {
   const adapters = session.config?.adapters.artifacts ?? [];
   adapterOverlaps.replaceChildren();
-  for (const warning of session.adapterWarnings) {
+  for (const warning of shownOverlaps(session.config)) {
     addText(adapterOverlaps, "p", overlapText(warning, adapters));
   }
 
@@ -649,7 +652,7 @@ function renderAdapters(): void {
       move.textContent = label;
       const held = moveHeldByContainer(adapters, index, index + offset);
       move.dataset.boundary = String(index + offset < 0 || index + offset >= adapters.length || held);
-      if (held) move.title = CONTAINED_MOVE_HELD;
+      if (held) move.title = heldMoveText(adapters, index, index + offset);
       move.addEventListener("click", () => void moveAdapter(index, offset));
       actions.append(move);
     }
@@ -1188,6 +1191,23 @@ async function removeAdapter(index: number): Promise<void> {
 }
 
 const CONTAINED_MOVE_HELD = "A pull request or issue rule must stay ahead of its repository rule.";
+const CONTAINER_FIRST_MOVE_HELD = "This starter's container rule must stay ahead of the rules inside it, so its own pages are not recorded as them.";
+
+/** Why swapping `index` and `target` is held: a declared container-first
+ * starter pair (Splunk apps ahead of dashboards) or, otherwise, a contained
+ * rule that must stay ahead of its container. */
+function heldMoveText(adapters: AdapterDocument["artifacts"], index: number, target: number): string {
+  const [a, b] = [adapters[index], adapters[target]];
+  return a && b && (isContainerFirstPair(a, b) || isContainerFirstPair(b, a))
+    ? CONTAINER_FIRST_MOVE_HELD
+    : CONTAINED_MOVE_HELD;
+}
+
+/** The host's overlap warnings for `config`, minus the overlaps a starter
+ * family declares on purpose (`reviewableOverlaps`). */
+function shownOverlaps(config: ConfigSnapshot | null): AdapterWarning[] {
+  return reviewableOverlaps(session.adapterWarnings, config?.adapters.artifacts ?? []);
+}
 
 /** Whether swapping `index` and `target` would put a contained adapter after
  * its container, which every save would undo (`orderContainedFirst`). */
@@ -1230,7 +1250,7 @@ async function moveAdapter(index: number, offset: -1 | 1): Promise<void> {
   const target = index + offset;
   if (!config || busy || target < 0 || target >= config.adapters.artifacts.length) return;
   if (moveHeldByContainer(config.adapters.artifacts, index, target)) {
-    show(CONTAINED_MOVE_HELD, true);
+    show(heldMoveText(config.adapters.artifacts, index, target), true);
     return;
   }
   const artifacts = [...config.adapters.artifacts];

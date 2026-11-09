@@ -119,11 +119,52 @@ same rule a recorded sample's `url` follows, and `sample_scope` is non-empty
 exactly when `scope` needs account values (`github_org` or `tenant_name`).
 
 `overlaps` declares, for every pair of the family's types that is not one the
-other's `within` container, whether their rules may overlap: today, only
-`"disjoint"` is accepted. The generator refuses a missing pair, naming both
-types, and refuses an `a`/`b` that does not name a type in the family. Each
-declared pair becomes the family's single `overlap_report.starter.<family>`
-case, expecting `{"pairs": []}`.
+other's `within` container, whether their rules may overlap. The generator
+refuses a missing pair, naming both types, and refuses an `a`/`b` that does
+not name a type in the family or a pair declared twice. `expect` is one of:
+
+- `"disjoint"`: no URL matches both types' rules.
+- `"container_first"`: `b` declares `within` `a` with `a`'s own ID template,
+  `a` is listed before `b` in `types`, and `pairs` lists every
+  `[<a rule>, <b rule>]` that may overlap. Each listed pair is intended, and
+  `a` wins it: the container has pages of its own that `b`'s rule would
+  otherwise claim. Splunk is the case: `/<locale>/app/<app>/search` is the
+  app's Search page, but `splunk.dashboard`'s `/{_}/app/{app}/{view:name}`
+  matches it too, and format 1 has no negation.
+
+The declared pairs become the family's single `overlap_report.starter.<family>`
+case: `{"pairs": []}` for a family with only disjoint entries, otherwise
+exactly the container-first pairs, container first, in the engine's order.
+Any other rule pair that may overlap fails the engine vectors, so an
+undeclared overlap is refused when the family is built. For each
+container-first entry the generator also writes a `starter:<family>/<b>`
+fixture with `b` alone (no `within`, as the runtime saves it when the
+container is not chosen) and re-runs each of `b`'s matching `evaluate`
+vectors against it as `<id>.alone`: `b`'s own pages stay `b`'s.
+
+At runtime the declaration is read from the bundled family, keyed on the
+family's own origins (an adapter that reuses the type name elsewhere is
+unaffected):
+
+- `orderContainedFirst` (`extension/starter-adapters.ts`) puts `a` ahead of
+  `b` on that origin on every save, whether or not `b` still carries its
+  `within`, so `a` wins in both engines (first match wins,
+  `adapter-templates.md` §3). Settings refuses a move that would reverse
+  them.
+- Settings leaves the host's warning for a declared pair out of the overlap
+  list, but only while both rules are exactly as the starter ships them
+  (rule text and `path_case`) and `a` comes first. An edited rule, a pair
+  not in `pairs`, or the pair on another origin is warned about as before.
+- Nothing else changes: user-written adapters keep the ordinary §10.3
+  warning, agent drafts still drop an overlapping rule, and restoring
+  recorded rules (`site_restore`) still refuses any overlap, a declared pair
+  included, because recorded contracts carry no family.
+
+Why a declaration in the family file, not in the format: the overlap is a
+property of how one vendor lays out its URLs, reviewed when the family is
+reviewed. Putting it in the format (an adapter-level `precedence` key, say)
+would let any saved or drafted adapter claim a winner, which is what the
+overlap warning exists to stop.
 
 Each type's own `vectors` are `protocol/adapter-templates/vectors.json`
 (`adapter-templates.md` §12) cases for that type, minus `doc`: the generator

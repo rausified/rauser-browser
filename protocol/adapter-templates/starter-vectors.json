@@ -903,6 +903,67 @@
           "id": "servicenow.kb:{host}/{number}"
         }
       ]
+    },
+    "starter:splunk": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "splunk.app",
+          "origin": "https://acme.splunkcloud.com",
+          "match": [
+            {
+              "path": "/{_}/app/{app:name}"
+            },
+            {
+              "path": "/{_}/app/{app:name}/(search|dashboards|reports|alerts|datasets|report|alert|dataset|job_manager|analytics_workspace|pivot|field_extractor|home|configuration|inputs)"
+            }
+          ],
+          "id": "splunk.app:{host}/app/{app}"
+        },
+        {
+          "type": "splunk.dashboard",
+          "origin": "https://acme.splunkcloud.com",
+          "match": [
+            {
+              "path": "/{_}/app/{app:name}/{view:name}/{mode?:(edit)}"
+            }
+          ],
+          "modes": {
+            "edit": "edit"
+          },
+          "id": "splunk.dashboard:{host}/{app}/{view}",
+          "title": [
+            "{title} | Splunk {~}",
+            "{title} | Splunk"
+          ],
+          "within": {
+            "type": "splunk.app",
+            "id": "splunk.app:{host}/app/{app}"
+          }
+        }
+      ]
+    },
+    "starter:splunk/splunk.dashboard": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "splunk.dashboard",
+          "origin": "https://acme.splunkcloud.com",
+          "match": [
+            {
+              "path": "/{_}/app/{app:name}/{view:name}/{mode?:(edit)}"
+            }
+          ],
+          "modes": {
+            "edit": "edit"
+          },
+          "id": "splunk.dashboard:{host}/{app}/{view}",
+          "title": [
+            "{title} | Splunk {~}",
+            "{title} | Splunk"
+          ]
+        }
+      ]
     }
   },
   "cases": [
@@ -11100,6 +11161,1294 @@
         "reason": "no_rule"
       },
       "url": "https://acme.service-now.com/helpzone?id=kb_article&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "validate.starter.splunk",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:splunk fixture (protocol/starters/splunk.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.splunk",
+      "kind": "overlap_report",
+      "why": "generated: splunk's declared overlaps (protocol/starters/splunk.json) are the whole set of rule pairs that may overlap; each container_first pair is reported with its container first, so the container wins",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "pairs": [
+          {
+            "first": [
+              0,
+              1
+            ],
+            "second": [
+              1,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "eval.splunk.app.app_root",
+      "kind": "evaluate",
+      "why": "app root",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search"
+    },
+    {
+      "id": "eval.splunk.app.app_root_trailing_slash",
+      "kind": "evaluate",
+      "why": "app root trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/"
+    },
+    {
+      "id": "eval.splunk.app.search_page_with_query_earliest_and_sid_query_noise",
+      "kind": "evaluate",
+      "why": "search page with query, earliest and sid (query noise)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/search?q=search%20index%3D_internal%20%7C%20stats%20count&earliest=-24h%40h&latest=now&sid=1700000000.12345"
+    },
+    {
+      "id": "eval.splunk.app.dashboards_listing_page",
+      "kind": "evaluate",
+      "why": "dashboards listing page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/dashboards"
+    },
+    {
+      "id": "eval.splunk.app.reports_listing_page",
+      "kind": "evaluate",
+      "why": "reports listing page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/reports?search=weekly"
+    },
+    {
+      "id": "eval.splunk.app.report_detail_page_saved_search_as_rest_path_in_s",
+      "kind": "evaluate",
+      "why": "report detail page (saved search as REST path in s=)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/report?s=%2FservicesNS%2Fnobody%2Fsearch%2Fsaved%2Fsearches%2FWeekly%2520Errors"
+    },
+    {
+      "id": "eval.splunk.app.alert_detail_page_other_locale",
+      "kind": "evaluate",
+      "why": "alert detail page, other locale",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/de-DE/app/search/alert?s=%2FservicesNS%2Fjdoe%2Fsearch%2Fsaved%2Fsearches%2FDisk%2520full"
+    },
+    {
+      "id": "eval.splunk.app.alerts_listing_page_with_fragment",
+      "kind": "evaluate",
+      "why": "alerts listing page with fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/alerts#owner"
+    },
+    {
+      "id": "eval.splunk.app.splunk_home_in_the_launcher_app",
+      "kind": "evaluate",
+      "why": "Splunk Home in the launcher app",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "launcher"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/launcher",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/launcher/home"
+    },
+    {
+      "id": "eval.splunk.app.job_manager",
+      "kind": "evaluate",
+      "why": "job manager",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-GB/app/search/job_manager"
+    },
+    {
+      "id": "eval.splunk.app.ucc_add_on_configuration_page",
+      "kind": "evaluate",
+      "why": "UCC add-on configuration page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "TA_acme_widgets"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/TA_acme_widgets",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/TA_acme_widgets/configuration?tab=account"
+    },
+    {
+      "id": "eval.splunk.app.ucc_add_on_inputs_page",
+      "kind": "evaluate",
+      "why": "UCC add-on inputs page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "TA_acme_widgets"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/TA_acme_widgets",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/TA_acme_widgets/inputs"
+    },
+    {
+      "id": "eval.splunk.neg.origin_root",
+      "kind": "evaluate",
+      "why": "origin root",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/"
+    },
+    {
+      "id": "eval.splunk.neg.locale_root",
+      "kind": "evaluate",
+      "why": "locale root",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/"
+    },
+    {
+      "id": "eval.splunk.neg.sub_page_below_a_built_in_view",
+      "kind": "evaluate",
+      "why": "sub-page below a built-in view",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/reports/extra"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_view_mode_classic_versioned_title",
+      "kind": "evaluate",
+      "why": "dashboard view mode, Classic, versioned title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        },
+        "title": "Web Traffic Overview",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+      "title": "Web Traffic Overview | Splunk 9.3.2411.104"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_trailing_slash",
+      "kind": "evaluate",
+      "why": "dashboard trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        },
+        "title": "Web Traffic Overview",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/",
+      "title": "Web Traffic Overview | Splunk 9.3.2411.104"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_with_form_tokens_and_time_range_query_noise",
+      "kind": "evaluate",
+      "why": "dashboard with form tokens and time range (query noise)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        }
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview?form.host=web-01&form.time_tok.earliest=-24h%40h&form.time_tok.latest=now"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_with_fragment",
+      "kind": "evaluate",
+      "why": "dashboard with fragment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        }
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview#panel3"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_edit_mode",
+      "kind": "evaluate",
+      "why": "dashboard edit mode",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview",
+          "mode": "edit"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": "edit",
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        }
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/edit"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_edit_mode_with_trailing_slash_and_query",
+      "kind": "evaluate",
+      "why": "dashboard edit mode with trailing slash and query",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview",
+          "mode": "edit"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": "edit",
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        }
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/edit/?form.host=web-02"
+    },
+    {
+      "id": "eval.splunk.dashboard.non_english_locale_hyphenated_id_title_without_version",
+      "kind": "evaluate",
+      "why": "non-English locale, hyphenated ID, title without version",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "sales_ops",
+          "view": "q3-pipeline"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/sales_ops/q3-pipeline",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/sales_ops"
+        },
+        "title": "Q3 Pipeline",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/ja-JP/app/sales_ops/q3-pipeline",
+      "title": "Q3 Pipeline | Splunk"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_studio_dashboard_with_tab_and_display_parameters",
+      "kind": "evaluate",
+      "why": "Dashboard Studio dashboard with tab and display parameters",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "studio_kpis"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/studio_kpis",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        },
+        "title": "Service KPIs",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/studio_kpis?tab=layout_1&hideChrome=true",
+      "title": "Service KPIs | Splunk 9.3.2411.104"
+    },
+    {
+      "id": "eval.splunk.dashboard.app_name_with_dot_dash_and_uppercase_keeps_case",
+      "kind": "evaluate",
+      "why": "app name with dot, dash and uppercase keeps case",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "TA-Acme.ops",
+          "view": "Ops_Health"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/TA-Acme.ops/Ops_Health",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/TA-Acme.ops"
+        },
+        "title": "Ops Health",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-GB/app/TA-Acme.ops/Ops_Health",
+      "title": "Ops Health | Splunk 10.0.2503.1"
+    },
+    {
+      "id": "eval.splunk.dashboard.title_containing_the_delimiter_keeps_the_earlier_part",
+      "kind": "evaluate",
+      "why": "title containing the delimiter keeps the earlier part",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "region_ops"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/region_ops",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        },
+        "title": "Ops | EMEA",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/region_ops",
+      "title": "Ops | EMEA | Splunk 9.2.2406.108"
+    },
+    {
+      "id": "eval.splunk.dashboard.same_dashboard_id_in_another_app_is_another_artifact",
+      "kind": "evaluate",
+      "why": "same dashboard ID in another app is another artifact",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "itsi_custom",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/itsi_custom/web_traffic_overview",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/itsi_custom"
+        }
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/itsi_custom/web_traffic_overview"
+    },
+    {
+      "id": "eval.splunk.dashboard.unrecognized_tab_title_falls_back_to_whole_title",
+      "kind": "evaluate",
+      "why": "unrecognized tab title falls back to whole title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        },
+        "title": "Loading...",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+      "title": "Loading..."
+    },
+    {
+      "id": "eval.splunk.neg.login_page",
+      "kind": "evaluate",
+      "why": "login page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/account/login?return_to=%2Fen-US%2Fapp%2Fsearch%2Fweb_traffic_overview"
+    },
+    {
+      "id": "eval.splunk.neg.settings_user_interface_views",
+      "kind": "evaluate",
+      "why": "Settings: user interface views",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/manager/search/data/ui/views"
+    },
+    {
+      "id": "eval.splunk.neg.settings_searches_reports_and_alerts",
+      "kind": "evaluate",
+      "why": "Settings: searches, reports and alerts",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/manager/search/saved/searches?app=search&count=10"
+    },
+    {
+      "id": "eval.splunk.neg.splunkd_proxy_rest_call",
+      "kind": "evaluate",
+      "why": "splunkd proxy REST call",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/splunkd/__raw/servicesNS/nobody/search/data/ui/views/web_traffic_overview"
+    },
+    {
+      "id": "eval.splunk.neg.static_asset",
+      "kind": "evaluate",
+      "why": "static asset",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/static/app/search/dashboard.js"
+    },
+    {
+      "id": "eval.splunk.neg.no_locale_prefix_splunk_web_redirects_these",
+      "kind": "evaluate",
+      "why": "no locale prefix (Splunk Web redirects these)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/app/search/web_traffic_overview"
+    },
+    {
+      "id": "eval.splunk.neg.go_job_link_is_not_a_dashboard",
+      "kind": "evaluate",
+      "why": "@go job link is not a dashboard",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/@go?sid=scheduler__nobody__search__RMD5aaaabbbbccccdddd_at_1700000000_42"
+    },
+    {
+      "id": "eval.splunk.neg.sub_page_below_a_dashboard_that_is_not_edit",
+      "kind": "evaluate",
+      "why": "sub-page below a dashboard that is not edit",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/export"
+    },
+    {
+      "id": "eval.splunk.neg.encoded_slash_in_the_view_segment",
+      "kind": "evaluate",
+      "why": "encoded slash in the view segment",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "path_rejected"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web%2Ftraffic"
+    },
+    {
+      "id": "eval.splunk.neg.space_in_the_view_segment_is_not_a_name",
+      "kind": "evaluate",
+      "why": "space in the view segment is not a name",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web%20traffic"
+    },
+    {
+      "id": "eval.splunk.neg.another_stack_is_another_origin",
+      "kind": "evaluate",
+      "why": "another stack is another origin",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_adapter"
+      },
+      "url": "https://acme-dev.splunkcloud.com/en-US/app/search/web_traffic_overview"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_view_mode_classic_versioned_title.alone",
+      "kind": "evaluate",
+      "why": "generated: dashboard view mode, Classic, versioned title, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "title": "Web Traffic Overview",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+      "title": "Web Traffic Overview | Splunk 9.3.2411.104"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_trailing_slash.alone",
+      "kind": "evaluate",
+      "why": "generated: dashboard trailing slash, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "title": "Web Traffic Overview",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/",
+      "title": "Web Traffic Overview | Splunk 9.3.2411.104"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_with_form_tokens_and_time_range_query_noise.alone",
+      "kind": "evaluate",
+      "why": "generated: dashboard with form tokens and time range (query noise), with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview?form.host=web-01&form.time_tok.earliest=-24h%40h&form.time_tok.latest=now"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_with_fragment.alone",
+      "kind": "evaluate",
+      "why": "generated: dashboard with fragment, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview#panel3"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_edit_mode.alone",
+      "kind": "evaluate",
+      "why": "generated: dashboard edit mode, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview",
+          "mode": "edit"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": "edit"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/edit"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_edit_mode_with_trailing_slash_and_query.alone",
+      "kind": "evaluate",
+      "why": "generated: dashboard edit mode with trailing slash and query, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview",
+          "mode": "edit"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": "edit"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/edit/?form.host=web-02"
+    },
+    {
+      "id": "eval.splunk.dashboard.non_english_locale_hyphenated_id_title_without_version.alone",
+      "kind": "evaluate",
+      "why": "generated: non-English locale, hyphenated ID, title without version, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "sales_ops",
+          "view": "q3-pipeline"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/sales_ops/q3-pipeline",
+        "mode": null,
+        "title": "Q3 Pipeline",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/ja-JP/app/sales_ops/q3-pipeline",
+      "title": "Q3 Pipeline | Splunk"
+    },
+    {
+      "id": "eval.splunk.dashboard.dashboard_studio_dashboard_with_tab_and_display_parameters.alone",
+      "kind": "evaluate",
+      "why": "generated: Dashboard Studio dashboard with tab and display parameters, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "studio_kpis"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/studio_kpis",
+        "mode": null,
+        "title": "Service KPIs",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/studio_kpis?tab=layout_1&hideChrome=true",
+      "title": "Service KPIs | Splunk 9.3.2411.104"
+    },
+    {
+      "id": "eval.splunk.dashboard.app_name_with_dot_dash_and_uppercase_keeps_case.alone",
+      "kind": "evaluate",
+      "why": "generated: app name with dot, dash and uppercase keeps case, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "TA-Acme.ops",
+          "view": "Ops_Health"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/TA-Acme.ops/Ops_Health",
+        "mode": null,
+        "title": "Ops Health",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-GB/app/TA-Acme.ops/Ops_Health",
+      "title": "Ops Health | Splunk 10.0.2503.1"
+    },
+    {
+      "id": "eval.splunk.dashboard.title_containing_the_delimiter_keeps_the_earlier_part.alone",
+      "kind": "evaluate",
+      "why": "generated: title containing the delimiter keeps the earlier part, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "region_ops"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/region_ops",
+        "mode": null,
+        "title": "Ops | EMEA",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/region_ops",
+      "title": "Ops | EMEA | Splunk 9.2.2406.108"
+    },
+    {
+      "id": "eval.splunk.dashboard.same_dashboard_id_in_another_app_is_another_artifact.alone",
+      "kind": "evaluate",
+      "why": "generated: same dashboard ID in another app is another artifact, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "itsi_custom",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/itsi_custom/web_traffic_overview",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/itsi_custom/web_traffic_overview"
+    },
+    {
+      "id": "eval.splunk.dashboard.unrecognized_tab_title_falls_back_to_whole_title.alone",
+      "kind": "evaluate",
+      "why": "generated: unrecognized tab title falls back to whole title, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "title": "Loading...",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+      "title": "Loading..."
     }
   ]
 }

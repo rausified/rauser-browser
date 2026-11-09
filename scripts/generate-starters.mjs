@@ -1047,6 +1047,33 @@ function expectedOverlapPairs(family) {
   });
 }
 
+/** A `"container_first"` entry's contained type `b` configured alone, as
+ * when a user chooses it without its container: a `starter:<family>/<b>`
+ * fixture holding only `b`'s adapter, with no `within` (the runtime drops a
+ * `within` whose container is not configured, `linkedToPresentContainers`),
+ * and each of `b`'s own matching `evaluate` vectors re-run against it, as
+ * `<id>.alone`. Those URLs must still be `b`'s, from its only adapter and
+ * with no container: the declared order changes which rule wins the
+ * container's pages, never `b`'s own pages. */
+function containedAlone(family, entry) {
+  const fixtureName = `starter:${family.family}/${entry.b}`;
+  const typeB = family.types.find((type) => type.type === entry.b);
+  const { within: _within, ...unlinked } = typeB.adapter;
+  const fixture = synthesizeFixture({ ...family, types: [{ ...typeB, adapter: unlinked }] });
+  const cases = typeB.vectors
+    .filter((vector) => vector.kind === "evaluate" && vector.expect?.match === true && vector.expect.type === entry.b)
+    .map((vector) => {
+      const { within: _vectorWithin, ...expect } = vector.expect;
+      return withFixtureDoc({
+        ...vector,
+        id: `${vector.id}.alone`,
+        why: `generated: ${vector.why}, with ${entry.b} configured without ${entry.a} (${STARTERS_DIR}/${family.family}.json container_first), so no within`,
+        expect: { ...expect, adapter: 0 },
+      }, fixtureName);
+    });
+  return { fixtureName, fixture, cases };
+}
+
 /** The JSON text of `protocol/adapter-templates/starter-vectors.json`: one
  * synthesized `starter:<family>` fixture per family (`synthesizeFixture`),
  * in catalog family order (`familyCatalogOrder`). Per family, the cases are
@@ -1054,7 +1081,8 @@ function expectedOverlapPairs(family) {
  * document), `overlap_report.starter.<family>` (the family's declared
  * `overlaps`, Open decision 3, are the whole set of pairs that may
  * overlap), then each type's own `vectors`, in source order, each pointed
- * at the family's fixture. */
+ * at the family's fixture, then, per `"container_first"` entry, the
+ * contained type alone (`containedAlone`). */
 export function renderStarterVectors(families, starterTypes) {
   const order = familyCatalogOrder(families, starterTypes);
   const byFamily = new Map(families.map((family) => [family.family, family]));
@@ -1085,6 +1113,12 @@ export function renderStarterVectors(families, starterTypes) {
     });
     for (const type of family.types) {
       for (const vector of type.vectors) cases.push(withFixtureDoc(vector, fixtureName));
+    }
+    for (const entry of family.overlaps ?? []) {
+      if (entry.expect !== "container_first") continue;
+      const alone = containedAlone(family, entry);
+      fixtures[alone.fixtureName] = alone.fixture;
+      cases.push(...alone.cases);
     }
   }
   const body = { vectors_format: 1, generated: HEADER_SENTENCE, fixtures, cases };

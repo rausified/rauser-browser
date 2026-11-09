@@ -35,3 +35,5 @@
 | [servicenow.ritm](servicenow.ritm.md) | servicenow | development | — | — | — |
 | [servicenow.change](servicenow.change.md) | servicenow | development | — | — | — |
 | [servicenow.kb](servicenow.kb.md) | servicenow | development | — | — | — |
+| [splunk.app](splunk.app.md) | splunk | development | — | — | — |
+| [splunk.dashboard](splunk.dashboard.md) | splunk | development | — | — | — |

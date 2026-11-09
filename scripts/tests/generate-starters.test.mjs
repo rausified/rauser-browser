@@ -785,6 +785,48 @@ test("a container_first pair becomes the family's expected overlap_report pairs,
   assert.deepEqual(strict.cases.find((entry) => entry.id === "overlap_report.starter.strict").expect, { pairs: [] });
 });
 
+test("a container_first pair re-runs the contained type's own vectors with that type alone", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  const board = {
+    id: "eval.nest.board.roadmap", kind: "evaluate", why: "a board", impls: ["rust", "ts"],
+    url: "https://nest.example.test/s/acme/roadmap",
+    expect: {
+      match: true, adapter: 1, rule: 0, type: "nest.board", captures: { space: "acme", board: "roadmap" },
+      artifact_id: "nest.board:nest.example.test/acme/roadmap", mode: null,
+      within: { type: "nest.space", artifact_id: "nest.space:nest.example.test/s/acme" },
+    },
+  };
+  const winner = {
+    id: "eval.nest.space.settings", kind: "evaluate", why: "a space's built-in page", impls: ["rust", "ts"],
+    url: "https://nest.example.test/s/acme/settings",
+    expect: {
+      match: true, adapter: 0, rule: 1, type: "nest.space", captures: { space: "acme" },
+      artifact_id: "nest.space:nest.example.test/s/acme", mode: null,
+    },
+  };
+  const miss = { id: "eval.nest.board.miss", kind: "evaluate", why: "no board", impls: ["rust", "ts"],
+    url: "https://nest.example.test/x", expect: { match: false, reason: "no_rule" } };
+  family.types[0].vectors = [winner];
+  family.types[1].vectors = [board, miss];
+  const vectors = JSON.parse(renderStarterVectors([family], family.types.map((type) => type.type)));
+  // The fixture holds only the contained type, without its within: the
+  // runtime drops a within whose container is not configured.
+  assert.deepEqual(vectors.fixtures["starter:nest/nest.board"], {
+    format: 1,
+    artifacts: [{ type: "nest.board", origin: "https://nest.example.test", match: [{ path: "/s/{space:name}/{board:name}" }],
+      id: "nest.board:{host}/{space}/{board}" }],
+  });
+  const alone = vectors.cases.filter((entry) => entry.doc?.$fixture === "starter:nest/nest.board");
+  assert.deepEqual(alone.map((entry) => entry.id), ["eval.nest.board.roadmap.alone"]);
+  const { within: _within, ...unlinked } = board.expect;
+  assert.deepEqual(alone[0].expect, { ...unlinked, adapter: 0 });
+  assert.deepEqual(alone[0].impls, ["rust", "ts"]);
+  assert.match(alone[0].why, /without nest\.space/);
+  // A family without a container_first entry gets no extra fixture.
+  const strict = JSON.parse(renderStarterVectors([EXAMPLE_STRICT_FAMILY], ["strict.item"]));
+  assert.deepEqual(Object.keys(strict.fixtures), ["starter:strict"]);
+});
+
 test("expected pairs are sorted by first, then second, and span several entries", () => {
   const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
   family.types[0].adapter.match.push({ path: "/s/{space:name}/(trash)" });

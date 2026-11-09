@@ -9,6 +9,8 @@ const {
   matchingStarter,
   orderContainedFirst,
   parseGitHubOrganizations,
+  reviewableOverlaps,
+  setStarterFamiliesForTest,
   starterKind,
   starterOffers,
   starterRuleAddition,
@@ -17,6 +19,7 @@ const {
   containerLinks,
 } = await import("../dist/starter-adapters.js");
 
+const { EXAMPLE_CONTAINER_FIRST_FAMILY } = await import("./starter-fixtures.mjs");
 const vectors = JSON.parse(await readFile(new URL("../../protocol/adapter-templates/vectors.json", import.meta.url)));
 const recorded = vectors.fixtures.starters.artifacts;
 const catalog = JSON.parse(await readFile(new URL("../../protocol/capture-site/catalog.json", import.meta.url)));
@@ -98,6 +101,65 @@ test("orderContainedFirst is stable and leaves other origins alone", () => {
   const b = adapter("x.b", "https://github.com", "x.a");
   assert.deepEqual(orderContainedFirst([a, b]), [a, b]);
   assert.deepEqual(orderContainedFirst([]), []);
+});
+
+// A family's declared container_first overlap (protocol/starters/README.md)
+// orders its container first on the family's own origins, whether or not the
+// contained adapter still carries its within.
+function containerFirstSeam(t) {
+  setStarterFamiliesForTest([EXAMPLE_CONTAINER_FIRST_FAMILY]);
+  t.after(() => setStarterFamiliesForTest(null));
+  const nest = "https://nest.example.test";
+  const [spaceType, boardType] = EXAMPLE_CONTAINER_FIRST_FAMILY.types;
+  return {
+    space: { ...spaceType.adapter, origin: nest },
+    board: { ...boardType.adapter, origin: nest },
+  };
+}
+
+test("orderContainedFirst puts a declared container_first container ahead of its contained type", (t) => {
+  const { space, board } = containerFirstSeam(t);
+  const other = adapter("custom.page", "https://nest.example.test");
+  assert.deepEqual(orderContainedFirst([board, space]), [space, board]);
+  assert.deepEqual(orderContainedFirst([board, other, space]), [space, board, other]);
+  const inOrder = [space, other, board];
+  assert.deepEqual(orderContainedFirst(inOrder), inOrder);
+  // A board saved before its space lost its within (linkedToPresentContainers);
+  // the declared order still holds once the space is added.
+  const { within: _within, ...unlinked } = board;
+  assert.deepEqual(orderContainedFirst([unlinked, space]), [space, unlinked]);
+  // The declaration is the family's: on an origin it does not claim, the same
+  // types fall back to the ordinary contained-first order.
+  const elsewhereSpace = { ...space, origin: "https://elsewhere.example.test" };
+  const elsewhereBoard = { ...board, origin: "https://elsewhere.example.test" };
+  assert.deepEqual(orderContainedFirst([elsewhereSpace, elsewhereBoard]), [elsewhereBoard, elsewhereSpace]);
+  // The evaluated document agrees: the space's built-in page is the space.
+  const doc = compileDocument({ format: 1, artifacts: orderContainedFirst([board, space]) });
+  assert.equal(doc.ok, true);
+  assert.equal(evaluate(doc.doc, "https://nest.example.test/s/acme/settings").artifact_id, "nest.space:nest.example.test/s/acme");
+  assert.equal(evaluate(doc.doc, "https://nest.example.test/s/acme/roadmap").artifact_id, "nest.board:nest.example.test/acme/roadmap");
+});
+
+test("reviewableOverlaps hides only a declared container_first rule pair, unedited and container first", (t) => {
+  const { space, board } = containerFirstSeam(t);
+  const declared = { first_adapter: 0, first_rule: 1, second_adapter: 1, second_rule: 0 };
+  assert.deepEqual(reviewableOverlaps([declared], [space, board]), []);
+  // The contained type first (hand-reordered config.toml) is not the declared winner.
+  const reversed = { first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 1 };
+  assert.deepEqual(reviewableOverlaps([reversed], [board, space]), [reversed]);
+  // A rule pair the family did not declare is still shown.
+  const undeclared = { first_adapter: 0, first_rule: 0, second_adapter: 1, second_rule: 0 };
+  assert.deepEqual(reviewableOverlaps([undeclared], [space, board]), [undeclared]);
+  // An edited rule on either side is the user's own overlap, shown as before.
+  const widened = { ...space, match: [space.match[0], { path: "/s/{space:name}/{*}" }] };
+  assert.deepEqual(reviewableOverlaps([declared], [widened, board]), [declared]);
+  const edited = { ...board, match: [{ path: "/s/{space:name}/{board:name}/{*}" }] };
+  assert.deepEqual(reviewableOverlaps([declared], [space, edited]), [declared]);
+  const folded = { ...space, path_case: "insensitive" };
+  assert.deepEqual(reviewableOverlaps([declared], [folded, board]), [declared]);
+  // Off the family's origin the declaration does not apply.
+  const elsewhere = [{ ...space, origin: "https://elsewhere.example.test" }, { ...board, origin: "https://elsewhere.example.test" }];
+  assert.deepEqual(reviewableOverlaps([declared], elsewhere), [declared]);
 });
 
 test("starter origins are classified narrowly", () => {
