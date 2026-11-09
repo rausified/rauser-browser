@@ -1020,6 +1020,8 @@ The panel is about the page in the active tab. A page card at the top shows a sm
 
 **Visual design (2026-11-02).** The panel follows the "Brauser Sidebar" dark-glass design, with a matching light variant under `prefers-color-scheme: light`. Its styles live in `panel.css` under `body.panel-page`, so the settings and Tasks pages keep their own look. The extension CSP allows no inline styles and no fonts (`font-src 'none'`), so the design's IBM Plex Sans and JetBrains Mono map to the `system-ui` and `ui-monospace` stacks. Text sits on solid surfaces, never on a gradient or blur, so the accessibility gate measures every contrast pair in both themes; pulsing and spinning indicators stop under `prefers-reduced-motion`. Run cards carry their run state as `data-state` for the indicator only.
 
+**Activity dock.** The page content scrolls independently above a compact bottom area for general notices, summary runs, task runs, and Capture Site's AI draft progress or notices. Each visible activity is a closed row labelled with its current title and state, or its notice text; expanding it reveals the existing run details and actions. Runs hidden after a page switch do not leave an empty row. The dock and streamed text have height limits and scroll independently, so a long result does not move the page card or task controls. The capture strip stays below the dock and scrolls internally when expanded in a short panel. Setup and permission banners remain prominent because they require action before normal use.
+
 **Keyboard access.** This page and Recent form a labelled tablist with one
 tab stop, selected state and associated tabpanels. Left/Right switch tabs;
 Home/End choose the first/last tab. Capture Site, Page patterns and the

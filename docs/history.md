@@ -1855,6 +1855,7 @@ ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
 formatting, protocol generation, typecheck, lint, script tests, Markdown safety
 and queue consistency pass. Development tools pass 254 tests with 94 skips;
 accessibility passes two tests with 55 Chromium sandbox skips.
+
 ## 2026-11-03 — Per-task project folders
 
 `brwr-zla` adds native-picked, host-owned task destinations, a per-task selector,
@@ -1909,3 +1910,7 @@ reload with the real DOM.
 The same review found that crossing midnight made More sessions silently
 ignore an expired Today catalog. The action now starts a fresh catalog for
 the current dates; a simulated-clock regression covers the rollover.
+
+## 2026-11-09 — Keep run activity in a compact bottom dock
+
+The side panel now scrolls its page content independently of a bottom activity area. General notices, summary runs, task runs, and Capture Site AI draft progress or notices appear there as collapsed rows with a title and current state. Runs hidden after a page switch leave no empty row. Expanding a row reveals its existing details and actions. The dock and streamed text have bounded heights, and the capture strip remains below it with its own scrolling when expanded in a short panel. Setup and permission banners remain visible in the page content when action is required.

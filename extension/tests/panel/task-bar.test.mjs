@@ -109,7 +109,7 @@ test("the task bar sits between the page area and the tabs", async () => {
   assert.ok(PANEL_HTML.indexOf("</section>", pageArea) < bar, "the bar follows the page area");
   assert.ok(bar < tabs, "the bar comes before the tabs");
   const section = PANEL_HTML.slice(bar, tabs);
-  for (const id of ["task-form", "task-input", "task-run", "task-open", "task-context", "task-hint", "task-announce", "task-run-area"]) {
+  for (const id of ["task-form", "task-input", "task-run", "task-open", "task-context", "task-hint", "task-announce"]) {
     assert.match(section, new RegExp(`id="${id}"`), id);
   }
   assert.match(section, /<textarea id="task-input"[^>]*maxlength="4000"/);
@@ -130,7 +130,19 @@ test("only task-announce is a live region for tasks", () => {
   assert.equal(live.length, 1, live.join("\n"));
   assert.match(live[0], /id="task-announce"/);
   assert.match(live[0], /aria-live="polite"/);
-  assert.doesNotMatch(section.match(/<div id="task-run-area"[^>]*>/)[0], /aria-live/);
+  assert.doesNotMatch(PANEL_HTML.match(/<div id="task-run-area"[^>]*>/)[0], /aria-live/);
+});
+
+test("run activity stays in a collapsed bottom dock outside the scrolling page", () => {
+  const scrollEnd = PANEL_HTML.indexOf('<section id="activity-dock"');
+  const captureBar = PANEL_HTML.indexOf('<div class="capture-bar"');
+  assert.ok(PANEL_HTML.indexOf('class="panel-scroll"') < scrollEnd);
+  assert.ok(scrollEnd < captureBar);
+  for (const id of ["status", "run-area", "task-run-area", "capture-site-agent-run"]) {
+    const position = PANEL_HTML.indexOf(`id="${id}"`);
+    assert.ok(scrollEnd < position && position < captureBar, id);
+  }
+  assert.equal((PANEL_HTML.slice(scrollEnd, captureBar).match(/<details class="activity-item">/g) ?? []).length, 4);
 });
 
 test("panel tabs link their panels and keyboard selection keeps one tab stop", async () => {
