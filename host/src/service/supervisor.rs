@@ -177,10 +177,12 @@ pub type EnvSource = Arc<dyn Fn() -> Result<Vec<(OsString, OsString)>, String> +
 /// a restart), that the folder it was queued to run in is still the
 /// knowledge base folder the user picked, so a folder replaced or remounted
 /// at the same path while the run waited is never handed to a harness. A
-/// task also passes the protected paths recorded for its prompt, which must
+/// task also passes its optional immutable folder ID and the protected paths
+/// recorded for its prompt, which must
 /// still be the ones the configuration gives. The error is shown as the
 /// run's error.
-pub type CwdCheck = Arc<dyn Fn(&Path, Option<&[String]>) -> Result<(), String> + Send + Sync>;
+pub type CwdCheck =
+    Arc<dyn Fn(&Path, Option<&[String]>, Option<&str>) -> Result<(), String> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct ServiceOptions {
@@ -297,6 +299,7 @@ struct Launch {
     /// A task's protected paths, as its prompt will name them; `None` for
     /// the other kinds.
     protected: Option<Vec<String>>,
+    task_folder_id: Option<String>,
 }
 
 /// The in-memory side of one queued or running run.
@@ -560,6 +563,7 @@ impl Supervisor {
                         cwd,
                         vocabulary,
                         protected: None,
+                        task_folder_id: None,
                     };
                     let span = inner.run_span(id, status.harness, status.kind, &status.url);
                     span.in_scope(|| tracing::info!("run resumed"));
@@ -727,6 +731,10 @@ impl Supervisor {
                 cwd,
                 vocabulary: req.vocabulary,
                 protected: status.task.as_ref().map(|task| task.protected.clone()),
+                task_folder_id: status
+                    .task
+                    .as_ref()
+                    .and_then(|task| task.task_folder_id.clone()),
             };
             // In the request's span, so its `request_id` meets the `run_id`.
             tracing::info!(
@@ -1204,7 +1212,13 @@ impl Inner {
         if let Some(Err(reason)) = launch
             .as_ref()
             .filter(|launch| launch.kind != RunKind::SiteDraft)
-            .map(|launch| (this.options.run_cwd)(&launch.cwd, launch.protected.as_deref()))
+            .map(|launch| {
+                (this.options.run_cwd)(
+                    &launch.cwd,
+                    launch.protected.as_deref(),
+                    launch.task_folder_id.as_deref(),
+                )
+            })
         {
             tracing::warn!(error = reason.as_str(), "knowledge base check failed");
             control.end_turn();
@@ -2248,16 +2262,19 @@ mod tests {
                 idle_exit: Duration::from_secs(600),
                 service_pid: std::process::id(),
                 run_env: Arc::new(move || source.lock().unwrap().clone()),
-                run_cwd: Arc::new(move |cwd: &Path, protected: Option<&[String]>| {
-                    if cwd.join(FOLDER_CHANGED).exists() || root.join(KNOWLEDGE_BASE_GONE).exists()
-                    {
-                        Err(FOLDER_CHANGED_ERROR.to_string())
-                    } else if protected.is_some() && root.join(HOME_MOVED).exists() {
-                        Err(HOME_MOVED_ERROR.to_string())
-                    } else {
-                        Ok(())
-                    }
-                }),
+                run_cwd: Arc::new(
+                    move |cwd: &Path, protected: Option<&[String]>, _: Option<&str>| {
+                        if cwd.join(FOLDER_CHANGED).exists()
+                            || root.join(KNOWLEDGE_BASE_GONE).exists()
+                        {
+                            Err(FOLDER_CHANGED_ERROR.to_string())
+                        } else if protected.is_some() && root.join(HOME_MOVED).exists() {
+                            Err(HOME_MOVED_ERROR.to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                ),
                 opener: crate::open::default_opener(),
             };
             let supervisor = match spawn_fault {
@@ -2831,7 +2848,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: std::process::id(),
             run_env: Arc::new(|| Ok(Vec::new())),
-            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>| Ok(())),
+            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>, _: Option<&str>| Ok(())),
             opener: crate::open::default_opener(),
         };
         let own = Duration::from_secs(5);
@@ -3603,6 +3620,7 @@ mod tests {
     fn sentinel_task() -> TaskStatus {
         TaskStatus {
             start_request_id: None,
+            task_folder_id: None,
             no_page: false,
             instruction: "Do it".into(),
             protected: Vec::new(),
@@ -4677,7 +4695,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: std::process::id().wrapping_add(1),
             run_env: Arc::new(|| Ok(Vec::new())),
-            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>| Ok(())),
+            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>, _: Option<&str>| Ok(())),
             opener: crate::open::default_opener(),
         };
         let finisher = TestFinisher {
@@ -4733,7 +4751,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: std::process::id().wrapping_add(1),
             run_env: Arc::new(|| Ok(Vec::new())),
-            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>| Ok(())),
+            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>, _: Option<&str>| Ok(())),
             opener: crate::open::default_opener(),
         };
         let finisher = TestFinisher {
@@ -4796,7 +4814,7 @@ mod tests {
             idle_exit: Duration::from_secs(600),
             service_pid: 1,
             run_env: Arc::new(|| Ok(vec![("API_KEY".into(), "secret-value".into())])),
-            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>| Ok(())),
+            run_cwd: Arc::new(|_: &Path, _: Option<&[String]>, _: Option<&str>| Ok(())),
             opener: crate::open::default_opener(),
         };
         let debug = format!("{options:?}");
@@ -5464,6 +5482,7 @@ mod tests {
                 kind: RunKind::Task,
                 task: Some(TaskStatus {
                     start_request_id: None,
+                    task_folder_id: None,
                     no_page: false,
                     instruction: instruction.to_string(),
                     protected: self.protected(),
@@ -5638,6 +5657,7 @@ mod tests {
             status.task,
             Some(TaskStatus {
                 start_request_id: None,
+                task_folder_id: None,
                 no_page: false,
                 instruction: INSTRUCTION.to_string(),
                 protected: fixture.protected(),
@@ -5995,6 +6015,7 @@ mod tests {
                 "2026-10-26T09:00:00.000000000Z",
                 Some(TaskStatus {
                     start_request_id: None,
+                    task_folder_id: None,
                     no_page: false,
                     instruction: INSTRUCTION.to_string(),
                     protected: vec![cwd.join("home/notes").display().to_string()],

@@ -54,7 +54,7 @@ for (const name of [
   "task-notifications.js", "task-notification-settings.js",
   "capture-site.js", "capture-site-handoff.js", "capture-site-panel.js", "activity.js", "adapter-review.js", "adopted-state-settings.js", "artifact-refresh.js", "auto-summary.js", "adapter-templates.js", "agent.js", "brand.js", "build-info.js", "build-update.js", "coordination.js", "diag.js", "extract.js",
   "focus-session.js", "model.js", "native.js", "note-editor.js", "note-recovery.js", "options.js", "panel.js", "panel-look.js", "protocol-shape.js",
-  "run-card.js", "settings.js", "site-patterns.js", "site-pattern-panel.js", "site-pattern-settings.js", "site-coverage.js", "starter-adapters.js", "starter-choice-view.js", "starter-families.generated.js", "starter-scopes.js", "summarize.js", "summary-text.js", "task-commands.js", "task-handoff.js", "task-history.js", "task-recall.js", "task-tracker.js", "task.js", "tasks.js", "worker.js",
+  "run-card.js", "settings.js", "site-patterns.js", "site-pattern-panel.js", "site-pattern-settings.js", "site-coverage.js", "starter-adapters.js", "starter-choice-view.js", "starter-families.generated.js", "starter-scopes.js", "summarize.js", "summary-text.js", "task-commands.js", "task-folders.js", "task-handoff.js", "task-history.js", "task-recall.js", "task-tracker.js", "task.js", "tasks.js", "worker.js",
 ]) {
   await copyFile(join(intermediateDir, "extension", name), join(outputDir, name));
 }
