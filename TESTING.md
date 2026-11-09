@@ -333,6 +333,16 @@ writer and recovery with pending bytes explicitly refuse unsupported directory
 durability; a Windows-only regression covers refusal without writes and normal
 no-pending recovery. Ordinary save primitives are unchanged.
 
+Nested-read fixtures check that ordinary loading, refresh and explicit locked
+reads leave a prepared transaction untouched, after which private recovery can
+still finish it. A foreign config-lock token refuses planning and replacement
+preparation before writes. The config tests also exercise coordination-only
+refreshes, read-only nested stores beneath a recording lock, and recording
+ownership ending when its guard drops. A live token for another config path
+refuses even when both configs share the same lock directory. These checks
+prepare nested reads for the later recovery gate; they do not prove universal
+recovery or encode capture-lock ownership.
+
 Run config tests with `cargo test --locked -p brauser --lib config::`, and CLI
 boundary tests with `cargo test --locked -p brauser --test relearn_journal
 --test relearn_preview --test relearn_plan --test aliases_preview`. No test uses
