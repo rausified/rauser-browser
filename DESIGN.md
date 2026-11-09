@@ -1341,8 +1341,15 @@ of same-identity siblings. The refusal names the competing adapters and asks
 to keep their earlier order. Disjoint and same-identity reorders remain allowed.
 Declared containment does not excuse moving a container ahead of a still-live
 contained adapter; first-match evaluation would change the primary record key.
-These checks are conservative, and do not yet cover every handoff caused by a
-new leading adapter or expansion without a reorder (`brwr-98mo`).
+The same guard checks newly inserted leading adapters and recognition expansion
+without a reorder. A preceding adapter must retain a complete rule prefix that
+already preceded the protected contract, with identical other matching settings;
+appended rules must be disjoint from the protected routes. Scope and path-case
+changes receive the same conservative check, without general template or scope
+inclusion proofs. The established allowance for adding or narrowing a declared
+child ahead of its container remains, but never excuses reversing an already-live
+pair or widening a container over live children. Refusals preserve config bytes,
+revision and active policy.
 
 The frozen-ID transition check compares counted template sets within each origin and type, so removing one of two same-type adapters narrows policy without mistaking the surviving sibling for an ID edit, while a real replacement remains refused.
 
