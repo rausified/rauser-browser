@@ -59,12 +59,17 @@ export interface StarterTypeData {
   status: { state: "certified" | "development"; method: "live" | "history" | null; checked_on: string | null; checked_by: string | null };
   docs: string;
 }
+/** A declared container-first overlap (protocol/starters/README.md): a (the
+ * container) is ordered before b (a type within it) on every origin, and each
+ * [a rule, b rule] in pairs is an intended overlap that a wins. */
+export interface StarterOverlapData { a: string; b: string; expect: "container_first"; pairs: [number, number][] }
 export interface StarterFamilyData {
   family: StarterFamilyId;
   display_name: string;
   review_prompt: string | null;
   origin: { kind: "exact"; origin: string } | { kind: "subdomain"; suffix: string; labels?: 1; exclude?: string[] };
   scope: StarterScopeData | null;
+  overlaps?: StarterOverlapData[];
   types: StarterTypeData[];
 }
 `;
@@ -172,7 +177,9 @@ const STATUS_KEYS = ["state", "method", "checked_on", "checked_by"];
 const STATUS_STATES = ["certified", "development"];
 const STATUS_METHODS = ["live", "history", null];
 const SAMPLE_KEYS = ["url", "title", "shape", "note"];
-const OVERLAP_KEYS = ["a", "b", "expect"];
+const OVERLAP_KEYS = ["a", "b", "expect", "pairs"];
+const OVERLAP_REQUIRED = ["a", "b", "expect"];
+const OVERLAP_EXPECTS = ["disjoint", "container_first"];
 // The engines' own vectors.rs run_case match arm names every kind they
 // accept; a vector naming any other kind fails inside the engine harness
 // with "unknown kind <k>", not a file-and-field generator message.
@@ -621,11 +628,18 @@ function validateSampleScope(problems, file, family) {
 }
 
 /** `family.overlaps` (Open decision 3; spec §4 check 5): each entry names
- * two of the family's own types and declares the only permitted `expect`,
- * `"disjoint"`. Every unordered pair of the family's types that is not one
- * the other's `within` container (github.repo and the types that declare a
- * `within` naming it, for example) needs exactly one entry naming it, in
- * either order; a pair with no entry is reported `<a> and <b> have no
+ * two of the family's own types and declares how their rules relate.
+ * `"disjoint"`: no URL matches both. `"container_first"`: `b` declares
+ * `within` `a` with `a`'s own ID template, `a` comes before `b` in `types`,
+ * and `pairs` lists every `[a rule, b rule]` pair that may overlap, each one
+ * intended and won by `a` (the container's own pages, such as Splunk's
+ * built-in app views, that `b`'s rule would otherwise claim). The family's
+ * generated `overlap_report` case expects exactly those pairs, so the engine
+ * refuses the family if any other rule pair may overlap. Every unordered pair
+ * of the family's types that is not one the other's `within` container
+ * (github.repo and the types that declare a `within` naming it, for example)
+ * needs exactly one entry naming it, in either order; a container-first pair
+ * may have one. A pair with no entry is reported `<a> and <b> have no
  * overlaps entry`, `<a>` and `<b>` in the family's own type order. */
 function validateOverlaps(problems, file, family) {
   if (!("overlaps" in family)) return;
@@ -643,7 +657,7 @@ function validateOverlaps(problems, file, family) {
       return;
     }
     checkKeys(problems, file, entry, OVERLAP_KEYS, where);
-    requireKeys(problems, file, entry, OVERLAP_KEYS, where);
+    requireKeys(problems, file, entry, OVERLAP_REQUIRED, where);
     if ("a" in entry) {
       if (typeof entry.a !== "string") fail(problems, file, `${at(where, "a")} must be a string`);
       else if (!typeNames.has(entry.a)) fail(problems, file, `${at(where, "a")} "${entry.a}" is not a type in this family`);
@@ -652,10 +666,15 @@ function validateOverlaps(problems, file, family) {
       if (typeof entry.b !== "string") fail(problems, file, `${at(where, "b")} must be a string`);
       else if (!typeNames.has(entry.b)) fail(problems, file, `${at(where, "b")} "${entry.b}" is not a type in this family`);
     }
-    if ("expect" in entry && entry.expect !== "disjoint") {
-      fail(problems, file, `${at(where, "expect")} must be "disjoint"`);
+    if ("expect" in entry && !OVERLAP_EXPECTS.includes(entry.expect)) {
+      fail(problems, file, `${at(where, "expect")} must be "disjoint" or "container_first"`);
     }
+    if (entry.expect === "container_first") validateContainerFirst(problems, file, types, entry, where);
+    else if ("pairs" in entry) fail(problems, file, `${at(where, "pairs")} is only for "container_first"`);
     if (typeof entry.a === "string" && typeof entry.b === "string") {
+      if (declared.has(`${entry.a}\u0000${entry.b}`)) {
+        fail(problems, file, `${where} declares ${entry.a} and ${entry.b} again`);
+      }
       declared.add(`${entry.a}\u0000${entry.b}`);
       declared.add(`${entry.b}\u0000${entry.a}`);
     }
@@ -671,6 +690,45 @@ function validateOverlaps(problems, file, family) {
       }
     }
   }
+}
+
+/** A `"container_first"` entry's own rules (`validateOverlaps`): `b` within
+ * `a` under `a`'s own ID template, so a URL `a` wins is still recorded as
+ * the very container `b`'s artifact would roll up into; `a` listed first,
+ * the order the fixture and the runtime (`orderContainedFirst`) evaluate
+ * in; and a non-empty `pairs` of distinct, in-range rule indices. */
+function validateContainerFirst(problems, file, types, entry, where) {
+  const typeA = types.find((type) => type.type === entry.a);
+  const typeB = types.find((type) => type.type === entry.b);
+  if (typeA && typeB) {
+    const quoted = `${at(where, "expect")} "container_first"`;
+    if (withinTarget(typeB) !== entry.a) {
+      fail(problems, file, `${quoted} needs ${entry.b} within ${entry.a}`);
+    } else if (typeB.adapter.within.id !== typeA.adapter?.id) {
+      fail(problems, file, `${quoted} needs ${entry.b}'s within.id to be ${entry.a}'s adapter.id`);
+    }
+    if (types.indexOf(typeA) > types.indexOf(typeB)) {
+      fail(problems, file, `${quoted} needs ${entry.a} before ${entry.b}`);
+    }
+  }
+  if (!Array.isArray(entry.pairs) || entry.pairs.length === 0) {
+    fail(problems, file, `${at(where, "pairs")} must list at least one rule pair for "container_first"`);
+    return;
+  }
+  const rules = (type) => (Array.isArray(type?.adapter?.match) ? type.adapter.match.length : 0);
+  const seen = new Set();
+  entry.pairs.forEach((pair, index) => {
+    const pairAt = `${at(where, "pairs")}[${index}]`;
+    if (!Array.isArray(pair) || pair.length !== 2 || !pair.every(Number.isInteger)) {
+      fail(problems, file, `${pairAt} must be [<a rule>, <b rule>]`);
+      return;
+    }
+    if (typeA && typeB && (pair[0] < 0 || pair[0] >= rules(typeA) || pair[1] < 0 || pair[1] >= rules(typeB))) {
+      fail(problems, file, `${pairAt} names no rule`);
+    }
+    if (seen.has(`${pair[0]},${pair[1]}`)) fail(problems, file, `${pairAt} repeats a rule pair`);
+    seen.add(`${pair[0]},${pair[1]}`);
+  });
 }
 
 /** `npm run new:starter` (`scripts/new-starter.mjs`) writes the literal
@@ -853,8 +911,19 @@ const TS_EXCLUDED_TYPE_KEYS = ["samples", "samples_shape", "vectors"];
 /** Test-only family-level keys (Open decision 10): the sample origin and
  * scope `synthesizeFixture` uses, and the overlap declarations check 5
  * reads, live in the family file and in `starter-vectors.json`, not in the
- * bundle the extension ships. */
+ * bundle the extension ships. The one exception is a `"container_first"`
+ * overlap, which the extension needs at runtime (`tsOverlaps`). */
 const TS_EXCLUDED_FAMILY_KEYS = ["sample_origin", "sample_scope", "overlaps"];
+
+/** A family's `"container_first"` overlaps, the only ones the extension
+ * reads (`extension/starter-adapters.ts`: `orderContainedFirst` puts the
+ * container first, and `reviewableOverlaps` keeps their intended rule pairs
+ * out of the settings warnings), or `null` when it has none, so families
+ * without one keep their bundle unchanged. */
+function tsOverlaps(family) {
+  const entries = (family.overlaps ?? []).filter((entry) => entry.expect === "container_first");
+  return entries.length ? entries.map(({ a, b, expect, pairs }) => ({ a, b, expect, pairs })) : null;
+}
 
 function omit(obj, keys) {
   const copy = { ...obj };
@@ -874,10 +943,15 @@ export function renderTs(families, starterTypes) {
   const order = starterTypes ?? families.flatMap((family) => family.types.map((type) => type.type));
   const familyIds = familyCatalogOrder(families, order);
   const idsLine = `export const STARTER_FAMILY_IDS = [${familyIds.map((id) => JSON.stringify(id)).join(", ")}] as const; // catalog order\nexport type StarterFamilyId = (typeof STARTER_FAMILY_IDS)[number];\n`;
-  const bundled = families.map((family) => ({
-    ...omit(family, TS_EXCLUDED_FAMILY_KEYS),
-    types: family.types.map((type) => omit(type, TS_EXCLUDED_TYPE_KEYS)),
-  }));
+  const bundled = families.map((family) => {
+    const { types, ...rest } = omit(family, TS_EXCLUDED_FAMILY_KEYS);
+    const overlaps = tsOverlaps(family);
+    return {
+      ...rest,
+      ...(overlaps ? { overlaps } : {}),
+      types: types.map((type) => omit(type, TS_EXCLUDED_TYPE_KEYS)),
+    };
+  });
   return `${HEADER}\n${idsLine}${INTERFACES}\nexport const STARTER_FAMILIES: readonly StarterFamilyData[] = ${JSON.stringify(bundled, null, 2)};\n`;
 }
 
@@ -952,6 +1026,27 @@ function withFixtureDoc(vector, fixtureName) {
   return { id, kind, why, impls, doc: { "$fixture": fixtureName }, ...rest };
 }
 
+/** The `overlap_report` pairs `family`'s fixture must report: one
+ * `{first: [<a's index>, <a rule>], second: [<b's index>, <b rule>]}` per
+ * `"container_first"` rule pair, sorted by `first` then `second` (the
+ * engine's own order). The fixture lists types in source order, and the
+ * container comes first there, so its rule is `first`: the one that wins. */
+function expectedOverlapPairs(family) {
+  const index = new Map(family.types.map((type, at) => [type.type, at]));
+  const pairs = (family.overlaps ?? [])
+    .filter((entry) => entry.expect === "container_first")
+    .flatMap((entry) => entry.pairs.map(([ruleA, ruleB]) => ({
+      first: [index.get(entry.a), ruleA],
+      second: [index.get(entry.b), ruleB],
+    })));
+  const key = (pair) => [...pair.first, ...pair.second];
+  return pairs.sort((x, y) => {
+    const [kx, ky] = [key(x), key(y)];
+    const at = kx.findIndex((value, i) => value !== ky[i]);
+    return at === -1 ? 0 : kx[at] - ky[at];
+  });
+}
+
 /** The JSON text of `protocol/adapter-templates/starter-vectors.json`: one
  * synthesized `starter:<family>` fixture per family (`synthesizeFixture`),
  * in catalog family order (`familyCatalogOrder`). Per family, the cases are
@@ -977,13 +1072,16 @@ export function renderStarterVectors(families, starterTypes) {
       doc: { "$fixture": fixtureName },
       expect: { ok: true },
     });
+    const pairs = expectedOverlapPairs(family);
     cases.push({
       id: `overlap_report.starter.${familyId}`,
       kind: "overlap_report",
-      why: `generated: ${familyId}'s declared overlaps (${STARTERS_DIR}/${familyId}.json) are the whole set of rule pairs that may overlap`,
+      why: pairs.length
+        ? `generated: ${familyId}'s declared overlaps (${STARTERS_DIR}/${familyId}.json) are the whole set of rule pairs that may overlap; each container_first pair is reported with its container first, so the container wins`
+        : `generated: ${familyId}'s declared overlaps (${STARTERS_DIR}/${familyId}.json) are the whole set of rule pairs that may overlap`,
       impls: ["rust"],
       doc: { "$fixture": fixtureName },
-      expect: { pairs: [] },
+      expect: { pairs },
     });
     for (const type of family.types) {
       for (const vector of type.vectors) cases.push(withFixtureDoc(vector, fixtureName));

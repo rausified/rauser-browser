@@ -8,10 +8,10 @@ import test from "node:test";
 
 import {
   appendLock, catalogTypeOrder, checkLock, checkPolicy, checkRegistry, familyClaims, loadFamilies, loadFamilyEntries,
-  renderAdaptersIndex, renderCatalogLine, renderTs, validateFamily,
+  renderAdaptersIndex, renderCatalogLine, renderStarterVectors, renderTs, validateFamily,
 } from "../generate-starters.mjs";
 import { ORIGIN_CASES, STRICT_ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
-import { EXAMPLE_STRICT_FAMILY } from "../../extension/tests/starter-fixtures.mjs";
+import { EXAMPLE_CONTAINER_FIRST_FAMILY, EXAMPLE_STRICT_FAMILY } from "../../extension/tests/starter-fixtures.mjs";
 import { ipcDenied } from "./ipc-guard.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -706,7 +706,7 @@ test("sample_origin must be on the family's own origin", (t) => {
   );
 });
 
-test('overlaps[].expect must be "disjoint"', (t) => {
+test('overlaps[].expect must be "disjoint" or "container_first"', (t) => {
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.overlaps[0].expect = "may_overlap";
@@ -715,7 +715,7 @@ test('overlaps[].expect must be "disjoint"', (t) => {
   assert.equal(result.status, 1);
   assert.match(
     result.stdout + result.stderr,
-    /protocol\/starters\/atlassian\.json: overlaps\[0\]\.expect must be "disjoint"/,
+    /protocol\/starters\/atlassian\.json: overlaps\[0\]\.expect must be "disjoint" or "container_first"/,
   );
 });
 
@@ -756,6 +756,94 @@ test("a within container is exempt from the pair-coverage check", (t) => {
   assert.match(output, /protocol\/starters\/github\.json: github\.pr and github\.issue have no overlaps entry/);
   assert.doesNotMatch(output, /github\.pr and github\.repo have no overlaps entry/);
   assert.doesNotMatch(output, /github\.issue and github\.repo have no overlaps entry/);
+});
+
+// --- Declared container-first overlaps ---------------------------------------
+
+/** The container-first fixture with `edit` applied to a deep copy, and the
+ * problems `validateFamily` reports for it. */
+function containerFirstProblems(edit) {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  edit(family);
+  const problems = [];
+  validateFamily(problems, "nest.json", family);
+  return problems;
+}
+
+test("a container_first pair passes validation", () => {
+  assert.deepEqual(containerFirstProblems(() => {}), []);
+});
+
+test("a container_first pair becomes the family's expected overlap_report pairs, winner first", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  const vectors = JSON.parse(renderStarterVectors([family], family.types.map((type) => type.type)));
+  const report = vectors.cases.find((entry) => entry.id === "overlap_report.starter.nest");
+  assert.deepEqual(report.expect, { pairs: [{ first: [0, 1], second: [1, 0] }] });
+  assert.match(report.why, /container_first/);
+  // A family with only disjoint entries still expects no pair at all.
+  const strict = JSON.parse(renderStarterVectors([EXAMPLE_STRICT_FAMILY], ["strict.item"]));
+  assert.deepEqual(strict.cases.find((entry) => entry.id === "overlap_report.starter.strict").expect, { pairs: [] });
+});
+
+test("expected pairs are sorted by first, then second, and span several entries", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  family.types[0].adapter.match.push({ path: "/s/{space:name}/(trash)" });
+  family.overlaps[0].pairs = [[2, 0], [1, 0]];
+  const vectors = JSON.parse(renderStarterVectors([family], family.types.map((type) => type.type)));
+  const report = vectors.cases.find((entry) => entry.id === "overlap_report.starter.nest");
+  assert.deepEqual(report.expect.pairs, [{ first: [0, 1], second: [1, 0] }, { first: [0, 2], second: [1, 0] }]);
+});
+
+test('container_first needs b within a', () => {
+  const problems = containerFirstProblems((family) => { delete family.types[1].adapter.within; });
+  assert.ok(problems.includes('nest.json: overlaps[0].expect "container_first" needs nest.board within nest.space'), problems.join("\n"));
+  // The contained type winning is today's within fall-through, never declared.
+  const reversed = containerFirstProblems((family) => {
+    family.overlaps[0] = { a: "nest.board", b: "nest.space", expect: "container_first", pairs: [[0, 1]] };
+  });
+  assert.ok(reversed.includes('nest.json: overlaps[0].expect "container_first" needs nest.space within nest.board'), reversed.join("\n"));
+});
+
+test("container_first needs b's within.id to be a's own id template", () => {
+  const problems = containerFirstProblems((family) => { family.types[1].adapter.within.id = "nest.space:{host}/{space}"; });
+  assert.ok(problems.includes('nest.json: overlaps[0].expect "container_first" needs nest.board\'s within.id to be nest.space\'s adapter.id'), problems.join("\n"));
+});
+
+test("container_first needs a before b", () => {
+  const problems = containerFirstProblems((family) => { family.types.reverse(); });
+  assert.ok(problems.includes('nest.json: overlaps[0].expect "container_first" needs nest.space before nest.board'), problems.join("\n"));
+});
+
+test("container_first rule pairs must name real rules", () => {
+  const outOfRange = containerFirstProblems((family) => { family.overlaps[0].pairs = [[2, 0]]; });
+  assert.ok(outOfRange.includes("nest.json: overlaps[0].pairs[0] names no rule"), outOfRange.join("\n"));
+  const malformed = containerFirstProblems((family) => { family.overlaps[0].pairs = [[1]]; });
+  assert.ok(malformed.includes("nest.json: overlaps[0].pairs[0] must be [<a rule>, <b rule>]"), malformed.join("\n"));
+  const empty = containerFirstProblems((family) => { family.overlaps[0].pairs = []; });
+  assert.ok(empty.includes('nest.json: overlaps[0].pairs must list at least one rule pair for "container_first"'), empty.join("\n"));
+  const missing = containerFirstProblems((family) => { delete family.overlaps[0].pairs; });
+  assert.ok(missing.includes('nest.json: overlaps[0].pairs must list at least one rule pair for "container_first"'), missing.join("\n"));
+  const repeated = containerFirstProblems((family) => { family.overlaps[0].pairs = [[1, 0], [1, 0]]; });
+  assert.ok(repeated.includes("nest.json: overlaps[0].pairs[1] repeats a rule pair"), repeated.join("\n"));
+});
+
+test('a disjoint entry may not carry pairs', () => {
+  const problems = containerFirstProblems((family) => { family.overlaps[0].expect = "disjoint"; });
+  assert.ok(problems.includes('nest.json: overlaps[0].pairs is only for "container_first"'), problems.join("\n"));
+});
+
+test("a type pair is declared at most once", () => {
+  const problems = containerFirstProblems((family) => {
+    family.overlaps.push({ a: "nest.board", b: "nest.space", expect: "disjoint" });
+  });
+  assert.ok(problems.includes("nest.json: overlaps[1] declares nest.board and nest.space again"), problems.join("\n"));
+});
+
+test("renderTs carries each family's overlaps for the runtime order and the settings warnings", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  const text = renderTs([family], family.types.map((type) => type.type));
+  assert.match(text, /"overlaps": \[\s*\{\s*"a": "nest.space",\s*"b": "nest.board",\s*"expect": "container_first",\s*"pairs": \[/);
+  assert.match(text, /overlaps\?: StarterOverlapData\[\];/);
 });
 
 test('a vector must not carry "doc"', (t) => {

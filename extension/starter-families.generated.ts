@@ -18,12 +18,17 @@ export interface StarterTypeData {
   status: { state: "certified" | "development"; method: "live" | "history" | null; checked_on: string | null; checked_by: string | null };
   docs: string;
 }
+/** A declared container-first overlap (protocol/starters/README.md): a (the
+ * container) is ordered before b (a type within it) on every origin, and each
+ * [a rule, b rule] in pairs is an intended overlap that a wins. */
+export interface StarterOverlapData { a: string; b: string; expect: "container_first"; pairs: [number, number][] }
 export interface StarterFamilyData {
   family: StarterFamilyId;
   display_name: string;
   review_prompt: string | null;
   origin: { kind: "exact"; origin: string } | { kind: "subdomain"; suffix: string; labels?: 1; exclude?: string[] };
   scope: StarterScopeData | null;
+  overlaps?: StarterOverlapData[];
   types: StarterTypeData[];
 }
 
