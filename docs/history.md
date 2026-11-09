@@ -257,6 +257,14 @@ are still prompt-level. Settings and README explain examples, limits and edits.
 
 ## §7.2 Artifact adapters — history
 
+**Configured-site scope versus format (2026-11-09).** A configured GitHub
+repository outside the selected owner list is an `out_of_scope` match of the
+existing repository rule. The panel no longer treats that verdict, on the
+current page or on a sampled URL shape, as evidence of a new page format for
+the recurring-pages drafter. A genuinely unmatched route can still offer a
+new draft after three visits. The existing capture explanation directs scope
+changes to Settings.
+
 **Starter rule updates (2026-10-28).** The rule this record introduced is now stated in DESIGN.md §7.2, “Starter rule updates”.
 
 *Saving an adapter:* Before v6, enabling or widening an adapter requested the origin's optional Chrome grant and a native confirmation.
