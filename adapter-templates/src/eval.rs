@@ -14,7 +14,10 @@ use crate::document::{Adapter, Alias, Document, IdPart, Mode, QueryCond, Rule};
 use crate::path::prepare_segments;
 use crate::title::prepare_title;
 
-pub const MAX_URL_CHARS: usize = 2048;
+/// §5.1: the URL cap, in scalar values. It equals the capture store's URL cap
+/// (8192 bytes, `host/src/capture.rs`), so no URL Brauser could store is
+/// refused for length; evaluation stays linear in it (§10.2).
+pub const MAX_URL_CHARS: usize = 8192;
 pub const MAX_ID_BYTES: usize = 512;
 pub const MAX_REFS: usize = 20;
 const UUID_LEN: usize = 36;

@@ -49,6 +49,12 @@ opened in two locales is one artifact. App names are directory names
 (`TA-acme.ops`, `Splunk_SA_CIM`) and keep their case. No rule has a rest
 segment, so `/<locale>/app/<app>/reports/<anything>` never matches.
 
+A search page carries the whole search in `q=`, so its URL is often longer
+than 2048 characters. Both engines accept URLs of up to 8192 characters
+(`adapter-templates.md` §5.1), the capture store's own limit, so a long
+search still counts toward its app (`eval.splunk.app.long_search_url`); a
+longer one matches nothing.
+
 **Rule 2 overlaps Splunk dashboards on purpose.** Dashboards and built-in
 pages share `/<locale>/app/<app>/<view>`, and the template language has no
 "any word but these" segment, so the dashboard rule also matches

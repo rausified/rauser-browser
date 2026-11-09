@@ -553,7 +553,7 @@ function titleNearMiss(r, title) {
 }
 
 /** The URL padded to `n` scalar values with a fragment, which never affects
- * matching, so only the 2048-scalar cap decides the result. */
+ * matching, so only the 8192-scalar cap decides the result. */
 function padUrl(url, n) {
   const base = url.includes("#") ? url : `${url}#`;
   const length = [...base].length;
@@ -591,7 +591,7 @@ export function genCase(seed, index) {
     }
     request.title ??= title;
   }
-  if (r.chance(0.04)) request.url = padUrl(request.url, r.pick([2047, 2048, 2049]));
+  if (r.chance(0.04)) request.url = padUrl(request.url, r.pick([8191, 8192, 8193]));
   if (r.chance(0.05)) request.url = utf16(request.url).concat([0xd83d]);
   // JSON strings cannot portably carry lone surrogates (serde_json rejects
   // them), so any text that is not well-formed goes as UTF-16 units.

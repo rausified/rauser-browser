@@ -13012,6 +13012,30 @@
       "url": "https://acme.splunkcloud.com/en-US/app/search/reports/extra"
     },
     {
+      "id": "eval.splunk.app.long_search_url",
+      "kind": "evaluate",
+      "why": "a real-shaped 3542-character search URL, past the old 2048 cap, still matches (adapter-templates.md §5.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/search?q=search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20head%2020&sid=1730000000.12345_ACME0000-0000-4000-8000-000000000000&display.page.search.mode=smart&dispatch.sample_ratio=1&earliest=-24h%40h&latest=now&display.general.type=statistics"
+    },
+    {
       "id": "eval.splunk.dashboard.dashboard_view_mode_classic_versioned_title",
       "kind": "evaluate",
       "why": "dashboard view mode, Classic, versioned title",

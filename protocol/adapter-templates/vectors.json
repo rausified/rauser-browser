@@ -23275,9 +23275,9 @@
       "url": "https://www.notion.so/Release-Plan-0123456789abcdef0123456789abcdef"
     },
     {
-      "id": "eval.bounds.url_2048",
+      "id": "eval.bounds.url_8192",
       "kind": "evaluate",
-      "why": "§5.1/§12: a 2048-character URL is allowed",
+      "why": "§5.1/§12: a 8192-character URL is allowed",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {
@@ -23290,20 +23290,20 @@
         "mode": null
       },
       "doc": {"$fixture": "starters"},
-      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "a", "times": 2003}]}
+      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "a", "times": 8147}]}
     },
     {
-      "id": "eval.bounds.url_2049",
+      "id": "eval.bounds.url_8193",
       "kind": "evaluate",
-      "why": "§5.1: a URL over 2048 characters matches no adapter",
+      "why": "§5.1: a URL over 8192 characters matches no adapter",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {"match": false, "reason": "url_too_long"},
       "doc": {"$fixture": "starters"},
-      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "a", "times": 2004}]}
+      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "a", "times": 8148}]}
     },
     {
-      "id": "eval.bounds.url_2048_astral",
+      "id": "eval.bounds.url_8192_astral",
       "kind": "evaluate",
       "why": "§5.1: the cap counts scalar values, not UTF-16 units",
       "impls": ["rust", "ts"],
@@ -23319,10 +23319,10 @@
         "mode": null
       },
       "doc": {"$fixture": "starters"},
-      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "😀", "times": 2003}]}
+      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "😀", "times": 8147}]}
     },
     {
-      "id": "eval.bounds.url_2049_astral",
+      "id": "eval.bounds.url_8193_astral",
       "kind": "evaluate",
       "why": "§5.1: one scalar over the cap",
       "impls": ["rust", "ts"],
@@ -23330,17 +23330,17 @@
       "budget_ms": 50,
       "expect": {"match": false, "reason": "url_too_long"},
       "doc": {"$fixture": "starters"},
-      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "😀", "times": 2004}]}
+      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "😀", "times": 8148}]}
     },
     {
-      "id": "eval.bounds.url_2049_invalid",
+      "id": "eval.bounds.url_8193_invalid",
       "kind": "evaluate",
       "why": "§5.1: the cap is checked before parsing",
       "impls": ["rust", "ts"],
       "sq": ["SQ17"],
       "expect": {"match": false, "reason": "url_too_long"},
       "doc": {"$fixture": "starters"},
-      "url": {"$build": [{"repeat": " ", "times": 2049}]}
+      "url": {"$build": [{"repeat": " ", "times": 8193}]}
     },
     {
       "id": "eval.bounds.64_segments",
@@ -24353,9 +24353,9 @@
       "title": {"$build": [{"repeat": "#1 ", "times": 168}, "abcde #7"]}
     },
     {
-      "id": "eval.bounds.url_2048_query",
+      "id": "eval.bounds.url_8192_query",
       "kind": "evaluate",
-      "why": "§5.3/§12: 8 query conditions, all at the end of a 2048-scalar URL with hundreds of pairs",
+      "why": "§5.3/§12: 8 query conditions, all at the end of a 8192-scalar URL with hundreds of pairs",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {
@@ -24396,15 +24396,15 @@
         "$build": [
           "https://bounds.example.com/q?",
           "z=yyyyy&",
-          {"repeat": "p=1&", "times": 493},
+          {"repeat": "p=1&", "times": 2029},
           "k0=x&k1=x&k2=x&k3=x&k4=x&k5=x&k6=x&id=7"
         ]
       }
     },
     {
-      "id": "eval.bounds.url_2048_absent",
+      "id": "eval.bounds.url_8192_absent",
       "kind": "evaluate",
-      "why": "§5.3/§12: 8 absent keys; the last is the final pair of a 2048-scalar URL",
+      "why": "§5.3/§12: 8 absent keys; the last is the final pair of a 8192-scalar URL",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {"match": false, "reason": "no_rule"},
@@ -24420,13 +24420,13 @@
         ]
       },
       "url": {
-        "$build": ["https://bounds.example.com/q/7?", "z=yyyyyy&", {"repeat": "p=1&", "times": 501}, "k7=1"]
+        "$build": ["https://bounds.example.com/q/7?", "z=yyyyyy&", {"repeat": "p=1&", "times": 2037}, "k7=1"]
       }
     },
     {
-      "id": "eval.bounds.url_2048_absent_miss",
+      "id": "eval.bounds.url_8192_absent_miss",
       "kind": "evaluate",
-      "why": "§5.3/§12: 8 absent keys, none present in a 2048-scalar URL with hundreds of pairs",
+      "why": "§5.3/§12: 8 absent keys, none present in a 8192-scalar URL with hundreds of pairs",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {
@@ -24450,7 +24450,7 @@
         ]
       },
       "url": {
-        "$build": ["https://bounds.example.com/q/7?", "z=yyyyyy&", {"repeat": "p=1&", "times": 501}, "k8=1"]
+        "$build": ["https://bounds.example.com/q/7?", "z=yyyyyy&", {"repeat": "p=1&", "times": 2037}, "k8=1"]
       }
     },
     {

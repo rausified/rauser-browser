@@ -56,7 +56,8 @@ const MAX_GENERIC_TITLES = 16;
 const MAX_GENERIC_TITLE_CHARS = 128;
 const MAX_SCOPE_VALUES = 64;
 const MAX_REF_SPECS = 8;
-const MAX_URL_CHARS = 2048;
+/** §5.1: equals the capture store's 8192-byte URL cap, so no storable URL is refused for length. */
+const MAX_URL_CHARS = 8192;
 const MAX_URL_SEGMENTS = 64;
 const MAX_ANONYMOUS_CHARS = 256;
 const MAX_ID_BYTES = 512;
