@@ -31,8 +31,25 @@ jobs:
       # (EPERM/EACCES on bind) and this flag is unset. CI runners never
       # sandbox IPC, so a bind failure here is a real failure: never skip.
       BRAUSER_REQUIRE_IPC_TESTS: "1"
+      # A CI build is never rebuilt in place, so incremental data is dead
+      # weight in the cache. Line tables keep file:line in panics and
+      # backtraces but skip full debuginfo, which made linking the test
+      # binaries (and their PDBs on Windows) most of the cached build's cost.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Caches the Cargo registry and the compiled dependencies in `target`,
+      # including the nested `target/scripted-dialogs` (the action cleans it
+      # as its own target dir and drops workspace crates, which always
+      # rebuild). The key has the runner label, toolchain and Cargo.lock.
+      # Only pushes to main save: PR runs and the Mergify queue's draft PRs
+      # restore main's cache (a branch may read its base branch's caches)
+      # and never write their own, so they cannot evict it.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ inputs.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
@@ -52,6 +69,15 @@ jobs:
         run: cargo test --locked --workspace
       - name: Check Rust lints
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # The scripted-dialogs builds keep their own target dir on purpose:
+      # `target/debug/brauser` must stay the production host (the adapter
+      # diff below runs it), and a shared
+      # dir would overwrite it with the scripted binary. A shared Cargo
+      # build-dir (deps compiled once, binaries uplifted apart) is not safe
+      # either: Windows MSVC executables carry no hash in `deps/`, so the two
+      # feature sets would overwrite each other's `deps/brauser.exe`. The
+      # cache above restores this dir's compiled dependencies instead, so
+      # only the `brauser` crate rebuilds here.
       - name: Test the scripted-dialogs test build
         run: cargo test --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
       - name: Lint the scripted-dialogs test build
