@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 const { PROTOCOL_VERSION } = await import("../dist/native.js");
 const { POLICY_STORAGE_KEY } = await import("../dist/model.js");
-const { setStarterFamiliesForTest, starterFamilies } = await import("../dist/starter-adapters.js");
+const { setStarterFamiliesForTest, starterFamilies, starterOffers } = await import("../dist/starter-adapters.js");
 const { STARTER_FAMILIES } = await import("../dist/starter-families.generated.js");
 const { EXAMPLE_TENANT_FAMILY, EXAMPLE_UNSCOPED_FAMILY, EXAMPLE_UNSCOPED_PAIR_FAMILY } = await import("./starter-fixtures.mjs");
 
@@ -1431,6 +1431,43 @@ test("adapter workspace edits, reorders, and removes through revisioned saves", 
   await until(() => state.config.adapters.artifacts.length === 1 && idle(), "the removal");
   assert.equal(state.config.adapters.artifacts[0].type, "work.search");
   assert.ok(state.revision >= 4);
+});
+
+test("a starter's declared container-first overlap is not listed for review, and its order is held", async () => {
+  const [app, dashboard] = starterOffers("https://acme.splunkcloud.com", []).map((offer) => offer.adapter);
+  assert.deepEqual([app.type, dashboard.type], ["splunk.app", "splunk.dashboard"]);
+  // The host reports the one intended pair: the app's built-in pages over the dashboard rule.
+  const declared = { first_adapter: 0, first_rule: 1, second_adapter: 1, second_rule: 0 };
+  const settingsWith = (adapters) => install({
+    adapters,
+    host: {
+      get_config: (_request, current) => ({
+        type: "config_result", revision: "1", config: current.config, config_issue: null,
+        agent_status: AGENT_STATUS, adapter_issue: null, adapter_warnings: [declared],
+        adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
+      }),
+    },
+  });
+  const state = settingsWith([app, dashboard]);
+  await openSettings();
+  assert.doesNotMatch(statusText(), /overlap/);
+  assert.equal(nodeText(env.elements.get("adapter-overlaps")), "");
+  const held = "This starter's container rule must stay ahead of the rules inside it, so its own pages are not recorded as them.";
+  const buttons = () => env.elements.get("adapter-list").querySelectorAll("button");
+  assert.equal(buttons()[2].disabled, true, "apps cannot move below dashboards");
+  assert.equal(buttons()[2].title, held);
+  assert.equal(buttons()[5].disabled, true, "dashboards cannot move above apps");
+  buttons()[2].dispatch("click");
+  await until(idle, "the held move");
+  assert.equal(statusText(), held);
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+
+  // Once the app's built-in rule is edited, the same pair is the user's own overlap again.
+  const edited = { ...app, match: [app.match[0], { path: "/{_}/app/{app:name}/{*}" }] };
+  settingsWith([edited, dashboard]);
+  await openSettings();
+  assert.match(statusText(), /1 adapter rule overlap needs review/);
+  assert.match(nodeText(env.elements.get("adapter-overlaps")), /rule 2 may overlap .* rule 1; .* wins/);
 });
 
 test("a pull request or issue rule cannot be moved below its repository rule", async () => {

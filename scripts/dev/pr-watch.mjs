@@ -184,7 +184,8 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
       const name = /^check-(?:success|neutral|skipped) = (.+)$/.exec(c)?.[1];
       return name && PASSED.has(snap.checks.find((check) => check.name === name)?.state);
     });
-    if (stale || (stuck && !unmet.length)) return act(EXIT.QUEUE_BLOCKED, "queue-refresh", `#${n} is queued and Mergify is waiting (${unmetText}) though GitHub reports those checks passed; Mergify missed the update (a repeat queue comment is ignored while one runs): gh pr comment ${n} --body "${REFRESH_COMMENT}"`);
+    // Only after the grace: Mergify normally lags GitHub by up to a minute.
+    if (stuck && (stale || !unmet.length)) return act(EXIT.QUEUE_BLOCKED, "queue-refresh", `#${n} is queued and Mergify is waiting (${unmetText}) though GitHub reports those checks passed; Mergify missed the update (a repeat queue comment is ignored while one runs): gh pr comment ${n} --body "${REFRESH_COMMENT}"`);
     const fix = snap.labeled ? `fix those, or comment "${REFRESH_COMMENT}" if they already hold` : `gh pr edit ${n} --add-label ${QUEUE_LABEL}`;
     if (stuck) return act(EXIT.QUEUE_BLOCKED, "queue-conditions-unmet", `#${n} is green and queued but Mergify has waited ${ADMIT_GRACE_MINUTES}+ minutes (${unmetText}): ${fix}`);
     return wait(`waiting:${unmet.join(",")}`, `#${n} is queued; Mergify is waiting for its conditions (${pending ?? unmetText}).`);

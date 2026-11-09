@@ -188,7 +188,9 @@ test("in the queue: wait, naming Mergify's step; BEHIND changes nothing", () => 
 });
 
 test("#339: waiting on Build and check that GitHub reports passed advises refresh, not a repeat queue", () => {
-  const d = decide(snap({ comments: [FX.waiting339] }), { now: NOW, idleSince: NOW });
+  const s = snap({ comments: [FX.waiting339] });
+  assert.equal(decide(s, { now: NOW, idleSince: ago(1) }).done, false); // ordinary Mergify lag (#346)
+  const d = decide(s, { now: NOW, idleSince: ago(ADMIT_GRACE_MINUTES) });
   assert.equal(d.exitCode, EXIT.QUEUE_BLOCKED);
   assert.equal(d.action, "queue-refresh");
   assert.match(d.message, new RegExp(`gh pr comment 243 --body "${REFRESH_COMMENT}"`));
