@@ -467,3 +467,7 @@
   focus moves from the disappearing Load more button. An offline regression
   now models Chrome's inherited disabled-state behavior, while the original
   browser assertion remains intact for the driver's acceptance gate.
+
+- Brauser now keeps named sharing drafts across panel closure and browser restart, preserving the exact checked preview in browser-local storage scoped to the home/profile. Explicit comparison reviews the original artifact-days against current evidence, distinguishes missing from unreached entries, excludes new activity and requires approval of changed rows and session/gap context. Reviewed versions preserve their originals; no source notes/logs or agent runs are created.
+
+- Repaired 36 starter-generator CLI test boundaries to use the required local-IPC probe before subprocess setup. Pure checks remain active and CLI assertions are preserved; restricted runners explain skips, while strict CI still requires subprocess execution.

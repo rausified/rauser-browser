@@ -12,3 +12,5 @@ explicit way to keep it without writing source logs or notes.
 Where: the selected-work controls in `extension/panel.ts`, an isolated local
 draft store keyed to the home folder, and the panel tests. Reopening must
 start no agent, change no source content, and copy nothing automatically.
+
+- Done 2026-11-09: `brwr-1b6o` implements immutable browser-local drafts and explicit original-identity evidence review; complete local gates pass. Driver commit/review/publication pending.

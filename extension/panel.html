@@ -278,7 +278,7 @@
           </div>
           <label class="check-label"><input id="worklog-curate" type="checkbox"> Choose work to share</label>
           <div id="worklog-choices-area" hidden>
-            <p class="page-url">Selected work includes only checked entries. Container entries show direct activity, without work inside them. Choices last while this panel is open.</p>
+            <p class="page-url">Selected work includes only checked entries. Container entries show direct activity, without work inside them. Save a named sharing draft below to keep a selection after closing the panel.</p>
             <label for="worklog-share-scope">Choose from</label>
             <select id="worklog-share-scope">
               <option value="entries">All recorded work</option>
@@ -306,6 +306,41 @@
           <div class="card-foot">
             <button id="copy-worklog" type="button" class="secondary compact" disabled><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="12" height="12"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg> Copy</button>
           </div>
+          <details id="sharing-drafts">
+            <summary>Saved sharing drafts</summary>
+            <p class="page-url">Drafts stay in this browser, for this home and profile. Clearing browser data removes them. Saving and reopening do not copy, send or change your notes.</p>
+            <label for="sharing-draft-name">Draft name</label>
+            <input id="sharing-draft-name" type="text" maxlength="80" placeholder="Weekly update">
+            <button id="sharing-draft-save" type="button" class="secondary" disabled>Save current selection</button>
+            <label for="sharing-draft-list">Saved drafts</label>
+            <select id="sharing-draft-list"><option value="">Choose a saved draft…</option></select>
+            <p id="sharing-draft-count" class="page-url"></p>
+            <p id="sharing-draft-status" role="status"></p>
+            <div id="sharing-draft-view" hidden>
+              <h3>Frozen saved preview</h3>
+              <pre id="sharing-draft-original" class="worklog-text"></pre>
+              <div class="note-header">
+                <button id="sharing-draft-copy" type="button" class="secondary" disabled>Copy saved preview</button>
+                <button id="sharing-draft-refresh" type="button" class="secondary" disabled>Compare with current evidence</button>
+                <button id="sharing-draft-delete" type="button" class="secondary" disabled>Delete draft</button>
+              </div>
+              <div id="sharing-draft-review" hidden>
+                <h3>Review refreshed entries</h3>
+                <p id="sharing-draft-review-status" role="status"></p>
+                <div id="sharing-draft-rows" class="worklog-choices" role="group" aria-label="Saved entries compared with current evidence"></div>
+                <div id="sharing-draft-context" hidden>
+                  <pre id="sharing-draft-context-text" class="worklog-text"></pre>
+                  <label class="check-label"><input id="sharing-draft-context-approve" type="checkbox"> Use the current session name and capture-gap notices shown above</label>
+                </div>
+                <h3>Refreshed preview</h3>
+                <pre id="sharing-draft-preview" class="worklog-text"></pre>
+                <div class="note-header">
+                  <button id="sharing-draft-copy-review" type="button" class="secondary" disabled>Copy reviewed preview</button>
+                  <button id="sharing-draft-save-review" type="button" class="secondary" disabled>Save reviewed version</button>
+                </div>
+              </div>
+            </div>
+          </details>
         </section>
       </div>
 

@@ -1730,3 +1730,14 @@ The existing offline append-and-Copy test now reproduces Chrome's refusal to
 focus a control inside a disabled fieldset; it failed before the fix and passes
 afterward. The real-browser assertion remains unchanged and must still pass
 in the driver's external gate. No new feature scope was added this cycle.
+
+
+## 2026-11-09 — Keep and refresh a named sharing draft
+
+A curated work update can now survive closing the panel or restarting the browser. In Recent, name a checked selection and save its exact preview, including the session heading and capture-gap notices. Saved drafts belong to the current home/profile in this browser; reopening one shows the frozen original and copies nothing until Copy is pressed. Clearing browser data removes these drafts, and they do not travel with the home folder.
+
+Compare with current evidence revisits only the originally selected artifact-days and dates, including their original focus session. It shows unchanged, changed, missing and unreached entries without adding new activity. Changed rows start unchecked, and a changed session heading or gap footer needs separate approval. A bounded or omitted scan never pretends an unreached entry was deleted. Saving a reviewed version creates a new draft and keeps the original. The feature changes no source logs or notes and starts no agent.
+
+## 2026-11-09 — Keep generator checks honest in restricted runners
+
+The supplementary gate found 36 starter-generator CLI cases that captured child output without first checking whether this runner permits local IPC. Those cases now use the repository's existing child-pipe probe before creating fixtures or spawning the CLI. Their real validation assertions are unchanged, pure checks still execute, and strict CI still fails on a denied pipe instead of skipping. Real and simulated restrictions both report 13 pure passes and 66 explicit integration skips; simulated strict mode fails as required.
