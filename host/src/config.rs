@@ -2267,6 +2267,21 @@ fn container_first_problems(
     problems
 }
 
+/// Whether `config` has both of `pair`'s types on `origin`.
+fn container_first_both_live(
+    config: &ConfigSnapshot,
+    pair: &crate::capture_site::ContainerFirstPair,
+    origin: &str,
+) -> bool {
+    let has = |artifact_type: &str| {
+        config.adapters.artifacts.iter().any(|adapter| {
+            adapter.get("type").and_then(serde_json::Value::as_str) == Some(artifact_type)
+                && adapter.get("origin").and_then(serde_json::Value::as_str) == Some(origin)
+        })
+    };
+    has(&pair.container) && has(&pair.contained)
+}
+
 /// Refuse a save that leaves a catalog `container_first` pair (Splunk apps
 /// and dashboards) wrong on an origin where `current` had it right: the
 /// contained adapter without its container (dashboards alone, or apps
@@ -2286,13 +2301,33 @@ fn container_first_problems(
 ///
 /// A config that already had the problem on an origin (written by hand, or
 /// saved before this rule) is not blocked from other saves, including edits
-/// of those adapters; only a save that introduces one is refused.
+/// of those adapters; only a save that introduces one is refused. A live
+/// pair keeps the order it has either way: flipping an existing
+/// dashboards-first pair to apps-first is refused too, as it would move
+/// pages the dashboards already recorded.
 fn refuse_new_container_first_problem(
     current: &ConfigSnapshot,
     next: &ConfigSnapshot,
 ) -> Result<()> {
     let existing = container_first_problems(current);
-    for (origin, pair, problem) in container_first_problems(next) {
+    // The reverse flip: an origin where `current` had dashboards above apps
+    // (an existing `Behind`) and `next` still has both, apps now first.
+    let fixed = container_first_problems(next);
+    for (origin, pair, problem) in &existing {
+        if *problem != ContainerFirstProblem::Behind
+            || fixed
+                .iter()
+                .any(|(o, p, _)| o == origin && std::ptr::eq(*p, *pair))
+            || !container_first_both_live(next, pair, origin)
+        {
+            continue;
+        }
+        let (contained, container) = (&pair.contained_label, &pair.container_label);
+        bail!(
+            "{contained} must stay above {container} on {origin}, as they were saved. Whichever comes first records the pages both match, so putting {container} first now would move pages already recorded under {contained}. Keep the order, or remove one of them first."
+        );
+    }
+    for (origin, pair, problem) in fixed {
         if existing.iter().any(|(had_origin, had_pair, had)| {
             *had_origin == origin && std::ptr::eq(*had_pair, pair) && *had == problem
         }) {
@@ -4149,9 +4184,10 @@ mod tests {
 
         /// A config that already has dashboards above apps (written by hand,
         /// or saved before this rule) is not blocked from other saves on it,
-        /// edits of those adapters included.
+        /// edits of those adapters included, but it keeps that order: a flip
+        /// either way moves recorded pages.
         #[test]
-        fn an_existing_order_problem_does_not_block_other_saves() {
+        fn an_existing_dashboards_first_order_is_kept() {
             let [app, dashboard] = splunk();
             let mut current = empty_config();
             current.adapters.artifacts = vec![dashboard.clone(), app.clone()];
@@ -4161,9 +4197,17 @@ mod tests {
             let mut edit = current.clone();
             edit.adapters.artifacts = vec![dashboard.clone(), edited(&app)];
             validate_update(&current, &edit).unwrap();
-            let mut fixed = current.clone();
-            fixed.adapters.artifacts = vec![app, dashboard];
-            validate_update(&current, &fixed).unwrap();
+            // The reverse flip is refused too: dashboards there already
+            // recorded the app's pages, so putting apps first would move them.
+            let mut flipped = current.clone();
+            flipped.adapters.artifacts = vec![app, dashboard];
+            let error = validate_update(&current, &flipped).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("Splunk dashboards must stay above Splunk apps")
+                    && message.contains("remove one of them first"),
+                "{message}"
+            );
         }
 
         /// A config that already has dashboards without apps (written by

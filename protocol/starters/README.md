@@ -209,7 +209,10 @@ unaffected):
   it, remove Splunk dashboards first." So the order a pair becomes live in,
   container first, is the order it keeps. A config that already has either
   problem on an origin is not blocked from other saves there, edits of
-  those adapters included. The host's tests check the catalog line against
+  those adapters included, but a live pair already saved dashboards-first
+  keeps that order too: flipping it to apps-first would move pages the
+  dashboards recorded, so the host refuses it and asks to remove one of
+  them first. The host's tests check the catalog line against
   the families' own `overlaps`. The check is on type names, so it applies on
   any origin: starter type names are reserved for drafts, and a hand-written
   adapter that reuses one is held to it too.
