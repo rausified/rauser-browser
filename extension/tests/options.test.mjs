@@ -1224,34 +1224,23 @@ test("a missing starter offer cannot become available when scope changes", async
   assert.equal(pullRequest.disabled, true);
 });
 
-test("the gallery hint joins the family display names", async () => {
+test("the gallery hint names the first three families and counts the rest", async () => {
   install();
   await openSettings();
   const hint = nodeText(env.elements.get("starter-gallery")).trim();
 
-  // Independently reimplement options.ts's joinOr grammar ("A", "A or B",
-  // "A, B, …, or Z") against the real STARTER_FAMILIES data, so the
-  // expectation tracks any new family instead of pinning a literal that a
-  // new family would break (final review, Important 1).
+  // Built from the real STARTER_FAMILIES data in catalog order, so a new
+  // family changes N rather than breaking a literal list (coordinator copy,
+  // 2026-11-05: the first three families, then "or one of N more").
   const names = starterFamilies().map((family) => family.display_name);
-  const joined =
-    names.length < 2
-      ? names.join("")
-      : names.length === 2
-        ? `${names[0]} or ${names[1]}`
-        : `${names.slice(0, -1).join(", ")}, or ${names[names.length - 1]}`;
-  assert.equal(hint, `Enter an ${joined} site address above to see starter drafts.`);
+  assert.ok(names.length > 3, "the gallery has more than three families");
+  assert.equal(
+    hint,
+    `Enter an ${names.slice(0, 3).join(", ")} or one of ${names.length - 3} more work tools' site addresses above to see starter drafts.`,
+  );
 
-  // Today's four families' exact display names still appear, in order, among
-  // whichever families exist — an ordered-subsequence check, not an exact
-  // list, so a family added later (PR D) does not break this pin.
-  const today = ["Atlassian Cloud (Jira or Confluence)", "SharePoint/OneDrive", "GitHub", "Miro"];
-  let cursor = -1;
-  for (const name of today) {
-    const index = names.indexOf(name);
-    assert.ok(index > cursor, `expected "${name}" after position ${cursor} in ${JSON.stringify(names)}`);
-    cursor = index;
-  }
+  // Today's first three families, pinned by name.
+  assert.deepEqual(names.slice(0, 3), ["Atlassian Cloud (Jira or Confluence)", "SharePoint/OneDrive", "GitHub"]);
 });
 
 test("gallery cards say whether each starter is certified", async () => {
