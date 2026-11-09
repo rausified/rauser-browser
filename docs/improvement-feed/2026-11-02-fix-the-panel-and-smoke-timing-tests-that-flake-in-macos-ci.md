@@ -13,3 +13,4 @@ waits, `extension/tests/auto-summary.test.mjs`, and a rerun-once-on-known-flake
 step in `.github/workflows/build-os.yml` as a stopgap.
 
 - +1 2026-11-05: PR #318's new saved-command keyboard test asserted focus immediately after an asynchronous host read, without waiting for the editor's fields. Extend the offline browser fixture with selectable per-request delays to expose similar missing readiness waits; the repair adds a delayed command-settings reply and waits for the first enabled field. Chromium is sandbox-blocked locally, so the browser result still needs the unsandboxed commit gate.
+- +1 2026-11-09: brwr-b508 found the "basic Capture Site review" cause. In runs 41546744879 and 41528659106 the open wait accepted, before any click, a review already showing in one panel.html document, and later reads hit a different one. The smoke now skips its own scratch panel.html tabs, refuses an ambiguous page lookup, and counts only a review seen after its own click.
