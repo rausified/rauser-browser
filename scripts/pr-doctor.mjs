@@ -37,6 +37,8 @@ export const LABEL = "needs-merge";
 export const SKIP_LABEL = "pr-doctor:skip";
 // The Mergify queue label (.mergify.yml): a PR waiting to merge.
 const QUEUE_LABEL = "queue";
+// worker-contract.json merge.comment: what actually queues a labelled PR.
+export const QUEUE_COMMENT = "@Mergifyio queue";
 export const QUEUE_PATH = ".beads/issues.jsonl";
 export const BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md";
 export const QUEUE_FILES = Object.freeze([QUEUE_PATH, BACKLOG_PATH]);
@@ -106,12 +108,12 @@ export function classifyPr(pr) {
 const list = (files) => files.map((file) => `- \`${file}\``).join("\n");
 
 /** The sticky comment for an outcome; never mentions anyone. */
-export function commentBody({ outcome, files = [], sha = "", queued = false, resolvable = false }) {
+export function commentBody({ outcome, files = [], sha = "", queued = false, resolvable = false, requeued = false }) {
   const head = `${MARKER}\n<!-- pr-doctor outcome=${outcome} -->\n**PR doctor**\n\n`;
   const waiting = queued ? " It is labeled `queue` and waits until this is fixed: a conflicting PR runs no CI and the Mergify queue cannot take it." : " A conflicting PR runs no CI.";
   switch (outcome) {
     case "repaired":
-      return head + `Merged \`main\` into this branch as ${sha}. The conflicts were only in the work queue (its bead edits applied through bd, its backlog prose moved to \`${FRAME_PATH}\`, and the files dropped from this PR) or both-sides-appended Markdown, resolved with main's text first:\n\n${list(files)}\n\nCI runs on the new commit. Pull before pushing again.`;
+      return head + `Merged \`main\` into this branch as ${sha}. The conflicts were only in the work queue (its bead edits applied through bd, its backlog prose moved to \`${FRAME_PATH}\`, and the files dropped from this PR) or both-sides-appended Markdown, resolved with main's text first:\n\n${list(files)}\n\nCI runs on the new commit.${requeued ? ` The push cancelled this PR's queue request, so the doctor commented \`${QUEUE_COMMENT}\` again.` : ""} Pull before pushing again.`;
     case "needs-person":
       return head + `This PR conflicts with \`main\` in files the doctor does not resolve on its own.${waiting} The files:\n\n${list(files)}\n\nMerge \`main\` into the branch and resolve these by hand. For \`${QUEUE_PATH}\` or \`${BACKLOG_PATH}\`: ${QUEUE_HELP}. The \`${LABEL}\` label clears on the next run after the PR merges cleanly.`;
     case "report-only":
@@ -123,6 +125,30 @@ export function commentBody({ outcome, files = [], sha = "", queued = false, res
     default:
       throw new Error(`unknown outcome ${outcome}`);
   }
+}
+
+/** Whether the doctor must ask Mergify to queue a PR again after its push:
+ * a push cancels a pending `@Mergifyio queue` request, whoever pushes. Only
+ * the label marks a PR the merge queue should take (an armed auto-merge is
+ * not a queue request). */
+export function needsRequeue(pr, outcome) {
+  return outcome === "repaired" && (pr.labels ?? []).some((item) => item.name === QUEUE_LABEL);
+}
+
+/** Comment QUEUE_COMMENT once GitHub reports `sha` as the PR's head, polling
+ * every `stepMs` for at most `limitMs`: a comment Mergify reads before the
+ * push lands is cancelled by it. Past the limit it comments anyway (as the
+ * remote-worker driver's contract_requeue_after_push does): a late request
+ * beats none. A failed read counts as not yet. */
+export function requeueAfterPush({ sha, headOf, comment, wait, limitMs = 60000, stepMs = 5000 }) {
+  let seen = null;
+  for (let waited = 0; ; waited += stepMs) {
+    try { seen = headOf(); } catch { seen = null; }
+    if (seen === sha || waited >= limitMs) break;
+    wait(stepMs);
+  }
+  comment(QUEUE_COMMENT);
+  return { settled: seen === sha, seen };
 }
 
 // --- I/O ----------------------------------------------------------------------
@@ -324,9 +350,22 @@ function main() {
         }
         outcome = "repaired";
       }
-      const body = commentBody({ outcome, files: result.files, sha: result.sha, queued, resolvable: result.ok });
+      const requeued = needsRequeue(pr, outcome);
+      const body = commentBody({ outcome, files: result.files, sha: result.sha, queued, resolvable: result.ok, requeued });
       report(repo, pr, body, { dryRun, label: outcome !== "repaired" });
-      rows.push([pr.number, outcome + (outcome === "report-only" && result.ok ? " (resolvable)" : ""), result.files.join(", ")]);
+      let note = "";
+      if (requeued) {
+        const sha = git(["rev-parse", "HEAD"]).stdout.trim();
+        const { settled, seen } = requeueAfterPush({
+          sha,
+          headOf: () => JSON.parse(gh(["api", `repos/${repo}/pulls/${pr.number}`]).stdout).head.sha,
+          comment: (text) => gh(["api", "-X", "POST", `repos/${repo}/issues/${pr.number}/comments`, "-f", `body=${text}`]),
+          wait: sleep,
+        });
+        if (!settled) console.log(`::warning title=PR doctor #${pr.number}::GitHub still showed ${seen ?? "no head"}, not ${sha.slice(0, 12)}, after 60s; requeued anyway`);
+        note = " (requeued)";
+      }
+      rows.push([pr.number, outcome + note + (outcome === "report-only" && result.ok ? " (resolvable)" : ""), result.files.join(", ")]);
     } catch (error) {
       console.log(`::warning title=PR doctor #${pr.number}::${String(error.message).split("\n")[0]}`);
       rows.push([pr.number, "error", String(error.message).split("\n")[0]]);
