@@ -1788,3 +1788,21 @@ configuration tests and four capture-site module tests pass, alongside host
 Clippy and the fast static gates. Independent diff review found no P1/P2 issues.
 New leading adapters and expansion without a reorder remain a separate review
 item, brwr-98mo. Re-learn apply remains blocked on its documented open decisions.
+
+
+## 2026-11-09 — Preserve page identity when capture rules grow
+
+Settings now protects recorded pages when a new adapter is placed ahead of an
+existing one, or an earlier adapter gains matching rules. Previously both saves
+could silently give a page another artifact key while retaining every existing
+adapter and its order. The host now compares each leading candidate with the
+rules that already preceded the protected adapter, requiring a complete matching
+prefix; new suffix rules pass only when they cannot overlap those routes. The
+same check covers case and scope changes and a Splunk app widened over dashboards.
+Refusals keep the exact config file, revision and active policy intact and explain
+which adapters compete. Disjoint additions, existing overlaps, safe appended rules
+and established declared-child/container workflows remain usable. Six new tests
+pass with all 149 configuration tests. The seeded save model now changes real URL
+coverage and checks both order and history guards, catching the widening scenario
+that its earlier presentation-only edits could not exercise. Re-learn apply still
+awaits its documented recovery and downgrade decisions.

@@ -2329,7 +2329,7 @@ fn continues(before: &[PairMember<'_>], after: &[PairMember<'_>]) -> Vec<Option<
     paired
 }
 
-/// The one invariant for catalog `container_first` pairs (container type C,
+/// The order invariant for catalog `container_first` pairs (container type C,
 /// contained type D; Splunk apps and dashboards), per origin, between the
 /// adapter list `before` a save and `after` it. Whichever of a C and a D
 /// adapter comes first records the pages both match, so a save may not
@@ -2342,9 +2342,9 @@ fn continues(before: &[PairMember<'_>], after: &[PairMember<'_>]) -> Vec<Option<
 /// 4. When neither type was live before, every C adapter sits above every D
 ///    adapter (the shipped order).
 ///
-/// Everything else is allowed: other adapters, rule edits (paired with what
-/// they edit by type and `id`) that keep their place, and removals, which
-/// the history guard (`refuse_rekeyed_routes`) checks.
+/// This is an order check only. The history guard checks recognition edits,
+/// including widening a preceding adapter, and removals. Together they prevent
+/// changes to the winning identity of recorded routes.
 pub(crate) fn container_first_violation(
     before: &[serde_json::Value],
     after: &[serde_json::Value],
@@ -3356,8 +3356,10 @@ fn validate_adapter_transition_with_history(
     Ok(())
 }
 
-/// Preserve first-match precedence between existing differently keyed
-/// adapters. Contract membership alone cannot detect a live-rule reversal.
+/// An ordinary save must not hand a still-live contract's recorded routes to
+/// another identity, apart from established declared-child additions/narrowing.
+/// Check every preceding next contract, including insertions and recognition
+/// edits, against the recognition that preceded it before.
 fn validate_adapter_precedence(
     current: &[serde_json::Value],
     next: &[serde_json::Value],
@@ -3402,9 +3404,8 @@ fn validate_adapter_precedence(
         else {
             continue;
         };
-        for candidate_at in positions.iter().skip(old_at + 1).flatten().copied() {
-            let candidate = &next[candidate_at];
-            if candidate_at >= previous_at || same_identity(previous, candidate) {
+        for candidate in &next[..previous_at] {
+            if same_identity(previous, candidate) {
                 continue;
             }
             let (Some((origin, previous_id)), Some((candidate_origin, candidate_id))) = (
@@ -3413,16 +3414,93 @@ fn validate_adapter_precedence(
             ) else {
                 continue;
             };
-            if origin == candidate_origin && adapter_contracts_overlap(previous, candidate)? {
+            if origin != candidate_origin {
+                continue;
+            }
+            // Preserve the established allowance for adding/narrowing a
+            // declared child ahead of its container. It does not authorize
+            // reversing a pair that was already live in the other order,
+            // or expanding a container ahead of a child.
+            if declared_container(candidate)
+                == Some((
+                    adapter_contract_type(previous).unwrap_or_default(),
+                    previous_id,
+                ))
+                && !current[old_at + 1..]
+                    .iter()
+                    .any(|old| same_identity(old, candidate))
+                && (!current.iter().any(|old| same_identity(old, candidate))
+                    || current[..old_at]
+                        .iter()
+                        .any(|old| narrows_scoped_recognition(old, candidate)))
+            {
+                continue;
+            }
+            let mut already_preceded = false;
+            for earlier in &current[..old_at] {
+                if preserves_preceding_recognition(earlier, candidate, previous)? {
+                    already_preceded = true;
+                    break;
+                }
+            }
+            if !already_preceded && adapter_contracts_overlap(previous, candidate)? {
                 let previous_type = adapter_contract_type(previous).unwrap_or_default();
                 let candidate_type = adapter_contract_type(candidate).unwrap_or_default();
                 bail!(
-                    "the order of adapters on {origin:?} cannot change until artifact migrations are available: moving {candidate_type:?} ({candidate_id:?}) ahead of {previous_type:?} ({previous_id:?}) may change recorded artifact keys. Keep their earlier order in settings."
+                    "adapter order or recognition on {origin:?} cannot change until artifact migrations are available: placing or expanding {candidate_type:?} ({candidate_id:?}) ahead of {previous_type:?} ({previous_id:?}) may change recorded artifact keys. Keep their earlier order and recognition, or add the new rules below the recorded adapter in settings."
                 );
             }
         }
     }
     Ok(())
+}
+
+/// The declared-child allowance may narrow an existing rule prefix or scope,
+/// but cannot expand it over direct container routes. No general inclusion
+/// proof: every old scope constraint must remain with a subset of its values.
+fn narrows_scoped_recognition(earlier: &serde_json::Value, candidate: &serde_json::Value) -> bool {
+    if preserves_recognition(candidate, earlier) {
+        return true;
+    }
+    let (Some(old_scope), Some(new_scope)) =
+        (earlier["scope"].as_object(), candidate["scope"].as_object())
+    else {
+        return false;
+    };
+    if !old_scope.iter().all(|(key, old)| {
+        let (Some(old), Some(new)) = (
+            old.as_array(),
+            new_scope.get(key).and_then(|v| v.as_array()),
+        ) else {
+            return false;
+        };
+        new.iter().all(|value| old.contains(value))
+    }) {
+        return false;
+    }
+    let mut scoped = candidate.clone();
+    scoped["scope"] = earlier["scope"].clone();
+    preserves_recognition(&scoped, earlier)
+}
+
+/// Sufficient proof that a preceding candidate cannot newly claim the
+/// protected routes. Complete rule prefixes retain first-match captures and
+/// every matching setting; membership of individual rules would not prove it.
+fn preserves_preceding_recognition(
+    earlier: &serde_json::Value,
+    candidate: &serde_json::Value,
+    protected: &serde_json::Value,
+) -> Result<bool> {
+    if preserves_recognition(candidate, earlier) {
+        return Ok(true);
+    }
+    if !preserves_recognition(earlier, candidate) {
+        return Ok(false);
+    }
+    // Appending rules is safe only where the new suffix cannot intersect
+    // this protected contract. Never infer inclusion from sampled URLs.
+    let old_len = earlier["match"].as_array().expect("valid contract").len();
+    Ok(!adapter_rules_overlap(protected, candidate, old_len)?)
 }
 
 /// Refuse `candidate` when it overlaps a contract in `earlier` on its origin
@@ -3685,6 +3763,14 @@ fn adapter_contracts_overlap(
     previous: &serde_json::Value,
     candidate: &serde_json::Value,
 ) -> Result<bool> {
+    adapter_rules_overlap(previous, candidate, 0)
+}
+
+fn adapter_rules_overlap(
+    previous: &serde_json::Value,
+    candidate: &serde_json::Value,
+    first_candidate_rule: usize,
+) -> Result<bool> {
     let config = ConfigSnapshot {
         adapters: AdapterDocument {
             format: 1,
@@ -3694,7 +3780,13 @@ fn adapter_contracts_overlap(
     };
     // Every shared URL counts here, declared container fall-throughs included:
     // the history guard has its own, narrower container allowance.
-    Ok(!compile_adapters(&config)?.overlapping_rules().is_empty())
+    // Compile complete adapters: a suffix alone may not produce all scope
+    // values supported by the prefix, even though the full adapter is valid.
+    let document = compile_adapters(&config)?;
+    Ok((0..document.adapters()[0].rule_count()).any(|old_rule| {
+        (first_candidate_rule..document.adapters()[1].rule_count())
+            .any(|new_rule| document.may_overlap((0, old_rule), (1, new_rule)))
+    }))
 }
 
 fn updated_adapter_history(
@@ -4127,6 +4219,25 @@ mod tests {
         }
 
         #[test]
+        fn widening_a_splunk_app_cannot_take_recorded_dashboard_pages() {
+            let [app, dashboard] = splunk();
+            for edit in ["append", "replace"] {
+                let mut widened = app.clone();
+                let rule = json!({"path":"/{_}/app/{app:name}/{*}"});
+                if edit == "append" {
+                    widened["match"].as_array_mut().unwrap().push(rule);
+                } else {
+                    widened["match"] = json!([rule]);
+                }
+                assert_live_handoff_refused(
+                    vec![app.clone(), dashboard.clone()],
+                    vec![widened, dashboard.clone()],
+                    "https://acme.splunkcloud.com/en-US/app/search/operations",
+                );
+            }
+        }
+
+        #[test]
         fn a_removed_container_first_starter_is_refused_restore_but_may_be_re_added() {
             let origin = "https://acme.splunkcloud.com";
             let folder = tempfile::tempdir().unwrap();
@@ -4360,38 +4471,49 @@ mod tests {
         const MODEL_STEPS: usize = 12;
         const MODEL_URLS: usize = 6;
 
-        /// A model adapter: which of the shared URLs (pages both the app and
-        /// the dashboard type may match) it matches, keyed by its identity,
-        /// and a rule variant that an edit toggles without changing them.
+        /// Exact URL rules give the model and real overlap checker the same
+        /// coverage. Variant 1 changes coverage, not just presentation.
         fn model_adapter(
             kind: &str,
             ident: usize,
             variant: usize,
             origin: &str,
         ) -> serde_json::Value {
-            json!({
-                "type": kind, "origin": origin, "id": format!("{kind}:{{host}}/{ident}"),
-                "match": [{"path": format!("/m{ident}/v{variant}")}],
-            })
-        }
-
-        fn coverage(adapter: &serde_json::Value) -> Vec<usize> {
-            let kind = adapter["type"].as_str().unwrap();
-            let ident: usize = adapter["id"]
-                .as_str()
-                .unwrap()
-                .rsplit('/')
-                .next()
-                .unwrap()
-                .parse()
-                .unwrap();
-            match (kind, ident) {
+            let mut urls: Vec<usize> = match (kind, ident) {
                 ("splunk.app", 0) | ("splunk.dashboard", 0) => (0..MODEL_URLS).collect(),
                 ("splunk.app", 1) => vec![0, 1, 2],
                 ("splunk.app", _) => vec![3, 4],
                 ("splunk.dashboard", _) => vec![1, 3, 5],
-                _ => Vec::new(),
+                _ => vec![MODEL_URLS],
+            };
+            if variant == 1 {
+                if urls.len() == MODEL_URLS {
+                    urls.pop();
+                } else if let Some(extra) = (0..MODEL_URLS).find(|url| !urls.contains(url)) {
+                    urls.push(extra);
+                }
             }
+            json!({
+                "type": kind, "origin": origin, "id": format!("{kind}:{{host}}/{ident}"),
+                "match": urls.iter().map(|url| json!({"path":format!("/m{url}")})).collect::<Vec<_>>(),
+            })
+        }
+
+        fn coverage(adapter: &serde_json::Value) -> Vec<usize> {
+            adapter["match"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|rule| {
+                    rule["path"]
+                        .as_str()
+                        .unwrap()
+                        .strip_prefix("/m")
+                        .unwrap()
+                        .parse()
+                        .unwrap()
+                })
+                .collect()
         }
 
         /// Who records `url` on ACME under `adapters`, by first match:
@@ -4413,15 +4535,15 @@ mod tests {
             (text("type"), text("origin"), text("id"))
         }
 
-        /// Randomized check of `container_first_violation`: random save
+        /// Randomized check of the order and history guards together: save
         /// sequences (add, remove, move, edit or revert, unrelated adapters,
         /// and arbitrary whole-list saves), from [], [D], [C, D] and [D, C].
         /// Every save it accepts must leave each shared URL recorded before
-        /// it with the same winning type, unless the adapter that recorded
-        /// it was removed; and it must accept saves of every kind, so it
+        /// it with the same winning identity if still recognized, unless the
+        /// adapter that recorded it was removed; it must accept every kind, so it
         /// cannot pass by refusing everything.
         #[test]
-        fn container_first_violation_never_moves_a_recorded_page() {
+        fn container_order_and_history_guards_preserve_recorded_winners() {
             let pairs = vec![crate::capture_site::ContainerFirstPair {
                 container: "splunk.app".into(),
                 contained: "splunk.dashboard".into(),
@@ -4434,6 +4556,8 @@ mod tests {
             const KINDS: [&str; 6] = ["add", "remove", "move", "edit", "unrelated", "whole list"];
             let mut accepted = [0usize; KINDS.len()];
             let mut refused = 0usize;
+            let mut accepted_coverage_edits = [0usize; 2];
+            let mut refused_coverage_edits = 0usize;
             let mut rng = Rng(MODEL_SEED);
             for sequence in 0..MODEL_SEQUENCES {
                 let mut list = starts[sequence % starts.len()].clone();
@@ -4469,13 +4593,22 @@ mod tests {
                         }
                         3 if !next.is_empty() => {
                             let at = rng.below(next.len());
-                            let path = next[at]["match"][0]["path"].as_str().unwrap().to_owned();
-                            let toggled = if path.ends_with("/v0") {
-                                path.replace("/v0", "/v1")
+                            let ident = next[at]["id"]
+                                .as_str()
+                                .unwrap()
+                                .rsplit('/')
+                                .next()
+                                .unwrap()
+                                .parse()
+                                .unwrap();
+                            let kind = next[at]["type"].as_str().unwrap();
+                            let origin = next[at]["origin"].as_str().unwrap();
+                            let original = model_adapter(kind, ident, 0, origin);
+                            next[at] = if next[at] == original {
+                                model_adapter(kind, ident, 1, origin)
                             } else {
-                                path.replace("/v1", "/v0")
+                                original
                             };
-                            next[at]["match"][0]["path"] = json!(toggled);
                         }
                         4 => {
                             let unrelated = if rng.below(2) == 0 {
@@ -4522,8 +4655,23 @@ mod tests {
                     if next == list {
                         continue;
                     }
-                    if container_first_violation(&list, &next, &pairs).is_some() {
+                    let edit_direction = (kind == 3).then(|| {
+                        usize::from(
+                            next.iter().map(|a| coverage(a).len()).sum::<usize>()
+                                > list.iter().map(|a| coverage(a).len()).sum::<usize>(),
+                        )
+                    });
+                    if container_first_violation(&list, &next, &pairs).is_some()
+                        || validate_adapter_transition(
+                            &adapter_config(list.clone()),
+                            &adapter_config(next.clone()),
+                        )
+                        .is_err()
+                    {
                         refused += 1;
+                        if edit_direction.is_some() {
+                            refused_coverage_edits += 1;
+                        }
                         continue;
                     }
                     for url in 0..MODEL_URLS {
@@ -4538,14 +4686,19 @@ mod tests {
                         if !survives {
                             continue;
                         }
-                        let after = winner(&next, url).map(|(kind, _)| kind);
+                        let Some(after) = winner(&next, url) else {
+                            continue; // Narrowing may stop recognizing a URL.
+                        };
                         assert_eq!(
-                            after.as_deref(),
-                            Some(kind_before.as_str()),
+                            after,
+                            (kind_before, id_before),
                             "seed {MODEL_SEED:#x}, sequence {sequence}: url {url} moved\nbefore {list:?}\nafter {next:?}"
                         );
                     }
                     accepted[kind] += 1;
+                    if let Some(direction) = edit_direction {
+                        accepted_coverage_edits[direction] += 1;
+                    }
                     list = next;
                 }
             }
@@ -4553,6 +4706,14 @@ mod tests {
                 assert!(count > 0, "no accepted {kind} save");
             }
             assert!(refused > 0, "the invariant refused nothing");
+            assert!(
+                accepted_coverage_edits.iter().all(|count| *count > 0),
+                "must accept safe narrowing and widening"
+            );
+            assert!(
+                refused_coverage_edits > 0,
+                "must exercise unsafe coverage edits"
+            );
         }
 
         /// So a recorded dashboard never holds the app's pages, and the app
@@ -6331,6 +6492,259 @@ mod tests {
         let reordered = adapter_config(vec![second, first]);
         validate(&reordered).unwrap();
         validate_adapter_transition(&current, &reordered).unwrap();
+    }
+
+    #[test]
+    fn inserting_or_expanding_an_earlier_adapter_cannot_take_live_routes() {
+        let retained = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        let newcomer = adapter(
+            "https://work.example",
+            "work.page",
+            "/docs/{id:int}",
+            "page:{host}/{id}",
+        );
+        for edit in ["insert", "append", "prepend", "rewrite", "path-case"] {
+            let mut old_leader = newcomer.clone();
+            let mut new_leader = newcomer.clone();
+            match edit {
+                "insert" | "rewrite" => new_leader["match"][0]["path"] = json!("/items/{id:int}"),
+                "append" => new_leader["match"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"path":"/items/{id:int}"})),
+                "prepend" => new_leader["match"]
+                    .as_array_mut()
+                    .unwrap()
+                    .insert(0, json!({"path":"/items/{id:int}"})),
+                "path-case" => {
+                    old_leader["match"][0]["path"] = json!("/ITEMS/{id:int}");
+                    old_leader["path_case"] = json!("sensitive");
+                    new_leader = old_leader.clone();
+                    new_leader["path_case"] = json!("insensitive");
+                }
+                _ => unreachable!(),
+            }
+            let before = if edit == "insert" {
+                vec![retained.clone()]
+            } else {
+                vec![old_leader, retained.clone()]
+            };
+            assert_live_handoff_refused(
+                before,
+                vec![new_leader, retained.clone()],
+                "https://work.example/items/42",
+            );
+        }
+    }
+
+    fn assert_live_handoff_refused(
+        before: Vec<serde_json::Value>,
+        after: Vec<serde_json::Value>,
+        url: &str,
+    ) {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let revision = store
+            .update(adapter_config(before), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let next = adapter_config(after);
+        let old_key = store
+            .adapter_document()
+            .unwrap()
+            .evaluate(url, None)
+            .unwrap();
+        let new_key = compile_adapters(&next)
+            .unwrap()
+            .evaluate(url, None)
+            .unwrap();
+        assert_ne!(
+            (&old_key.artifact_type, &old_key.artifact_id),
+            (&new_key.artifact_type, &new_key.artifact_id)
+        );
+        let error = store.update(next, &revision).unwrap_err().to_string();
+        assert!(error.contains("artifact migrations"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(store.revision(), revision);
+        assert_eq!(
+            store
+                .adapter_document()
+                .unwrap()
+                .evaluate(url, None)
+                .unwrap()
+                .artifact_id,
+            old_key.artifact_id
+        );
+    }
+
+    #[test]
+    fn expanding_a_leading_container_cannot_take_its_live_children() {
+        let app = adapter(
+            "https://work.example",
+            "work.app",
+            "/apps/{id:int}",
+            "app:{host}/{id}",
+        );
+        let mut child = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        child["within"] = json!({"type":"work.app", "id":"app:{host}/{id}"});
+        let mut expanded = app.clone();
+        expanded["match"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":"/items/{id:int}"}));
+        assert_live_handoff_refused(
+            vec![app, child.clone()],
+            vec![expanded, child],
+            "https://work.example/items/42",
+        );
+    }
+
+    #[test]
+    fn expanding_a_leading_child_cannot_take_container_direct_routes() {
+        let app = adapter(
+            "https://work.example",
+            "work.app",
+            "/apps/{id:int}",
+            "app:{host}/{id}",
+        );
+        let mut child = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        child["within"] = json!({"type":"work.app", "id":"app:{host}/{id}"});
+        let mut expanded = child.clone();
+        expanded["match"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":"/apps/{id:int}"}));
+        assert_live_handoff_refused(
+            vec![child, app.clone()],
+            vec![expanded, app],
+            "https://work.example/apps/42",
+        );
+    }
+
+    #[test]
+    fn scope_changes_above_a_live_adapter_need_recognition_review() {
+        let mut leading = github_pr_adapter(&["a"]);
+        let mut later = github_pr_adapter(&["a", "b"]);
+        later["type"] = json!("work.item");
+        later["id"] = json!("item:{host}/{owner}/{repo}/{number}");
+        let old = vec![leading.clone(), later.clone()];
+        leading["scope"] = json!({"owner":["a", "b"]});
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let revision = store
+            .update(adapter_config(old), MISSING_REVISION)
+            .unwrap()
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+        // Scope stops at the first matching adapter rather than falling
+        // through. The overlap proof does not attempt scope inclusion.
+        let error = store
+            .update(adapter_config(vec![leading, later]), &revision)
+            .unwrap_err();
+        assert!(error.to_string().contains("artifact migrations"));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(store.revision(), revision);
+    }
+
+    #[test]
+    fn safe_leading_additions_and_disjoint_growth_remain_usable() {
+        let first = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        let later = adapter(
+            "https://work.example",
+            "work.page",
+            "/items/{id:int}",
+            "page:{host}/{id}",
+        );
+        let docs = adapter(
+            "https://work.example",
+            "work.doc",
+            "/docs/{id:int}",
+            "doc:{host}/{id}",
+        );
+        for (before, after) in [
+            (vec![first.clone()], vec![first.clone(), later.clone()]),
+            (vec![first.clone()], vec![docs, first.clone()]),
+            (vec![first.clone()], vec![first.clone(), first.clone()]),
+            (vec![first.clone(), later.clone()], {
+                let mut grown = first.clone();
+                grown["match"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"path":"/docs/{id:int}"}));
+                vec![grown, later]
+            }),
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = ConfigStore::for_test(folder.path().join("config.toml"));
+            let revision = store
+                .update(adapter_config(before), MISSING_REVISION)
+                .unwrap()
+                .unwrap();
+            store
+                .update(adapter_config(after), &revision)
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn disjoint_growth_keeps_scope_values_supported_by_the_existing_prefix() {
+        let mut leading = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}/{mode:(view)}",
+            "item:{host}/{id}",
+        );
+        leading["modes"] = json!({"view":"view", "files":"review"});
+        leading["scope"] = json!({"mode":["view"]});
+        let later = adapter(
+            "https://work.example",
+            "work.page",
+            "/items/{id:int}/{_}",
+            "page:{host}/{id}",
+        );
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = ConfigStore::for_test(folder.path().join("config.toml"));
+        let revision = store
+            .update(
+                adapter_config(vec![leading.clone(), later.clone()]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        leading["match"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":"/docs/{id:int}/{mode:(files)}"}));
+        let next = adapter_config(vec![leading, later]);
+        validate(&next).unwrap();
+        let url = "https://work.example/items/42/view";
+        let old_key = store.adapter_match(url, None).unwrap().artifact_id;
+        store.update(next, &revision).unwrap().unwrap();
+        assert_eq!(store.adapter_match(url, None).unwrap().artifact_id, old_key);
     }
 
     #[test]
