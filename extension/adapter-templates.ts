@@ -516,7 +516,7 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
       const bad = length === 0 || length > MAX_GENERIC_TITLE_CHARS || trimWhiteSpace(entry) !== entry
         || Array.from(entry).some((char) => {
           const code = char.codePointAt(0) ?? 0;
-          return code === 0x7b || code === 0x7d || code < 0x20 || code === 0x7f;
+          return code === 0x7b || code === 0x7d || code < 0x20 || (code >= 0x7f && code <= 0x9f);
         });
       if (bad) fail("bad_generic_title", null, e);
       genericTitles.push(asciiLower(entry));

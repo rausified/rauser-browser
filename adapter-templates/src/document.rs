@@ -898,7 +898,7 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
 }
 
 /// §9.4: a list of 1 to 16 plain titles. Each is 1 to 128 scalar values with
-/// no surrounding white space, no control character, and no brace, which is
+/// no surrounding white space, no control character (C0, DEL or C1), and no brace, which is
 /// reserved so a later format can add patterns without changing a valid list.
 fn validate_generic_titles(g: &Value, at: At) -> VResult<Vec<String>> {
     let list = g.as_array().ok_or(at.err(ErrorCode::WrongType))?;
@@ -919,7 +919,7 @@ fn validate_generic_titles(g: &Value, at: At) -> VResult<Vec<String>> {
                 || text.trim_matches(char::is_whitespace) != text
                 || text
                     .chars()
-                    .any(|c| matches!(c, '{' | '}' | '\0'..='\x1f' | '\x7f'));
+                    .any(|c| matches!(c, '{' | '}' | '\0'..='\x1f' | '\x7f'..='\u{9f}'));
             if bad {
                 return Err(at.err(ErrorCode::BadGenericTitle));
             }

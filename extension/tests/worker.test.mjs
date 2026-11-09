@@ -1493,6 +1493,65 @@ test("worker-start map rebuild settles activity restored from storage.session", 
   assert.equal(sessionValues.get(storageKey("activity_session_v1")).measured_at, now);
 });
 
+test("a tab restored on a gate page never records the gate's generic title", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://gate.example";
+  const start = new Date("2026-10-16T10:15:00Z").getTime();
+  const hour = (at) => `${localTimestamp(new Date(at)).slice(0, 13)}:00:00${localTimestamp(new Date(at)).slice(19)}`;
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin), expires_at: start + 7_200_000 * 4,
+    adapters: { format: 1, artifacts: [artifact(origin, { title: "{title} - Acme", generic_titles: ["Sign in"] })] },
+  });
+  values.set(storageKey("activity_totals_v1"), {
+    version: 1,
+    totals: [{
+      event_id: "00000000-0000-4000-8000-000000000011",
+      artifact_id: "test:gate.example/a", artifact_type: "test.item", hour_start: hour(start),
+      url: `${origin}/items/a`, title: "Plan",
+      opens: 1, focused_ms: 0, background_ms: 0, modes: [], trails: [], refs: [],
+    }],
+  });
+  // A browser restart: the session map is gone and the tab sits on a gate.
+  tabs.set(30, {
+    id: 30, windowId: 1, active: true, status: "complete",
+    url: `${origin}/items/a`, title: "Sign in - Acme", incognito: false,
+  });
+  const realNow = Date.now;
+  const titles = () => [
+    ...values.get(storageKey("activity_totals_v1")).totals.map((total) => total.title),
+    ...(values.get(storageKey("queue_v1"))?.items ?? []).map((item) => item.event.title),
+  ];
+  try {
+    Date.now = () => start;
+    await rebuildActivityMap();
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan",
+      "the restored tab takes the artifact's latest recorded title, not the gate's");
+
+    // The hour boundary falls inside the gate period: the new hour is seeded
+    // from the tab, and nothing records the gate title.
+    Date.now = () => start + 3_600_000;
+    await send({ kind: "get_activity" });
+    assert.ok(titles().every((title) => title === "Plan"), JSON.stringify(titles()));
+
+    // good → generic → good across a second restart keeps the good name.
+    Date.now = () => start + 3_700_000;
+    onTabUpdated(30, { title: "Plan v2 - Acme" }, { id: 30, url: `${origin}/items/a`, incognito: false });
+    await flush();
+    sessionValues.clear();
+    tabs.get(30).title = "Sign in - Acme";
+    await rebuildActivityMap();
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan v2");
+    Date.now = () => start + 7_200_000;
+    await send({ kind: "get_activity" });
+    assert.ok(titles().every((title) => title === "Plan" || title === "Plan v2"), JSON.stringify(titles()));
+    assert.ok(titles().includes("Plan v2"), JSON.stringify(titles()));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("a successful ack clears retry state but keeps notices until dismissed", async () => {
   values.clear();
   sessionValues.clear();

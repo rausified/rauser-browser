@@ -323,7 +323,7 @@ function genRule(r, captures, scoped, modeAlts) {
 }
 
 const GENERIC_POOL = ["Plan", "PLAN", "plan", "A - B", "é", "É", "Loading…", "Sign in", "PROJ-12", "fix #42", "x", "·"];
-const GENERIC_INVALID = ["", " Plan", "Plan\t", "{x}", "a}", "a\u0007b", "a\u007fb", "é".repeat(129)];
+const GENERIC_INVALID = ["", " Plan", "Plan\t", "{x}", "a}", "a\u0007b", "a\u007fb", "a\u0080b", "a\u009fb", "a\u00a0b", "é".repeat(129)];
 
 const PREFIX_DELIMS = ["] ", " - ", " · ", ": ", " | ", "#", " (", ") ", " — ", "😀 "];
 const TITLE_LITERALS = [" - Jira", " - Google Docs", " · GitHub", "[", "(", " - Mail", "Tracker", " — ", "é"];

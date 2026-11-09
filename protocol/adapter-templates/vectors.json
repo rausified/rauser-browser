@@ -28274,6 +28274,50 @@
       "doc": {"$fixture": "starters"},
       "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
       "title": "Miro - Miro"
+    },
+    {
+      "id": "eval.generic_title.non_ascii_case_not_folded",
+      "kind": "evaluate",
+      "why": "§9.4: only ASCII case is folded, so CAFÉ is not café",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": "CAFÉ", "title_entry": 0, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Café"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "CAFÉ - Acme"
+    },
+    {
+      "id": "eval.generic_title.ascii_part_folded",
+      "kind": "evaluate",
+      "why": "§9.4: the ASCII letters of a non-ASCII entry fold",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Café"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "CAFé - Acme"
+    },
+    {
+      "id": "validate.generic_titles.c1_control",
+      "kind": "validate",
+      "why": "§9.4: C1 controls are control characters",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["ab"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.c1_control_end",
+      "kind": "validate",
+      "why": "§9.4: U+009F is the last C1 control",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["ab"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.nbsp_inside",
+      "kind": "validate",
+      "why": "§9.4: U+00A0 inside an entry is allowed",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["a b"]}]},
+      "expect": {"ok": true}
     }
   ]
 }

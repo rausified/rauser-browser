@@ -1800,12 +1800,19 @@ export async function rebuildActivityMap(): Promise<void> {
     const url = frame?.url;
     const match = url ? matchingArtifact(lease, url) : null;
     if (!url || !match) continue;
+    // Only keep tab metadata after recognizing the live top-frame URL,
+    // and only if the tab snapshot still names the same page.
+    let title = tab.status === "complete" && tab.url && withoutHash(tab.url) === withoutHash(url)
+      ? tab.title?.slice(0, MAX_TITLE_CHARS) ?? null : null;
+    // A tab restored on a sign-in, password or loading page has a generic
+    // title (adapter-templates.md §9.4): it never seeds an hour. The latest
+    // hour recorded for the artifact names it instead.
+    if (title !== null && matchingArtifact(lease, url, title)?.title === null) {
+      title = [...activity.totals].reverse().find((total) =>
+        total.artifact_id === match.artifact_id && total.title !== null)?.title ?? null;
+    }
     activity.tabs[String(tab.id)] = {
-      artifact_id: match.artifact_id, artifact_type: match.type, url,
-      // Only keep tab metadata after recognizing the live top-frame URL,
-      // and only if the tab snapshot still names the same page.
-      title: tab.status === "complete" && tab.url && withoutHash(tab.url) === withoutHash(url)
-        ? tab.title?.slice(0, MAX_TITLE_CHARS) ?? null : null,
+      artifact_id: match.artifact_id, artifact_type: match.type, url, title,
       mode: match.mode, window_id: tab.windowId ?? -1,
     };
     if (tab.active) activity.active_by_window[String(tab.windowId ?? -1)] = tab.id;

@@ -341,7 +341,7 @@ The first failing check is reported.
         6. `title_type_mismatch`: the type name must match. Title bounds are optional, but if present they must equal the path capture's effective bounds (SQ26). A `uuid` title capture takes no bounds at all. A capture named `mode` refers to an alternation, which no title type matches (SQ-V23).
         7. `title_capture_swallows`
       - Title captures take no modifiers, alternations, or `@tail`. Any of those gives `title_syntax`.
-      - Then **`generic_titles`** (§9.4): a value that is not a list gives `wrong_type`, then `empty_generic_titles` and `too_many_generic_titles` (more than 16, before any entry is checked). For each entry, which sets `entry`: `wrong_type`, then `bad_generic_title` for an entry that is empty, longer than 128 scalar values, has white space at either end, or contains `{`, `}`, or a control character (U+0000–U+001F, U+007F).
+      - Then **`generic_titles`** (§9.4): a value that is not a list gives `wrong_type`, then `empty_generic_titles` and `too_many_generic_titles` (more than 16, before any entry is checked). For each entry, which sets `entry`: `wrong_type`, then `bad_generic_title` for an entry that is empty, longer than 128 scalar values, has white space at either end, or contains `{`, `}`, or a control character (U+0000–U+001F, U+007F–U+009F).
    9. **`alias`:**
       1. `wrong_type`
       2. `bad_alias`: the shape is exactly `{from="tab_title", capture}` or `{from="meta", name (non-empty), value}`, and `value` is a single non-optional capture with nothing around it.

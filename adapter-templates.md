@@ -334,7 +334,7 @@ The title that is checked is the one §9.1 produces: the extracted `{title}` of 
 2. equals an entry of the adapter's `generic_titles`; or
 3. is the browser's placeholder for a page with no title: the URL's host, with any non-default port, optionally after `http://` or `https://`, alone or followed by `/`, `?` or `#`.
 
-`generic_titles` is optional: a list of 1 to 16 plain titles, each 1 to 128 scalar values with no surrounding white space, no control character, and no `{` or `}`. Braces are reserved, so a later format can add patterns without changing what a valid list means. An entry must equal the whole title: `Sign in` does not make `Sign in help` generic. Only ASCII case is folded, as everywhere in this format, so both engines compare the same way.
+`generic_titles` is optional: a list of 1 to 16 plain titles, each 1 to 128 scalar values with no surrounding white space, no control character (U+0000–U+001F or U+007F–U+009F), and no `{` or `}`. Braces are reserved, so a later format can add patterns without changing what a valid list means. An entry must equal the whole title: `Sign in` does not make `Sign in help` generic. Only ASCII case is folded, as everywhere in this format, so both engines compare the same way.
 
 Write an entry as the `{title}` part the adapter extracts, not the whole tab title: for a template `{title} - Webex`, the password gate `Recorded Meeting Password - Webex` is listed as `Recorded Meeting Password`. A page that matches no entry is compared whole, so list a bare app-shell title such as `Figma` as it is. Rules 1 and 3 need no list and apply to every adapter.
 
