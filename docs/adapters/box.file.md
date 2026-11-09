@@ -4,14 +4,20 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/box/`, researched blind: public sources only, no
 browsing history, cookies or a Box account.
 
-Brauser offers this draft on an enterprise's custom subdomain,
-`<company>.app.box.com` (the `box` family's strict subdomain origin,
-`exclude: ["www", "cloud"]`), alongside Box folders and Box shared links.
+Brauser offers this draft on every Box web-app host, through the `box`
+family's multi-origin `origin` (`kind: "any"`): personal Box,
+`https://app.box.com` (an exact origin); an enterprise's custom subdomain,
+`<company>.app.box.com`; and Box Zones' enterprise hosts,
+`<company>.ent.box.com`. Both subdomain members are strict (`labels: 1`,
+`exclude: ["www", "cloud", "fupload-*"]`; `fupload-*` skips the upload
+hosts `fupload-<n>.…`). Box folders and Box shared links are offered alongside.
 Any combination can be chosen in Capture Site and in the settings gallery.
 The draft records one artifact per file, Box Note or Box Canvas, however it
 was opened or edited:
 
-`box.file:<company>.app.box.com/<file ID>`
+`box.file:<host>/<file ID>`, for example
+`box.file:acme.app.box.com/111122223333` or
+`box.file:app.box.com/111122223333`
 
 The ID is Box's permanent file ID (API `files/<id>`, typed `f_<id>`); it
 survives renames and moves. Box's web-app bundle routes a file item to
@@ -111,27 +117,13 @@ so no ambiguity forces it to `false` here.
 
 ## Known limits
 
-- **This draft does not cover personal `https://app.box.com` or
-  `<company>.ent.box.com`**. The family's strict
-  `.app.box.com` subdomain origin claims only `<company>.app.box.com`
-  hosts; `familyClaims` never claims the suffix's own bare host, so a
-  personal Box account without a custom subdomain is not offered this
-  starter, and Box Zones' `*.ent.box.com` twins (observed serving shared
-  links, e.g. `acme.ent.box.com`) are a separate suffix this family does
-  not claim either. Covering all three needs either a permissive `.box.com`
-  family (ruled out because it would claim Box's product hosts) or a
-  multi-origin model, which needs engine code; it is listed in the D2 pull
-  request as a follow-up, with a bead to follow once the shared `bd`
-  database can create one.
-- **This starter is also offered, unintentionally, on Box's upload hosts,**
-  `fupload-<n>.app.box.com` (named in `docs/research/blind/box/
-  adapters.toml`): `origin.exclude` matches a whole first label exactly, and
-  cannot express a `fupload-*` prefix pattern, so the strict `.app.box.com`
-  family claims these hosts too. Those hosts serve file uploads, not the web
-  app's pages, so none of this type's rules is expected to match anything
-  there in practice; this is a known limit of the data, not a behavior
-  change. It is listed in the D2 pull request as a follow-up (an `exclude`
-  prefix-pattern form in the generator); bead to follow.
+- **The same file on two Box hosts is two artifacts.** The file ID is the
+  same on every host, but the frozen ID template carries `{host}`, so
+  `app.box.com/file/<id>` and `acme.app.box.com/file/<id>` record different
+  IDs. A custom-subdomain user is expected to stay on that subdomain (Live
+  check step 3).
+- **`<company>.box.com` is not offered.** Every probe redirected it to
+  `<company>.app.box.com`, which is offered.
 - **The enterprise-name loading title is recorded as the file's title.**
   While a page is untitled, an enterprise user's tab reads `{enterprise
   name} | Powered by Box` (predicted and confirmed by the

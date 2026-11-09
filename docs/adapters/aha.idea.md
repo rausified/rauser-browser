@@ -81,17 +81,12 @@ real visits happened to be an in-app idea.
 
 ## Known limits
 
-- **Portal ideas (`<portal>.ideas.aha.io`) are not covered by this draft.**
-  Aha!'s public ideas portals live on a second tenant subdomain,
-  `https://<portal>.ideas.aha.io` (or a customer CNAME such as
-  `ideas.example.com`, which no suffix rule can detect), and the same idea
-  gets a *different* reference-keyed ID there than it does in-app — the
-  portal page is a separate audience's view of the same idea, not a
-  duplicate to be merged. The generator's origin-collision check also
-  refuses a `.ideas.aha.io` suffix family alongside this family's `.aha.io`
-  suffix with `labels: 1`, so a `aha.portalidea` family needs its own
-  generator change (a follow-up, listed in the D3 pull request; bead to
-  follow) before the portal can be covered at all.
+- **Portal ideas are a separate type.** Aha!'s ideas portals live on a
+  second tenant subdomain, `https://<portal>.ideas.aha.io`, covered by the
+  `aha-ideas` family's `aha.portalidea` (`docs/adapters/aha.portalidea.md`).
+  The same idea gets a *different* ID there than it does in-app — the portal
+  page is a separate audience's view of the same idea, not a duplicate to be
+  merged.
 - **Every in-app title template is low confidence**, the same limit
   `aha.feature`'s page states in full.
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).
