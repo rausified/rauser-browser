@@ -986,7 +986,11 @@ fn dispatch(
                 end_date: value.end_date,
             },
             config,
-            WorklogMode::FocusChoices(value.expected_revision, value.focus_session_id),
+            WorklogMode::FocusChoices(
+                value.expected_revision,
+                value.focus_session_id,
+                value.sessions_page,
+            ),
         ),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         #[cfg(unix)]
@@ -3260,7 +3264,11 @@ enum WorklogMode {
     Text,
     Report,
     Choices(String, Option<brauser_protocol::WorklogChoicesPageRequest>),
-    FocusChoices(String, Option<String>),
+    FocusChoices(
+        String,
+        Option<String>,
+        Option<brauser_protocol::WorklogChoicesPageRequest>,
+    ),
 }
 
 fn worklog_response(
@@ -3306,7 +3314,7 @@ fn worklog_response(
             "worklog range must be one to seven inclusive local dates",
         );
     }
-    if let WorklogMode::Choices(_, Some(page)) = &mode
+    if let WorklogMode::Choices(_, Some(page)) | WorklogMode::FocusChoices(_, _, Some(page)) = &mode
         && !crate::index::valid_page_request(page)
     {
         return error(
@@ -3315,7 +3323,7 @@ fn worklog_response(
             "worklog page needs a valid snapshot for continuation",
         );
     }
-    if let WorklogMode::FocusChoices(_, Some(id)) = &mode
+    if let WorklogMode::FocusChoices(_, Some(id), _) = &mode
         && !uuid::Uuid::parse_str(id).is_ok_and(|uuid| {
             uuid.get_version_num() == 4
                 && uuid.get_variant() == uuid::Variant::RFC4122
@@ -3329,7 +3337,7 @@ fn worklog_response(
         );
     }
     if let WorklogMode::Choices(expected_revision, _)
-    | WorklogMode::FocusChoices(expected_revision, _) = &mode
+    | WorklogMode::FocusChoices(expected_revision, _, _) = &mode
     {
         if config.refresh().is_err() {
             return error(
@@ -3350,8 +3358,14 @@ fn worklog_response(
         Ok(index) => index,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
-    if let WorklogMode::FocusChoices(_, focus_session_id) = mode {
-        return match index.worklog_focus_choices(start, end, focus_session_id.as_deref()) {
+    if let WorklogMode::FocusChoices(_, focus_session_id, page) = mode {
+        let result = match &page {
+            Some(page) => {
+                index.worklog_focus_choices_page(start, end, focus_session_id.as_deref(), page)
+            }
+            None => index.worklog_focus_choices(start, end, focus_session_id.as_deref()),
+        };
+        return match result {
             Ok(result) => {
                 Response::WorklogFocusChoicesResult(brauser_protocol::WorklogFocusChoicesResult {
                     protocol_version: PROTOCOL_VERSION,
@@ -3361,6 +3375,7 @@ fn worklog_response(
                     focus_session_id,
                     sessions: result.sessions,
                     sessions_truncated: result.sessions_truncated,
+                    sessions_page: result.sessions_page,
                     selected_session: result.selected_session,
                     name_changed: result.name_changed,
                     choices: result.choices,
@@ -3369,6 +3384,11 @@ fn worklog_response(
                     gaps_truncated: result.gaps_truncated,
                 })
             }
+            Err(error_value) if error_value.is::<crate::index::StaleWorklogPage>() => error(
+                &value.request_id,
+                ErrorCode::Conflict,
+                "recorded sessions changed or this page is unavailable; reload sessions",
+            ),
             Err(_) => error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -10470,6 +10490,40 @@ id = "work:{host}/{id}"
             start_date: start.into(),
             end_date: end.into(),
         };
+        for page in [
+            brauser_protocol::WorklogChoicesPageRequest {
+                offset: 64,
+                snapshot: None,
+            },
+            brauser_protocol::WorklogChoicesPageRequest {
+                offset: 0,
+                snapshot: Some("x".repeat(64)),
+            },
+        ] {
+            let Response::Error(result) = worklog_response(
+                request("2026-11-01", "2026-11-07"),
+                &mut config,
+                WorklogMode::FocusChoices(revision.clone(), None, Some(page)),
+            ) else {
+                panic!("malformed continuation must refuse")
+            };
+            assert_eq!(result.code, ErrorCode::InvalidRequest);
+        }
+        let Response::Error(result) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::FocusChoices(
+                revision.clone(),
+                None,
+                Some(brauser_protocol::WorklogChoicesPageRequest {
+                    offset: 64,
+                    snapshot: Some("a".repeat(64)),
+                }),
+            ),
+        ) else {
+            panic!("unavailable continuation must refuse")
+        };
+        assert_eq!(result.code, ErrorCode::Conflict);
         for (start, end, id) in [
             ("2026-02-30", "2026-03-01", None),
             ("2026-11-02", "2026-11-01", None),
@@ -10484,7 +10538,7 @@ id = "work:{host}/{id}"
             let Response::Error(result) = worklog_response(
                 request(start, end),
                 &mut config,
-                WorklogMode::FocusChoices(revision.clone(), id.map(str::to_owned)),
+                WorklogMode::FocusChoices(revision.clone(), id.map(str::to_owned), None),
             ) else {
                 panic!("invalid scope must fail before loading history");
             };
@@ -10493,7 +10547,7 @@ id = "work:{host}/{id}"
         let Response::WorklogFocusChoicesResult(result) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::FocusChoices(revision.clone(), None),
+            WorklogMode::FocusChoices(revision.clone(), None, None),
         ) else {
             panic!("expected empty session catalog");
         };
@@ -10503,7 +10557,7 @@ id = "work:{host}/{id}"
         let Response::Error(stale) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::FocusChoices("stale".into(), None),
+            WorklogMode::FocusChoices("stale".into(), None, None),
         ) else {
             panic!("stale selection must refuse");
         };
@@ -10518,7 +10572,7 @@ id = "work:{host}/{id}"
         let Response::Error(changed) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::FocusChoices(revision, None),
+            WorklogMode::FocusChoices(revision, None, None),
         ) else {
             panic!("external settings change must refuse");
         };

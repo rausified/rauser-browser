@@ -194,6 +194,31 @@ test("sharing drafts survive reload and support explicit keyboard copy, comparis
   assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task" || r.type === "save_note")), false);
 });
 
+test("More sessions preserves checked work and returns keyboard focus to the catalog when exhausted", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => { fixture.focusPages = true; });
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  await page.locator('#worklog-choices input[type="checkbox"]').first().waitFor();
+  await page.locator("#worklog-share-scope").focus();
+  await selectByKeyboard(page, "#worklog-share-scope", "last");
+  await page.locator("#worklog-focus-session:enabled").waitFor();
+  await page.locator("#worklog-focus-session").focus();
+  await selectByKeyboard(page, "#worklog-focus-session", "last");
+  const choice = page.locator('#worklog-choices input[type="checkbox"]').first();
+  await choice.waitFor();
+  await activate(page, choice, "Space");
+  const preview = await page.locator("#worklog-text").textContent();
+  await activate(page, "#worklog-focus-more", "Enter");
+  await page.waitForFunction(() => document.querySelectorAll('#worklog-focus-session option').length === 3);
+  await focused(page, "#worklog-focus-session");
+  assert.equal(await choice.isChecked(), true);
+  assert.equal(await page.locator("#worklog-text").textContent(), preview);
+  assert.equal(await page.locator("#worklog-focus-session").inputValue(), "10000000-0000-4000-8000-000000000001");
+  await audit(t, page, "panel/share-session-pages");
+});
+
 test("sharing a recorded focus session is named, keyboard operable and copies the exact preview", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

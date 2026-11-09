@@ -951,6 +951,135 @@ function chooseFocus(page, id) {
   page.el("worklog-focus-session").dispatch("change");
 }
 
+const MANY_SESSIONS = [FOCUS_ONE, FOCUS_TWO, ...Array.from({ length: 128 }, (_, n) => ({
+  id: `10000000-0000-4000-8000-${String(n + 3).padStart(12, "0")}`, name: "Same name", revision: 1,
+}))];
+function pagedFocusReply(request, snapshot = "a".repeat(64)) {
+  const offset = request.sessions_page?.offset ?? 0;
+  const sessions = MANY_SESSIONS.slice(offset, offset + 64).map((s) => ({ ...s }));
+  const selected = MANY_SESSIONS.find((s) => s.id === request.focus_session_id) ?? null;
+  const next = offset + sessions.length < MANY_SESSIONS.length ? offset + sessions.length : null;
+  return focusChoicesReply(request, { sessions, sessions_truncated: next !== null,
+    sessions_page: { snapshot, offset, next_offset: next, omitted: false }, selected_session: selected,
+    choices: choicesReply(request, selected ? [selected.id] : []).choices, name_changed: false });
+}
+
+test("More sessions reaches every duplicate-named session and preserves selected work and preview", async () => {
+  const page = await focusCuration((request) => pagedFocusReply(request));
+  const select = page.el("worklog-focus-session");
+  assert.equal(select.children.length, 65);
+  assert.equal(select.value, "");
+  chooseFocus(page, FOCUS_ONE.id);
+  await until(() => choiceRows(page).length === 1, "selected work");
+  checkChoice(choiceRows(page)[0]);
+  const preview = page.el("worklog-text").textContent;
+  const more = page.el("worklog-focus-more");
+  more.focus();
+  document.activeElement = more;
+  more.click();
+  await until(() => select.children.length === 129, "second session page");
+  assert.equal(document.activeElement, more);
+  assert.equal(select.value, FOCUS_ONE.id);
+  assert.equal(choiceRows(page)[0].checked, true);
+  assert.equal(page.el("worklog-text").textContent, preview);
+  assert.equal(page.sent("worklog_focus_choices").at(-1).focus_session_id, null, "catalog paging requests no work");
+  more.click();
+  await until(() => select.children.length === 131, "last session page");
+  assert.equal(more.hidden, true);
+  assert.equal(select.focused, true, "exhausted control gives focus to session choices");
+  assert.equal(new Set(select.children.map((o) => o.value)).size, 131);
+  chooseFocus(page, MANY_SESSIONS.at(-1).id);
+  await until(() => page.el("worklog-choices").textContent.includes(MANY_SESSIONS.at(-1).id), "late session work");
+  assert.equal(select.children.length, 131, "unchanged refresh retains all loaded catalog pages");
+  assert.equal(select.value, MANY_SESSIONS.at(-1).id);
+  assert.equal(choiceRows(page)[0].checked, false, "new session starts unchecked");
+  assert.equal(page.el("copy-worklog").disabled, true);
+});
+
+test("a changed catalog refresh keeps the selected identity and checked work while dropping later pages", async () => {
+  let snapshot = "a".repeat(64);
+  const page = await focusCuration((request) => pagedFocusReply(request, snapshot));
+  page.el("worklog-focus-more").click();
+  await until(() => page.el("worklog-focus-session").children.length === 129, "second catalog page");
+  const selected = MANY_SESSIONS[100].id;
+  chooseFocus(page, selected);
+  await until(() => choiceRows(page).length === 1, "later session entries");
+  checkChoice(choiceRows(page)[0]);
+  snapshot = "b".repeat(64);
+  page.el("tab-recent").click();
+  await until(() => page.el("worklog-focus-session").children.length === 66, "fresh first page and explicit selected session");
+  assert.equal(page.el("worklog-focus-session").value, selected);
+  assert.equal(choiceRows(page)[0].checked, true);
+  page.el("worklog-focus-more").click();
+  await until(() => page.el("worklog-focus-session").children.length === 129, "new continuation");
+  assert.equal(page.sent("worklog_focus_choices").at(-1).sessions_page.snapshot, snapshot);
+  assert.equal(page.el("worklog-focus-session").value, selected);
+  assert.equal(choiceRows(page)[0].checked, true);
+});
+
+for (const invalid of ["changed history", "different snapshot", "duplicate session", "wrong offset", "wrong next", "omitted", "missing page", "wrong dates", "unexpected work"]) {
+  test(`session paging refuses ${invalid} and offers explicit reload`, async () => {
+    const page = await focusCuration((request) => {
+      const reply = pagedFocusReply(request);
+      if (!request.sessions_page?.offset) return reply;
+      if (invalid === "changed history") return { type: "error", code: "conflict", message: "history changed" };
+      if (invalid === "different snapshot") reply.sessions_page.snapshot = "b".repeat(64);
+      if (invalid === "duplicate session") reply.sessions[0] = FOCUS_ONE;
+      if (invalid === "wrong offset") reply.sessions_page.offset = 1;
+      if (invalid === "wrong next") reply.sessions_page.next_offset = 65;
+      if (invalid === "omitted") reply.sessions_page.omitted = true;
+      if (invalid === "missing page") delete reply.sessions_page;
+      if (invalid === "wrong dates") reply.start_date = "1900-01-01";
+      if (invalid === "unexpected work") reply.choices = choicesReply(request, ["UNEXPECTED"]).choices;
+      return reply;
+    });
+    chooseFocus(page, FOCUS_ONE.id);
+    await until(() => choiceRows(page).length === 1, "selected session work");
+    checkChoice(choiceRows(page)[0]);
+    page.el("worklog-focus-more").click();
+    await until(() => /Could not load more/.test(page.el("worklog-focus-status").textContent), "refused catalog");
+    assert.equal(choiceRows(page).length, 0);
+    assert.equal(page.el("copy-worklog").disabled, true);
+    assert.equal(page.el("worklog-focus-session").disabled, true);
+    assert.equal(page.el("worklog-focus-more").textContent, "Reload sessions");
+    page.el("worklog-focus-more").click();
+    await until(() => page.el("worklog-focus-session").children.length === 65, "reloaded session catalog");
+    assert.equal(page.el("worklog-focus-session").value, "");
+    assert.equal(choiceRows(page).length, 0);
+  });
+}
+
+for (const changed of ["session", "period", "scope", "home", "host exit"]) {
+  test(`a late catalog page is discarded after changing ${changed}`, async () => {
+    let waiting, release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const page = await focusCuration((request) => {
+      if (request.sessions_page?.offset) { waiting = request; return pending; }
+      return pagedFocusReply(request);
+    });
+    page.el("worklog-focus-more").click();
+    await until(() => waiting, "held session page");
+    if (changed === "session") chooseFocus(page, FOCUS_TWO.id);
+    if (changed === "period") chooseWorklogPeriod(page, "yesterday");
+    if (changed === "scope") {
+      page.el("worklog-share-scope").value = "entries";
+      page.el("worklog-share-scope").dispatch("change");
+    }
+    if (changed === "home") {
+      page.state.config.storage.root = "/other-home";
+      page.state.revision = "2";
+      page.policyChanged();
+    }
+    if (changed === "host exit") { page.state.hostDead = true; page.hostExits(); }
+    const reply = pagedFocusReply(waiting);
+    reply.sessions[0].name = "LATE CATALOG";
+    release(reply);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.doesNotMatch(page.el("worklog-focus-session").textContent, /LATE CATALOG/);
+    assert.equal(page.el("copy-worklog").disabled, true);
+  });
+}
+
 test("a recorded focus session narrows sharing before explicit selection and copies the exact preview", async () => {
   const page = await focusCuration((request) => focusChoicesReply(request, { gaps: [WORKLOG_GAP], sessions_truncated: true }));
   assert.equal(page.sent("worklog_choices").length, 0);

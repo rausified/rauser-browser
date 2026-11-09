@@ -1830,3 +1830,20 @@ ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
 formatting, protocol generation, typecheck, lint, script tests, Markdown safety
 and queue consistency pass. Development tools pass 254 tests with 94 skips;
 accessibility passes two tests with 55 Chromium sandbox skips.
+
+## 2026-11-09 — Page through recorded focus sessions (brwr-t4gf)
+
+The One focus session sharing catalog now offers explicit More sessions instead
+of hiding every session after the first 64. Additive protocol-v8 sessions_page
+metadata reuses the worklog paging shapes; legacy requests still receive the
+original bounded catalog without metadata. One index read streams the complete
+activity snapshot, retains at most 64 session records plus deduplication IDs,
+and binds the continuation to its home identity, adapter policy and date range.
+Tied timestamps follow the existing durable event order. Paging requests no
+selected work and never broadens a selected session's direct activity.
+
+The panel preserves the selected ID, checked work and preview while extending
+the catalog. It retains loaded pages on a matching refresh, drops them when the
+snapshot changes, discards replies after context changes and explicitly reloads
+a stale catalog. The final paging action returns keyboard focus to the select.
+Original note identity, Re-learn gates and browser-local recovery are unchanged.
