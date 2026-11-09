@@ -2207,9 +2207,12 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
     Ok(())
 }
 
-/// Each `(origin, contained adapter)` in `config` whose catalog
-/// `container_first` container type has no adapter ahead of it on that
-/// origin (`crate::capture_site::container_first_pairs`), with that type.
+/// Each contained adapter in `config` whose catalog `container_first`
+/// container type has no adapter on its origin
+/// (`crate::capture_site::container_first_pairs`), with that type. Where
+/// the container sits is the extension's call (`orderContainedFirst`:
+/// container first while both are as shipped, contained first once the user
+/// edits either), so only its presence is checked.
 fn container_first_gaps(config: &ConfigSnapshot) -> Vec<(&serde_json::Value, &str)> {
     let adapters = &config.adapters.artifacts;
     let field = |adapter: &serde_json::Value, key: &str| {
@@ -2219,7 +2222,7 @@ fn container_first_gaps(config: &ConfigSnapshot) -> Vec<(&serde_json::Value, &st
             .map(str::to_owned)
     };
     let mut gaps = Vec::new();
-    for (index, adapter) in adapters.iter().enumerate() {
+    for adapter in adapters {
         let (Some(artifact_type), Some(origin)) =
             (field(adapter, "type"), field(adapter, "origin"))
         else {
@@ -2229,11 +2232,11 @@ fn container_first_gaps(config: &ConfigSnapshot) -> Vec<(&serde_json::Value, &st
             if *contained != artifact_type {
                 continue;
             }
-            let ahead = adapters[..index].iter().any(|other| {
+            let present = adapters.iter().any(|other| {
                 field(other, "type").as_deref() == Some(container.as_str())
                     && field(other, "origin").as_deref() == Some(origin.as_str())
             });
-            if !ahead {
+            if !present {
                 gaps.push((adapter, container.as_str()));
             }
         }
@@ -2242,13 +2245,13 @@ fn container_first_gaps(config: &ConfigSnapshot) -> Vec<(&serde_json::Value, &st
 }
 
 /// Refuse a save that leaves a container_first contained adapter (Splunk
-/// dashboards) live without its container (Splunk apps) ahead of it on its
-/// origin, unless `current` already had that gap. Alone, or ahead of its
-/// container, the contained rule records the container's own pages (the
-/// built-in views) under its identity, and adding the container later would
-/// re-key them without a migration. Keeping the container ahead means a
-/// contained contract never holds those pages, so the container may take a
-/// retired contained contract's routes (`declares_container`) safely.
+/// dashboards) live without its container (Splunk apps) on its origin,
+/// unless `current` already had that gap. Alone, the contained rule records
+/// the container's own pages (the built-in views) under its identity, and
+/// adding the container later would re-key them without a migration. With
+/// the shipped pair the extension keeps the container ahead, so a contained
+/// contract never holds those pages, and the container may take a retired
+/// contained contract's routes (`declares_container`) safely.
 fn refuse_new_container_first_gap(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     let existing = container_first_gaps(current);
     for (adapter, container) in container_first_gaps(next) {
@@ -2264,7 +2267,7 @@ fn refuse_new_container_first_gap(current: &ConfigSnapshot, next: &ConfigSnapsho
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         bail!(
-            "A {artifact_type:?} adapter on {origin} needs a {container:?} adapter ahead of it: without one, {artifact_type:?} records {container:?}'s own pages under its own identity. Choose {container:?} too, or remove {artifact_type:?}."
+            "A {artifact_type:?} adapter on {origin} needs a {container:?} adapter on the same site: without one, {artifact_type:?} records {container:?}'s own pages under its own identity. Choose {container:?} too, or remove {artifact_type:?}."
         );
     }
     Ok(())
@@ -3983,18 +3986,17 @@ mod tests {
         }
 
         /// A container_first contained adapter (catalog `container_first`)
-        /// is never live without its container ahead of it on its origin:
-        /// alone it would record the container's own pages (Splunk's
-        /// built-in views) under its identity, and adding the container
-        /// later would re-key them. So dashboards saved alone are refused,
-        /// as are dashboards ahead of apps and removing apps under
-        /// dashboards; the refusal names both types.
+        /// is never live without its container on its origin: alone it
+        /// would record the container's own pages (Splunk's built-in views)
+        /// under its identity, and adding the container later would re-key
+        /// them. So dashboards saved alone are refused, as is removing apps
+        /// under dashboards; the refusal names both types. The order is the
+        /// extension's: dashboards ahead of edited apps still save.
         #[test]
         fn a_container_first_contained_adapter_needs_its_container_ahead() {
             let [app, dashboard] = splunk();
             for (case, setup, refused) in [
                 ("alone", Vec::new(), vec![dashboard.clone()]),
-                ("ahead", Vec::new(), vec![dashboard.clone(), app.clone()]),
                 (
                     "container removed",
                     vec![app.clone(), dashboard.clone()],
@@ -4012,7 +4014,7 @@ mod tests {
                 for message in [format!("{checked:#}"), format!("{error:#}")] {
                     assert!(
                         message.contains("\"splunk.dashboard\"")
-                            && message.contains("\"splunk.app\" adapter ahead of it"),
+                            && message.contains("\"splunk.app\" adapter on the same site"),
                         "{case}: {message}"
                     );
                 }
@@ -4025,7 +4027,11 @@ mod tests {
             assert!(save_adapters(&mut store, vec![elsewhere, dashboard.clone()]).is_err());
             // Apps alone, and apps with dashboards after them, save.
             save_adapters(&mut store, vec![app.clone()]).unwrap();
-            save_adapters(&mut store, vec![app, dashboard]).unwrap();
+            save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
+            // An edited app is ordered after the dashboard (contained first).
+            let mut edited = app;
+            edited["match"] = json!([{"path": "/{_}/app/{app:name}/{*}"}]);
+            save_adapters(&mut store, vec![dashboard, edited]).unwrap();
         }
 
         /// A config that already has dashboards without apps (written by

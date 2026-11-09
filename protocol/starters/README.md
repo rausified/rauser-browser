@@ -180,13 +180,15 @@ unaffected):
   the save puts back exactly as live again, not retired.
 - Nothing else changes: user-written adapters keep the ordinary §10.3
   warning, and agent drafts still drop an overlapping rule.
-- The host never lets `b` be live without `a` ahead of it on its origin.
-  `gen:starters` writes every declared pair into the `container_first` line
-  of `protocol/capture-site/catalog.json`, and a save (settings or Capture
-  Site) is refused when it would leave a `b` adapter with no `a` adapter
-  before it on the same origin: `b` alone, `b` ahead of `a`, or `a` removed
-  under `b`. A config that already has the gap is not blocked from
-  unrelated saves. This is a check on the type names, so it applies on any
+- The host never lets `b` be live without `a` on its origin. `gen:starters`
+  writes every declared pair into the `container_first` line of
+  `protocol/capture-site/catalog.json`, and a save (settings or Capture
+  Site) is refused when it would leave a `b` adapter with no `a` adapter on
+  the same origin: `b` alone, or `a` removed under `b`. The order stays the
+  extension's (`orderContainedFirst` above), so an edited pair may save
+  contained first; edited rules are the user's own, and such a pair can
+  re-key as any user-written container can. A config that already has the
+  gap is not blocked from unrelated saves. This is a check on the type names, so it applies on any
   origin, as starter type names are reserved.
 
   Why: alone, `b`'s rule records `a`'s own pages (Splunk's built-in views)

@@ -96,7 +96,7 @@ capture, so the structural drafter cannot learn this shape.
 ## Known limits
 
 - **Needs Splunk apps.** Brauser refuses to save this type without
-  Splunk apps ahead of it on the stack, because alone it would record
+  Splunk apps on the stack, because alone it would record
   Search and the other built-in pages as dashboards named `search`,
   `reports`, and so on; see `docs/adapters/splunk.app.md`.
 - **The built-in view list is Splunk apps'.** A built-in page missing from

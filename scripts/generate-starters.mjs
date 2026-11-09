@@ -1201,7 +1201,7 @@ export function renderCatalogLine(families, current) {
  * after `starter_types`: every family's declared `"container_first"`
  * `[a, b]` type pair (protocol/starters/README.md), in family then entry
  * order. The host reads it to refuse a save that would make a `b` adapter
- * live without an `a` adapter ahead of it on its origin, so a contained
+ * live without an `a` adapter on its origin, so a contained
  * adapter never records the container's own pages (Splunk's built-in
  * views) under its own identity. */
 export function renderContainerFirstLine(families) {
