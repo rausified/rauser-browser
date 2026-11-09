@@ -55,6 +55,7 @@ struct CatalogFile {
     mode_words: BTreeMap<String, String>,
     fill: FillFile,
     starter_types: Vec<String>,
+    container_first: Vec<(String, String)>,
     shared_origins: BTreeMap<String, SharedOriginFile>,
 }
 
@@ -152,6 +153,18 @@ pub fn catalog() -> &'static DraftPolicy {
     static CATALOG_POLICY: OnceLock<DraftPolicy> = OnceLock::new();
     CATALOG_POLICY.get_or_init(|| match parse(CATALOG) {
         Ok(policy) => policy,
+        Err(error) => panic!("protocol/capture-site/catalog.json is invalid: {error}"),
+    })
+}
+
+/// The catalog's `container_first` pairs, `(container, contained)` starter
+/// types (generated from protocol/starters/, README "Test vectors and
+/// overlaps"): the container must stay ahead of the contained type on its
+/// origin, because it wins pages the contained rule also matches.
+pub(crate) fn container_first_pairs() -> &'static [(String, String)] {
+    static PAIRS: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    PAIRS.get_or_init(|| match serde_json::from_str::<CatalogFile>(CATALOG) {
+        Ok(file) => file.container_first,
         Err(error) => panic!("protocol/capture-site/catalog.json is invalid: {error}"),
     })
 }

@@ -102,9 +102,11 @@ capture, so the structural drafter cannot learn this shape.
   built-in view, such as Enterprise Security's `incident_review`, is
   recorded as a dashboard. An app's own dashboard whose ID is one of the
   listed words (most often `home`) is recorded as app time instead.
-- **Choose dashboards with apps.** Splunk dashboards chosen without Splunk
-  apps have no app rule ahead of them, so Search and the other built-in
-  pages are recorded as dashboards named `search`, `reports`, and so on.
+- **Dashboards need apps.** Brauser refuses to save Splunk dashboards
+  without Splunk apps ahead of them on the stack, or to remove apps while
+  dashboards stay. Without the app rule, Search and the other built-in
+  pages would be recorded as dashboards named `search`, `reports`, and so
+  on, and adding apps later would move those records without a migration.
 - **Prefixed search heads are not offered.** `labels: 1` claims
   `<stack>.splunkcloud.com` and one-label hosts such as
   `es-<stack>.splunkcloud.com`, but not `<prefix>.<stack>.splunkcloud.com`.
@@ -119,10 +121,6 @@ capture, so the structural drafter cannot learn this shape.
   overlap on purpose. It says so and offers the starter instead. The host
   checks the starter against the recorded identities, so existing notes keep
   theirs.
-- **Dashboards chosen before apps are not linked later.** A dashboard rule
-  saved without apps has no `within`, and adding apps afterwards does not
-  add it. Dashboard time then does not count toward its app until both are
-  removed and chosen together.
 - **Non-web hosts on the suffix are claimed.** The starter is also offered
   on `https://<stack>.splunkcloud.com:8089` (the REST port) and other
   same-suffix hosts. None of them serve `/app/` pages, so nothing is

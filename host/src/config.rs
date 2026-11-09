@@ -2194,6 +2194,7 @@ pub fn validate(config: &ConfigSnapshot) -> Result<()> {
 /// authoritative adapter validation.
 pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     validate_base(next)?;
+    refuse_new_container_first_gap(current, next)?;
     if let Some(storage) = &next.storage {
         layout::require_fixed(storage)?;
     }
@@ -2202,6 +2203,69 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
         && compile_validated_adapters(next).is_err();
     if !preserving_inert_adapters {
         compile_validated_adapters(next)?;
+    }
+    Ok(())
+}
+
+/// Each `(origin, contained adapter)` in `config` whose catalog
+/// `container_first` container type has no adapter ahead of it on that
+/// origin (`crate::capture_site::container_first_pairs`), with that type.
+fn container_first_gaps(config: &ConfigSnapshot) -> Vec<(&serde_json::Value, &str)> {
+    let adapters = &config.adapters.artifacts;
+    let field = |adapter: &serde_json::Value, key: &str| {
+        adapter
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let mut gaps = Vec::new();
+    for (index, adapter) in adapters.iter().enumerate() {
+        let (Some(artifact_type), Some(origin)) =
+            (field(adapter, "type"), field(adapter, "origin"))
+        else {
+            continue;
+        };
+        for (container, contained) in crate::capture_site::container_first_pairs() {
+            if *contained != artifact_type {
+                continue;
+            }
+            let ahead = adapters[..index].iter().any(|other| {
+                field(other, "type").as_deref() == Some(container.as_str())
+                    && field(other, "origin").as_deref() == Some(origin.as_str())
+            });
+            if !ahead {
+                gaps.push((adapter, container.as_str()));
+            }
+        }
+    }
+    gaps
+}
+
+/// Refuse a save that leaves a container_first contained adapter (Splunk
+/// dashboards) live without its container (Splunk apps) ahead of it on its
+/// origin, unless `current` already had that gap. Alone, or ahead of its
+/// container, the contained rule records the container's own pages (the
+/// built-in views) under its identity, and adding the container later would
+/// re-key them without a migration. Keeping the container ahead means a
+/// contained contract never holds those pages, so the container may take a
+/// retired contained contract's routes (`declares_container`) safely.
+fn refuse_new_container_first_gap(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
+    let existing = container_first_gaps(current);
+    for (adapter, container) in container_first_gaps(next) {
+        if existing.iter().any(|(had, _)| *had == adapter) {
+            continue;
+        }
+        let artifact_type = adapter
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let origin = adapter
+            .get("origin")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        bail!(
+            "A {artifact_type:?} adapter on {origin} needs a {container:?} adapter ahead of it: without one, {artifact_type:?} records {container:?}'s own pages under its own identity. Choose {container:?} too, or remove {artifact_type:?}."
+        );
     }
     Ok(())
 }
@@ -3909,43 +3973,118 @@ mod tests {
             save(&mut store, splunk().to_vec());
         }
 
-        /// Dashboards saved alone, removed, then saved with apps: the app's
-        /// built-in views move from the retired dashboard's routes to the
-        /// app. That is the established container allowance
-        /// (`declares_container`: a contract declaring `candidate` as its
-        /// container lets the container take its routes, as a repository
-        /// does a removed pull request's), not the re-added-contract rule:
-        /// the same save passes with the dashboard left out, and with the
-        /// app added first and the dashboard after.
+        /// A save of `adapters` on `store`.
+        fn save_adapters(store: &mut ConfigStore, adapters: Vec<serde_json::Value>) -> Result<()> {
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts = adapters;
+            let revision = store.revision().to_owned();
+            store.update(next, &revision)?.expect("no conflict");
+            Ok(())
+        }
+
+        /// A container_first contained adapter (catalog `container_first`)
+        /// is never live without its container ahead of it on its origin:
+        /// alone it would record the container's own pages (Splunk's
+        /// built-in views) under its identity, and adding the container
+        /// later would re-key them. So dashboards saved alone are refused,
+        /// as are dashboards ahead of apps and removing apps under
+        /// dashboards; the refusal names both types.
+        #[test]
+        fn a_container_first_contained_adapter_needs_its_container_ahead() {
+            let [app, dashboard] = splunk();
+            for (case, setup, refused) in [
+                ("alone", Vec::new(), vec![dashboard.clone()]),
+                ("ahead", Vec::new(), vec![dashboard.clone(), app.clone()]),
+                (
+                    "container removed",
+                    vec![app.clone(), dashboard.clone()],
+                    vec![dashboard.clone()],
+                ),
+            ] {
+                let folder = tempfile::tempdir().unwrap();
+                let mut store = loaded(&folder.path().join("config.toml"));
+                save_adapters(&mut store, setup)
+                    .unwrap_or_else(|error| panic!("{case}: {error:#}"));
+                let mut proposal = store.snapshot().adapters.clone();
+                proposal.artifacts = refused.clone();
+                let checked = store.check_capture_site(&proposal).unwrap_err();
+                let error = save_adapters(&mut store, refused).unwrap_err();
+                for message in [format!("{checked:#}"), format!("{error:#}")] {
+                    assert!(
+                        message.contains("\"splunk.dashboard\"")
+                            && message.contains("\"splunk.app\" adapter ahead of it"),
+                        "{case}: {message}"
+                    );
+                }
+            }
+            // On another origin, the app does not count.
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            let mut elsewhere = app.clone();
+            elsewhere["origin"] = json!("https://other.splunkcloud.com");
+            assert!(save_adapters(&mut store, vec![elsewhere, dashboard.clone()]).is_err());
+            // Apps alone, and apps with dashboards after them, save.
+            save_adapters(&mut store, vec![app.clone()]).unwrap();
+            save_adapters(&mut store, vec![app, dashboard]).unwrap();
+        }
+
+        /// A config that already has dashboards without apps (written by
+        /// hand, or saved before this rule) is not blocked from unrelated
+        /// saves; only a save that introduces the gap is refused.
+        #[test]
+        fn an_existing_gap_does_not_block_unrelated_saves() {
+            let [app, dashboard] = splunk();
+            let mut current = empty_config();
+            current.adapters.artifacts = vec![dashboard.clone()];
+            let mut next = current.clone();
+            next.strip_params.push("ref".into());
+            validate_update(&current, &next).unwrap();
+            let mut fixed = current.clone();
+            fixed.adapters.artifacts = vec![app, dashboard.clone()];
+            validate_update(&current, &fixed).unwrap();
+            let mut twice = current.clone();
+            let mut other = dashboard;
+            other["origin"] = json!("https://other.splunkcloud.com");
+            twice.adapters.artifacts.push(other);
+            assert!(validate_update(&current, &twice).is_err());
+        }
+
+        /// So a recorded dashboard never holds the app's pages, and the app
+        /// taking a retired dashboard's routes (the `declares_container`
+        /// allowance) re-keys nothing recorded: apps with dashboards, both
+        /// removed, then apps alone or both again, save.
         #[test]
         fn a_container_may_take_a_retired_contained_contracts_routes() {
             let [app, dashboard] = splunk();
-            let saves: [&[Vec<serde_json::Value>]; 3] = [
-                &[
-                    vec![dashboard.clone()],
-                    Vec::new(),
-                    vec![app.clone(), dashboard.clone()],
-                ],
-                &[vec![dashboard.clone()], Vec::new(), vec![app.clone()]],
-                &[
-                    vec![dashboard.clone()],
-                    Vec::new(),
-                    vec![app.clone()],
-                    vec![app.clone(), dashboard.clone()],
-                ],
-            ];
-            for (case, steps) in saves.into_iter().enumerate() {
+            for (case, last) in [
+                ("apps alone", vec![app.clone()]),
+                ("both", vec![app.clone(), dashboard.clone()]),
+            ] {
                 let folder = tempfile::tempdir().unwrap();
                 let mut store = loaded(&folder.path().join("config.toml"));
-                for (step, adapters) in steps.iter().enumerate() {
-                    let mut next = store.snapshot().clone();
-                    next.adapters.artifacts = adapters.clone();
-                    let revision = store.revision().to_owned();
-                    store
-                        .update(next, &revision)
-                        .unwrap_or_else(|error| panic!("case {case} step {step}: {error:#}"))
-                        .expect("no conflict");
+                for adapters in [vec![app.clone(), dashboard.clone()], Vec::new(), last] {
+                    save_adapters(&mut store, adapters)
+                        .unwrap_or_else(|error| panic!("{case}: {error:#}"));
                 }
+            }
+        }
+
+        /// Families without a container_first declaration keep today's
+        /// allowance: a repository may take a removed pull request's pages,
+        /// and a pull request rule may stand alone.
+        #[test]
+        fn a_repository_may_take_a_removed_pull_requests_pages() {
+            let repo = json!({"type":"github.repo", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/{*}"}], "id":"github:{host}/{owner}/{repo}", "scope":{"owner":["acme-corp"]}});
+            let pr = json!({"type":"github.pr", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/pull/{n:int}/{*}"}], "id":"github:{host}/{owner}/{repo}/pull/{n}", "scope":{"owner":["acme-corp"]}, "within":{"type":"github.repo","id":"github:{host}/{owner}/{repo}"}});
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            for adapters in [
+                vec![pr.clone()],
+                Vec::new(),
+                vec![repo.clone()],
+                vec![pr, repo],
+            ] {
+                save_adapters(&mut store, adapters).unwrap_or_else(|error| panic!("{error:#}"));
             }
         }
 

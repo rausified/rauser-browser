@@ -8,7 +8,7 @@ import test from "node:test";
 
 import {
   appendLock, catalogTypeOrder, checkLock, checkPolicy, checkRegistry, familyClaims, loadFamilies, loadFamilyEntries,
-  renderAdaptersIndex, renderCatalogLine, renderStarterVectors, renderTs, validateFamily,
+  renderAdaptersIndex, renderCatalogLine, renderContainerFirstLine, renderStarterVectors, renderTs, validateFamily,
 } from "../generate-starters.mjs";
 import { ORIGIN_CASES, SHIPPED_STRICT_ORIGIN_CASES, STRICT_ORIGIN_CASES } from "../../extension/tests/starter-origin-cases.mjs";
 import { EXAMPLE_CONTAINER_FIRST_FAMILY, EXAMPLE_STRICT_FAMILY } from "../../extension/tests/starter-fixtures.mjs";
@@ -826,6 +826,15 @@ test("a container_first pair becomes the family's expected overlap_report pairs,
   // A family with only disjoint entries still expects no pair at all.
   const strict = JSON.parse(renderStarterVectors([EXAMPLE_STRICT_FAMILY], ["strict.item"]));
   assert.deepEqual(strict.cases.find((entry) => entry.id === "overlap_report.starter.strict").expect, { pairs: [] });
+});
+
+test("the catalog's container_first line lists each declared [container, contained] pair for the host", () => {
+  const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
+  assert.equal(renderContainerFirstLine([family, EXAMPLE_STRICT_FAMILY]), '  "container_first": [["nest.space", "nest.board"]],');
+  assert.equal(renderContainerFirstLine([EXAMPLE_STRICT_FAMILY]), '  "container_first": [],');
+  // The shipped catalog carries Splunk's pair.
+  const catalog = JSON.parse(readFileSync(path.join(REPO, CATALOG_JSON), "utf8"));
+  assert.deepEqual(catalog.container_first, [["splunk.app", "splunk.dashboard"]]);
 });
 
 test("a container_first pair re-runs the contained type's own vectors with that type alone", () => {

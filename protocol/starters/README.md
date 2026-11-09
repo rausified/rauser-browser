@@ -180,10 +180,25 @@ unaffected):
   the save puts back exactly as live again, not retired.
 - Nothing else changes: user-written adapters keep the ordinary §10.3
   warning, and agent drafts still drop an overlapping rule.
-- A contained adapter saved before its container has no `within`, and
-  adding the container later does not link it: existing-rule linking is
-  GitHub's only. Its time does not roll up into the container until it is
-  removed and chosen again with the container.
+- The host never lets `b` be live without `a` ahead of it on its origin.
+  `gen:starters` writes every declared pair into the `container_first` line
+  of `protocol/capture-site/catalog.json`, and a save (settings or Capture
+  Site) is refused when it would leave a `b` adapter with no `a` adapter
+  before it on the same origin: `b` alone, `b` ahead of `a`, or `a` removed
+  under `b`. A config that already has the gap is not blocked from
+  unrelated saves. This is a check on the type names, so it applies on any
+  origin, as starter type names are reserved.
+
+  Why: alone, `b`'s rule records `a`'s own pages (Splunk's built-in views)
+  under `b`'s identity. Adding `a` later would then re-key those records
+  without a migration, live or retired. The host's history guard lets a
+  container take a retired contained contract's routes (`declares_container`,
+  as a repository takes a removed pull request's pages), so the guarantee
+  has to come from `b` never holding them. Recording a per-contract
+  "was alone" flag would need an adopted-contracts format change, and the
+  record's order cannot tell, because it keeps each contract once. A family
+  without a `"container_first"` entry is unaffected: a pull request rule may
+  still stand alone.
 
 Why a declaration in the family file, not in the format: the overlap is a
 property of how one vendor lays out its URLs, reviewed when the family is
