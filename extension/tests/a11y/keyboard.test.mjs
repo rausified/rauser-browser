@@ -382,8 +382,7 @@ test("task working folder can be selected by keyboard without starting a task", 
   await activate(page, "#task-input", null);
   await page.keyboard.type("Inspect this project");
   await activate(page, "#task-folder", null);
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, "#task-folder", 1);
   assert.equal(await page.locator("#task-folder").inputValue(), "project-id");
   assert.equal(await page.locator("#task-input").inputValue(), "Inspect this project");
   assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
