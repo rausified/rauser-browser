@@ -334,6 +334,9 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::ReplaceAdapters(_) => "replace_adapters",
         Request::UpdateConfig(_) => "update_config",
         Request::ChooseFolder(_) => "choose_folder",
+        Request::ListTaskFolders(_) => "list_task_folders",
+        Request::AddTaskFolder(_) => "add_task_folder",
+        Request::RemoveTaskFolder(_) => "remove_task_folder",
         Request::RecordVisit(_) => "record_visit",
         Request::RecordActivity(_) => "record_activity",
         Request::RecordBatch(_) => "record_batch",
@@ -945,6 +948,51 @@ fn dispatch(
                 }
             }
         }
+        Request::ListTaskFolders(value) => task_folders_result(&value.request_id, config),
+        Request::AddTaskFolder(value) => {
+            let grant = consent.task_folder_grant(&value.picker_token, &value.expected_revision);
+            let (path, identity) = match grant {
+                Ok(grant) => grant,
+                Err(err) => {
+                    return error(
+                        &value.request_id,
+                        ErrorCode::InvalidRequest,
+                        &err.to_string(),
+                    );
+                }
+            };
+            match config.add_task_folder(path, identity, &value.expected_revision) {
+                Ok(true) => {
+                    consent.consume_picker(&value.picker_token);
+                    task_folders_result(&value.request_id, config)
+                }
+                Ok(false) => error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "configuration changed; choose the task folder again",
+                ),
+                Err(err) => error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &err.to_string(),
+                ),
+            }
+        }
+        Request::RemoveTaskFolder(value) => {
+            match config.remove_task_folder(&value.folder_id, &value.expected_revision) {
+                Ok(true) => task_folders_result(&value.request_id, config),
+                Ok(false) => error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "configuration changed; read task folders again",
+                ),
+                Err(err) => error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &err.to_string(),
+                ),
+            }
+        }
         Request::RecordVisit(value) => record_visit(value, config),
         Request::RecordActivity(value) => record_activity(value, config),
         Request::RecordBatch(value) => record_batch(value, config),
@@ -1080,7 +1128,7 @@ fn start_run(
             "kind is chosen by the host",
         );
     }
-    if value.no_page.is_some() {
+    if value.no_page.is_some() || value.task_folder_id.is_some() {
         return error(
             &value.request_id,
             ErrorCode::InvalidRequest,
@@ -1200,6 +1248,7 @@ fn start_auto_summary(
         }
     }
     let request = brauser_protocol::StartRunRequest {
+        task_folder_id: None,
         no_page: None,
         protocol_version: value.protocol_version,
         request_id: value.request_id.clone(),
@@ -1257,6 +1306,27 @@ fn existing_summary(
         .ok_or_else(|| anyhow::anyhow!("no home folder"))?;
     let cache_dir = config.cache_dir()?;
     open_index(config, storage, &cache_dir)?.summary_for(artifact_id)
+}
+
+/// List only public folder choices after refreshing the host configuration.
+fn task_folders_result(id: &str, config: &mut ConfigStore) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(err) => return error(id, ErrorCode::Internal, &err.to_string()),
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return error(
+            id,
+            ErrorCode::InvalidConfig,
+            "repair configuration before reading task folders",
+        );
+    }
+    Response::TaskFoldersListed(brauser_protocol::TaskFoldersListed {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: id.into(),
+        revision: config.revision().into(),
+        folders: config.task_folder_choices(),
+    })
 }
 
 /// Build a task-bar run: the user's instruction, bounded as the service
@@ -1365,6 +1435,7 @@ fn task_request(
     crate::service::record::check_task_instruction(&instruction)
         .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
     Ok(brauser_protocol::StartRunRequest {
+        task_folder_id: value.task_folder_id,
         no_page: no_page.then_some(true),
         protocol_version: value.protocol_version,
         request_id: value.request_id,
@@ -11448,6 +11519,7 @@ title = "{title} - Jira"
 
         fn start_run(url: &str, record_key: Option<RecordKey>, requested_at: &str) -> Request {
             Request::StartRun(StartRunRequest {
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "run-1".into(),
@@ -12180,6 +12252,7 @@ title = "{title} - Jira"
         ) -> StartTaskRequest {
             StartTaskRequest {
                 command_revision: None,
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "task-1".into(),
@@ -12201,6 +12274,7 @@ title = "{title} - Jira"
         fn no_page_request() -> StartTaskRequest {
             StartTaskRequest {
                 command_revision: None,
+                task_folder_id: None,
                 no_page: Some(true),
                 url: None,
                 title: None,
@@ -12296,6 +12370,7 @@ title = "{title} - Jira"
             assert_eq!(
                 requests[1],
                 Request::StartRun(StartRunRequest {
+                    task_folder_id: None,
                     no_page: None,
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "task-1".into(),
@@ -12447,6 +12522,7 @@ title = "{title} - Jira"
             let mut value = start_task_request(url, TASK_INSTRUCTION, &now());
             value.content = Some(String::new());
             let forwarded = StartRunRequest {
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: value.protocol_version,
                 request_id: value.request_id.clone(),
@@ -13227,6 +13303,7 @@ id = "gdoc:{host}/{id}"
         );
         let view = brauser_protocol::RunView {
             start_request_id: None,
+            task_folder_id: Some("f".repeat(36)),
             no_page: None,
             run_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
             state: RunState::Succeeded,

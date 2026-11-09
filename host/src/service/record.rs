@@ -156,6 +156,8 @@ pub struct TaskStatus {
     /// discovery. Legacy task records have no correlation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_folder_id: Option<String>,
     /// Missing on legacy records, which always had a page.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_page: bool,
@@ -343,6 +345,11 @@ impl RunStatusFile {
                 .as_ref()
                 .filter(|_| self.kind == RunKind::Task)
                 .and_then(|task| task.start_request_id.clone()),
+            task_folder_id: self
+                .task
+                .as_ref()
+                .filter(|_| self.kind == RunKind::Task)
+                .and_then(|task| task.task_folder_id.clone()),
             no_page: self
                 .task
                 .as_ref()
@@ -967,6 +974,7 @@ mod tests {
         status.kind = RunKind::Task;
         status.task = Some(TaskStatus {
             start_request_id: None,
+            task_folder_id: None,
             no_page: true,
             instruction: "Organize notes".into(),
             protected: vec![],
@@ -1512,6 +1520,7 @@ mod tests {
         status.kind = RunKind::Task;
         status.task = Some(TaskStatus {
             start_request_id: None,
+            task_folder_id: None,
             no_page: false,
             instruction: instruction.into(),
             protected: vec!["/home/notes".into()],
@@ -1559,6 +1568,28 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn task_folder_id_survives_record_round_trip_and_is_absent_on_legacy_tasks() {
+        let mut status = task_sample("Inspect this project");
+        let legacy = serde_json::to_value(&status).unwrap();
+        assert!(legacy["task"].get("task_folder_id").is_none());
+        status.task.as_mut().unwrap().task_folder_id = Some("picked-folder".into());
+        let stored = serde_json::to_vec(&status).unwrap();
+        let restored: RunStatusFile = serde_json::from_slice(&stored).unwrap();
+        assert_eq!(
+            restored.view(0, None).task_folder_id.as_deref(),
+            Some("picked-folder")
+        );
+        assert!(
+            serde_json::from_value::<RunStatusFile>(legacy)
+                .unwrap()
+                .task
+                .unwrap()
+                .task_folder_id
+                .is_none()
+        );
     }
 
     #[test]
@@ -1629,9 +1660,16 @@ mod tests {
         status.state = RunState::Succeeded;
         // Even a summary record that somehow carries a task shows none of it.
         status.task = task_sample("x").task;
+        status.task.as_mut().unwrap().task_folder_id = Some("project-id".into());
         let kept = serde_json::json!({ "report": "r" });
         let view = serde_json::to_value(status.view(0, Some(&kept))).unwrap();
-        for key in ["kind", "instruction", "task_report", "site_draft"] {
+        for key in [
+            "kind",
+            "instruction",
+            "task_report",
+            "site_draft",
+            "task_folder_id",
+        ] {
             assert!(view.get(key).is_none(), "{key}: {view}");
         }
     }

@@ -323,6 +323,12 @@ Deploy host and extension together. An older host cannot run these commands;
 an older host also refuses `[[commands]]` in config.toml, so remove that section
 before rolling back. Built-in slash actions and other output destinations are
 still planned.
+In settings, **Task working folders → Add folder…** makes a native-picked
+project folder available in the task bar's **Working folder** selector. The
+knowledge base is the default. The task starts in the folder shown; its history
+keeps that location, and **Reuse** keeps the original choice. Removing a choice
+leaves its files untouched and prevents queued tasks from starting there.
+An unavailable reused choice asks you to select a working folder before Run.
 
 ### Diagnostics
 

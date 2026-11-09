@@ -373,6 +373,25 @@ test("task Run, Tasks and Summarize activate without a mouse and expose failure 
   await audit(t, page, "panel/agent-start-error");
 });
 
+test("task working folder can be selected by keyboard without starting a task", async (t) => {
+  const page = await browserFixture(t, "panel", "configured", {
+    taskFolders: [{ id: "project-id", path: "/work/project" }],
+  });
+  if (!page) return;
+  await page.locator("#task-folder option[value='project-id']").waitFor({ state: "attached" });
+  await activate(page, "#task-input", null);
+  await page.keyboard.type("Inspect this project");
+  await activate(page, "#task-folder", null);
+  await selectByKeyboard(page, "#task-folder", 1);
+  assert.equal(await page.locator("#task-folder").inputValue(), "project-id");
+  assert.equal(await page.locator("#task-input").inputValue(), "Inspect this project");
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
+  await audit(t, page, "panel/task-project-folder");
+  await activate(page, "#task-run");
+  await page.waitForFunction(() => fixture.requests.some((r) => r.type === "start_task"));
+  assert.equal(await page.evaluate(() => fixture.requests.find((r) => r.type === "start_task").task_folder_id), "project-id");
+});
+
 test("task page scope can be changed by keyboard without submitting or losing a draft", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;
@@ -459,6 +478,25 @@ test("settings primary actions and adapter editor work from the keyboard", async
   await page.waitForFunction((before) => fixture.requests.filter((request) => request.type === "update_config").length > before, saved);
   await activate(page, "#copy-diagnostics");
   await page.waitForFunction(() => fixture.actions.includes("copy"));
+});
+
+test("site review selects Google kinds without JSON and saves by keyboard", async (t) => {
+  const page = await browserFixture(t, "options");
+  if (!page) return;
+  await page.locator("#site-origin").fill("https://docs.google.com");
+  const review = page.locator('[data-site-bundle="true"]');
+  await review.waitFor();
+  await activate(page, review);
+  await focused(page, "#adapter-editor-heading");
+  assert.equal(await page.locator("#adapter-technical-review").isVisible(), false);
+  assert.equal(await page.locator("#site-bundle-review input[type=checkbox]").count(), 5);
+  await audit(t, page, "options/site-review");
+  await page.locator('[data-site-kind="google.formresponse"]').focus();
+  await page.keyboard.press("Space");
+  await activate(page, "#save-adapter");
+  await page.waitForFunction(() => fixture.config.adapters.artifacts.length === 4);
+  assert.deepEqual(await page.evaluate(() => fixture.config.adapters.artifacts.map((adapter) => adapter.type)),
+    ["google.doc", "google.sheet", "google.slides", "google.form"]);
 });
 
 test("task list selection follows arrows/Home/End and detail actions survive refresh and dismissal", async (t) => {
