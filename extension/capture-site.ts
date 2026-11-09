@@ -78,6 +78,15 @@ export function planCaptureSite(
     ? new Set(types.map((type) => type.type))
     : new Set(types.filter((type) => choice.types.has(type.type)).map((type) => type.type));
   if (!chosen.size) return { ok: false, message: chooseMessage(types.map(choiceNoun)) };
+  // A declared container_first contained type needs its container: the host
+  // refuses it alone (it would record the container's own pages), so the
+  // plan says so instead of offering a selection that cannot be saved.
+  const needed = family.overlaps?.find((entry) => entry.expect === "container_first" && chosen.has(entry.b) && !chosen.has(entry.a));
+  if (needed) {
+    const label = (name: string) => family.types.find((type) => type.type === name)?.label ?? name;
+    const [container, contained] = [label(needed.a), label(needed.b)];
+    return { ok: false, message: `${contained} need ${container} saved with them. Check ${container} too, or uncheck ${contained}.` };
+  }
   const input = scopeInput(family);
   let values: string[] = [];
   if (input) {
