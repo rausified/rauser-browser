@@ -65,11 +65,18 @@ invalidation is conservative but simple; component-specific generations can
 follow if real editing friction justifies them. Refuse an ambiguous fallback
 instead of adding an unreviewed note-selection UI.
 
-Open apply decisions remain: universal automatic recovery versus refusal
-until explicit recovery; durable
-unalias support; authoritative history location and downgrade contract. These
-are outside the note-ownership slice; no application is enabled while they
-remain open. Ordinary note requests use empty replay; tests supply only
+Apply decisions, resolved by John on 2026-11-09 (`brwr-dbp`):
+
+- Recovery: an interrupted apply recovers automatically on the next host
+  start, rolling forward or back from the prepared, byte-bound journal entry.
+  There is no mode that refuses ordinary access until an explicit recovery.
+- Unalias: not in the first version. Durable apply supports alias and re-key
+  only; the read-only replay keeps its existing unalias handling.
+- Authoritative history: an append-only file inside the home folder's existing
+  fixed layout, so deleting the cache rebuilds the projection from it.
+- Downgrade: no contract at this stage; older builds are out of scope.
+
+Apply is authorized under these decisions. Ordinary note requests use empty replay; tests supply only
 host-built replay. Neither the worker nor a journal receipt supplies aliases.
 
 ## Ordered delivery
