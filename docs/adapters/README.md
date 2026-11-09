@@ -38,3 +38,4 @@
 | [aha.portalidea](aha.portalidea.md) | aha-ideas | development | — | — | — |
 | [splunk.app](splunk.app.md) | splunk | development | — | — | — |
 | [splunk.dashboard](splunk.dashboard.md) | splunk | development | — | — | — |
+| [google.drivefolder](google.drivefolder.md) | google-drive | development | — | — | — |
