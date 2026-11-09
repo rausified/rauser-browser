@@ -33,7 +33,7 @@ function rollup(overrides = [], base = GREEN) {
   const names = new Set(overrides.map((node) => node.name ?? node.context));
   return [...base.filter((node) => !names.has(node.name ?? node.context)), ...overrides];
 }
-const gql = (c) => ({ author: { login: c.author }, body: c.body, createdAt: c.createdAt });
+const gql = (c) => ({ author: { login: c.author }, body: c.body, createdAt: c.createdAt, updatedAt: c.updatedAt });
 function graphql({ pr = {}, contexts = GREEN, comments = [FX.checking339] } = {}) {
   return { repository: { pullRequest: {
     number: 243, state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
@@ -99,8 +99,15 @@ test("mergifyStatus: #299 dequeued carries Mergify's reason", () => {
 
 test("mergifyStatus: a push cancels the request until a later status comment (#329)", () => {
   assert.equal(mergifyStatus(FX.pr329.slice(0, 2)).state, "cancelled");
-  assert.equal(mergifyStatus([FX.waiting339, FX.pr329[1]]).state, "cancelled");
   assert.equal(mergifyStatus(FX.pr329).state, "merged");
+});
+
+test("mergifyStatus orders by update time: a status comment edited after a cancel reply is current (Codex P2)", () => {
+  const cancel = FX.pr329[1]; // 08:15:11Z
+  const status = { ...FX.checking339, createdAt: "2026-11-09T08:00:00Z", updatedAt: "2026-11-09T08:20:00Z" };
+  assert.equal(mergifyStatus([status, cancel]).state, "checking");
+  assert.equal(mergifyStatus([{ ...status, updatedAt: "2026-11-09T08:10:00Z" }, cancel]).state, "cancelled");
+  assert.equal(mergifyStatus([FX.pr329[2], FX.pr329[0], FX.pr329[1], FX.pr329[3]]).state, "merged"); // GraphQL order does not matter
 });
 
 test("mergifyStatus: command replies alone, or a payload from anyone but Mergify, are no request", () => {

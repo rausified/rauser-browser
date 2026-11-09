@@ -1,5 +1,5 @@
 {
- "_source": "Mergify comments recorded from rausified/rauser-browser via GraphQL on 2026-11-09 (author, createdAt, body; waiting339 is the 09:57:09Z edit of #339's status comment, from userContentEdits).",
+ "_source": "Mergify comments recorded from rausified/rauser-browser via GraphQL on 2026-11-09 (author, createdAt, body, and updatedAt for pr329; waiting339 is the 09:57:09Z edit of #339's status comment, from userContentEdits).",
  "waiting339": {
   "author": "mergify",
   "createdAt": "2026-11-09T09:57:09Z",
@@ -24,22 +24,26 @@
   {
    "author": "mergify",
    "createdAt": "2026-11-09T07:56:33Z",
-   "body": "### 🛑 Queue command cancelled\n\nQueue requested — the merge queue status continues in [this comment ↓](https://github.com/rausified/rauser-browser/pull/329#issuecomment-6735370059)."
+   "body": "### 🛑 Queue command cancelled\n\nQueue requested — the merge queue status continues in [this comment ↓](https://github.com/rausified/rauser-browser/pull/329#issuecomment-6735370059).",
+   "updatedAt": "2026-11-09T08:15:18Z"
   },
   {
    "author": "mergify",
    "createdAt": "2026-11-09T08:15:11Z",
-   "body": "> `queue`\n\n#### 🛑 The queue request has been cancelled: new commits were pushed\n\n<details>\n\n@rausified pushed to this pull request after `queue` was requested. Review the new commits and request it again.\n\n</details>\n\n\n"
+   "body": "> `queue`\n\n#### 🛑 The queue request has been cancelled: new commits were pushed\n\n<details>\n\n@rausified pushed to this pull request after `queue` was requested. Review the new commits and request it again.\n\n</details>\n\n\n",
+   "updatedAt": "2026-11-09T08:15:11Z"
   },
   {
    "author": "mergify",
    "createdAt": "2026-11-09T08:15:17Z",
-   "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"merged\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-09T09:04:58.938403+00:00\", \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": [], \"left_at\": \"2026-11-09T09:33:52.092366+00:00\"}\n-*- Mergify Payload End -*-\n-->\n\n### ✅ Merged into `main` as `03c70fe` at 09:33 UTC\n\n29 min in the queue, 21 min of it CI.\n\n**So far**\n\n- ✅ **Entered the queue** Mon 9 Nov, 09:04 · rule `default` · triggered by @jrausercisco with the [`@mergifyio queue` command](https://github.com/rausified/rauser-browser/pull/329#issuecomment-6735365955)\n- ✅ **Passed** · draft #334\n- ✅ **Merged** 09:33 · `03c70fe` · merge\n\n<details>\n<summary>4 merge conditions met</summary>\n\n- [x] any of · required by GitHub branch protection:\n  - [x] `check-success = Build and check`\n  - [ ] `check-neutral = Build and check`\n  - [ ] `check-skipped = Build and check`\n- [x] any of · required by GitHub branch protection:\n  - [x] `check-success = Rust dependency policy`\n  - [ ] `check-neutral = Rust dependency policy`\n  - [ ] `check-skipped = Rust dependency policy`\n- [x] any of · required by GitHub branch protection:\n  - [x] `check-success = merge-hold`\n  - [ ] `check-neutral = merge-hold`\n  - [ ] `check-skipped = merge-hold`\n- [x] any of · required by GitHub branch protection:\n  - [x] `check-success = PR owner`\n  - [ ] `check-neutral = PR owner`\n  - [ ] `check-skipped = PR owner`\n\n</details>\n\n<sub>Times in UTC · [dashboard](https://dashboard.mergify.com/orgs/rausified/repos/rauser-browser/queues/status?branch=main&pull=329) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+   "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"merged\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-09T09:04:58.938403+00:00\", \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": [], \"left_at\": \"2026-11-09T09:33:52.092366+00:00\"}\n-*- Mergify Payload End -*-\n-->\n\n### ✅ Merged into `main` as `03c70fe` at 09:33 UTC\n\n29 min in the queue, 21 min of it CI.\n\n**So far**\n\n- ✅ **Entered the queue** Mon 9 Nov, 09:04 · rule `default` · triggered by @jrausercisco with the [`@mergifyio queue` command](https://github.com/rausified/rauser-browser/pull/329#issuecomment-6735365955)\n- ✅ **Passed** · draft #334\n- ✅ **Merged** 09:33 · `03c70fe` · merge\n\n<details>\n<summary>4 merge conditions met</summary>\n\n- [x] any of · required by GitHub branch protection:\n  - [x] `check-success = Build and check`\n  - [ ] `check-neutral = Build and check`\n  - [ ] `check-skipped = Build and check`\n- [x] any of · required by GitHub branch protection:\n  - [x] `check-success = Rust dependency policy`\n  - [ ] `check-neutral = Rust dependency policy`\n  - [ ] `check-skipped = Rust dependency policy`\n- [x] any of · required by GitHub branch protection:\n  - [x] `check-success = merge-hold`\n  - [ ] `check-neutral = merge-hold`\n  - [ ] `check-skipped = merge-hold`\n- [x] any of · required by GitHub branch protection:\n  - [x] `check-success = PR owner`\n  - [ ] `check-neutral = PR owner`\n  - [ ] `check-skipped = PR owner`\n\n</details>\n\n<sub>Times in UTC · [dashboard](https://dashboard.mergify.com/orgs/rausified/repos/rauser-browser/queues/status?branch=main&pull=329) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>",
+   "updatedAt": "2026-11-09T09:33:53Z"
   },
   {
    "author": "mergify",
    "createdAt": "2026-11-09T09:04:25Z",
-   "body": "> `refresh`\n\n#### ✅ Pull request refreshed\n\n\n\n"
+   "body": "> `refresh`\n\n#### ✅ Pull request refreshed\n\n\n\n",
+   "updatedAt": "2026-11-09T09:04:25Z"
   }
  ],
  "dequeued299": {
