@@ -1808,8 +1808,10 @@ export async function rebuildActivityMap(): Promise<void> {
     // title (adapter-templates.md §9.4): it never seeds an hour. The latest
     // hour recorded for the artifact names it instead.
     if (title !== null && matchingArtifact(lease, url, title)?.title === null) {
+      // An hour recorded before the rule can hold a generic title too.
       title = [...activity.totals].reverse().find((total) =>
-        total.artifact_id === match.artifact_id && total.title !== null)?.title ?? null;
+        total.artifact_id === match.artifact_id && total.title !== null &&
+        matchingArtifact(lease, total.url, total.title)?.title !== null)?.title ?? null;
     }
     activity.tabs[String(tab.id)] = {
       artifact_id: match.artifact_id, artifact_type: match.type, url, title,

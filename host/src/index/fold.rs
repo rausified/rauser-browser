@@ -194,12 +194,16 @@ impl<'a> Fold<'a> {
                         row.last_mode = Some(mode.mode.clone());
                     }
                 }
-                if recorded == event.title {
-                    row.activities.push(event.clone());
-                } else {
+                // A generic title carries no refs either (§9.4), even ones an
+                // older rule found in it.
+                let generic = event.title.is_some() && recorded.is_none();
+                if generic {
                     let mut kept = event.clone();
-                    kept.title = recorded;
+                    kept.title = None;
+                    kept.refs.clear();
                     row.activities.push(kept);
+                } else {
+                    row.activities.push(event.clone());
                 }
                 visits.push(VisitRow {
                     event_id: event.event_id.clone(),
@@ -232,6 +236,7 @@ impl<'a> Fold<'a> {
                 let refs = event
                     .refs
                     .iter()
+                    .filter(|_| !generic)
                     .map(|reference| Ref {
                         artifact_type: reference.artifact_type.clone(),
                         value: reference.value.clone(),

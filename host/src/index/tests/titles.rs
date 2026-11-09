@@ -96,3 +96,54 @@ fn without_adapters_a_title_is_kept() {
         "Sign in - Acme"
     );
 }
+
+/// Refs found in a title an older rule recorded are dropped with the title
+/// once the adapter finds it generic (§9.4): replaying it adds no mention.
+#[test]
+fn a_replayed_generic_title_adds_no_mention() {
+    let document: adapter_templates::Value = serde_json::from_value(serde_json::json!({
+        "format": 1,
+        "artifacts": [{
+            "type": "jira.issue",
+            "origin": "https://acme.atlassian.net",
+            "match": [{"path": "/browse/{key:jira_key}"}],
+            "id": "jira:{host}/{key}",
+        }, {
+            "type": "work.item",
+            "origin": "https://example.com",
+            "match": [{"path": "/items/{id:token}"}],
+            "id": "work:{host}/{id}",
+            "generic_titles": ["Error PROJ-1"],
+            "refs": [{"type": "jira.issue", "find": "jira_key"}],
+        }],
+    }))
+    .unwrap();
+    let document = adapter_templates::Document::from_value(&document).unwrap();
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache).with_adapters(Some(&document));
+    let mut issue = titled(1, Some("Issue"), "2026-10-15T09:00:00Z");
+    issue.artifact_id = "jira:acme.atlassian.net/PROJ-1".into();
+    issue.artifact_type = "jira.issue".into();
+    issue.url = "https://acme.atlassian.net/browse/PROJ-1".into();
+    issue.modes.clear();
+    let mut gate = titled(2, Some("Error PROJ-1"), "2026-10-15T10:00:00Z");
+    gate.refs.push(ActivityRef {
+        artifact_type: "jira.issue".into(),
+        value: "PROJ-1".into(),
+    });
+    index.record_activities([&issue, &gate], &[]).unwrap();
+    let query = |query: &str| sql::display(&sql::sql_rows(&index.database_path(), query)[0][0]);
+    assert_eq!(
+        query("select count(*) from edges where kind = 'mentions'"),
+        "0"
+    );
+    assert_eq!(
+        index
+            .artifact("work:example.com/A1")
+            .unwrap()
+            .unwrap()
+            .title,
+        "Untitled"
+    );
+}

@@ -1552,6 +1552,31 @@ test("a tab restored on a gate page never records the gate's generic title", asy
   }
 });
 
+test("a restored tab skips an hour whose stored title is now generic", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://gate-old.example";
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin),
+    adapters: { format: 1, artifacts: [artifact(origin, { title: "{title} - Acme", generic_titles: ["Sign in"] })] },
+  });
+  const total = (n, title) => ({
+    event_id: `00000000-0000-4000-8000-00000000002${n}`,
+    artifact_id: "test:gate-old.example/a", artifact_type: "test.item",
+    hour_start: `2026-10-1${n}T10:00:00+00:00`, url: `${origin}/items/a`, title,
+    opens: 1, focused_ms: 0, background_ms: 0, modes: [], trails: [], refs: [],
+  });
+  // The newer hour was recorded before the rule made its title generic.
+  values.set(storageKey("activity_totals_v1"), { version: 1, totals: [total(4, "Plan"), total(5, "Sign in")] });
+  tabs.set(30, {
+    id: 30, windowId: 1, active: true, status: "complete",
+    url: `${origin}/items/a`, title: "Sign in - Acme", incognito: false,
+  });
+  await rebuildActivityMap();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan");
+});
+
 test("a successful ack clears retry state but keeps notices until dismissed", async () => {
   values.clear();
   sessionValues.clear();
