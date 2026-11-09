@@ -166,19 +166,22 @@ At runtime the declaration is read from the bundled family, keyed on the
 family's own origins (an adapter that reuses the type name elsewhere is
 unaffected):
 
-- `orderContainedFirst` (`extension/starter-adapters.ts`) puts `a` ahead of
-  `b` on that origin on every save, whether or not `b` still carries its
-  `within`, so `a` wins in both engines (first match wins,
-  `adapter-templates.md` §3). Settings refuses a move that would reverse
-  them. This holds only while `a`'s rules named in `pairs` are exactly as
-  shipped: once the user edits one (widening it to a catch-all, say), the
-  ordinary contained-first order applies, so `b`'s own pages stay `b`'s.
+- The starter offers `a` before `b`, so a new pair is saved container
+  first and `a` wins in both engines (first match wins,
+  `adapter-templates.md` §3). After that, `orderContainedFirst`
+  (`extension/starter-adapters.ts`) never reorders the pair on that origin
+  (`isDeclaredPair`), shipped or edited. Whichever comes first records the
+  pages both match, so a re-sort on any save (an edit, a revert, or an
+  unrelated change to a config already saved dashboards-first) would move
+  recorded pages from one to the other. Settings holds a move that would
+  swap them, either way. Like the host's check, this is by type name on any
+  origin (the overlap warning stays the family's own). An edit that makes `b`'s rule unreachable (widening an
+  `a` rule to a catch-all) shows as an overlap to review.
 - Settings leaves the host's warning for a declared pair out of the overlap
   list, but only while both adapters are exactly as the starter ships them
-  (every `match` rule and `path_case`) and `a` comes first. One predicate,
-  `isContainerFirstPair`, decides both this and the order above. An edited
-  rule on either adapter, a pair not in `pairs`, or the pair on another
-  origin is warned about and ordered as before.
+  (every `match` rule and `path_case`) and `a` comes first. `isContainerFirstPair`
+  decides this. An edited rule on either adapter, a pair not in `pairs`, or
+  the pair on another origin is warned about as before.
 - Restoring recorded rules (`site_restore`) still refuses any overlap, a
   declared pair included, because recorded contracts carry no family. On a
   family that declares `"container_first"`, Capture Site treats that one
@@ -191,10 +194,61 @@ unaffected):
   the save puts back exactly as live again, not retired.
 - Nothing else changes: user-written adapters keep the ordinary §10.3
   warning, and agent drafts still drop an overlapping rule.
-- A contained adapter saved before its container has no `within`, and
-  adding the container later does not link it: existing-rule linking is
-  GitHub's only. Its time does not roll up into the container until it is
-  removed and chosen again with the container.
+- The host never lets a save change which of `a` and `b` records a page
+  it already recorded. `gen:starters` writes every declared pair, with both
+  types' labels, into the `container_first` line of
+  `protocol/capture-site/catalog.json`. That line is generated only. A host
+  that finds it malformed fails closed: the first save that needs it panics
+  instead of saving unchecked, and the host's tests compare it with the
+  families, so a damaged line never ships.
+
+  Every save (settings, Capture Site and its preflight, saving restored
+  rules, adapter repair) goes through one check,
+  `container_first_violation(before, after, pairs)` in `host/src/config.rs`.
+  Per origin and declared pair, it compares the adapter list before the save
+  with the list after it. An adapter after the save continues the one
+  before it that is exactly equal, or else the one with the same type and
+  `id` (a rule edit). The check enforces four rules:
+
+  1. An `a` and a `b` adapter live both before and after keep their
+     relative order: "Splunk apps and Splunk dashboards can't change order
+     on <origin> once saved. To change it, remove Splunk dashboards, save,
+     then add them again."
+  2. A newly live `a` adapter may not sit above an already-live `b` adapter:
+     "To add Splunk apps here, remove Splunk dashboards on <origin>, save,
+     then add both: ..."
+  3. A newly live `b` adapter may not sit above an already-live `a` adapter:
+     "Splunk dashboards can't go above Splunk apps on <origin>: ... Add
+     Splunk dashboards below Splunk apps."
+  4. When neither type was live before, every `a` adapter sits above every
+     `b` adapter (the shipped order): "Splunk apps must come above Splunk
+     dashboards on <origin> when added together: ..."
+
+  Everything else is allowed: other adapters, edits that keep their place,
+  and removals, which the history guard checks. A site saved dashboards
+  first, or with dashboards alone, keeps working; apps can be added there
+  only below the dashboards, which then keep the pages they record. The
+  check is on type names, so it applies on any origin: starter type names
+  are reserved for drafts, and a hand-written adapter that reuses one is
+  held to it too.
+
+  The extension follows the same rule. `orderContainedFirst` never
+  re-sorts a declared pair, new adapters are appended below the live ones,
+  the starter offers `a` before `b`, and settings holds a move that would
+  swap an `a` and a `b`. Capture Site does not offer `b` without `a` on a
+  new site, because alone `b` records `a`'s own pages (Splunk's built-in
+  views) as its own.
+
+  Why one invariant: whichever of the two comes first records the pages
+  both match, so a page keeps its recorder exactly when no adapter of the
+  other type moves above the one recording it. Rules 1 to 3 say that, and
+  rule 4 fixes the order for a fresh pair. A randomized host test
+  (`container_first_violation_never_moves_a_recorded_page`, fixed seed,
+  2,000 sequences of add, remove, move, edit, unrelated and whole-list
+  saves) checks that every accepted save leaves each recorded page's type
+  unchanged unless its adapter was removed. It also checks that every kind
+  of save is accepted sometimes. A family without a `"container_first"`
+  entry is unaffected.
 
 Why a declaration in the family file, not in the format: the overlap is a
 property of how one vendor lays out its URLs, reviewed when the family is

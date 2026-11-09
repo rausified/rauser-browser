@@ -1452,7 +1452,7 @@ test("a starter's declared container-first overlap is not listed for review, and
   await openSettings();
   assert.doesNotMatch(statusText(), /overlap/);
   assert.equal(nodeText(env.elements.get("adapter-overlaps")), "");
-  const held = "This starter's container rule must stay ahead of the rules inside it, so its own pages are not recorded as them.";
+  const held = "These two rules keep their order: whichever comes first records the pages both match, so swapping them would move pages already recorded.";
   const buttons = () => env.elements.get("adapter-list").querySelectorAll("button");
   assert.equal(buttons()[2].disabled, true, "apps cannot move below dashboards");
   assert.equal(buttons()[2].title, held);
@@ -1468,6 +1468,18 @@ test("a starter's declared container-first overlap is not listed for review, and
   await openSettings();
   assert.match(statusText(), /1 adapter rule overlap needs review/);
   assert.match(nodeText(env.elements.get("adapter-overlaps")), /rule 2 may overlap .* rule 1; .* wins/);
+  // Edited or not, the pair keeps apps first: the move stays held.
+  assert.equal(buttons()[2].disabled, true, "edited apps cannot move below dashboards");
+  assert.equal(buttons()[2].title, held);
+  assert.equal(buttons()[5].disabled, true, "dashboards cannot move above edited apps");
+
+  // A config already saved dashboards-first keeps that order too: the
+  // reverse swap is held, as the host refuses it.
+  settingsWith([dashboard, app]);
+  await openSettings();
+  assert.equal(buttons()[2].disabled, true, "dashboards cannot move below apps");
+  assert.equal(buttons()[5].disabled, true, "apps cannot move above dashboards");
+  assert.equal(buttons()[5].title, held);
 });
 
 test("a pull request or issue rule cannot be moved below its repository rule", async () => {

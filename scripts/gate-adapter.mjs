@@ -126,7 +126,9 @@ const ENGINE_TEST_INPUTS = anyOf(
   "protocol/capture-site/",
   "host/tests/fixtures/site-draft-answers/",
 );
-const HOST_TEST_INPUTS = anyOf("protocol/capture-site/catalog.json", "host/tests/fixtures/");
+// capture_site's tests also check the catalog's container_first line
+// against the starter families' own overlaps.
+const HOST_TEST_INPUTS = anyOf("protocol/capture-site/catalog.json", "protocol/starters/", "host/tests/fixtures/");
 // A family source, a doc page (Open decision 7: a Status: line edit must
 // still run the generator's check 3), or the generated TypeScript twin;
 // checked before anything else reads any of them, so a stale generated file

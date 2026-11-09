@@ -2203,7 +2203,198 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
     if !preserving_inert_adapters {
         compile_validated_adapters(next)?;
     }
+    // After compilation, so an invalid document gets its own error first and
+    // origins compare as canonical strings.
+    if let Some(violation) = container_first_violation(
+        &current.adapters.artifacts,
+        &next.adapters.artifacts,
+        crate::capture_site::container_first_pairs(),
+    ) {
+        bail!("{violation}");
+    }
     Ok(())
+}
+
+/// A save that would change which of a catalog `container_first` pair's
+/// types records pages both match (`container_first_violation`).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ContainerFirstViolation {
+    pub origin: String,
+    pub container_label: String,
+    pub contained_label: String,
+    pub kind: ContainerFirstViolationKind,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ContainerFirstViolationKind {
+    /// A container and a contained adapter live before and after changed
+    /// relative order.
+    OrderChanged,
+    /// A newly live container adapter sits above an already-live contained one.
+    NewContainerAbove,
+    /// A newly live contained adapter sits above an already-live container one.
+    NewContainedAbove,
+    /// Both types newly live together, with a contained adapter above a container one.
+    AddedTogetherContainedFirst,
+}
+
+impl std::fmt::Display for ContainerFirstViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (origin, container, contained) =
+            (&self.origin, &self.container_label, &self.contained_label);
+        match self.kind {
+            ContainerFirstViolationKind::OrderChanged => write!(
+                f,
+                "{container} and {contained} can't change order on {origin} once saved. To change it, remove {contained}, save, then add them again."
+            ),
+            ContainerFirstViolationKind::NewContainerAbove => write!(
+                f,
+                "To add {container} here, remove {contained} on {origin}, save, then add both: {container} above {contained} would take pages {contained} already recorded."
+            ),
+            ContainerFirstViolationKind::NewContainedAbove => write!(
+                f,
+                "{contained} can't go above {container} on {origin}: they would take pages {container} already recorded. Add {contained} below {container}."
+            ),
+            ContainerFirstViolationKind::AddedTogetherContainedFirst => write!(
+                f,
+                "{container} must come above {contained} on {origin} when added together: whichever comes first records the pages both match."
+            ),
+        }
+    }
+}
+
+/// One adapter of a pair on an origin: its type (container or not), and
+/// its position in the list.
+struct PairMember<'a> {
+    adapter: &'a serde_json::Value,
+    container: bool,
+    position: usize,
+}
+
+/// `before` and `after`'s adapters of `pair` on `origin`, each after one
+/// paired with the before one it continues, if any: exact equals first, in
+/// order, then the same type and `id` (a rule edit), in order. Unpaired
+/// before ones were removed; unpaired after ones are newly live.
+fn pair_members<'a>(
+    adapters: &'a [serde_json::Value],
+    pair: &crate::capture_site::ContainerFirstPair,
+    origin: &str,
+) -> Vec<PairMember<'a>> {
+    let text = |adapter: &serde_json::Value, key: &str| {
+        adapter
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    adapters
+        .iter()
+        .enumerate()
+        .filter(|(_, adapter)| text(adapter, "origin").as_deref() == Some(origin))
+        .filter_map(|(position, adapter)| {
+            let artifact_type = text(adapter, "type")?;
+            let container = artifact_type == pair.container;
+            (container || artifact_type == pair.contained).then_some(PairMember {
+                adapter,
+                container,
+                position,
+            })
+        })
+        .collect()
+}
+
+fn continues(before: &[PairMember<'_>], after: &[PairMember<'_>]) -> Vec<Option<usize>> {
+    let key =
+        |adapter: &serde_json::Value| (adapter.get("type").cloned(), adapter.get("id").cloned());
+    let mut taken = vec![false; before.len()];
+    let mut paired = vec![None; after.len()];
+    for (at, member) in after.iter().enumerate() {
+        if let Some(index) = (0..before.len())
+            .find(|&index| !taken[index] && before[index].adapter == member.adapter)
+        {
+            taken[index] = true;
+            paired[at] = Some(index);
+        }
+    }
+    for (at, member) in after.iter().enumerate() {
+        if paired[at].is_some() {
+            continue;
+        }
+        if let Some(index) = (0..before.len())
+            .find(|&index| !taken[index] && key(before[index].adapter) == key(member.adapter))
+        {
+            taken[index] = true;
+            paired[at] = Some(index);
+        }
+    }
+    paired
+}
+
+/// The one invariant for catalog `container_first` pairs (container type C,
+/// contained type D; Splunk apps and dashboards), per origin, between the
+/// adapter list `before` a save and `after` it. Whichever of a C and a D
+/// adapter comes first records the pages both match, so a save may not
+/// change who records a page already recorded:
+///
+/// 1. A C and a D adapter live both before and after keep their relative
+///    order.
+/// 2. A newly live C adapter may not sit above an already-live D adapter.
+/// 3. A newly live D adapter may not sit above an already-live C adapter.
+/// 4. When neither type was live before, every C adapter sits above every D
+///    adapter (the shipped order).
+///
+/// Everything else is allowed: other adapters, rule edits (paired with what
+/// they edit by type and `id`) that keep their place, and removals, which
+/// the history guard (`refuse_rekeyed_routes`) checks.
+pub(crate) fn container_first_violation(
+    before: &[serde_json::Value],
+    after: &[serde_json::Value],
+    pairs: &[crate::capture_site::ContainerFirstPair],
+) -> Option<ContainerFirstViolation> {
+    let origins: std::collections::BTreeSet<&str> = after
+        .iter()
+        .filter_map(|adapter| adapter.get("origin").and_then(serde_json::Value::as_str))
+        .collect();
+    for pair in pairs {
+        for origin in &origins {
+            let old = pair_members(before, pair, origin);
+            let new = pair_members(after, pair, origin);
+            let paired = continues(&old, &new);
+            let violation = |kind| {
+                Some(ContainerFirstViolation {
+                    origin: (*origin).to_owned(),
+                    container_label: pair.container_label.clone(),
+                    contained_label: pair.contained_label.clone(),
+                    kind,
+                })
+            };
+            for (i, x) in new.iter().enumerate() {
+                for (j, y) in new.iter().enumerate().skip(i + 1) {
+                    // x sits above y after the save.
+                    if x.container == y.container {
+                        continue;
+                    }
+                    match (paired[i], paired[j]) {
+                        (Some(px), Some(py)) if old[px].position > old[py].position => {
+                            return violation(ContainerFirstViolationKind::OrderChanged);
+                        }
+                        (None, Some(_)) if x.container => {
+                            return violation(ContainerFirstViolationKind::NewContainerAbove);
+                        }
+                        (None, Some(_)) => {
+                            return violation(ContainerFirstViolationKind::NewContainedAbove);
+                        }
+                        (None, None) if old.is_empty() && !x.container => {
+                            return violation(
+                                ContainerFirstViolationKind::AddedTogetherContainedFirst,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn validate_base(config: &ConfigSnapshot) -> Result<()> {
@@ -3890,43 +4081,449 @@ mod tests {
             save(&mut store, splunk().to_vec());
         }
 
-        /// Dashboards saved alone, removed, then saved with apps: the app's
-        /// built-in views move from the retired dashboard's routes to the
-        /// app. That is the established container allowance
-        /// (`declares_container`: a contract declaring `candidate` as its
-        /// container lets the container take its routes, as a repository
-        /// does a removed pull request's), not the re-added-contract rule:
-        /// the same save passes with the dashboard left out, and with the
-        /// app added first and the dashboard after.
+        /// A save of `adapters` on `store`.
+        fn save_adapters(store: &mut ConfigStore, adapters: Vec<serde_json::Value>) -> Result<()> {
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts = adapters;
+            let revision = store.revision().to_owned();
+            store.update(next, &revision)?.expect("no conflict");
+            Ok(())
+        }
+
+        /// An app adapter edited in a way that keeps the pages it records (a
+        /// title template), so the history guard's narrowing check, which
+        /// refuses an edit that hands pages to another adapter, stays out of
+        /// these order tests.
+        fn edited(app: &serde_json::Value) -> serde_json::Value {
+            let mut edited = app.clone();
+            edited["title"] = json!(["{title} | Splunk"]);
+            edited
+        }
+
+        const ACME: &str = "https://acme.splunkcloud.com";
+
+        fn refused(error: &anyhow::Error, text: &str) -> bool {
+            format!("{error:#}").contains(text)
+        }
+
+        const ADDED_TOGETHER: &str = "Splunk apps must come above Splunk dashboards on https://acme.splunkcloud.com when added together";
+        const ORDER_CHANGED: &str = "Splunk apps and Splunk dashboards can't change order on https://acme.splunkcloud.com once saved. To change it, remove Splunk dashboards, save, then add them again.";
+        const ADD_APPS: &str = "To add Splunk apps here, remove Splunk dashboards on https://acme.splunkcloud.com, save, then add both";
+        const DASHBOARDS_ABOVE: &str =
+            "Splunk dashboards can't go above Splunk apps on https://acme.splunkcloud.com";
+
+        /// A store whose config.toml was written with `adapters` as they are
+        /// (by hand, or by a build before this rule), adopted under the lock.
+        fn legacy_store(adapters: Vec<serde_json::Value>) -> (tempfile::TempDir, ConfigStore) {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            fs::create_dir_all(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            // As config.toml keeps them: an [adapters] header, then the
+            // adapter document's own tables.
+            let tables = format!(
+                "[adapters]\nformat = 1\n\n{}",
+                toml::to_string_pretty(&json!({"artifacts": adapters})).unwrap()
+            );
+            fixtures::write(&path, &root, "", "", &tables);
+            let mut store = ConfigStore::for_test(path);
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            (folder, store)
+        }
+
+        /// The invariant through real saves (settings and the Capture Site
+        /// preflight): a first save of both goes apps first; edits and
+        /// reverts keep the order; a live pair never changes order; new
+        /// apps may not go above live dashboards, nor new dashboards above
+        /// live apps; dashboards alone, removals and apps added below lone
+        /// dashboards are allowed.
+        #[test]
+        fn a_container_first_pair_never_changes_who_records_a_page() {
+            let [app, dashboard] = splunk();
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            let error =
+                save_adapters(&mut store, vec![dashboard.clone(), app.clone()]).unwrap_err();
+            assert!(refused(&error, ADDED_TOGETHER), "{error:#}");
+            let mut proposal = store.snapshot().adapters.clone();
+            proposal.artifacts = vec![dashboard.clone(), app.clone()];
+            assert!(refused(
+                &store.check_capture_site(&proposal).unwrap_err(),
+                ADDED_TOGETHER
+            ));
+            save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
+            save_adapters(&mut store, vec![edited(&app), dashboard.clone()]).unwrap();
+            save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
+            save_adapters(&mut store, vec![edited(&app), dashboard.clone()]).unwrap();
+            for flipped in [
+                vec![dashboard.clone(), edited(&app)],
+                vec![dashboard.clone(), app.clone()],
+            ] {
+                let error = save_adapters(&mut store, flipped).unwrap_err();
+                assert!(refused(&error, ORDER_CHANGED), "{error:#}");
+            }
+            // A second app rule below the dashboards takes nothing they record.
+            let mut second = app.clone();
+            second["match"] = json!([{"path": "/{_}/app/{app:name}/(home)"}]);
+            save_adapters(
+                &mut store,
+                vec![edited(&app), dashboard.clone(), second.clone()],
+            )
+            .unwrap();
+            // Above them, it would.
+            let mut third = second.clone();
+            third["match"] = json!([{"path": "/{_}/app/{app:name}/(pivot)"}]);
+            let error = save_adapters(
+                &mut store,
+                vec![third, edited(&app), dashboard.clone(), second.clone()],
+            )
+            .unwrap_err();
+            assert!(refused(&error, ADD_APPS), "{error:#}");
+            // New dashboards above live apps are refused.
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            save_adapters(&mut store, vec![app.clone()]).unwrap();
+            let error =
+                save_adapters(&mut store, vec![dashboard.clone(), app.clone()]).unwrap_err();
+            assert!(refused(&error, DASHBOARDS_ABOVE), "{error:#}");
+            save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
+            // Removals are allowed by the invariant; the history guard
+            // checks them (removing apps under live dashboards is its refusal).
+            assert!(refused(
+                &save_adapters(&mut store, vec![dashboard.clone()]).unwrap_err(),
+                "cannot change until artifact migrations"
+            ));
+            save_adapters(&mut store, vec![app.clone()]).unwrap();
+            save_adapters(&mut store, Vec::new()).unwrap();
+            // Restoring recorded rules saves through the same check.
+            let [_app, mut alone] = splunk();
+            alone.as_object_mut().unwrap().remove("within");
+            let (_folder, store) = recorded(&[adapter_contract(&alone).unwrap()]);
+            assert!(store.site_restore(ACME).is_ok());
+        }
+
+        /// Regression I-A: dashboards live alone, then apps added above
+        /// them, would take pages recorded as dashboards. Below them is fine.
+        #[test]
+        fn apps_are_not_added_above_lone_dashboards() {
+            let [app, mut dashboard] = splunk();
+            dashboard.as_object_mut().unwrap().remove("within");
+            let (_folder, mut store) = legacy_store(vec![dashboard.clone()]);
+            let error =
+                save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap_err();
+            assert!(refused(&error, ADD_APPS), "{error:#}");
+            let mut current = empty_config();
+            current.adapters.artifacts = vec![dashboard.clone()];
+            let mut next = current.clone();
+            next.adapters.artifacts = vec![app.clone(), dashboard.clone()];
+            assert!(refused(
+                &validate_update(&current, &next).unwrap_err(),
+                ADD_APPS
+            ));
+            save_adapters(&mut store, vec![dashboard.clone(), app.clone()]).unwrap();
+            save_adapters(&mut store, Vec::new()).unwrap();
+            save_adapters(&mut store, vec![app, dashboard]).unwrap();
+        }
+
+        /// Regression I-B: a site saved dashboards first, given apps above
+        /// the dashboards in a whole-list save (another copy of the live app,
+        /// or a new app rule), is refused; other saves and edits there are
+        /// not, and removing dashboards, then adding them below the apps,
+        /// works with the history guard still applied.
+        #[test]
+        fn a_dashboards_first_site_keeps_its_order_until_dashboards_are_removed() {
+            let [app, dashboard] = splunk();
+            let (_folder, mut store) = legacy_store(vec![dashboard.clone(), app.clone()]);
+            assert_eq!(store.snapshot().adapters.artifacts.len(), 2);
+            let mut app2 = app.clone();
+            app2["match"] = json!([{"path": "/{_}/app/{app:name}/(home)"}]);
+            for (wanted, saved) in [
+                (ORDER_CHANGED, vec![app.clone(), dashboard.clone()]),
+                (ORDER_CHANGED, vec![edited(&app), dashboard.clone()]),
+                (
+                    ORDER_CHANGED,
+                    vec![app.clone(), dashboard.clone(), app.clone()],
+                ),
+                (ADD_APPS, vec![app2.clone(), dashboard.clone(), app.clone()]),
+            ] {
+                let error = save_adapters(&mut store, saved).unwrap_err();
+                assert!(refused(&error, wanted), "{error:#}");
+            }
+            save_adapters(&mut store, vec![dashboard.clone(), edited(&app)]).unwrap();
+            let mut next = store.snapshot().clone();
+            next.strip_params.push("ref".into());
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let (_folder, mut store) = legacy_store(vec![dashboard.clone(), app.clone()]);
+            save_adapters(&mut store, vec![app.clone()]).unwrap();
+            let mut rekeyed = dashboard.clone();
+            rekeyed["id"] = json!("splunk.dashboard:{host}/views/{app}/{view}");
+            let error = save_adapters(&mut store, vec![app.clone(), rekeyed]).unwrap_err();
+            assert!(
+                refused(&error, "cannot change until artifact migrations"),
+                "{error:#}"
+            );
+            save_adapters(&mut store, vec![app, dashboard]).unwrap();
+        }
+
+        /// A small deterministic generator (xorshift64*), so the randomized
+        /// test needs no dependency and replays exactly.
+        struct Rng(u64);
+        impl Rng {
+            fn next(&mut self) -> u64 {
+                self.0 ^= self.0 >> 12;
+                self.0 ^= self.0 << 25;
+                self.0 ^= self.0 >> 27;
+                self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+            }
+            fn below(&mut self, n: usize) -> usize {
+                (self.next() % n as u64) as usize
+            }
+        }
+
+        const MODEL_SEED: u64 = 0x5eed_2026_1109_0362;
+        const MODEL_SEQUENCES: usize = 2000;
+        const MODEL_STEPS: usize = 12;
+        const MODEL_URLS: usize = 6;
+
+        /// A model adapter: which of the shared URLs (pages both the app and
+        /// the dashboard type may match) it matches, keyed by its identity,
+        /// and a rule variant that an edit toggles without changing them.
+        fn model_adapter(
+            kind: &str,
+            ident: usize,
+            variant: usize,
+            origin: &str,
+        ) -> serde_json::Value {
+            json!({
+                "type": kind, "origin": origin, "id": format!("{kind}:{{host}}/{ident}"),
+                "match": [{"path": format!("/m{ident}/v{variant}")}],
+            })
+        }
+
+        fn coverage(adapter: &serde_json::Value) -> Vec<usize> {
+            let kind = adapter["type"].as_str().unwrap();
+            let ident: usize = adapter["id"]
+                .as_str()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
+            match (kind, ident) {
+                ("splunk.app", 0) | ("splunk.dashboard", 0) => (0..MODEL_URLS).collect(),
+                ("splunk.app", 1) => vec![0, 1, 2],
+                ("splunk.app", _) => vec![3, 4],
+                ("splunk.dashboard", _) => vec![1, 3, 5],
+                _ => Vec::new(),
+            }
+        }
+
+        /// Who records `url` on ACME under `adapters`, by first match:
+        /// the winning adapter's (type, id).
+        fn winner(adapters: &[serde_json::Value], url: usize) -> Option<(String, String)> {
+            adapters
+                .iter()
+                .find(|adapter| adapter["origin"] == ACME && coverage(adapter).contains(&url))
+                .map(|adapter| {
+                    (
+                        adapter["type"].as_str().unwrap().to_owned(),
+                        adapter["id"].as_str().unwrap().to_owned(),
+                    )
+                })
+        }
+
+        fn identity(adapter: &serde_json::Value) -> (String, String, String) {
+            let text = |key: &str| adapter[key].as_str().unwrap_or_default().to_owned();
+            (text("type"), text("origin"), text("id"))
+        }
+
+        /// Randomized check of `container_first_violation`: random save
+        /// sequences (add, remove, move, edit or revert, unrelated adapters,
+        /// and arbitrary whole-list saves), from [], [D], [C, D] and [D, C].
+        /// Every save it accepts must leave each shared URL recorded before
+        /// it with the same winning type, unless the adapter that recorded
+        /// it was removed; and it must accept saves of every kind, so it
+        /// cannot pass by refusing everything.
+        #[test]
+        fn container_first_violation_never_moves_a_recorded_page() {
+            let pairs = vec![crate::capture_site::ContainerFirstPair {
+                container: "splunk.app".into(),
+                contained: "splunk.dashboard".into(),
+                container_label: "Splunk apps".into(),
+                contained_label: "Splunk dashboards".into(),
+            }];
+            let c = |ident| model_adapter("splunk.app", ident, 0, ACME);
+            let d = |ident| model_adapter("splunk.dashboard", ident, 0, ACME);
+            let starts = [vec![], vec![d(0)], vec![c(0), d(0)], vec![d(0), c(0)]];
+            const KINDS: [&str; 6] = ["add", "remove", "move", "edit", "unrelated", "whole list"];
+            let mut accepted = [0usize; KINDS.len()];
+            let mut refused = 0usize;
+            let mut rng = Rng(MODEL_SEED);
+            for sequence in 0..MODEL_SEQUENCES {
+                let mut list = starts[sequence % starts.len()].clone();
+                for _ in 0..MODEL_STEPS {
+                    let kind = rng.below(KINDS.len());
+                    let mut next = list.clone();
+                    let pool = |rng: &mut Rng| {
+                        let ident = rng.below(3);
+                        if rng.below(2) == 0 {
+                            c(ident)
+                        } else {
+                            d(ident.min(1))
+                        }
+                    };
+                    match kind {
+                        0 => {
+                            let added = pool(&mut rng);
+                            if next.iter().any(|a| identity(a) == identity(&added)) {
+                                continue;
+                            }
+                            let at = rng.below(next.len() + 1);
+                            next.insert(at, added);
+                        }
+                        1 if !next.is_empty() => {
+                            let at = rng.below(next.len());
+                            next.remove(at);
+                        }
+                        2 if next.len() > 1 => {
+                            let from = rng.below(next.len());
+                            let moved = next.remove(from);
+                            let to = rng.below(next.len() + 1);
+                            next.insert(to, moved);
+                        }
+                        3 if !next.is_empty() => {
+                            let at = rng.below(next.len());
+                            let path = next[at]["match"][0]["path"].as_str().unwrap().to_owned();
+                            let toggled = if path.ends_with("/v0") {
+                                path.replace("/v0", "/v1")
+                            } else {
+                                path.replace("/v1", "/v0")
+                            };
+                            next[at]["match"][0]["path"] = json!(toggled);
+                        }
+                        4 => {
+                            let unrelated = if rng.below(2) == 0 {
+                                model_adapter("work.item", rng.below(2), 0, ACME)
+                            } else {
+                                model_adapter(
+                                    "splunk.app",
+                                    rng.below(2),
+                                    0,
+                                    "https://other.splunkcloud.com",
+                                )
+                            };
+                            match next.iter().position(|a| *a == unrelated) {
+                                Some(at) => {
+                                    next.remove(at);
+                                }
+                                None => {
+                                    let at = rng.below(next.len() + 1);
+                                    next.insert(at, unrelated);
+                                }
+                            }
+                        }
+                        5 => {
+                            // An arbitrary whole-list save: shuffle, then drop or add a few.
+                            for i in (1..next.len()).rev() {
+                                let j = rng.below(i + 1);
+                                next.swap(i, j);
+                            }
+                            for _ in 0..rng.below(3) {
+                                if rng.below(2) == 0 && !next.is_empty() {
+                                    let at = rng.below(next.len());
+                                    next.remove(at);
+                                } else {
+                                    let added = pool(&mut rng);
+                                    if !next.iter().any(|a| identity(a) == identity(&added)) {
+                                        let at = rng.below(next.len() + 1);
+                                        next.insert(at, added);
+                                    }
+                                }
+                            }
+                        }
+                        _ => continue,
+                    }
+                    if next == list {
+                        continue;
+                    }
+                    if container_first_violation(&list, &next, &pairs).is_some() {
+                        refused += 1;
+                        continue;
+                    }
+                    for url in 0..MODEL_URLS {
+                        let Some((kind_before, id_before)) = winner(&list, url) else {
+                            continue;
+                        };
+                        let survives = next.iter().any(|a| {
+                            a["origin"] == ACME
+                                && a["type"] == kind_before.as_str()
+                                && a["id"] == id_before.as_str()
+                        });
+                        if !survives {
+                            continue;
+                        }
+                        let after = winner(&next, url).map(|(kind, _)| kind);
+                        assert_eq!(
+                            after.as_deref(),
+                            Some(kind_before.as_str()),
+                            "seed {MODEL_SEED:#x}, sequence {sequence}: url {url} moved\nbefore {list:?}\nafter {next:?}"
+                        );
+                    }
+                    accepted[kind] += 1;
+                    list = next;
+                }
+            }
+            for (kind, count) in KINDS.iter().zip(accepted) {
+                assert!(count > 0, "no accepted {kind} save");
+            }
+            assert!(refused > 0, "the invariant refused nothing");
+        }
+
+        /// So a recorded dashboard never holds the app's pages, and the app
+        /// taking a retired dashboard's routes (the `declares_container`
+        /// allowance) re-keys nothing recorded: apps with dashboards, both
+        /// removed, then apps alone or both again, save.
         #[test]
         fn a_container_may_take_a_retired_contained_contracts_routes() {
             let [app, dashboard] = splunk();
-            let saves: [&[Vec<serde_json::Value>]; 3] = [
-                &[
-                    vec![dashboard.clone()],
-                    Vec::new(),
-                    vec![app.clone(), dashboard.clone()],
-                ],
-                &[vec![dashboard.clone()], Vec::new(), vec![app.clone()]],
-                &[
-                    vec![dashboard.clone()],
-                    Vec::new(),
-                    vec![app.clone()],
-                    vec![app.clone(), dashboard.clone()],
-                ],
-            ];
-            for (case, steps) in saves.into_iter().enumerate() {
+            let both = vec![app.clone(), dashboard.clone()];
+            for (case, after) in [
+                ("apps alone", vec![vec![app.clone()]]),
+                ("both in one save", vec![both.clone()]),
+                (
+                    "apps, then dashboards",
+                    vec![vec![app.clone()], both.clone()],
+                ),
+            ] {
                 let folder = tempfile::tempdir().unwrap();
                 let mut store = loaded(&folder.path().join("config.toml"));
-                for (step, adapters) in steps.iter().enumerate() {
-                    let mut next = store.snapshot().clone();
-                    next.adapters.artifacts = adapters.clone();
-                    let revision = store.revision().to_owned();
-                    store
-                        .update(next, &revision)
-                        .unwrap_or_else(|error| panic!("case {case} step {step}: {error:#}"))
-                        .expect("no conflict");
+                for adapters in [both.clone(), Vec::new()].into_iter().chain(after) {
+                    save_adapters(&mut store, adapters)
+                        .unwrap_or_else(|error| panic!("{case}: {error:#}"));
                 }
+            }
+        }
+
+        /// Families without a container_first declaration keep today's
+        /// allowance: a repository may take a removed pull request's pages,
+        /// and a pull request rule may stand alone.
+        #[test]
+        fn a_repository_may_take_a_removed_pull_requests_pages() {
+            let repo = json!({"type":"github.repo", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/{*}"}], "id":"github:{host}/{owner}/{repo}", "scope":{"owner":["acme-corp"]}});
+            let pr = json!({"type":"github.pr", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/pull/{n:int}/{*}"}], "id":"github:{host}/{owner}/{repo}/pull/{n}", "scope":{"owner":["acme-corp"]}, "within":{"type":"github.repo","id":"github:{host}/{owner}/{repo}"}});
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            for adapters in [
+                vec![pr.clone()],
+                Vec::new(),
+                vec![repo.clone()],
+                vec![pr, repo],
+            ] {
+                save_adapters(&mut store, adapters).unwrap_or_else(|error| panic!("{error:#}"));
             }
         }
 

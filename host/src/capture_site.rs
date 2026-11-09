@@ -55,6 +55,7 @@ struct CatalogFile {
     mode_words: BTreeMap<String, String>,
     fill: FillFile,
     starter_types: Vec<String>,
+    container_first: Vec<ContainerFirstPair>,
     shared_origins: BTreeMap<String, SharedOriginFile>,
 }
 
@@ -152,6 +153,62 @@ pub fn catalog() -> &'static DraftPolicy {
     static CATALOG_POLICY: OnceLock<DraftPolicy> = OnceLock::new();
     CATALOG_POLICY.get_or_init(|| match parse(CATALOG) {
         Ok(policy) => policy,
+        Err(error) => panic!("protocol/capture-site/catalog.json is invalid: {error}"),
+    })
+}
+
+/// One catalog `container_first` entry (generated from protocol/starters/,
+/// README "Test vectors and overlaps"): `container` must be configured on
+/// any origin that has a `contained` adapter, because the container wins
+/// pages the contained rule also matches. The labels are the starters' own,
+/// for the refusal.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ContainerFirstPair {
+    pub container: String,
+    pub contained: String,
+    pub container_label: String,
+    pub contained_label: String,
+}
+
+/// The `container_first` entries of a catalog `source`, refused unless each
+/// names two distinct starter types (`starter_types`) with non-empty labels
+/// and no contained type appears twice: the line is generated, so anything
+/// else is a damaged catalog.
+fn parse_container_first(source: &str) -> Result<Vec<ContainerFirstPair>, String> {
+    let file: CatalogFile = serde_json::from_str(source).map_err(|error| error.to_string())?;
+    let mut seen = Vec::new();
+    for pair in &file.container_first {
+        let known = |name: &String| file.starter_types.contains(name);
+        if !known(&pair.container) || !known(&pair.contained) || pair.container == pair.contained {
+            return Err(format!(
+                "container_first entry {:?} / {:?} must name two distinct starter types",
+                pair.container, pair.contained
+            ));
+        }
+        if pair.container_label.trim().is_empty() || pair.contained_label.trim().is_empty() {
+            return Err(format!(
+                "container_first entry {:?} needs both labels",
+                pair.contained
+            ));
+        }
+        if seen.contains(&&pair.contained) {
+            return Err(format!("container_first lists {:?} twice", pair.contained));
+        }
+        seen.push(&pair.contained);
+    }
+    Ok(file.container_first)
+}
+
+/// The compiled-in catalog's `container_first` entries, read on the first
+/// save that needs them. A damaged entry fails closed: that save panics
+/// rather than saving unchecked (as `catalog` does for the rest of the
+/// file), and the tests below parse the shipped file and compare it with the
+/// starter families, so a damaged one never ships.
+pub(crate) fn container_first_pairs() -> &'static [ContainerFirstPair] {
+    static PAIRS: OnceLock<Vec<ContainerFirstPair>> = OnceLock::new();
+    PAIRS.get_or_init(|| match parse_container_first(CATALOG) {
+        Ok(pairs) => pairs,
         Err(error) => panic!("protocol/capture-site/catalog.json is invalid: {error}"),
     })
 }
@@ -1144,8 +1201,104 @@ pub fn check_site_draft(value: CheckSiteDraftRequest, config: &mut ConfigStore) 
 
 #[cfg(test)]
 mod tests {
-    use super::{CATALOG, catalog, parse};
+    use super::{CATALOG, catalog, container_first_pairs, parse, parse_container_first};
     use std::collections::BTreeSet;
+
+    /// The catalog's `container_first` line is exactly what the starter
+    /// families declare (protocol/starters/*.json `overlaps` entries with
+    /// `expect: "container_first"`, labels from their types): an empty line
+    /// while a family declares one, a typo, or a stale label fails here, in
+    /// the host's own tests, not only in the generator's `--check`.
+    #[test]
+    fn container_first_matches_the_starter_families() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../protocol/starters");
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension().is_some_and(|ext| ext == "json")
+                    && path.file_name().is_some_and(|name| name != "ids.lock.json")
+            })
+            .collect();
+        files.sort();
+        let mut expected = Vec::new();
+        for path in files {
+            let family: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let label = |name: &str| {
+                family["types"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|ty| ty["type"] == name)
+                    .and_then(|ty| ty["label"].as_str())
+                    .unwrap_or_else(|| panic!("{}: no type {name}", path.display()))
+                    .to_owned()
+            };
+            for entry in family["overlaps"].as_array().into_iter().flatten() {
+                if entry["expect"] != "container_first" {
+                    continue;
+                }
+                let (a, b) = (entry["a"].as_str().unwrap(), entry["b"].as_str().unwrap());
+                expected.push((a.to_owned(), b.to_owned(), label(a), label(b)));
+            }
+        }
+        assert!(
+            !expected.is_empty(),
+            "a family declares container_first (Splunk)"
+        );
+        let shipped: Vec<_> = container_first_pairs()
+            .iter()
+            .map(|pair| {
+                (
+                    pair.container.clone(),
+                    pair.contained.clone(),
+                    pair.container_label.clone(),
+                    pair.contained_label.clone(),
+                )
+            })
+            .collect();
+        let sorted = |mut pairs: Vec<(String, String, String, String)>| {
+            pairs.sort();
+            pairs
+        };
+        assert_eq!(sorted(shipped), sorted(expected));
+    }
+
+    /// The shipped catalog's generated `container_first` line parses to
+    /// Splunk's pair; a damaged line is refused, never half-read.
+    #[test]
+    fn container_first_parses_and_a_damaged_line_fails_closed() {
+        let pairs = container_first_pairs();
+        assert!(pairs.iter().any(|pair| pair.container == "splunk.app"
+            && pair.contained == "splunk.dashboard"
+            && pair.container_label == "Splunk apps"
+            && pair.contained_label == "Splunk dashboards"));
+        let good = r#""container_first": [{ "container": "splunk.app", "contained": "splunk.dashboard", "container_label": "Splunk apps", "contained_label": "Splunk dashboards" }],"#;
+        assert!(
+            CATALOG.contains(good),
+            "the shipped line is the generated one"
+        );
+        for (case, damaged) in [
+            ("not a list", r#""container_first": "splunk","#.to_owned()),
+            ("a bare pair", r#""container_first": [["splunk.app", "splunk.dashboard"]],"#.to_owned()),
+            ("unknown key", good.replace(r#""contained_label""#, r#""extra": 1, "contained_label""#)),
+            ("missing label", good.replace(r#", "contained_label": "Splunk dashboards""#, "")),
+            ("empty label", good.replace(r#""Splunk apps""#, r#"" ""#)),
+            ("unknown type", good.replace(r#""splunk.app""#, r#""splunk.other""#)),
+            ("same type", good.replace(r#""splunk.app""#, r#""splunk.dashboard""#)),
+            (
+                "twice",
+                good.replace("}],", r#"}, { "container": "splunk.app", "contained": "splunk.dashboard", "container_label": "A", "contained_label": "B" }],"#),
+            ),
+        ] {
+            let source = CATALOG.replace(good, &damaged);
+            assert_ne!(source, CATALOG, "{case}: the fixture changed the catalog");
+            assert!(parse_container_first(&source).is_err(), "{case}");
+        }
+        // The line is required: a catalog without it is refused too.
+        assert!(parse(&CATALOG.replace(good, "")).is_err());
+    }
 
     #[test]
     fn catalog_parses_and_lists_every_shared_origin() {

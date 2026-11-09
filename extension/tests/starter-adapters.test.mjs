@@ -103,9 +103,11 @@ test("orderContainedFirst is stable and leaves other origins alone", () => {
   assert.deepEqual(orderContainedFirst([]), []);
 });
 
-// A family's declared container_first overlap (protocol/starters/README.md)
-// orders its container first on the family's own origins, whether or not the
-// contained adapter still carries its within.
+// A family's declared container_first pair (protocol/starters/README.md) is
+// never reordered on the family's own origins: whichever comes first records
+// the pages both match, so a re-sort would move recorded pages. Starters
+// offer the container first, and the host refuses a save that puts the
+// contained type first or flips a live pair.
 function containerFirstSeam(t) {
   setStarterFamiliesForTest([EXAMPLE_CONTAINER_FIRST_FAMILY]);
   t.after(() => setStarterFamiliesForTest(null));
@@ -117,40 +119,47 @@ function containerFirstSeam(t) {
   };
 }
 
-test("orderContainedFirst puts a declared container_first container ahead of its contained type", (t) => {
+test("orderContainedFirst never reorders a declared container_first pair", (t) => {
   const { space, board } = containerFirstSeam(t);
   const other = adapter("custom.page", "https://nest.example.test");
-  assert.deepEqual(orderContainedFirst([board, space]), [space, board]);
-  assert.deepEqual(orderContainedFirst([board, other, space]), [space, board, other]);
+  assert.deepEqual(orderContainedFirst([space, board]), [space, board]);
+  // A legacy dashboards-first pair keeps its order, so an unrelated save
+  // does not flip it (which the host would refuse).
+  assert.deepEqual(orderContainedFirst([board, space]), [board, space]);
+  assert.deepEqual(orderContainedFirst([board, other, space]), [board, other, space]);
   const inOrder = [space, other, board];
   assert.deepEqual(orderContainedFirst(inOrder), inOrder);
-  // A board saved before its space lost its within (linkedToPresentContainers);
-  // the declared order still holds once the space is added.
   const { within: _within, ...unlinked } = board;
-  assert.deepEqual(orderContainedFirst([unlinked, space]), [space, unlinked]);
-  // The declaration is the family's: on an origin it does not claim, the same
-  // types fall back to the ordinary contained-first order.
+  assert.deepEqual(orderContainedFirst([unlinked, space]), [unlinked, space]);
+  // The host checks type names on every origin, so the order is kept there
+  // too (the overlap warning stays the family's own, below).
   const elsewhereSpace = { ...space, origin: "https://elsewhere.example.test" };
   const elsewhereBoard = { ...board, origin: "https://elsewhere.example.test" };
-  assert.deepEqual(orderContainedFirst([elsewhereSpace, elsewhereBoard]), [elsewhereBoard, elsewhereSpace]);
+  assert.deepEqual(orderContainedFirst([elsewhereSpace, elsewhereBoard]), [elsewhereSpace, elsewhereBoard]);
   // Once either adapter differs from what the starter ships in any rule or
-  // in path_case, the declaration no longer describes it: the ordinary
-  // contained-first order returns, so the board's own pages stay boards.
+  // in path_case, the pair keeps whatever order it already has: whichever
+  // comes first records the pages both match, so reordering on an edit (or
+  // on reverting one) would move recorded pages from one to the other. The
+  // host refuses a save that puts the contained type first.
   const widened = { ...space, match: [space.match[0], { path: "/s/{space:name}/{_}" }] };
-  assert.deepEqual(orderContainedFirst([widened, board]), [board, widened]);
-  // A container rule the declaration does not name, widened to a catch-all.
+  assert.deepEqual(orderContainedFirst([widened, board]), [widened, board]);
+  assert.deepEqual(orderContainedFirst([board, widened]), [board, widened]);
   const widenedRoot = { ...space, match: [{ path: "/s/{space:name}/{*}" }, space.match[1]] };
-  assert.deepEqual(orderContainedFirst([widenedRoot, board]), [board, widenedRoot]);
-  // An extra, broader container rule appended after the shipped ones.
+  assert.deepEqual(orderContainedFirst([widenedRoot, board]), [widenedRoot, board]);
   const appended = { ...space, match: [...space.match, { path: "/s/{space:name}/{_}" }] };
-  assert.deepEqual(orderContainedFirst([appended, board]), [board, appended]);
+  assert.deepEqual(orderContainedFirst([appended, board]), [appended, board]);
   const folded = { ...space, path_case: "insensitive" };
-  assert.deepEqual(orderContainedFirst([folded, board]), [board, folded]);
-  // An edited contained adapter is the user's own rule: ordinary order too.
+  assert.deepEqual(orderContainedFirst([folded, board]), [folded, board]);
   const editedBoard = { ...board, match: [{ path: "/s/{space:name}/{board:name}/{*}" }] };
-  assert.deepEqual(orderContainedFirst([space, editedBoard]), [editedBoard, space]);
+  assert.deepEqual(orderContainedFirst([space, editedBoard]), [space, editedBoard]);
+  // Reverting an edit (shipped again) never flips a container-first pair.
+  // A site saved dashboards first, its app edited, then reverted: the next
+  // save keeps dashboards first, so the host has no flip to refuse.
+  assert.deepEqual(orderContainedFirst([board, widened]), [board, widened]);
+  assert.deepEqual(orderContainedFirst([board, space]), [board, space]);
+  assert.deepEqual(orderContainedFirst([space, board]), [space, board]);
   // The evaluated document agrees: the space's built-in page is the space.
-  const doc = compileDocument({ format: 1, artifacts: orderContainedFirst([board, space]) });
+  const doc = compileDocument({ format: 1, artifacts: orderContainedFirst([space, board]) });
   assert.equal(doc.ok, true);
   assert.equal(evaluate(doc.doc, "https://nest.example.test/s/acme/settings").artifact_id, "nest.space:nest.example.test/s/acme");
   assert.equal(evaluate(doc.doc, "https://nest.example.test/s/acme/roadmap").artifact_id, "nest.board:nest.example.test/acme/roadmap");
@@ -168,13 +177,14 @@ test("a multi-origin (kind any) family's container_first declaration holds on ea
   for (const origin of ["https://nest.example.test", "https://acme.nest.example.org"]) {
     const space = { ...spaceType.adapter, origin };
     const board = { ...boardType.adapter, origin };
-    assert.deepEqual(orderContainedFirst([board, space]), [space, board], origin);
+    assert.deepEqual(orderContainedFirst([board, space]), [board, space], origin);
+    assert.deepEqual(orderContainedFirst([space, board]), [space, board], origin);
     const declared = { first_adapter: 0, first_rule: 1, second_adapter: 1, second_rule: 0 };
     assert.deepEqual(reviewableOverlaps([declared], [space, board]), [], origin);
   }
   const off = "https://elsewhere.example.test";
   const [space, board] = [{ ...spaceType.adapter, origin: off }, { ...boardType.adapter, origin: off }];
-  assert.deepEqual(orderContainedFirst([space, board]), [board, space]);
+  assert.deepEqual(orderContainedFirst([space, board]), [space, board]);
 });
 
 test("reviewableOverlaps hides only a declared container_first rule pair, unedited and container first", (t) => {

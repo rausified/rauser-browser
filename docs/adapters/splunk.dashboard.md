@@ -101,9 +101,10 @@ capture, so the structural drafter cannot learn this shape.
 
 ## Known limits
 
-- **Choose dashboards with apps.** Without Splunk apps, no rule sits ahead
-  of this one, so Search and the other built-in pages are recorded as
-  dashboards named `search`, `reports`, and so on.
+- **Choose with Splunk apps.** Alone, this type records Search and the
+  other built-in pages as dashboards named `search`, `reports`, and so on,
+  so Capture Site offers it only with Splunk apps. Once saved, the two keep
+  their order; see `docs/adapters/splunk.app.md`.
 - **The built-in view list is Splunk apps'.** A built-in page missing from
   it, such as Enterprise Security's `incident_review`, is recorded as a
   dashboard; a dashboard whose ID is a listed word (most often `home`) is
@@ -114,8 +115,8 @@ capture, so the structural drafter cannot learn this shape.
 - **Two users' private dashboards with one ID in one app** map to one
   artifact ID; Brauser is single-user, so in practice this is one user's
   view of that URL. Moving a dashboard to another app changes its ID.
-- **Dashboards chosen before apps are not linked later**, and a built-in
-  view's `/edit` path is recorded here; see `docs/adapters/splunk.app.md`.
+- **A built-in view's `/edit` path is recorded here**; see
+  `docs/adapters/splunk.app.md`.
 - **Prefixed search heads** (`<prefix>.<stack>.splunkcloud.com`) are not
   offered under `labels: 1`; see `docs/adapters/splunk.app.md`.
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).

@@ -135,11 +135,13 @@ test("a Splunk plan keeps apps ahead of dashboards, so built-in pages are app ti
   assert.equal(dashboard.type, "splunk.dashboard");
   assert.deepEqual(dashboard.within, { type: "splunk.app", artifact_id: "splunk.app:acme.splunkcloud.com/app/search" });
   assert.ok(result.probes.every((row) => !row.result.match));
-  // Dashboards alone have no app rule ahead of them and no container to roll up into.
-  const alone = plan("https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview", CONFIG,
+  // Dashboards alone would record the built-in pages as dashboards, so the
+  // host refuses them; the plan says so before asking it.
+  const alone = planCaptureSite(CONFIG, "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
     { types: new Set(["splunk.dashboard"]), scopes: {} });
-  assert.deepEqual(alone.document.artifacts.map((adapter) => adapter.type), ["splunk.dashboard"]);
-  assert.equal(alone.document.artifacts[0].within, undefined);
+  assert.deepEqual(alone, {
+    ok: false, message: "Splunk dashboards need Splunk apps saved with them. Check Splunk apps too, or uncheck Splunk dashboards.",
+  });
 });
 
 test("unchecking repositories leaves pull requests and issues unlinked", () => {

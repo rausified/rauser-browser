@@ -3,7 +3,7 @@
 // Starter family generator (docs/superpowers/specs/2026-11-03-starter-families-design.md
 // §2): turns the per-family JSON sources under protocol/starters/ into the
 // generated TypeScript module extension/starter-families.generated.ts, the
-// `starter_types` line of protocol/capture-site/catalog.json, the generated
+// `starter_types` and `container_first` lines of protocol/capture-site/catalog.json, the generated
 // docs/adapters/README.md status index, protocol/capture-site/starter-shapes.json
 // and protocol/adapter-templates/starter-vectors.json, and checks every
 // adapter's id template against protocol/starters/ids.lock.json, appending an
@@ -78,6 +78,7 @@ export interface StarterFamilyData {
 `;
 
 const CATALOG_LINE_RE = /^ {2}"starter_types": \[.*\],$/m;
+const CONTAINER_FIRST_LINE_RE = /^ {2}"container_first": \[.*\],$/m;
 
 /** The dotted/bracketed field path a sub-object sits at, for error messages. */
 function at(where, key) {
@@ -1196,6 +1197,38 @@ export function renderCatalogLine(families, current) {
   return `  "starter_types": [${ordered.map((type) => JSON.stringify(type)).join(", ")}],`;
 }
 
+/** The `container_first` line of `protocol/capture-site/catalog.json`, just
+ * after `starter_types`: every family's declared `"container_first"`
+ * `a`/`b` type pair (protocol/starters/README.md), with both types' labels
+ * for the host's refusal, in family then entry order. The host reads it to refuse a save that would make a `b` adapter
+ * live without an `a` adapter on its origin, so a contained
+ * adapter never records the container's own pages (Splunk's built-in
+ * views) under its own identity. */
+export function renderContainerFirstLine(families) {
+  const pairs = families.flatMap((family) => {
+    const label = (name) => family.types.find((type) => type.type === name)?.label ?? name;
+    return (family.overlaps ?? [])
+      .filter((entry) => entry.expect === "container_first")
+      .map((entry) => {
+        const fields = { container: entry.a, contained: entry.b, container_label: label(entry.a), contained_label: label(entry.b) };
+        return `{ ${Object.entries(fields).map(([key, value]) => `"${key}": ${JSON.stringify(value)}`).join(", ")} }`;
+      });
+  });
+  return `  "container_first": [${pairs.join(", ")}],`;
+}
+
+/** `catalogSource` with its generated lines (`renderCatalogLine`, then
+ * `renderContainerFirstLine`) brought up to date, inserting the
+ * `container_first` line after `starter_types` when it is missing. */
+function updateCatalog(catalogSource, families, current) {
+  const withTypes = catalogSource.replace(CATALOG_LINE_RE, renderCatalogLine(families, current));
+  const pairs = renderContainerFirstLine(families);
+  if (CONTAINER_FIRST_LINE_RE.test(withTypes)) return withTypes.replace(CONTAINER_FIRST_LINE_RE, pairs);
+  // Keep the file's own line ending (a CRLF checkout stays CRLF).
+  const eol = withTypes.includes("\r\n") ? "\r\n" : "\n";
+  return withTypes.replace(CATALOG_LINE_RE, (line) => `${line}${eol}${pairs}`);
+}
+
 /** The Markdown text (trailing newline) of `docs/adapters/README.md`: a
  * "Do not edit" HTML comment, a title, and a table of every starter type in
  * catalog order (`starterTypes`), each linking to its own doc page
@@ -1770,8 +1803,7 @@ function main(argv) {
   const lock = JSON.parse(readFileSync(path.join(root, LOCK_FILE), "utf8"));
 
   const catalogOrder = catalogTypeOrder(families, current);
-  const catalogLine = renderCatalogLine(families, current);
-  const updatedCatalog = catalogSource.replace(CATALOG_LINE_RE, catalogLine);
+  const updatedCatalog = updateCatalog(catalogSource, families, current);
 
   const ts = renderTs(families, catalogOrder);
   const tsPath = path.join(root, GENERATED_TS);
