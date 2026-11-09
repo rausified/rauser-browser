@@ -442,7 +442,7 @@ fn is_generic_title(adapter: &Adapter, title: &str) -> bool {
         return true;
     }
     let folded = trimmed.to_ascii_lowercase();
-    if adapter.generic_titles.iter().any(|g| *g == folded) {
+    if adapter.generic_titles.contains(&folded) {
         return true;
     }
     let rest = folded

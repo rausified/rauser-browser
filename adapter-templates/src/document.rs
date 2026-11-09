@@ -299,7 +299,7 @@ impl Container {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Adapter {
     pub(crate) artifact_type: String,
     pub(crate) origin: String,
@@ -317,6 +317,34 @@ pub struct Adapter {
     pub(crate) scope: Option<Vec<(String, Vec<String>)>>,
     pub(crate) fields: Vec<(String, String)>,
     pub(crate) within: Option<Container>,
+}
+
+/// Written out so an adapter without `generic_titles` prints exactly as the
+/// derived form did before the field existed: the host fingerprints a
+/// document by its `Debug` text (`index::adapters_fingerprint`), and a new
+/// optional key must not mark every existing user's index as built under
+/// another document.
+impl std::fmt::Debug for Adapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("Adapter");
+        s.field("artifact_type", &self.artifact_type)
+            .field("origin", &self.origin)
+            .field("host", &self.host)
+            .field("insensitive", &self.insensitive)
+            .field("rules", &self.rules)
+            .field("id", &self.id)
+            .field("titles", &self.titles);
+        if !self.generic_titles.is_empty() {
+            s.field("generic_titles", &self.generic_titles);
+        }
+        s.field("alias", &self.alias)
+            .field("refs", &self.refs)
+            .field("modes", &self.modes)
+            .field("scope", &self.scope)
+            .field("fields", &self.fields)
+            .field("within", &self.within)
+            .finish()
+    }
 }
 
 impl Adapter {
@@ -1185,6 +1213,22 @@ mod tests {
 
     fn doc(json: &str) -> Result<Document, ValidationError> {
         Document::from_value(&serde_json::from_str(json).unwrap())
+    }
+
+    /// The host fingerprints a document by its `Debug` text, so an adapter
+    /// without `generic_titles` must print as it did before the key existed,
+    /// and one with it must print differently.
+    #[test]
+    fn generic_titles_change_the_debug_text_only_when_present() {
+        let base = r#"{"format": 1, "artifacts": [{"type": "a.item", "origin": "https://a.example.com", "match": [{"path": "/i/{id:int}"}], "id": "a:{host}/{id}"#;
+        let without = format!("{:?}", doc(&format!("{base}\"}}]}}")).unwrap());
+        assert!(!without.contains("generic_titles"));
+        assert!(without.contains("titles: [], alias: None,"));
+        let with = format!(
+            "{:?}",
+            doc(&format!("{base}\", \"generic_titles\": [\"Sign in\"]}}]}}")).unwrap()
+        );
+        assert!(with.contains("generic_titles: [\"sign in\"]"));
     }
 
     #[test]
