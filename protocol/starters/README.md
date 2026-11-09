@@ -166,22 +166,21 @@ At runtime the declaration is read from the bundled family, keyed on the
 family's own origins (an adapter that reuses the type name elsewhere is
 unaffected):
 
-- `orderContainedFirst` (`extension/starter-adapters.ts`) puts `a` ahead of
-  `b` on that origin on every save, whether or not `b` still carries its
-  `within`, so `a` wins in both engines (first match wins,
-  `adapter-templates.md` §3), while both adapters are exactly as shipped.
-  Once the user edits either one, the pair is not reordered at all
-  (`isDeclaredPair`). Whichever comes first records the pages both match, so
-  reordering on an edit, or on reverting it, would move recorded pages from
-  one to the other. Settings holds a move that would put `b` above `a`,
-  edited or not. An edit that makes `b`'s rule unreachable (widening an `a`
-  rule to a catch-all) shows as an overlap to review.
+- The starter offers `a` before `b`, so a new pair is saved container
+  first and `a` wins in both engines (first match wins,
+  `adapter-templates.md` §3). After that, `orderContainedFirst`
+  (`extension/starter-adapters.ts`) never reorders the pair on that origin
+  (`isDeclaredPair`), shipped or edited. Whichever comes first records the
+  pages both match, so a re-sort on any save (an edit, a revert, or an
+  unrelated change to a config already saved dashboards-first) would move
+  recorded pages from one to the other. Settings holds a move that would
+  put `b` above `a`. An edit that makes `b`'s rule unreachable (widening an
+  `a` rule to a catch-all) shows as an overlap to review.
 - Settings leaves the host's warning for a declared pair out of the overlap
   list, but only while both adapters are exactly as the starter ships them
-  (every `match` rule and `path_case`) and `a` comes first. One predicate,
-  `isContainerFirstPair`, decides both this and the order above. An edited
-  rule on either adapter, a pair not in `pairs`, or the pair on another
-  origin is warned about and ordered as before.
+  (every `match` rule and `path_case`) and `a` comes first. `isContainerFirstPair`
+  decides this. An edited rule on either adapter, a pair not in `pairs`, or
+  the pair on another origin is warned about as before.
 - Restoring recorded rules (`site_restore`) still refuses any overlap, a
   declared pair included, because recorded contracts carry no family. On a
   family that declares `"container_first"`, Capture Site treats that one

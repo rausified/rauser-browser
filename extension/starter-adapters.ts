@@ -619,12 +619,10 @@ export function declaresContainerFirst(origin: string): boolean {
 /** Whether `container` ahead of `contained` is a starter family's declared
  * `"container_first"` pair as the family ships it: same origin, the
  * family's own types, and both adapters' rules exactly as shipped, every
- * `match` rule and `path_case` (`shippedRules`). `orderContainedFirst` keeps
- * such a pair container first, and `reviewableOverlaps` hides its declared
- * rule pairs. Once the user edits either adapter (widening any app rule to a
+ * `match` rule and `path_case` (`shippedRules`). `reviewableOverlaps` hides
+ * its declared rule pairs. Once the user edits either adapter (widening any app rule to a
  * catch-all, adding a rule, editing the dashboard rule), the declaration no
- * longer describes its rules, so its overlaps are warned about again; its
- * order is then kept as it is (`isDeclaredPair`). */
+ * longer describes its rules, so its overlaps are warned about again. */
 export function isContainerFirstPair(container: AdapterObject, contained: AdapterObject): boolean {
   if (container.origin !== contained.origin) return false;
   return containerFirst(container.origin, container.type, contained.type) !== null
@@ -634,7 +632,7 @@ export function isContainerFirstPair(container: AdapterObject, contained: Adapte
 /** Whether `container` and `contained` are a starter family's declared
  * `"container_first"` pair by type and origin, edited or not. Whichever comes
  * first records the pages both match, so `orderContainedFirst` never moves
- * one past the other once the rules are edited, settings holds a move that
+ * one past the other, settings holds a move that
  * would put `contained` first, and the host refuses a save that does
  * (`refuse_new_container_first_problem`). */
 export function isDeclaredPair(container: AdapterObject, contained: AdapterObject): boolean {
@@ -651,19 +649,18 @@ export function isDeclaredPair(container: AdapterObject, contained: AdapterObjec
  * `within` declarations, which cannot all be satisfied, keep their order.
  *
  * The one exception is a starter family's declared `"container_first"` pair
- * (Splunk's apps and dashboards): there the container's own listed pages
- * must win, so on that family's origins the container goes ahead of the
- * contained type instead, whether or not the contained adapter still carries
- * its `within`, while both adapters are as shipped (`isContainerFirstPair`).
- * Once either is edited, that pair is not reordered at all
- * (`isDeclaredPair`). */
+ * (Splunk's apps and dashboards), which is never reordered on that family's
+ * origins (`isDeclaredPair`): whichever comes first records the pages both
+ * match, so a re-sort on any save would move recorded pages. The starter
+ * offers the container first, and the host refuses a save that puts the
+ * contained type first or flips a live pair. */
 export function orderContainedFirst<T extends AdapterObject>(artifacts: T[]): T[] {
   const containers = artifacts.map(containerType);
   // ahead[i]: the adapters on adapter i's origin that must come before it.
   const ahead = artifacts.map((adapter, index) => artifacts.flatMap((other, at) => {
     if (at === index || other.origin !== adapter.origin) return [];
-    if (isContainerFirstPair(other, adapter)) return [at];
-    // An edited declared pair keeps the order it has (`isDeclaredPair`).
+    // A declared container_first pair keeps the order it has, shipped or
+    // edited (`isDeclaredPair`).
     if (isDeclaredPair(other, adapter) || isDeclaredPair(adapter, other)) return [];
     const inside = containers[at] === adapter.type;
     return inside ? [at] : [];
