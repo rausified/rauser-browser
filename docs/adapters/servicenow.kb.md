@@ -5,6 +5,12 @@ Status: development draft. The URL rules come from
 (ServiceNow Community threads and the public Raycast ServiceNow extension
 source), no browsing history, cookies or a ServiceNow account.
 
+History check (2026-11-09): graded against a held-back sample of real
+browsing history (real URLs from eight researched sites): 4 real URLs
+(11 visits) matched, 2/3 rules confirmed, the recorded title right on
+2/4. Not every rule and title was confirmed, so this type stays a
+development draft.
+
 Brauser offers this draft on a customer instance, `<instance>.service-now.com`
 (the `servicenow` family's strict subdomain origin, `exclude: ["www"]`),
 alongside incidents, requested items and change requests. Any combination

@@ -117,6 +117,17 @@ confirmed every rule and title; `checked_by` names the agent session). A
 development type has not been certified yet and carries `method: null`,
 `checked_on: null`, `checked_by: null`.
 
+A history check passes a type only when, on real visits, every rule is
+matched at least once, every visit of that type gets the right type, ID and
+recorded title, and no page that should not match does. A recorded title
+counts as wrong when it is a sign-in page, password gate, app-shell loading
+title, error page or portal default rather than the item's own name. A
+type that falls short stays `development` and its doc gets a
+`History check (<date>):` paragraph under its `Status:` line, giving only
+counts: real URLs and visits matched, rules confirmed, titles right, and
+real URLs of the type that matched no rule. Real URLs, titles, tenant
+names and IDs stay with the evidence, outside the repository.
+
 ## Test vectors and overlaps
 
 `sample_origin` and `sample_scope` are the values `scripts/generate-starters.mjs`

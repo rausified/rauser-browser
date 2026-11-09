@@ -8,6 +8,12 @@ the type-name rule — a type name may hold only one dot). Both
 adapter-template engines verify the samples below. A live check with a real
 Google account is still needed before this draft is release-certified.
 
+History check (2026-11-09): graded against a held-back sample of real
+browsing history (real URLs from eight researched sites): 3 real URLs (3
+visits) matched, 1/3 rules confirmed, the recorded title right on 3/3.
+Not every rule and title was confirmed, so this type stays a development
+draft.
+
 Brauser offers this draft on the exact origin `https://docs.google.com`,
 alongside Google Docs, Sheets, Slides and the Forms editor (the
 `google-workspace` family). Any one of the five can be chosen alone in

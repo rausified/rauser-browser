@@ -691,6 +691,34 @@ replies cannot cross refresh, period, home/config or host-lifecycle boundaries.
 On the final page, keyboard focus moves from the disappearing Load more button
 to the first new checkbox. Focus-session choices keep their separate bounds.
 
+**Saved sharing drafts.** Explicit **Save current selection** keeps the exact
+checked preview, rendered session heading/gap notices, original artifact-day
+rows and absolute dates as an immutable browser-local UUID record. Drafts are
+scoped by exact home root and profile; duplicate names are allowed. They survive
+panel closure and browser restart, but do not travel with the home folder and
+are lost when browser data is cleared. A save refuses an invalid name, more
+than 2,000 selected rows, a preview over 128 Ki characters, a record over 256 KiB,
+or a catalog already holding 20 drafts. No draft is evicted automatically;
+concurrent saves use independent keys. The catalog displays at most 20 records,
+with an explicit notice if concurrent saves left more. Original previews open
+separately from live choices and copy/delete only on explicit gestures.
+
+**Compare with current evidence** queries the original dates/session with the
+current configuration revision, retaining only the saved identity set. It
+follows at most 50 snapshot-checked all-work pages, stopping early when every
+saved identity is found. Focus-session and legacy responses retain their
+existing bounds. Only complete coverage proves an entry missing; omission,
+truncation, unavailable sessions or the scan limit make unseen entries
+**unreached**. Unchanged rows start selected, changed rows require review, and
+missing/unreached rows cannot enter the refreshed preview. New activity is
+excluded. Changed session headings or gap notices are shown beside their saved
+versions and require separate approval before copying or saving the refreshed
+preview. **Save reviewed version** creates a new record and preserves its
+original. Home, revision, selected-draft and host-lifecycle changes invalidate
+pending comparisons. Browser-local storage is validated and rendered as text;
+storage/clipboard failures remain visible and retryable. This flow starts no
+agent and edits no source log, note, configuration or measured activity.
+
 **One focus session.** In the sharing area, **Choose from → One focus session**
 lists up to 64 recorded sessions in the period, newest activity first. Selecting
 one offers only its direct activity as unchecked artifact-day choices. Select

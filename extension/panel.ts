@@ -32,6 +32,8 @@ import { armTaskNotifications, taskNoticeSignal } from "./task-notifications.js"
 import { TaskRecall } from "./task-recall.js";
 import { literalTaskInstruction } from "./task-commands.js";
 import { readScopeText, recentSummaryText, summaryLine } from "./summary-text.js";
+import { SharingDraftPanel } from "./sharing-draft-panel.js";
+import { choiceKey, draftScope, focusHeading, gapFooter, gapLines, selectionPreview, type DraftSelection } from "./sharing-drafts.js";
 import {
   artifactLook, capturePill, compactDuration, importanceLabel, importanceTone, pageLook, summaryTimeLabel,
 } from "./panel-look.js";
@@ -383,7 +385,9 @@ let worklogStorage = "";
 let worklogPageLoading = false;
 let worklogPageNotice = "";
 const selectedWork = new Set<string>();
-const worklogChoiceKey = (row: WorklogChoice): string => JSON.stringify([row.artifact_id, row.local_date]);
+const worklogChoiceKey = choiceKey;
+let sharingDraftPanel: SharingDraftPanel | null = null;
+let draftPolicyPending = false;
 
 function resetWorklogSelection(): void {
   worklogScope = "";
@@ -403,6 +407,7 @@ function resetWorklogSelection(): void {
   copyWorklogButton.disabled = true;
   worklogSelectAll.disabled = true;
   worklogClear.disabled = true;
+  sharingDraftPanel?.invalidate();
 }
 
 // connected means a host can be reached, even after its port exits. Invalidate
@@ -1158,6 +1163,7 @@ function render(): void {
   renderFocus();
   if (session.status) renderQueue(session.status);
   updateControls();
+  sharingDraftPanel?.render();
   retryWaitingHistory();
   if (!closed && (reconnected || delivered)) void refreshArtifact(true);
   if (!closed && delivered && !recentView.hidden && curateWorklog.checked) void loadWorklog();
@@ -1195,6 +1201,8 @@ function openSettings(): void {
 
 async function reloadConfig(): Promise<void> {
   const response = await session.reload();
+  draftPolicyPending = false;
+  sharingDraftPanel?.render();
   if (response.config_issue || response.adapter_issue) {
     show(response.config_issue ?? response.adapter_issue ?? "Adapter policy is invalid.", true);
   }
@@ -2026,6 +2034,7 @@ async function loadWorklog(): Promise<void> {
   const focusedScope = worklogScope;
   const seq = ++worklogLoadSeq;
   worklogReport = null;
+  sharingDraftPanel?.render();
   worklogPageLoading = false;
   worklogPageNotice = "";
   worklogChoices.disabled = false;
@@ -2149,6 +2158,7 @@ async function loadMoreWorklog(): Promise<void> {
   worklogSelectAll.disabled = true;
   worklogClear.disabled = true;
   copyWorklogButton.disabled = true;
+  sharingDraftPanel?.render();
   try {
     const response = await session.host.call({ type: "worklog_choices", protocol_version: PROTOCOL_VERSION,
       request_id: newRequestId(), expected_revision: revision ?? "",
@@ -2198,6 +2208,7 @@ async function loadMoreWorklog(): Promise<void> {
     if (seq === worklogLoadSeq && !closed) {
       worklogChoices.disabled = false;
       worklogMore.setAttribute("aria-disabled", "false");
+      sharingDraftPanel?.render();
     }
   }
 }
@@ -2264,12 +2275,10 @@ function appendWorklogChoices(rows: WorklogChoice[], focusedKey: string | null =
 function renderWorklog(): void {
   const report = worklogReport;
   if (!report) return;
-  const lines = report.gaps.map((gap) =>
-    `${gap.count} completed activity-hour record${gap.count === 1 ? "" : "s"} missing from ${gap.first_occurred_at} through ${gap.last_occurred_at}.`);
+  const lines = gapLines(report);
   const hasGaps = lines.length > 0 || report.gaps_truncated;
   worklogGaps.hidden = !hasGaps;
   worklogGapStatus.textContent = "Known capture gaps intersect this period. Counts cover each full reported range; ranges may overlap. Missing activity is excluded from totals.";
-  if (report.gaps_truncated) lines.push("More capture gaps are recorded; only the first 32 notices are shown.");
   worklogGapList.replaceChildren();
   for (const line of lines) {
     const item = document.createElement("li");
@@ -2291,20 +2300,46 @@ function renderWorklog(): void {
     worklogClear.disabled = selected.length === 0 || worklogPageLoading;
     copyWorklogButton.disabled = selected.length === 0 || worklogPageLoading;
     const focus = report.type === "worklog_focus_choices_result";
-    const heading = focus && report.selected_session
-      ? `Focus session: ${report.selected_session.name}${report.name_changed ? " (name changed in this period)" : ""}\n` : "";
+    const heading = focusHeading(report);
     text = selected.length
-      ? `${heading}Selected work: ${report.start_date} through ${report.end_date}\n${selected.length} artifact-day entr${selected.length === 1 ? "y" : "ies"}\n\n${selected.map((row) => `${row.local_date} · ${row.text}\n${row.url}`).join("\n\n")}`
+      ? selectionPreview({ start_date: report.start_date, end_date: report.end_date, choices: selected,
+        heading, footer: "", include_gaps: false, focus_session_id: null })
       : focus && report.selected_session === null ? worklogFocusStatus.textContent ?? "Choose a session."
         : "Select work to include in the preview.";
   } else {
     text = report.text;
     copyWorklogButton.disabled = false;
   }
-  worklogText.textContent = text + (hasGaps && includeWorklogGaps.checked
-    ? `\n\nCapture gaps: ${report.type !== "worklog_reported" ? "this period has missing activity" : "this worklog is incomplete"}. Counts cover full reported ranges, may overlap, and are not added to activity totals.\n${lines.join("\n")}`
-    : "");
+  worklogText.textContent = text + gapFooter(report, includeWorklogGaps.checked, report.type !== "worklog_reported");
+  sharingDraftPanel?.render();
 }
+
+function currentDraftSelection(): DraftSelection | null {
+  const report = worklogReport;
+  if (!session.connected || draftPolicyPending || !report || report.type === "worklog_reported" ||
+      worklogPageLoading || copyWorklogButton.disabled) return null;
+  const choices = report.choices.filter((row) => selectedWork.has(worklogChoiceKey(row)));
+  if (!choices.length) return null;
+  return { start_date: report.start_date, end_date: report.end_date, choices,
+    focus_session_id: report.type === "worklog_focus_choices_result" ? report.focus_session_id : null,
+    heading: focusHeading(report), footer: gapFooter(report, includeWorklogGaps.checked),
+    include_gaps: includeWorklogGaps.checked };
+}
+
+sharingDraftPanel = new SharingDraftPanel({
+  context: () => !closed && !draftPolicyPending && session.connected && session.revision &&
+      session.config?.storage && !session.configIssue && !session.adapterIssue
+    ? { scope: draftScope(session.config.storage), revision: session.revision } : null,
+  selection: currentDraftSelection,
+  load: (draft, revision, offset, snapshot) => {
+    const dates = { protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), expected_revision: revision,
+      start_date: draft.start_date, end_date: draft.end_date };
+    return draft.focus_session_id === null
+      ? session.host.call({ ...dates, type: "worklog_choices", page: snapshot === undefined ? { offset } : { offset, snapshot } }, "worklog_choices_result")
+      : session.host.call({ ...dates, type: "worklog_focus_choices", focus_session_id: draft.focus_session_id }, "worklog_focus_choices_result");
+  },
+});
+window.addEventListener("storage", () => sharingDraftPanel?.render());
 
 function scheduleRecent(): void {
   if (recentTimer !== null) clearTimeout(recentTimer);
@@ -2668,7 +2703,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 session.watchPolicy(() => {
   // The config reload is debounced; invalidate sharing immediately so a
   // reply from the old home/revision cannot publish during that wait.
+  draftPolicyPending = true;
   resetWorklogSelection();
+  sharingDraftPanel?.render();
   worklogText.textContent = "Settings changed. Reloading worklog…";
   scheduleReload();
 });
@@ -2692,6 +2729,7 @@ const pollTimer = setInterval(() => {
 }, STATUS_POLL_MS);
 window.addEventListener("pagehide", () => {
   closed = true;
+  sharingDraftPanel?.invalidate();
   taskRecall.reset();
   pendingTaskFocus = null;
   clearInterval(pollTimer);
