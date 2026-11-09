@@ -1334,6 +1334,16 @@ remain recognized; other rewrites use the conservative historical overlap check.
 This does not attempt general template inclusion, so an edit whose safety cannot
 be proved may be refused even when particular URLs would retain their identity.
 
+Reordering existing live adapters also preserves this freeze: reversing
+potentially overlapping adapters with different origin/type/ID contracts is
+refused, including a reorder combined with recognition edits or consolidation
+of same-identity siblings. The refusal names the competing adapters and asks
+to keep their earlier order. Disjoint and same-identity reorders remain allowed.
+Declared containment does not excuse moving a container ahead of a still-live
+contained adapter; first-match evaluation would change the primary record key.
+These checks are conservative, and do not yet cover every handoff caused by a
+new leading adapter or expansion without a reorder (`brwr-98mo`).
+
 The frozen-ID transition check compares counted template sets within each origin and type, so removing one of two same-type adapters narrows policy without mistaking the surviving sibling for an ID edit, while a real replacement remains refused.
 
 **Retired history budget.** Growing

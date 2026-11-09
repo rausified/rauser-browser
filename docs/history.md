@@ -1712,3 +1712,35 @@ groups omitted from the previous child-pipe guard pass. Both now use the
 existing probe before fixtures, covering fourteen cases without changing
 validation assertions or strict-mode behavior. TESTING.md describes this audit
 boundary without stale fixed test counts.
+
+
+## 2026-11-09 — Freeze primary identity across live-adapter reorders
+
+`brwr-qbub`: `validate_adapter_precedence` complements retirement and recognition
+narrowing guards. Existing contract occurrences are paired in three passes:
+exact equality, preserved recognition and same origin/type/ID. Exact matches
+are reserved globally so edited siblings cannot consume them; duplicates consume
+one occurrence each. For each old earlier contract, its first recognition-
+preserving successor supplies its retained position, falling back to its paired
+occurrence for other recognition edits. A promoted existing adapter with another
+key contract and a potential overlap refuses the save. Using the first proven
+successor also detects removal of a shorter sibling in favor of a later wider
+one. Entirely invalid current policies still use the existing fragment/history
+repair checks; no first-match order is inferred from an inert document.
+
+The full overlap check includes declared containers. The retirement allowance
+for releasing a removed contained adapter to its container does not authorize
+moving a container ahead of that still-live adapter. Both directions of a
+container/contained reversal refuse; the valid starter order and movement of
+unrelated adapters remain usable. Matching does not grant authority to insert a
+new leading identity or expand recognition without reversal: `brwr-98mo` tracks
+those separate gaps. Ordinary ID freezing, note ownership and recovery, retired
+history and migration-apply behavior retain their contracts.
+
+Validation: failing-first real ConfigStore regression; five new tests, including
+15 type/ID/edit refusal variants, duplicate compatibility, consolidation,
+disjoint/same-key reorders and both container reversals. All 138 configuration
+tests and four capture-site module tests pass; host library/tests Clippy with
+warnings denied and all fast static gates pass. Full platform and extension
+suites are delegated to the driver's external commit gate. Complete fresh diff
+review and one independent session review found no P1/P2 issues.
