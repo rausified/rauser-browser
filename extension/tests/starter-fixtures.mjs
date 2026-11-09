@@ -235,3 +235,63 @@ export const EXAMPLE_UNSCOPED_PAIR_FAMILY = {
     },
   ],
 };
+
+// A container-first pair: `nest.space` lists its own built-in pages
+// (`settings`, `members`), which must win over `nest.board`, a type declared
+// `within` the space whose only rule takes any word at that position. The
+// declared `container_first` entry names that one overlapping rule pair
+// (space rule 1, board rule 0), so the space is ordered first and its
+// expected overlap is not shown as a settings warning.
+export const EXAMPLE_CONTAINER_FIRST_FAMILY = {
+  family: "nest",
+  display_name: "Nest",
+  review_prompt: "Choose what to remember on Nest.",
+  origin: { kind: "exact", origin: "https://nest.example.test" },
+  scope: null,
+  sample_origin: "https://nest.example.test",
+  sample_scope: [],
+  overlaps: [{ a: "nest.space", b: "nest.board", expect: "container_first", pairs: [[1, 0]] }],
+  types: [
+    {
+      type: "nest.space",
+      key: "nest.space:{origin}",
+      label: "Nest spaces",
+      label_variants: [],
+      description: "An example container with its own built-in pages.",
+      record_label: "spaces",
+      example_path: null,
+      adapter: {
+        type: "nest.space",
+        match: [{ path: "/s/{space:name}" }, { path: "/s/{space:name}/(settings|members)" }],
+        id: "nest.space:{host}/s/{space}",
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/nest.space.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    },
+    {
+      type: "nest.board",
+      key: "nest.board:{origin}",
+      label: "Nest boards",
+      label_variants: [],
+      description: "An example board inside a space.",
+      record_label: "boards",
+      example_path: null,
+      adapter: {
+        type: "nest.board",
+        match: [{ path: "/s/{space:name}/{board:name}" }],
+        id: "nest.board:{host}/{space}/{board}",
+        within: { type: "nest.space", id: "nest.space:{host}/s/{space}" },
+      },
+      history: [],
+      status: { state: "development", method: null, checked_on: null, checked_by: null },
+      docs: "docs/adapters/nest.board.md",
+      samples: [],
+      samples_shape: false,
+      vectors: [],
+    },
+  ],
+};
