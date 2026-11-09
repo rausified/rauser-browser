@@ -1199,15 +1199,21 @@ export function renderCatalogLine(families, current) {
 
 /** The `container_first` line of `protocol/capture-site/catalog.json`, just
  * after `starter_types`: every family's declared `"container_first"`
- * `[a, b]` type pair (protocol/starters/README.md), in family then entry
- * order. The host reads it to refuse a save that would make a `b` adapter
+ * `a`/`b` type pair (protocol/starters/README.md), with both types' labels
+ * for the host's refusal, in family then entry order. The host reads it to refuse a save that would make a `b` adapter
  * live without an `a` adapter on its origin, so a contained
  * adapter never records the container's own pages (Splunk's built-in
  * views) under its own identity. */
 export function renderContainerFirstLine(families) {
-  const pairs = families.flatMap((family) => (family.overlaps ?? [])
-    .filter((entry) => entry.expect === "container_first")
-    .map((entry) => `[${JSON.stringify(entry.a)}, ${JSON.stringify(entry.b)}]`));
+  const pairs = families.flatMap((family) => {
+    const label = (name) => family.types.find((type) => type.type === name)?.label ?? name;
+    return (family.overlaps ?? [])
+      .filter((entry) => entry.expect === "container_first")
+      .map((entry) => {
+        const fields = { container: entry.a, contained: entry.b, container_label: label(entry.a), contained_label: label(entry.b) };
+        return `{ ${Object.entries(fields).map(([key, value]) => `"${key}": ${JSON.stringify(value)}`).join(", ")} }`;
+      });
+  });
   return `  "container_first": [${pairs.join(", ")}],`;
 }
 

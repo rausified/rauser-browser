@@ -55,7 +55,7 @@ struct CatalogFile {
     mode_words: BTreeMap<String, String>,
     fill: FillFile,
     starter_types: Vec<String>,
-    container_first: Vec<(String, String)>,
+    container_first: Vec<ContainerFirstPair>,
     shared_origins: BTreeMap<String, SharedOriginFile>,
 }
 
@@ -157,14 +157,57 @@ pub fn catalog() -> &'static DraftPolicy {
     })
 }
 
-/// The catalog's `container_first` pairs, `(container, contained)` starter
-/// types (generated from protocol/starters/, README "Test vectors and
-/// overlaps"): the container must stay ahead of the contained type on its
-/// origin, because it wins pages the contained rule also matches.
-pub(crate) fn container_first_pairs() -> &'static [(String, String)] {
-    static PAIRS: OnceLock<Vec<(String, String)>> = OnceLock::new();
-    PAIRS.get_or_init(|| match serde_json::from_str::<CatalogFile>(CATALOG) {
-        Ok(file) => file.container_first,
+/// One catalog `container_first` entry (generated from protocol/starters/,
+/// README "Test vectors and overlaps"): `container` must be configured on
+/// any origin that has a `contained` adapter, because the container wins
+/// pages the contained rule also matches. The labels are the starters' own,
+/// for the refusal.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ContainerFirstPair {
+    pub container: String,
+    pub contained: String,
+    pub container_label: String,
+    pub contained_label: String,
+}
+
+/// The `container_first` entries of a catalog `source`, refused unless each
+/// names two distinct starter types (`starter_types`) with non-empty labels
+/// and no contained type appears twice: the line is generated, so anything
+/// else is a damaged catalog.
+fn parse_container_first(source: &str) -> Result<Vec<ContainerFirstPair>, String> {
+    let file: CatalogFile = serde_json::from_str(source).map_err(|error| error.to_string())?;
+    let mut seen = Vec::new();
+    for pair in &file.container_first {
+        let known = |name: &String| file.starter_types.contains(name);
+        if !known(&pair.container) || !known(&pair.contained) || pair.container == pair.contained {
+            return Err(format!(
+                "container_first entry {:?} / {:?} must name two distinct starter types",
+                pair.container, pair.contained
+            ));
+        }
+        if pair.container_label.trim().is_empty() || pair.contained_label.trim().is_empty() {
+            return Err(format!(
+                "container_first entry {:?} needs both labels",
+                pair.contained
+            ));
+        }
+        if seen.contains(&&pair.contained) {
+            return Err(format!("container_first lists {:?} twice", pair.contained));
+        }
+        seen.push(&pair.contained);
+    }
+    Ok(file.container_first)
+}
+
+/// The compiled-in catalog's `container_first` entries. A damaged entry
+/// fails closed: the host refuses to start (as for the rest of the catalog,
+/// `catalog`), and the tests below parse the shipped file, so one never
+/// ships.
+pub(crate) fn container_first_pairs() -> &'static [ContainerFirstPair] {
+    static PAIRS: OnceLock<Vec<ContainerFirstPair>> = OnceLock::new();
+    PAIRS.get_or_init(|| match parse_container_first(CATALOG) {
+        Ok(pairs) => pairs,
         Err(error) => panic!("protocol/capture-site/catalog.json is invalid: {error}"),
     })
 }
@@ -1157,8 +1200,43 @@ pub fn check_site_draft(value: CheckSiteDraftRequest, config: &mut ConfigStore) 
 
 #[cfg(test)]
 mod tests {
-    use super::{CATALOG, catalog, parse};
+    use super::{CATALOG, catalog, container_first_pairs, parse, parse_container_first};
     use std::collections::BTreeSet;
+
+    /// The shipped catalog's generated `container_first` line parses to
+    /// Splunk's pair; a damaged line is refused, never half-read.
+    #[test]
+    fn container_first_parses_and_a_damaged_line_fails_closed() {
+        let pairs = container_first_pairs();
+        assert!(pairs.iter().any(|pair| pair.container == "splunk.app"
+            && pair.contained == "splunk.dashboard"
+            && pair.container_label == "Splunk apps"
+            && pair.contained_label == "Splunk dashboards"));
+        let good = r#""container_first": [{ "container": "splunk.app", "contained": "splunk.dashboard", "container_label": "Splunk apps", "contained_label": "Splunk dashboards" }],"#;
+        assert!(
+            CATALOG.contains(good),
+            "the shipped line is the generated one"
+        );
+        for (case, damaged) in [
+            ("not a list", r#""container_first": "splunk","#.to_owned()),
+            ("a bare pair", r#""container_first": [["splunk.app", "splunk.dashboard"]],"#.to_owned()),
+            ("unknown key", good.replace(r#""contained_label""#, r#""extra": 1, "contained_label""#)),
+            ("missing label", good.replace(r#", "contained_label": "Splunk dashboards""#, "")),
+            ("empty label", good.replace(r#""Splunk apps""#, r#"" ""#)),
+            ("unknown type", good.replace(r#""splunk.app""#, r#""splunk.other""#)),
+            ("same type", good.replace(r#""splunk.app""#, r#""splunk.dashboard""#)),
+            (
+                "twice",
+                good.replace("}],", r#"}, { "container": "splunk.app", "contained": "splunk.dashboard", "container_label": "A", "contained_label": "B" }],"#),
+            ),
+        ] {
+            let source = CATALOG.replace(good, &damaged);
+            assert_ne!(source, CATALOG, "{case}: the fixture changed the catalog");
+            assert!(parse_container_first(&source).is_err(), "{case}");
+        }
+        // The line is required: a catalog without it is refused too.
+        assert!(parse(&CATALOG.replace(good, "")).is_err());
+    }
 
     #[test]
     fn catalog_parses_and_lists_every_shared_origin() {

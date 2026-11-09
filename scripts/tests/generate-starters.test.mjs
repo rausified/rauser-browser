@@ -830,11 +830,14 @@ test("a container_first pair becomes the family's expected overlap_report pairs,
 
 test("the catalog's container_first line lists each declared [container, contained] pair for the host", () => {
   const family = structuredClone(EXAMPLE_CONTAINER_FIRST_FAMILY);
-  assert.equal(renderContainerFirstLine([family, EXAMPLE_STRICT_FAMILY]), '  "container_first": [["nest.space", "nest.board"]],');
+  assert.equal(renderContainerFirstLine([family, EXAMPLE_STRICT_FAMILY]),
+    '  "container_first": [{ "container": "nest.space", "contained": "nest.board", "container_label": "Nest spaces", "contained_label": "Nest boards" }],');
   assert.equal(renderContainerFirstLine([EXAMPLE_STRICT_FAMILY]), '  "container_first": [],');
   // The shipped catalog carries Splunk's pair.
   const catalog = JSON.parse(readFileSync(path.join(REPO, CATALOG_JSON), "utf8"));
-  assert.deepEqual(catalog.container_first, [["splunk.app", "splunk.dashboard"]]);
+  assert.deepEqual(catalog.container_first, [{
+    container: "splunk.app", contained: "splunk.dashboard", container_label: "Splunk apps", contained_label: "Splunk dashboards",
+  }]);
 });
 
 test("a container_first pair re-runs the contained type's own vectors with that type alone", () => {

@@ -2209,11 +2209,16 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
 
 /// Each contained adapter in `config` whose catalog `container_first`
 /// container type has no adapter on its origin
-/// (`crate::capture_site::container_first_pairs`), with that type. Where
+/// (`crate::capture_site::container_first_pairs`), with that entry. Where
 /// the container sits is the extension's call (`orderContainedFirst`:
 /// container first while both are as shipped, contained first once the user
 /// edits either), so only its presence is checked.
-fn container_first_gaps(config: &ConfigSnapshot) -> Vec<(&serde_json::Value, &str)> {
+fn container_first_gaps(
+    config: &ConfigSnapshot,
+) -> Vec<(
+    &serde_json::Value,
+    &'static crate::capture_site::ContainerFirstPair,
+)> {
     let adapters = &config.adapters.artifacts;
     let field = |adapter: &serde_json::Value, key: &str| {
         adapter
@@ -2228,16 +2233,16 @@ fn container_first_gaps(config: &ConfigSnapshot) -> Vec<(&serde_json::Value, &st
         else {
             continue;
         };
-        for (container, contained) in crate::capture_site::container_first_pairs() {
-            if *contained != artifact_type {
+        for pair in crate::capture_site::container_first_pairs() {
+            if pair.contained != artifact_type {
                 continue;
             }
             let present = adapters.iter().any(|other| {
-                field(other, "type").as_deref() == Some(container.as_str())
+                field(other, "type").as_deref() == Some(pair.container.as_str())
                     && field(other, "origin").as_deref() == Some(origin.as_str())
             });
             if !present {
-                gaps.push((adapter, container.as_str()));
+                gaps.push((adapter, pair));
             }
         }
     }
@@ -2246,28 +2251,29 @@ fn container_first_gaps(config: &ConfigSnapshot) -> Vec<(&serde_json::Value, &st
 
 /// Refuse a save that leaves a container_first contained adapter (Splunk
 /// dashboards) live without its container (Splunk apps) on its origin,
-/// unless `current` already had that gap. Alone, the contained rule records
-/// the container's own pages (the built-in views) under its identity, and
-/// adding the container later would re-key them without a migration. With
-/// the shipped pair the extension keeps the container ahead, so a contained
-/// contract never holds those pages, and the container may take a retired
-/// contained contract's routes (`declares_container`) safely.
+/// unless `current` already had that gap: dashboards alone, or apps removed
+/// while dashboards stay. Every save reaches this through `validate_update`
+/// (settings, Capture Site and its preflight, and saving restored rules).
+/// Alone, the contained rule records the container's own pages (the
+/// built-in views) under its identity, and adding the container later would
+/// re-key them without a migration. With the shipped pair the extension
+/// keeps the container ahead, so a contained contract never holds those
+/// pages, and the container may take a retired contained contract's routes
+/// (`declares_container`) safely.
 fn refuse_new_container_first_gap(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result<()> {
     let existing = container_first_gaps(current);
-    for (adapter, container) in container_first_gaps(next) {
+    for (adapter, pair) in container_first_gaps(next) {
         if existing.iter().any(|(had, _)| *had == adapter) {
             continue;
         }
-        let artifact_type = adapter
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
         let origin = adapter
             .get("origin")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         bail!(
-            "A {artifact_type:?} adapter on {origin} needs a {container:?} adapter on the same site: without one, {artifact_type:?} records {container:?}'s own pages under its own identity. Choose {container:?} too, or remove {artifact_type:?}."
+            "{contained} need {container} saved with them on {origin}; add {container}, or remove {contained} too.",
+            contained = pair.contained_label,
+            container = pair.container_label,
         );
     }
     Ok(())
@@ -3993,7 +3999,7 @@ mod tests {
         /// under dashboards; the refusal names both types. The order is the
         /// extension's: dashboards ahead of edited apps still save.
         #[test]
-        fn a_container_first_contained_adapter_needs_its_container_ahead() {
+        fn a_container_first_contained_adapter_needs_its_container() {
             let [app, dashboard] = splunk();
             for (case, setup, refused) in [
                 ("alone", Vec::new(), vec![dashboard.clone()]),
@@ -4013,8 +4019,8 @@ mod tests {
                 let error = save_adapters(&mut store, refused).unwrap_err();
                 for message in [format!("{checked:#}"), format!("{error:#}")] {
                     assert!(
-                        message.contains("\"splunk.dashboard\"")
-                            && message.contains("\"splunk.app\" adapter on the same site"),
+                        message.contains("Splunk dashboards need Splunk apps saved with them")
+                            && message.contains("add Splunk apps, or remove Splunk dashboards too"),
                         "{case}: {message}"
                     );
                 }
@@ -4029,9 +4035,31 @@ mod tests {
             save_adapters(&mut store, vec![app.clone()]).unwrap();
             save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap();
             // An edited app is ordered after the dashboard (contained first).
-            let mut edited = app;
+            let mut edited = app.clone();
             edited["match"] = json!([{"path": "/{_}/app/{app:name}/{*}"}]);
-            save_adapters(&mut store, vec![dashboard, edited]).unwrap();
+            save_adapters(&mut store, vec![dashboard.clone(), edited]).unwrap();
+            // Apps and dashboards together in a first save.
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            save_adapters(&mut store, vec![app, dashboard]).unwrap();
+        }
+
+        /// Restoring recorded rules saves through the same check: a recorded
+        /// dashboard alone (one saved before this rule) is not restored on
+        /// its own.
+        #[test]
+        fn restoring_a_recorded_contained_adapter_alone_is_refused() {
+            let [_app, mut dashboard] = splunk();
+            dashboard.as_object_mut().unwrap().remove("within");
+            let contract = adapter_contract(&dashboard).expect("a recordable contract");
+            let (_folder, store) = recorded(&[contract]);
+            let error = store
+                .site_restore("https://acme.splunkcloud.com")
+                .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("Splunk dashboards need Splunk apps saved with them"),
+                "{error:#}"
+            );
         }
 
         /// A config that already has dashboards without apps (written by
@@ -4062,13 +4090,18 @@ mod tests {
         #[test]
         fn a_container_may_take_a_retired_contained_contracts_routes() {
             let [app, dashboard] = splunk();
-            for (case, last) in [
-                ("apps alone", vec![app.clone()]),
-                ("both", vec![app.clone(), dashboard.clone()]),
+            let both = vec![app.clone(), dashboard.clone()];
+            for (case, after) in [
+                ("apps alone", vec![vec![app.clone()]]),
+                ("both in one save", vec![both.clone()]),
+                (
+                    "apps, then dashboards",
+                    vec![vec![app.clone()], both.clone()],
+                ),
             ] {
                 let folder = tempfile::tempdir().unwrap();
                 let mut store = loaded(&folder.path().join("config.toml"));
-                for adapters in [vec![app.clone(), dashboard.clone()], Vec::new(), last] {
+                for adapters in [both.clone(), Vec::new()].into_iter().chain(after) {
                     save_adapters(&mut store, adapters)
                         .unwrap_or_else(|error| panic!("{case}: {error:#}"));
                 }

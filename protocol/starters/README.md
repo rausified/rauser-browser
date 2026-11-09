@@ -181,10 +181,14 @@ unaffected):
 - Nothing else changes: user-written adapters keep the ordinary §10.3
   warning, and agent drafts still drop an overlapping rule.
 - The host never lets `b` be live without `a` on its origin. `gen:starters`
-  writes every declared pair into the `container_first` line of
-  `protocol/capture-site/catalog.json`, and a save (settings or Capture
-  Site) is refused when it would leave a `b` adapter with no `a` adapter on
-  the same origin: `b` alone, or `a` removed under `b`. The order stays the
+  writes every declared pair, with both types' labels, into the
+  `container_first` line of `protocol/capture-site/catalog.json`. That line
+  is generated only, and a host that finds it malformed refuses to start.
+  Every save (settings, Capture Site and its preflight, and saving restored
+  rules) is refused when it would leave a `b` adapter with no `a` adapter
+  on the same origin: `b` alone, or `a` removed under `b`. The refusal reads
+  "Splunk dashboards need Splunk apps saved with them on <origin>; add
+  Splunk apps, or remove Splunk dashboards too." The order stays the
   extension's (`orderContainedFirst` above), so an edited pair may save
   contained first; edited rules are the user's own, and such a pair can
   re-key as any user-written container can. A config that already has the
