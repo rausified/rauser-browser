@@ -461,6 +461,25 @@ test("settings primary actions and adapter editor work from the keyboard", async
   await page.waitForFunction(() => fixture.actions.includes("copy"));
 });
 
+test("site review selects Google kinds without JSON and saves by keyboard", async (t) => {
+  const page = await browserFixture(t, "options");
+  if (!page) return;
+  await page.locator("#site-origin").fill("https://docs.google.com");
+  const review = page.locator('[data-site-bundle="true"]');
+  await review.waitFor();
+  await activate(page, review);
+  await focused(page, "#adapter-editor-heading");
+  assert.equal(await page.locator("#adapter-technical-review").isVisible(), false);
+  assert.equal(await page.locator("#site-bundle-review input[type=checkbox]").count(), 5);
+  await audit(t, page, "options/site-review");
+  await page.locator('[data-site-kind="google.formresponse"]').focus();
+  await page.keyboard.press("Space");
+  await activate(page, "#save-adapter");
+  await page.waitForFunction(() => fixture.config.adapters.artifacts.length === 4);
+  assert.deepEqual(await page.evaluate(() => fixture.config.adapters.artifacts.map((adapter) => adapter.type)),
+    ["google.doc", "google.sheet", "google.slides", "google.form"]);
+});
+
 test("task list selection follows arrows/Home/End and detail actions survive refresh and dismissal", async (t) => {
   const page = await browserFixture(t, "tasks");
   if (!page) return;

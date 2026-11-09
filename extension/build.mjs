@@ -42,6 +42,7 @@ for (const name of ["manifest.json", "options.html", "panel.html", "tasks.html"]
   await writeFile(join(outputDir, name), fillPlaceholders(source, placeholders, name));
 }
 await copyFile(join(extensionDir, "panel.css"), join(outputDir, "panel.css"));
+await copyFile(join(extensionDir, "options.css"), join(outputDir, "options.css"));
 await copyFile(join(extensionDir, "task-notification.png"), join(outputDir, "task-notification.png"));
 await mkdir(join(outputDir, "vendor"));
 await writeFile(join(outputDir, "vendor", "readability.js"), readability);

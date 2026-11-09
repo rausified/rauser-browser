@@ -59,6 +59,7 @@ import {
   starterFamilies,
   starterFamily,
   starterOffers,
+  starterType,
   starterRuleAddition,
   starterRuleUpdate,
   starterStatus,
@@ -100,6 +101,9 @@ const starterGallery = element<HTMLDivElement>("starter-gallery");
 const adapterEditor = element<HTMLDivElement>("adapter-editor");
 const adapterEditorHeading = element<HTMLHeadingElement>("adapter-editor-heading");
 const adapterEditorReview = element<HTMLDivElement>("adapter-editor-review");
+const siteBundleReview = element<HTMLDivElement>("site-bundle-review");
+const adapterTechnicalReview = element<HTMLDivElement>("adapter-technical-review");
+const adapterTechnicalPreview = element<HTMLDivElement>("adapter-technical-preview");
 const adapterJson = element<HTMLTextAreaElement>("adapter-json");
 const adapterValidation = element<HTMLOutputElement>("adapter-validation");
 const adapterPreviewUrl = element<HTMLInputElement>("adapter-preview-url");
@@ -144,6 +148,7 @@ type AdapterEdit =
   // linkContainers: the GitHub repositories starter, whose save also links
   // existing pull request and issue rules to it (`withContainerLinks`).
   | { kind: "new"; linkContainers?: boolean }
+  | { kind: "site_bundle"; origin: string; offers: StarterOffer[]; selected: Set<string> }
   | { kind: "existing"; identity: string; snapshot: string; starterUpdate?: boolean }
   // Capture Site's drafted adapters, handed off from the side panel. The
   // editor holds them as one JSON array.
@@ -157,6 +162,8 @@ let adapterOpener: HTMLElement | null = null;
 // gallery together, each with its own field.
 const scopeTexts = new Map<string, string>();
 const scopeEdited = new Set<string>();
+const siteBundleChecks = new Map<string, HTMLInputElement>();
+const siteBundlePreviews = new Map<string, HTMLElement>();
 
 const LINKS_EXISTING_RULES = "Also links your existing pull request and issue rules to their repositories.";
 const SKIPS_UNLINKABLE_RULES = "Some existing pull request or issue rules can't be linked to repositories because they don't capture owner and repo; they stay as they are.";
@@ -277,6 +284,9 @@ function updateControls(): void {
   }
   for (const button of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
     button.disabled = !connected || busy || repairing || repairingAdapters || button.dataset.available !== "true";
+  }
+  for (const box of siteBundleReview.querySelectorAll<HTMLInputElement>("input")) {
+    box.disabled = !connected || busy || repairing || repairingAdapters;
   }
   saveAdapterButton.disabled = !connected || busy || repairing || repairingAdapters ||
     adapterCandidate() === null;
@@ -503,6 +513,28 @@ function setStarterButtonState(button: HTMLButtonElement, origin: string, key: s
   button.disabled = !session.connected || busy || repairing || button.dataset.available !== "true";
 }
 
+function missingSiteOffers(origin: string): StarterOffer[] {
+  return starterOffers(origin, scopeValues(origin)).filter((offer) => !offerConfigured(offer));
+}
+
+/** The first site-level trial covers products whose starter kinds are parts
+ * of one product experience. Jira and Confluence stay separate choices even
+ * when they share an Atlassian Cloud origin. */
+function siteBundleFamily(origin: string): boolean {
+  const family = starterFamily(origin)?.family;
+  return family === "github" || family === "box" || family === "google-workspace";
+}
+
+function setSiteBundleButtonState(button: HTMLButtonElement, origin: string): void {
+  const missing = missingSiteOffers(origin);
+  button.dataset.available = String(missing.length > 0 && missing.every((offer) => offer.adapter !== null));
+  button.textContent = missing.length
+    ? `Review whole site (${missing.length} ${missing.length === 1 ? "kind" : "kinds"})…`
+    : "All starter kinds configured";
+  const repairing = session.configIssue !== null || session.adapterIssue !== null;
+  button.disabled = !session.connected || busy || repairing || button.dataset.available !== "true";
+}
+
 /** A scoped family's input/guidance block, from the scope-kind registry, on
  * `origin`'s first card. Mutating the field only updates this origin's own
  * buttons: another scoped origin's card in the same gallery keeps its own
@@ -528,7 +560,8 @@ function renderScopeField(card: HTMLElement, origin: string, input: ScopeInput):
     guidance.className = valid ? "" : "warning";
     for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
       if (scoped.dataset.siteOrigin === origin) {
-        setStarterButtonState(scoped, origin, scoped.dataset.starterKey ?? "");
+        if (scoped.dataset.siteBundle === "true") setSiteBundleButtonState(scoped, origin);
+        else setStarterButtonState(scoped, origin, scoped.dataset.starterKey ?? "");
       }
     }
   });
@@ -552,6 +585,43 @@ function renderStarterGallery(): void {
     addText(starterGallery, "p", starterGalleryHint());
     return;
   }
+  const siteDetails = new Map<string, HTMLDetailsElement>();
+  for (const origin of origins) {
+    const family = starterFamily(origin);
+    if (!family || !siteBundleFamily(origin)) continue;
+    const card = document.createElement("article");
+    card.className = "starter-card site-starter-card";
+    addText(card, "h3", family.display_name);
+    addText(card, "small", origin);
+    addText(card, "p", "Choose the kinds of pages this site should remember. Only matching pages are captured.");
+    const kinds = document.createElement("ul");
+    kinds.className = "plain-list";
+    for (const offer of starterOffers(origin, scopeValues(origin))) {
+      const status = starterStatus(offer.artifact_type);
+      const state = offerConfigured(offer) ? "already configured"
+        : status ? STARTER_STATUS_TEXT[status.state] : "starter";
+      addText(kinds, "li", `${offer.label} · ${state}`);
+    }
+    card.append(kinds);
+    const notice = unscopedNotice(family);
+    if (notice) addText(card, "small", notice);
+    const input = scopeInput(family);
+    if (input) renderScopeField(card, origin, input);
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Review one kind instead";
+    details.append(summary);
+    card.append(details);
+    siteDetails.set(origin, details);
+    const review = document.createElement("button");
+    review.type = "button";
+    review.dataset.siteOrigin = origin;
+    review.dataset.siteBundle = "true";
+    setSiteBundleButtonState(review, origin);
+    review.addEventListener("click", () => beginSiteBundleReview(origin));
+    card.append(review);
+    starterGallery.append(card);
+  }
   const scopeShown = new Set<string>();
   for (const { origin, offer } of compatible) {
     const card = document.createElement("article");
@@ -564,7 +634,7 @@ function renderStarterGallery(): void {
     const family = starterFamily(origin);
     const notice = family ? unscopedNotice(family) : null;
     if (notice) addText(card, "small", notice);
-    if (!scopeShown.has(origin)) {
+    if (!siteDetails.has(origin) && !scopeShown.has(origin)) {
       const input = family ? scopeInput(family) : null;
       if (input) {
         scopeShown.add(origin);
@@ -583,7 +653,9 @@ function renderStarterGallery(): void {
       beginAdapterDraft(draft!, selected.label, isContainerType(selected.artifact_type));
     });
     card.append(review);
-    starterGallery.append(card);
+    const details = siteDetails.get(origin);
+    if (details) details.append(card);
+    else starterGallery.append(card);
   }
 }
 
@@ -679,14 +751,16 @@ const MAX_DRAFT_ADAPTERS = 8;
 
 /** The drafted adapters as edited: a JSON array of 1–8 valid adapters, all
  * on the handed-off origin. */
-function parseDraftAdapters(text: string, origin: string): { ok: true; adapters: AdapterObject[] } | { ok: false; message: string } {
-  const shape = `The drafted rules must be a JSON array of 1–${MAX_DRAFT_ADAPTERS} adapter objects.`;
+function parseDraftAdapters(
+  text: string, origin: string, label = "Drafted rules",
+): { ok: true; adapters: AdapterObject[] } | { ok: false; message: string } {
+  const shape = `${label} must be a JSON array of 1–${MAX_DRAFT_ADAPTERS} adapter objects.`;
   if (text.length > MAX_DRAFT_ADAPTERS * 65_536) return { ok: false, message: shape };
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch (error) {
-    return { ok: false, message: `The drafted rules are not valid JSON: ${error instanceof Error ? error.message : "invalid JSON"}` };
+    return { ok: false, message: `${label} are not valid JSON: ${error instanceof Error ? error.message : "invalid JSON"}` };
   }
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_DRAFT_ADAPTERS) return { ok: false, message: shape };
   const adapters: AdapterObject[] = [];
@@ -694,7 +768,7 @@ function parseDraftAdapters(text: string, origin: string): { ok: true; adapters:
     const parsed = parseAdapterJson(JSON.stringify(item) ?? "");
     if (!parsed.ok) return { ok: false, message: `Adapter ${index + 1}: ${parsed.message}` };
     if (adapterOrigin(parsed.adapter) !== origin) {
-      return { ok: false, message: `Adapter ${index + 1}: drafted rules stay on ${origin}.` };
+      return { ok: false, message: `Adapter ${index + 1}: ${label.toLowerCase()} stay on ${origin}.` };
     }
     adapters.push(parsed.adapter);
   }
@@ -770,6 +844,24 @@ function readAdapterCandidate(): CandidateResult {
     return problem ? { ok: false, message: problem }
       : { ok: true, adapter: drafted.adapters[0]!, added: drafted.adapters, document };
   }
+  if (adapterEdit.kind === "site_bundle") {
+    const edit = adapterEdit;
+    const chosen = edit.offers.filter((offer) => edit.selected.has(offer.artifact_type));
+    if (!chosen.length) return { ok: false, message: "Choose at least one kind of page to capture." };
+    if (chosen.some((offer) => !offer.adapter)) return { ok: false, message: "Enter a valid site scope before saving." };
+    const bundled = chosen.map((offer) => offer.adapter!);
+    const existing = new Set(artifacts.map((adapter) => `${adapter.origin} ${adapter.type}`));
+    if (bundled.some((adapter) => existing.has(`${adapter.origin} ${adapter.type}`))) {
+      return { ok: false, message: "This site already has one of these kinds. Review the remaining kinds again." };
+    }
+    const added = linkedToPresentContainers(bundled, artifacts);
+    const repository = added.find((adapter) => adapter.type === "github.repo");
+    if (repository) artifacts = withContainerLinks(artifacts, repository);
+    const document = { format: 1, artifacts: orderContainedFirst([...artifacts, ...added]) };
+    const problem = validateAdapterDocument(document);
+    return problem ? { ok: false, message: problem }
+      : { ok: true, adapter: added[0]!, added, document };
+  }
   const parsed = parseAdapterJson(adapterJson.value);
   if (!parsed.ok) return parsed;
   if (adapterEdit.kind === "new") {
@@ -811,6 +903,11 @@ function refreshAdapterEditor(): void {
       ...(links.skipped ? [SKIPS_UNLINKABLE_RULES] : []),
     ].join(" ")
     : candidate.message;
+  if (adapterEdit.kind === "site_bundle") {
+    refreshSiteBundlePreview(candidate);
+    updateControls();
+    return;
+  }
   adapterPreview.replaceChildren();
   if (!candidate.ok) {
     addText(adapterPreview, "li", "Fix the definition to see its match preview.");
@@ -841,6 +938,74 @@ function refreshAdapterEditor(): void {
   updateControls();
 }
 
+function siteExampleUrl(offer: StarterOffer): string {
+  const path = starterType(offer.artifact_type)?.example_path;
+  if (path && offer.adapter) {
+    const scope = offer.adapter.scope as Record<string, string[]> | undefined;
+    const first = scope ? Object.values(scope)[0]?.[0] : undefined;
+    return `${offer.origin}${path.replace("{scope}", first ?? "example")}`;
+  }
+  return offer.adapter ? exampleUrl(offer.adapter) : offer.origin;
+}
+
+function refreshSiteBundlePreview(candidate: CandidateResult): void {
+  if (adapterEdit?.kind !== "site_bundle") return;
+  for (const offer of adapterEdit.offers) {
+    const line = siteBundlePreviews.get(offer.artifact_type);
+    if (!line) continue;
+    const url = siteExampleUrl(offer);
+    if (!candidate.ok) {
+      line.textContent = `Example: ${url} — choose a kind to preview the result.`;
+      continue;
+    }
+    const preview = previewDocument(candidate.document, url, "", false);
+    const result = preview.ok ? preview.rows[0]?.result : null;
+    line.textContent = `Example: ${url} — ${result?.match
+      ? `captured as ${result.type}${result.type === offer.artifact_type ? "" : " (another kind wins)"}`
+      : "not captured by this selection"}.`;
+    line.className = result?.match && result.type !== offer.artifact_type ? "warning" : "";
+  }
+  if (!candidate.ok) return;
+  const probes = previewDocument(candidate.document, "", "", true, adapterEdit.origin);
+  const matches = probes.ok ? probes.rows.filter((row) => row.probe && row.result.match).length : 0;
+  adapterValidation.textContent += matches
+    ? ` ${matches} non-artifact probe${matches === 1 ? " matches" : "s match"}; review the selected kinds before saving.`
+    : " Fixed search, login, dashboard, and auth probes stay unmatched.";
+  if (matches) adapterValidation.classList.add("warning");
+}
+
+function renderSiteBundleReview(edit: Extract<AdapterEdit, { kind: "site_bundle" }>): void {
+  siteBundleReview.replaceChildren();
+  siteBundleChecks.clear();
+  siteBundlePreviews.clear();
+  addText(siteBundleReview, "p", "Choose the kinds this site will capture. Each example shows what the complete selection records.");
+  for (const offer of edit.offers) {
+    const row = document.createElement("section");
+    row.className = "site-kind-review";
+    const label = document.createElement("label");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = edit.selected.has(offer.artifact_type);
+    check.dataset.siteKind = offer.artifact_type;
+    check.addEventListener("input", () => {
+      if (check.checked) edit.selected.add(offer.artifact_type);
+      else edit.selected.delete(offer.artifact_type);
+      refreshAdapterEditor();
+    });
+    const name = document.createElement("span");
+    name.textContent = offer.label;
+    label.append(check, name);
+    row.append(label);
+    const status = starterStatus(offer.artifact_type);
+    if (status) addText(row, "small", sentenceCase(STARTER_STATUS_TEXT[status.state]));
+    addText(row, "p", offer.description);
+    const preview = addText(row, "p", "", "site-kind-preview");
+    siteBundleChecks.set(offer.artifact_type, check);
+    siteBundlePreviews.set(offer.artifact_type, preview);
+    siteBundleReview.append(row);
+  }
+}
+
 /** A line above the JSON saying what an editor opened with, and its list. */
 function showEditorReview(review: { line: string; items: string[] } | null): void {
   adapterEditorReview.replaceChildren();
@@ -861,8 +1026,14 @@ function openAdapterEditor(
   adapterEdit = edit;
   adapterEditor.hidden = false;
   adapterEditorHeading.textContent = heading;
-  showEditorReview(review);
-  adapterJson.value = JSON.stringify(adapter, null, 2);
+  const siteBundle = edit.kind === "site_bundle";
+  showEditorReview(siteBundle ? null : review);
+  siteBundleReview.hidden = !siteBundle;
+  adapterTechnicalReview.hidden = siteBundle;
+  adapterTechnicalPreview.hidden = siteBundle;
+  saveAdapterButton.textContent = siteBundle ? "Save selected kinds" : "Save";
+  if (siteBundle) renderSiteBundleReview(edit);
+  adapterJson.value = siteBundle ? "" : JSON.stringify(adapter, null, 2);
   adapterPreviewUrl.value = exampleUrl(review?.example ?? (Array.isArray(adapter) ? adapter[0]! : adapter));
   adapterPreviewTitle.value = "";
   refreshAdapterEditor();
@@ -870,6 +1041,17 @@ function openAdapterEditor(
   // a click that opens it changes nothing the user can see.
   adapterEditor.scrollIntoView({ block: "start", behavior: "smooth" });
   adapterEditorHeading.focus({ preventScroll: true });
+}
+
+function beginSiteBundleReview(origin: string): void {
+  if (!session.config || busy) return;
+  const family = starterFamily(origin);
+  const offers = missingSiteOffers(origin);
+  if (!family || !offers.length || offers.some((offer) => !offer.adapter)) return;
+  const adapters = linkedToPresentContainers(offers.map((offer) => offer.adapter!), session.config.adapters.artifacts);
+  openAdapterEditor({ kind: "site_bundle", origin, offers,
+    selected: new Set(offers.map((offer) => offer.artifact_type)) },
+  adapters, `Review ${family.display_name} site`);
 }
 
 function beginAdapterDraft(adapter: AdapterObject, label: string, linkContainers = false): void {
@@ -1000,6 +1182,13 @@ function focusAdapterOpener(opener: HTMLElement | null): void {
 function closeAdapterEditor(): void {
   adapterEdit = null;
   adapterEditor.hidden = true;
+  siteBundleReview.hidden = true;
+  siteBundleReview.replaceChildren();
+  siteBundleChecks.clear();
+  siteBundlePreviews.clear();
+  adapterTechnicalReview.hidden = false;
+  adapterTechnicalPreview.hidden = false;
+  saveAdapterButton.textContent = "Save";
   showEditorReview(null);
   adapterJson.value = "";
   adapterValidation.textContent = "";
@@ -1109,7 +1298,10 @@ async function saveAdapter(): Promise<void> {
   }
   const action = adapterEdit?.kind === "new" ? "added" : "updated";
   const starterUpdate = adapterEdit?.kind === "existing" && adapterEdit.starterUpdate === true;
-  await saveAdapterDocument(candidate.document, `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`, undefined,
+  const success = adapterEdit?.kind === "site_bundle"
+    ? `${candidate.added.length} site starter kinds added.`
+    : `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`;
+  await saveAdapterDocument(candidate.document, success, undefined,
     starterUpdate ? explainStarterUpdateFailure : undefined);
 }
 

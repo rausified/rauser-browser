@@ -120,7 +120,9 @@ function install({
     ["adapter-repair-json", "textarea"], ["adapter-repair-validation", "output"],
     ["adapter-repair-url", "input"], ["adapter-repair-title", "input"], ["adapter-repair-preview", "ul"],
     ["adapter-repair-save", "button"], ["adapter-repair-cancel", "button"],
-    ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-editor-review", "div"], ["adapter-json", "textarea"],
+    ["adapter-editor", "div"], ["adapter-editor-heading", "h3"], ["adapter-editor-review", "div"],
+    ["site-bundle-review", "div"], ["adapter-technical-review", "div"], ["adapter-technical-preview", "div"],
+    ["adapter-json", "textarea"],
     ["adapter-validation", "output"], ["adapter-preview-url", "input"],
     ["adapter-preview-title", "input"], ["adapter-preview", "ul"], ["save-adapter", "button"],
     ["cancel-adapter", "button"],
@@ -1165,6 +1167,7 @@ test("an Atlassian site offers Jira issues and Confluence pages, each once", asy
   await openSettings();
   const gallery = env.elements.get("starter-gallery");
   const cards = gallery.querySelectorAll("button");
+  assert.equal(cards.some((button) => button.dataset.siteBundle === "true"), false);
   assert.match(nodeText(gallery), /Jira issues/);
   assert.match(nodeText(gallery), /Confluence pages/);
   const [jiraButton, confluenceButton] = cards;
@@ -1185,6 +1188,107 @@ test("an Atlassian site offers Jira issues and Confluence pages, each once", asy
   assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.type), ["jira.issue", "confluence.page"]);
   const after = env.elements.get("starter-gallery").querySelectorAll("button");
   assert.deepEqual(after.map((button) => button.textContent), ["Already configured", "Already configured"]);
+});
+
+test("a Google Workspace bundle reviews and saves its file kinds in one update", async () => {
+  const state = install();
+  await openSettings();
+  typeSite("https://docs.google.com");
+  const gallery = env.elements.get("starter-gallery");
+  const siteButton = gallery.querySelectorAll("button").find((button) => button.dataset.siteBundle === "true");
+  assert.equal(siteButton.textContent, "Review whole site (5 kinds)…");
+  assert.equal(gallery.children.filter((child) => child.tagName === "ARTICLE").length, 1);
+  siteButton.click();
+  const review = env.elements.get("site-bundle-review");
+  const boxes = review.querySelectorAll("input");
+  assert.equal(review.hidden, false);
+  assert.equal(env.elements.get("adapter-technical-review").hidden, true);
+  assert.equal(env.elements.get("adapter-json").value, "");
+  assert.deepEqual(boxes.map((box) => box.dataset.siteKind),
+    ["google.doc", "google.sheet", "google.slides", "google.form", "google.formresponse"]);
+  assert.match(nodeText(review), /Google Docs documents/);
+  assert.match(nodeText(review), /captured as google\.doc/);
+  assert.doesNotMatch(nodeText(review), /not captured by this selection|another kind wins/);
+  boxes.at(-1).checked = false;
+  boxes.at(-1).dispatch("input");
+  assert.match(nodeText(review), /not captured by this selection/);
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 4 && idle(), "the site bundle save");
+  assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.id),
+    ["google.doc:{host}/{id}", "google.sheet:{host}/{id}", "google.slides:{host}/{id}", "google.form:{host}/{id}"]);
+  assert.equal(gallery.querySelectorAll("button").find((button) => button.dataset.siteBundle === "true").disabled, false);
+});
+
+test("a Box bundle adds only missing kinds to a partly configured site", async () => {
+  const [file] = starterOffers("https://app.box.com", []);
+  const state = install({ adapters: [file.adapter] });
+  await openSettings();
+  const siteButton = env.elements.get("starter-gallery").querySelectorAll("button")
+    .find((button) => button.dataset.siteBundle === "true");
+  assert.equal(siteButton.textContent, "Review whole site (2 kinds)…");
+  siteButton.click();
+  assert.deepEqual(env.elements.get("site-bundle-review").querySelectorAll("input").map((box) => box.dataset.siteKind),
+    ["box.folder", "box.share"]);
+  assert.doesNotMatch(nodeText(env.elements.get("site-bundle-review")), /not captured by this selection|another kind wins/);
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the missing kinds save");
+  assert.deepEqual(state.config.adapters.artifacts[0], file.adapter);
+});
+
+test("a scoped site bundle requires an organization and applies it to every kind", async () => {
+  const state = install();
+  await openSettings();
+  typeSite("https://github.com");
+  const gallery = env.elements.get("starter-gallery");
+  const siteButton = gallery.querySelectorAll("button").find((button) => button.dataset.siteBundle === "true");
+  assert.equal(siteButton.disabled, true);
+  const [scope] = gallery.querySelectorAll("input");
+  scope.value = "Acme-Corp";
+  scope.dispatch("input");
+  assert.equal(siteButton.disabled, false);
+  siteButton.click();
+  const review = env.elements.get("site-bundle-review");
+  assert.equal(review.querySelectorAll("input").length, 3);
+  assert.match(nodeText(review), /github\.com\/acme-corp/);
+  assert.doesNotMatch(nodeText(review), /not captured by this selection|another kind wins/);
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the GitHub site save");
+  assert.ok(state.config.adapters.artifacts.every((adapter) => adapter.scope.owner[0] === "acme-corp"));
+});
+
+test("site review blocks an empty selection and shows a repository catch-all taking unchecked pages", async () => {
+  install();
+  await openSettings();
+  typeSite("https://github.com");
+  const gallery = env.elements.get("starter-gallery");
+  const [scope] = gallery.querySelectorAll("input");
+  scope.value = "acme-corp";
+  scope.dispatch("input");
+  gallery.querySelectorAll("button").find((button) => button.dataset.siteBundle === "true").click();
+  const boxes = env.elements.get("site-bundle-review").querySelectorAll("input");
+  for (const box of boxes.filter((item) => item.dataset.siteKind !== "github.repo")) {
+    box.checked = false;
+    box.dispatch("input");
+  }
+  assert.match(nodeText(env.elements.get("site-bundle-review")), /captured as github\.repo \(another kind wins\)/);
+  boxes.find((box) => box.dataset.siteKind === "github.repo").checked = false;
+  boxes.find((box) => box.dataset.siteKind === "github.repo").dispatch("input");
+  assert.equal(env.elements.get("save-adapter").disabled, true);
+  assert.match(env.elements.get("adapter-validation").textContent, /Choose at least one kind/);
+});
+
+test("adding a GitHub repository in the site review links existing pull requests", async () => {
+  const [pullRequest] = starterOffers("https://github.com", ["acme-corp"]);
+  const saved = { ...pullRequest.adapter };
+  delete saved.within;
+  const state = install({ adapters: [saved] });
+  await openSettings();
+  env.elements.get("starter-gallery").querySelectorAll("button")
+    .find((button) => button.dataset.siteBundle === "true").click();
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the repository bundle save");
+  assert.deepEqual(state.config.adapters.artifacts.find((adapter) => adapter.type === "github.pr").within,
+    { type: "github.repo", id: "github.repo:{host}/{owner}/{repo}" });
 });
 
 test("GitHub starters stay disabled until an explicit valid organization scope", async () => {
