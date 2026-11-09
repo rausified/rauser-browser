@@ -474,6 +474,20 @@
           "url": "https://acme.aha.io/features/board"
         },
         {
+          "id": "eval.aha.neg.features_new",
+          "kind": "evaluate",
+          "why": "the new-feature form: \"new\" is a route word, not a reference number (jira_key needs a dash and digits)",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": false,
+            "reason": "no_rule"
+          },
+          "url": "https://acme.aha.io/features/new"
+        },
+        {
           "id": "eval.aha.neg.feature_subpath",
           "kind": "evaluate",
           "why": "no rest segment",
@@ -1405,7 +1419,7 @@
       "key": "aha.idea:{origin}",
       "label": "Aha! ideas",
       "label_variants": [],
-      "description": "Each idea opened inside the Aha! application becomes one artifact keyed by its reference number, however it was opened: the record page or its Aha! Develop form. The same idea opened on an ideas portal gets a different ID, not covered by this draft.",
+      "description": "Each idea opened inside the Aha! application becomes one artifact keyed by its reference number, however it was opened: the record page or its Aha! Develop form. The same idea opened on an ideas portal is a separate artifact (Aha! portal ideas).",
       "record_label": "ideas",
       "example_path": null,
       "adapter": {

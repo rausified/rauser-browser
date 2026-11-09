@@ -23,7 +23,8 @@
       "eaf-sdk",
       "web-sdk",
       "downloadservicebts",
-      "mrsprod"
+      "mrsprod",
+      "nsj1wss"
     ]
   },
   "scope": null,

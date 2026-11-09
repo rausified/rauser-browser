@@ -886,21 +886,45 @@
               }
             },
             {
-              "path": "/(sp|esc|kb)",
+              "path": "/{_}",
               "query": {
                 "id": "kb_article",
                 "sysparm_article": "{number:token(3,40)|upper}"
-              }
+              },
+              "absent": [
+                "sys_id",
+                "sys_kb_id"
+              ]
             },
             {
-              "path": "/(sp|esc|kb)",
+              "path": "/{_}",
               "query": {
                 "id": "kb_article_view",
                 "sysparm_article": "{number:token(3,40)|upper}"
-              }
+              },
+              "absent": [
+                "sys_id",
+                "sys_kb_id"
+              ]
             }
           ],
           "id": "servicenow.kb:{host}/{number}"
+        }
+      ]
+    },
+    "starter:aha-ideas": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "aha.portalidea",
+          "origin": "https://acme.ideas.aha.io",
+          "match": [
+            {
+              "path": "/ideas/{ref:name(5,100)|upper}"
+            }
+          ],
+          "id": "aha.portalidea:{host}/{ref}",
+          "title": "{title} | {~}"
         }
       ]
     }
@@ -7697,6 +7721,23 @@
       "url": "https://acme.aha.io/features/board"
     },
     {
+      "id": "eval.aha.neg.features_new",
+      "kind": "evaluate",
+      "why": "the new-feature form: \"new\" is a route word, not a reference number (jira_key needs a dash and digits)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/features/new"
+    },
+    {
       "id": "eval.aha.neg.feature_subpath",
       "kind": "evaluate",
       "why": "no rest segment",
@@ -9760,6 +9801,23 @@
       "url": "https://acme.service-now.com/now/sow/record/problem/0123456789abcdef0123456789abcdef"
     },
     {
+      "id": "eval.servicenow.incident.neg.renamed_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "incident ticket page on a customer-renamed portal: NOT RECORDED; a /{_} ticket rule cannot be proven disjoint from the other types' classic .do rules, whose absent lists are full (docs/adapters/servicenow.incident.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
       "id": "eval.servicenow.ritm.classic_form_direct",
       "kind": "evaluate",
       "why": "classic form, direct",
@@ -10216,6 +10274,23 @@
       "url": "https://acme.service-now.com/sp?id=ticket&table=sc_req_item"
     },
     {
+      "id": "eval.servicenow.ritm.neg.renamed_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "sc_req_item ticket page on a customer-renamed portal: NOT RECORDED; a /{_} ticket rule cannot be proven disjoint from the other types' classic .do rules, whose absent lists are full (docs/adapters/servicenow.ritm.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
       "id": "eval.servicenow.change.classic_form_direct",
       "kind": "evaluate",
       "why": "classic form, direct",
@@ -10648,6 +10723,23 @@
       "url": "https://acme.service-now.com/sp?id=ticket&table=change_request"
     },
     {
+      "id": "eval.servicenow.change.neg.renamed_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "change_request ticket page on a customer-renamed portal: NOT RECORDED; a /{_} ticket rule cannot be proven disjoint from the other types' classic .do rules, whose absent lists are full (docs/adapters/servicenow.change.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
       "id": "eval.servicenow.kb.platform_article_view",
       "kind": "evaluate",
       "why": "platform article view",
@@ -10864,6 +10956,54 @@
       "url": "https://acme.service-now.com/sp?sysparm_article=HRKB0001001&id=kb_article_view"
     },
     {
+      "id": "eval.servicenow.kb.renamed_portal_view",
+      "kind": "evaluate",
+      "why": "KB article on a customer-renamed portal: the literal id plus the article-number capture anchor the rule (adapter-templates.md §4.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0012345"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0012345",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_article_view&sysparm_article=KB0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.renamed_portal_article",
+      "kind": "evaluate",
+      "why": "KB article on a customer-renamed portal (kb_article); lowercase number folded to upper",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0012345"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0012345",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/policyhub?id=kb_article&sysparm_article=kb0012345"
+    },
+    {
       "id": "eval.servicenow.kb.neg.kb_version_sys_id_form_deliberately",
       "kind": "evaluate",
       "why": "KB version sys_id form: deliberately not recorded",
@@ -11034,41 +11174,7 @@
       "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB%2F0001"
     },
     {
-      "id": "eval.servicenow.kb.renamed_portal_view",
-      "kind": "evaluate",
-      "why": "KB article on a customer-renamed portal: NOT RECORDED, a renamed portal path cannot anchor a rule (adapter-templates.md §4.1)",
-      "impls": [
-        "rust",
-        "ts"
-      ],
-      "doc": {
-        "$fixture": "starter:servicenow"
-      },
-      "expect": {
-        "match": false,
-        "reason": "no_rule"
-      },
-      "url": "https://acme.service-now.com/helpzone?id=kb_article_view&sysparm_article=KB0012345"
-    },
-    {
-      "id": "eval.servicenow.kb.renamed_portal_article",
-      "kind": "evaluate",
-      "why": "KB article on a customer-renamed portal (kb_article): NOT RECORDED, same anchor limit",
-      "impls": [
-        "rust",
-        "ts"
-      ],
-      "doc": {
-        "$fixture": "starter:servicenow"
-      },
-      "expect": {
-        "match": false,
-        "reason": "no_rule"
-      },
-      "url": "https://acme.service-now.com/policyhub?id=kb_article&sysparm_article=kb0012345"
-    },
-    {
-      "id": "eval.servicenow.kb.renamed_portal_search",
+      "id": "eval.servicenow.kb.neg.renamed_portal_search",
       "kind": "evaluate",
       "why": "knowledge search on a renamed portal",
       "impls": [
@@ -11085,7 +11191,7 @@
       "url": "https://acme.service-now.com/helpzone?id=kb_search&query=vpn"
     },
     {
-      "id": "eval.servicenow.kb.version_link",
+      "id": "eval.servicenow.kb.neg.renamed_portal_version_link",
       "kind": "evaluate",
       "why": "version sys_id link on a renamed portal: names a version, not the article",
       "impls": [
@@ -11100,6 +11206,475 @@
         "reason": "no_rule"
       },
       "url": "https://acme.service-now.com/helpzone?id=kb_article&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.number_with_version_sys_id",
+      "kind": "evaluate",
+      "why": "portal article link naming a version by sys_id as well as the number: not recorded, like every version link (docs/adapters/servicenow.kb.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.number_with_version_sys_kb_id",
+      "kind": "evaluate",
+      "why": "portal article view naming a version by sys_kb_id as well as the number: not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/esc?id=kb_article_view&sysparm_article=KB0010035&sys_kb_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.renamed_portal_home",
+      "kind": "evaluate",
+      "why": "knowledge home on a renamed portal",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_home"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.two_segment_portal_path",
+      "kind": "evaluate",
+      "why": "{_} is one segment: a two-segment path with the article query is not a portal article page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone/extra?id=kb_article&sysparm_article=KB0012345"
+    },
+    {
+      "id": "validate.starter.aha-ideas",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:aha-ideas fixture (protocol/starters/aha-ideas.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.aha-ideas",
+      "kind": "overlap_report",
+      "why": "generated: aha-ideas's declared overlaps (protocol/starters/aha-ideas.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.aha.portalidea.basic",
+      "kind": "evaluate",
+      "why": "portal idea page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null,
+        "title": "Allow hiding unused fields",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45",
+      "title": "Allow hiding unused fields | Acme Ideas"
+    },
+    {
+      "id": "eval.aha.portalidea.observed_shape",
+      "kind": "evaluate",
+      "why": "the public portal's observed ref shape and portal title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "A-I-24044"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/A-I-24044",
+        "mode": null,
+        "title": "Allow hiding unused record types on the new features",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.ideas.aha.io/ideas/A-I-24044",
+      "title": "Allow hiding unused record types on the new features | Aha! Big Ideas"
+    },
+    {
+      "id": "eval.aha.portalidea.trailing",
+      "kind": "evaluate",
+      "why": "trailing slash serves the same idea",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45/"
+    },
+    {
+      "id": "eval.aha.portalidea.query",
+      "kind": "evaluate",
+      "why": "query string ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45?foo=1&sort=recent"
+    },
+    {
+      "id": "eval.aha.portalidea.fragment",
+      "kind": "evaluate",
+      "why": "fragment ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45#comments"
+    },
+    {
+      "id": "eval.aha.portalidea.lower",
+      "kind": "evaluate",
+      "why": "a hand-typed lowercase ref folds to the same ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-45",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/prj-i-45"
+    },
+    {
+      "id": "eval.aha.portalidea.pipe_in_name",
+      "kind": "evaluate",
+      "why": "an idea name containing \" | \" is kept whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-46"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-46",
+        "mode": null,
+        "title": "Export | Import parity",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-46",
+      "title": "Export | Import parity | Acme Ideas"
+    },
+    {
+      "id": "eval.aha.portalidea.long",
+      "kind": "evaluate",
+      "why": "long workspace prefix and number",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "WORKSPACE1-I-123456"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/WORKSPACE1-I-123456",
+        "mode": null
+      },
+      "url": "https://acme.ideas.aha.io/ideas/WORKSPACE1-I-123456"
+    },
+    {
+      "id": "eval.aha.portalidea.no_portal_suffix",
+      "kind": "evaluate",
+      "why": "a title with no \" | \" matches no entry and is kept whole",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.portalidea",
+        "captures": {
+          "ref": "PRJ-I-47"
+        },
+        "artifact_id": "aha.portalidea:acme.ideas.aha.io/PRJ-I-47",
+        "mode": null,
+        "title": "Loading",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-47",
+      "title": "Loading"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.new",
+      "kind": "evaluate",
+      "why": "new-idea form: too short for name(5,100)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/new"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.list",
+      "kind": "evaluate",
+      "why": "idea list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.list_page",
+      "kind": "evaluate",
+      "why": "idea list paging",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/?page=2"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.comments",
+      "kind": "evaluate",
+      "why": "comment form under an idea",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45/idea_comments/new?id=1"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.endorse",
+      "kind": "evaluate",
+      "why": "vote prompt under an idea",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/PRJ-I-45/idea_endorsements/prompt_login?count=1"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.session",
+      "kind": "evaluate",
+      "why": "portal login",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/portal_session/new?return_to=%2Fideas%2FPRJ-I-45"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.home",
+      "kind": "evaluate",
+      "why": "portal home list",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/?category=1000000000000000007&sort=recent"
+    },
+    {
+      "id": "eval.aha.portalidea.neg.app_path",
+      "kind": "evaluate",
+      "why": "the in-app path on a portal host",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha-ideas"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.ideas.aha.io/ideas/ideas/PRJ-I-45"
     }
   ]
 }

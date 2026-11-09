@@ -477,10 +477,13 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
   if (shared && scopeTable === null && !("unscoped" in raw)) fail("shared_origin_unscoped");
   // 4.7.9: each rule needs an anchor among its required path segments. A
   // required path capture named by a scope key anchors too: the scope list
-  // pins it the way a literal would. A query binding never anchors.
+  // pins it the way a literal would. A query anchors only as a literal
+  // condition plus an identifier capture the ID uses (isQueryAnchored); a
+  // scoped capture bound from the query is never one.
   rules.forEach((rule, r) => {
     const anchored = rule.required.some((segment) =>
-      isAnchorSegment(segment) || (segment.kind === "cap" && !segment.optional && scope.has(segment.name)));
+      isAnchorSegment(segment) || (segment.kind === "cap" && !segment.optional && scope.has(segment.name)))
+      || isQueryAnchored(rule, (name) => !scope.has(name) && idNames.includes(name));
     if (!anchored) fail("no_literal_segment", r);
   });
 
@@ -610,6 +613,17 @@ function isAnchorSegment(segment: Segment): boolean {
   if (ctype.kind === "alt") return true;
   if (ctype.type === "uuid") return true;
   return ctype.type === "hex" && ctype.min === ctype.max && ctype.min >= 32;
+}
+
+/** §4.1: the query anchors a rule when it has a literal condition and binds
+ * an identifier capture (int, hex, uuid, jira_key or token; not name or an
+ * alternation) that `counts` accepts: the validator passes "the ID uses it
+ * and no scope key names it". The literal routes the page the way a path
+ * word would, and the identifier names the artifact. */
+function isQueryAnchored(rule: CompiledRule, counts: (name: string) => boolean): boolean {
+  return rule.query.some((cond) => cond.kind === "lit")
+    && rule.query.some((cond) => cond.kind === "cap" && cond.ctype.kind === "type" && cond.ctype.type !== "name"
+      && counts(cond.name));
 }
 
 function compileRule(
