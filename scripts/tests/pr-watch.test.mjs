@@ -108,6 +108,28 @@ test("mergifyStatus: the newest-created status comment is current, though Mergif
   assert.equal(mergifyStatus([FX.pr329[2], FX.pr329[0], FX.pr329[1], FX.pr329[3]]).state, "merged");
 });
 
+const queueCmd = (createdAt) => ({ author: "jrausercisco", createdAt, body: "@Mergifyio queue" });
+
+test("mergifyStatus: a queue comment newer than every status comment is requested, not the old dequeue (#346)", () => {
+  const old = { ...FX.dequeued299, createdAt: "2026-11-09T11:44:20Z" };
+  const fresh = { ...FX.waiting339, createdAt: "2026-11-09T12:18:45Z" };
+  assert.equal(mergifyStatus([old]).state, "dequeued");
+  assert.equal(mergifyStatus([old, queueCmd("2026-11-09T12:18:36Z")]).state, "requested");
+  assert.equal(mergifyStatus([old, queueCmd("2026-11-09T12:18:36Z"), fresh]).state, "waiting");
+});
+
+test("mergifyStatus: a repeat queue comment Mergify ignores as already running keeps the live status (#339)", () => {
+  const s = mergifyStatus([FX.waiting339, queueCmd("2026-11-09T10:04:10Z"), FX.ignored339]);
+  assert.equal(s.state, "waiting");
+  assert.ok(s.unmet.includes("check-success = Build and check"));
+});
+
+test("requested: wait for Mergify's answer, then exit 16 after the grace", () => {
+  const s = snap({ comments: [FX.dequeued299, queueCmd("2026-11-09T12:00:00Z")] });
+  assert.equal(decide(s, { now: NOW, idleSince: ago(1) }).action, "requested");
+  assert.equal(decide(s, { now: NOW, idleSince: ago(ADMIT_GRACE_MINUTES) }).action, "queue-unanswered");
+});
+
 test("mergifyStatus: command replies alone, or a payload from anyone but Mergify, are no request", () => {
   assert.equal(mergifyStatus([FX.ignored339, FX.refreshed339]).state, "none");
   assert.equal(mergifyStatus([{ ...FX.checking339, author: "rausified" }]).state, "none");
