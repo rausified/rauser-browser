@@ -1,0 +1,7 @@
+## 2026-11-09 — Check guard models across the whole sequence, through the real save
+
+Change: a randomized test for a record-ownership guard should keep a map of every page recorded so far in the sequence, and assert each accepted save against that map, not only against the state one save earlier. It should save through `ConfigStore::update`, so `[[adapter_id_history]]` builds up as it does in Brauser. Mutation-check the test against each guard it relies on, the history checks included, and list in the test's doc comment which mutations it catches. Add this to the guard-model checklist in AGENTS.md "Review and merge cadence".
+
+Why: `container_order_and_history_guards_preserve_recorded_winners` compares each save with the one before it and calls `validate_adapter_transition` with no retired history. It passes when `refuse_rekeyed_routes` ignores retired contracts, and when `container_first_violation` always returns `None`. A page that its adapter stops matching after a narrowing edit has no winner at the next step, so a later save can hand it to another identity and a one-step check never sees it. `recorded_splunk_pages_keep_their_recorder_across_coverage_edits` (brwr-nhwb) tracks recorded pages for the whole sequence through real saves, and it fails on both of those mutations and on the four the older model already caught.
+
+Where: `host/src/config.rs` `site_restore_tests` randomized models; `AGENTS.md` "Review and merge cadence".
