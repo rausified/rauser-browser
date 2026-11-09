@@ -290,6 +290,22 @@ callback directly, without waiting for wall-clock polling. Eight regressions
 failed before the fixes; the ordinary-poll control already passed. These tests
 use mocked Chrome and host transport, with no browser or external service.
 
+## Recognition edits and identity handoffs
+
+`host/src/config.rs` config tests exercise real revision-checked settings
+saves that remove a path, remove a built-in literal from a path alternative,
+or narrow tenant scope while another adapter could claim the former routes.
+Both unchanged and simultaneously edited recipients must refuse without
+changing config bytes, the revision or the in-memory policy. A different
+container ID receives no exception. Allowed cases cover append-only rule
+widening, unrelated and display-only saves, exact declared containers,
+same-identity fall-through and disjoint routes. Scope edits deliberately use
+the conservative overlap guard; scope rejection during capture is terminal,
+so that case does not assert a live capture fall-through. The refusal regression
+failed on the pre-fix validator. Run
+`cargo test --locked -p brauser --lib config::tests`.
+No browser, external API or migration is involved.
+
 ## External policy changes and note identity
 
 The built-panel tests deliver a valid policy lease for a different host
@@ -936,17 +952,19 @@ successful forwarding at the limit needs it for that forwarding step.
 
 The starter-generator CLI tests and PR-doctor's real-bd integration tests
 also capture child output. Their `child-pipe` guard runs before fixture
-creation or bd detection; the generator's seven pure tests and the doctor's
-19 pure tests still run without IPC. To inspect the per-case results rather
-than Node's file-level summary:
+creation or bd detection; pure validation tests still run without IPC.
+Loop-generated tests need the guard in each callback too, including
+template-literal names: the `origin.exclude`
+and multi-origin parameter groups once left 14 CLI cases unguarded. To
+inspect the per-case results rather than Node's file-level summary:
 
 ```sh
 node --test --test-isolation=none scripts/tests/generate-starters.test.mjs scripts/tests/pr-doctor.test.mjs
 ```
 
-With `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, this reports 26 passes and 21
-explicit skips on a non-Windows machine. Adding `BRAUSER_REQUIRE_IPC_TESTS=1`
-must instead fail those 21 cases. This checks the test boundary; the driver's
+With `BRAUSER_TEST_SIMULATE_IPC_DENIED=1`, IPC-dependent cases explicitly
+skip on a non-Windows machine. Adding `BRAUSER_REQUIRE_IPC_TESTS=1`
+must instead fail those cases. This checks the test boundary; the driver's
 unsandboxed gate exercises the actual subprocess assertions. An installed bd
 that fails `bd version` is an error, not an unavailable-tool skip.
 
