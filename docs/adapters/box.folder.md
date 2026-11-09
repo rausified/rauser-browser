@@ -4,6 +4,10 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/box/`, researched blind: public sources only, no
 browsing history, cookies or a Box account.
 
+History check (2026-11-09): graded against real browsing history: no
+real visits of this type, so 0/3 rules confirmed. Not every rule and
+title was confirmed, so this type stays a development draft.
+
 Brauser offers this draft on every Box web-app host: personal
 `https://app.box.com`, `<company>.app.box.com` and `<company>.ent.box.com`
 (the `box` family's multi-origin `origin`; `box.file`'s page lists its

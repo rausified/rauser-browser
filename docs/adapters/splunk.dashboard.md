@@ -4,6 +4,11 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/splunk-cloud/`, researched blind: public sources only,
 no browsing history, cookies or a Splunk account.
 
+History check (2026-11-09): graded against real browsing history: 5 real
+URLs (10 visits) matched, 1/1 rules confirmed, the recorded title right
+on 4/5. Not every rule and title was confirmed, so this type stays a
+development draft.
+
 Brauser offers this draft on a Splunk Cloud stack's own host,
 `<stack>.splunkcloud.com` (the `splunk` family's strict subdomain origin,
 `labels: 1`, `exclude: ["www"]`), alongside Splunk apps. Either or both can
