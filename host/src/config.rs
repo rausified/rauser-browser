@@ -2216,7 +2216,9 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
 }
 
 /// A save that would change which of a catalog `container_first` pair's
-/// types records pages both match (`container_first_violation`).
+/// types records pages both match by changing their order
+/// (`container_first_violation`). An edit that changes what either matches
+/// is the history guard's (`validate_adapter_precedence`).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ContainerFirstViolation {
     pub origin: String,
@@ -4713,6 +4715,323 @@ mod tests {
             assert!(
                 refused_coverage_edits > 0,
                 "must exercise unsafe coverage edits"
+            );
+        }
+
+        const SPLUNK_SEED: u64 = 0x5eed_2026_1109_0c0c;
+        const SPLUNK_SEQUENCES: usize = 60;
+        const SPLUNK_STEPS: usize = 10;
+
+        /// Splunk-shaped adapters for the real-save model, by identity, each
+        /// with variants that keep, widen or narrow the pages it matches.
+        /// Index 0 is the shipped (or hand-written) shape.
+        fn splunk_variants() -> Vec<Vec<serde_json::Value>> {
+            let [app, dashboard] = splunk();
+            let with_rules = |base: &serde_json::Value, rules: serde_json::Value| {
+                let mut edited = base.clone();
+                edited["match"] = rules;
+                edited
+            };
+            let root = app["match"][0].clone();
+            let views = app["match"][1].clone();
+            let manager = json!({"type":"splunk.manager", "origin":ACME, "match":[{"path":"/{_}/manager/{app:name}/{page:name}"}], "id":"splunk.manager:{host}/{app}/{page}"});
+            vec![
+                vec![
+                    app.clone(),
+                    // Widen by one literal page, by a catch-all, or by a
+                    // leading rule; narrow to the root or to fewer views.
+                    with_rules(
+                        &app,
+                        json!([root, views, {"path":"/{_}/app/{app:name}/(mydash)"}]),
+                    ),
+                    with_rules(
+                        &app,
+                        json!([root, views, {"path":"/{_}/app/{app:name}/{*}"}]),
+                    ),
+                    with_rules(
+                        &app,
+                        json!([{"path":"/{_}/app/{app:name}/(incident_review)"}, root, views]),
+                    ),
+                    with_rules(&app, json!([root])),
+                    with_rules(
+                        &app,
+                        json!([root, {"path":"/{_}/app/{app:name}/(search|home)"}]),
+                    ),
+                ],
+                vec![
+                    dashboard.clone(),
+                    with_rules(
+                        &dashboard,
+                        json!([{"path":"/{_}/app/{app:name}/{view:(operations|mydash|home|search)}/{mode?:(edit)}"}]),
+                    ),
+                    with_rules(
+                        &dashboard,
+                        json!([dashboard["match"][0], {"path":"/{_}/manager/{app:name}/{view:name}"}]),
+                    ),
+                ],
+                vec![
+                    manager.clone(),
+                    with_rules(
+                        &manager,
+                        json!([manager["match"][0], {"path":"/{_}/app/{app:name}/{page:name}/(edit)"}]),
+                    ),
+                    with_rules(
+                        &manager,
+                        json!([{"path":"/{_}/manager/{app:name}/{page:(launcher)}"}]),
+                    ),
+                ],
+            ]
+        }
+
+        /// Pages on ACME the Splunk-shaped variants match, and one that
+        /// none of them does.
+        fn splunk_corpus() -> Vec<String> {
+            let mut urls = Vec::new();
+            for app in ["search", "itsi"] {
+                urls.push(format!("{ACME}/en-US/app/{app}"));
+                for page in [
+                    "search",
+                    "home",
+                    "alerts",
+                    "reports",
+                    "mydash",
+                    "operations",
+                    "incident_review",
+                    "edge",
+                ] {
+                    urls.push(format!("{ACME}/en-US/app/{app}/{page}"));
+                    urls.push(format!("{ACME}/en-US/app/{app}/{page}/edit"));
+                }
+                urls.push(format!("{ACME}/en-US/app/{app}/edge/x/y"));
+                for page in ["launcher", "inputs"] {
+                    urls.push(format!("{ACME}/en-US/manager/{app}/{page}"));
+                }
+            }
+            urls.push(format!("{ACME}/en-US/account/login"));
+            urls
+        }
+
+        type Recorder = ((String, String), Option<(String, String)>);
+
+        /// The (type, id template) of the adapter that records `url` under
+        /// `adapters` in the real engine, and its declared container's.
+        fn engine_winner(
+            engine: &adapter_templates::Document,
+            adapters: &[serde_json::Value],
+            url: &str,
+        ) -> Option<Recorder> {
+            let found = engine.evaluate(url, None).ok()?;
+            let adapter = &adapters[found.adapter];
+            let pair = |value: &serde_json::Value| {
+                (
+                    value["type"].as_str().unwrap().to_owned(),
+                    value["id"].as_str().unwrap().to_owned(),
+                )
+            };
+            Some((pair(adapter), adapter.get("within").map(pair)))
+        }
+
+        /// Randomized check of the invariant over real Splunk-shaped rules
+        /// and real saves: an accepted save never changes which adapter (by
+        /// type and ID template) records a page Brauser already recorded,
+        /// except that once a contained adapter no longer matches one of its
+        /// pages, the page may fall through to the container it declares
+        /// `within` (DESIGN §8.3); a container winning a page its contained
+        /// adapter still matches is the widening this test exists to catch. Every save goes
+        /// through `ConfigStore::update`, so the order guard, the history
+        /// guard and `[[adapter_id_history]]` act as they do in Brauser, and
+        /// a page stays recorded after its adapter is removed or narrowed:
+        /// no other adapter may take it later in the sequence either. Edits
+        /// swap an adapter for a variant that widens or narrows its pages;
+        /// the test requires each kind of save, and safe widening and
+        /// narrowing, to be accepted sometimes and unsafe widening refused.
+        #[test]
+        fn recorded_splunk_pages_keep_their_recorder_across_coverage_edits() {
+            let variants = splunk_variants();
+            let corpus = splunk_corpus();
+            let other = {
+                let mut other = variants[0][0].clone();
+                other["origin"] = json!("https://other.splunkcloud.com");
+                other
+            };
+            let starts = [
+                vec![],
+                vec![variants[1][0].clone()],
+                vec![variants[0][0].clone(), variants[1][0].clone()],
+                vec![variants[1][0].clone(), variants[0][0].clone()],
+                vec![
+                    variants[2][0].clone(),
+                    variants[0][0].clone(),
+                    variants[1][0].clone(),
+                ],
+            ];
+            // The pages each variant matches on its own.
+            let coverage: Vec<(serde_json::Value, std::collections::BTreeSet<&String>)> = variants
+                .iter()
+                .flatten()
+                .map(|adapter| {
+                    let engine = compile_adapters(&adapter_config(vec![adapter.clone()])).unwrap();
+                    let urls = corpus
+                        .iter()
+                        .filter(|url| engine.evaluate(url, None).is_ok())
+                        .collect();
+                    (adapter.clone(), urls)
+                })
+                .collect();
+            let covered = |adapter: &serde_json::Value| {
+                &coverage
+                    .iter()
+                    .find(|(shape, _)| shape == adapter)
+                    .unwrap()
+                    .1
+            };
+            let family = |adapter: &serde_json::Value| {
+                variants
+                    .iter()
+                    .position(|shapes| shapes[0]["type"] == adapter["type"])
+                    .unwrap()
+            };
+            let on_acme_already = |list: &[serde_json::Value], added: &serde_json::Value| {
+                list.iter()
+                    .any(|a| a["origin"] == ACME && family(a) == family(added))
+            };
+            const KINDS: [&str; 6] = ["add", "remove", "move", "edit", "unrelated", "whole list"];
+            let mut accepted = [0usize; KINDS.len()];
+            let mut accepted_edits = [0usize; 2]; // [narrow, widen]
+            let mut refused_widening = 0usize;
+            let mut refused = 0usize;
+            let mut rng = Rng(SPLUNK_SEED);
+            for sequence in 0..SPLUNK_SEQUENCES {
+                let (_folder, mut store) = legacy_store(starts[sequence % starts.len()].clone());
+                let mut list = store.snapshot().adapters.artifacts.clone();
+                // Every page recorded so far in this sequence, with the
+                // adapter that recorded it first.
+                let mut recorded = std::collections::BTreeMap::new();
+                let engine = compile_adapters(&adapter_config(list.clone())).unwrap();
+                for url in &corpus {
+                    if let Some(winner) = engine_winner(&engine, &list, url) {
+                        recorded.insert(url.clone(), winner);
+                    }
+                }
+                for step in 0..SPLUNK_STEPS {
+                    let kind = rng.below(KINDS.len());
+                    let mut next = list.clone();
+                    let mut edit = None;
+                    let pick = |rng: &mut Rng| {
+                        let shapes = &variants[rng.below(variants.len())];
+                        shapes[rng.below(shapes.len())].clone()
+                    };
+                    match kind {
+                        0 => {
+                            let added = pick(&mut rng);
+                            if on_acme_already(&next, &added) {
+                                continue;
+                            }
+                            let at = rng.below(next.len() + 1);
+                            next.insert(at, added);
+                        }
+                        1 if !next.is_empty() => {
+                            next.remove(rng.below(next.len()));
+                        }
+                        2 if next.len() > 1 => {
+                            let moved = next.remove(rng.below(next.len()));
+                            let to = rng.below(next.len() + 1);
+                            next.insert(to, moved);
+                        }
+                        3 if !next.is_empty() => {
+                            let at = rng.below(next.len());
+                            if next[at]["origin"] != ACME {
+                                continue;
+                            }
+                            let shapes = &variants[family(&next[at])];
+                            let edited = shapes[rng.below(shapes.len())].clone();
+                            let (before, after) = (covered(&next[at]), covered(&edited));
+                            edit = if after != before && after.is_superset(before) {
+                                Some(1)
+                            } else if after != before && after.is_subset(before) {
+                                Some(0)
+                            } else {
+                                None
+                            };
+                            next[at] = edited;
+                        }
+                        4 => match next.iter().position(|a| *a == other) {
+                            Some(at) => {
+                                next.remove(at);
+                            }
+                            None => {
+                                let at = rng.below(next.len() + 1);
+                                next.insert(at, other.clone());
+                            }
+                        },
+                        5 => {
+                            for i in (1..next.len()).rev() {
+                                next.swap(i, rng.below(i + 1));
+                            }
+                            if rng.below(2) == 0 && !next.is_empty() {
+                                next.remove(rng.below(next.len()));
+                            } else {
+                                let added = pick(&mut rng);
+                                if !on_acme_already(&next, &added) {
+                                    let at = rng.below(next.len() + 1);
+                                    next.insert(at, added);
+                                }
+                            }
+                        }
+                        _ => continue,
+                    }
+                    if next == list {
+                        continue;
+                    }
+                    if save_adapters(&mut store, next.clone()).is_err() {
+                        refused += 1;
+                        if edit == Some(1) {
+                            refused_widening += 1;
+                        }
+                        assert_eq!(store.snapshot().adapters.artifacts, list);
+                        continue;
+                    }
+                    let engine = compile_adapters(&adapter_config(next.clone())).unwrap();
+                    for url in &corpus {
+                        let Some(after) = engine_winner(&engine, &next, url) else {
+                            continue; // Narrowing or removal may stop recognizing it.
+                        };
+                        let Some((recorder, container)) = recorded.get(url) else {
+                            recorded.insert(url.clone(), after);
+                            continue;
+                        };
+                        // The container may take a page only once its
+                        // recorder no longer matches it (removed or narrowed).
+                        let still_matched = next.iter().any(|a| {
+                            a["origin"] == ACME
+                                && (a["type"].as_str(), a["id"].as_str())
+                                    == (Some(recorder.0.as_str()), Some(recorder.1.as_str()))
+                                && covered(a).contains(url)
+                        });
+                        assert!(
+                            after.0 == *recorder
+                                || (!still_matched && Some(&after.0) == container.as_ref()),
+                            "seed {SPLUNK_SEED:#x}, sequence {sequence}, step {step} ({}): {url} recorded by {recorder:?} is now recorded by {:?}\nbefore {list:#?}\nafter {next:#?}",
+                            KINDS[kind],
+                            after.0,
+                        );
+                    }
+                    accepted[kind] += 1;
+                    if let Some(direction) = edit {
+                        accepted_edits[direction] += 1;
+                    }
+                    list = next;
+                }
+            }
+            for (kind, count) in KINDS.iter().zip(accepted) {
+                assert!(count > 0, "no accepted {kind} save");
+            }
+            assert!(refused > 0, "the guards refused nothing");
+            assert!(accepted_edits[0] > 0, "no accepted narrowing edit");
+            assert!(accepted_edits[1] > 0, "no accepted widening edit");
+            assert!(refused_widening > 0, "no refused widening edit");
+            eprintln!(
+                "seed {SPLUNK_SEED:#x}: {SPLUNK_SEQUENCES} sequences, accepted {accepted:?}, edits narrow/widen {accepted_edits:?}, refused {refused} ({refused_widening} widening)"
             );
         }
 
