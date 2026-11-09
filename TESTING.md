@@ -306,6 +306,40 @@ failed on the pre-fix validator. Run
 `cargo test --locked -p brauser --lib config::tests`.
 No browser, external API or migration is involved.
 
+## Dormant re-key transaction recovery
+
+Run `cargo test --locked -p brauser --lib relearn::` for the private transaction
+fixtures in `host/src/relearn/transaction/tests.rs`. On Unix they create a
+picker-confirmed temporary home, owned notes and recorded approvals, then inject
+callback errors at prepare, history append/sync, config file sync/publication
+and prepare cleanup. Recovery retries the prepare-directory sync before any
+history or config publication; an injected sync error at that barrier leaves
+both participants untouched. Additional tests substitute failing history,
+config-parent and cleanup directory-sync calls. They verify that history sync
+failure leaves the old config, config sync failure retains prepare after the
+rename, and an unsynced cleanup's reappearing private prepare never duplicates
+history. Reappearance is modeled through the private-file publisher, preserving
+the original permissions. Recovery is repeated, completes only an exact missing
+suffix, and preserves both config and history when either has unexpected bytes,
+including corrupt history after config publication. Fixtures also check stale
+approval/content, replaced home identity, oversized and symlink participants,
+host-only config preservation, operation-scoped move-back replay and the
+ordinary ID freeze. The nonempty-prefix and move-back fixtures construct later
+entries directly; they do not prove multiple real applies.
+
+These are same-process interruption tests, not process-kill or power-loss
+certification. Unix directory-sync errors propagate. On Windows the private
+writer and recovery with pending bytes explicitly refuse unsupported directory
+durability; a Windows-only regression covers refusal without writes and normal
+no-pending recovery. Ordinary save primitives are unchanged.
+
+Run config tests with `cargo test --locked -p brauser --lib config::`, and CLI
+boundary tests with `cargo test --locked -p brauser --test relearn_journal
+--test relearn_preview --test relearn_plan --test aliases_preview`. No test uses
+a network or real harness. There is no production apply entry point or ordinary
+startup recovery yet. Universal recovery, ordinary index/note/summary/run replay,
+in-flight handoff and cache-deletion rebuild remain parent acceptance work.
+
 ## External policy changes and note identity
 
 The built-panel tests deliver a valid policy lease for a different host

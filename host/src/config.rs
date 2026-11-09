@@ -1,6 +1,8 @@
 //! The host owns configuration. An absent file is an unconfigured, inert state.
 //! An update is validated in full before the old file is atomically replaced.
 
+#[path = "config/relearn.rs"]
+pub(crate) mod relearn;
 mod task_folders;
 pub(crate) use task_folders::TaskFolder;
 

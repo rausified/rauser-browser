@@ -603,6 +603,17 @@ or history. The command reads authoritative logs directly and publishes no
 cache, generated file, applied history or config. This is a developer preview;
 ordinary readers retain their current identities until durable apply ships.
 
+The durable transaction prerequisite is private and has no CLI/native entry
+point. It binds a freshly revalidated recorded approval to exact config bytes
+and a chained append in the home's `logs/rekey-history.jsonl`. Publication
+orders prepare, history, config and cleanup, with repeated roll-forward
+interruption tests. Activation still requires universal recovery before
+ordinary access and replay-aware readers. Ordinary startup does not invoke
+this recovery. All physical content and original decisions remain untouched.
+Windows transaction publication and pending recovery refuse because the
+existing directory-sync helpers do not provide the required durability;
+no-pending recovery remains a no-op. See the staged plan for activation work.
+
 Ordinary native note reads and saves share an internal location contract:
 the response key identifies the logical artifact, while ownership checks and
 file writes use the note's physical creation key. With host-verified replay,
