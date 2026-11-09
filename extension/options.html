@@ -138,6 +138,14 @@
         <p>Optional and off by default. Turning this on asks Chrome for notification permission. It applies to tasks you start afterward in this browser profile.</p>
       </section>
 
+      <section aria-labelledby="task-folders-heading">
+        <h2 id="task-folders-heading">Task working folders</h2>
+        <p>Choose project folders to offer in the task bar. The knowledge base remains the default. Removing a choice leaves its files untouched; queued tasks using it will fail before starting.</p>
+        <ul id="task-folders-list" class="plain-list"></ul>
+        <p id="task-folders-status" role="status"></p>
+        <button id="add-task-folder" type="button" class="secondary" disabled>Add folder…</button>
+        <button id="refresh-task-folders" type="button" class="secondary">Refresh folders</button>
+      </section>
       <section aria-labelledby="agent-heading">
         <h2 id="agent-heading">Summary harness</h2>
         <p id="harness-warning">Summaries and tasks run an AI agent with full access to your files, on your normal login. A page could contain instructions aimed at the agent. Use them on pages you trust.</p>

@@ -164,6 +164,24 @@ impl ConsentAuthority {
             .map(Some)
     }
 
+    /// A task-folder request carries only the host-minted token, never a path.
+    pub(crate) fn task_folder_grant(
+        &self,
+        token: &str,
+        revision: &str,
+    ) -> Result<(String, String)> {
+        let grant = self
+            .picker_grants
+            .get(token)
+            .context("folder selection token is unknown or already used")?;
+        let identity = self.check_grant(FolderPurpose::TaskFolder, token, revision, &grant.root)?;
+        Ok((grant.root.clone(), identity))
+    }
+
+    pub(crate) fn consume_picker(&mut self, token: &str) {
+        self.picker_grants.remove(token);
+    }
+
     fn check_grant(
         &self,
         purpose: FolderPurpose,
@@ -222,6 +240,7 @@ fn folder_noun(purpose: FolderPurpose) -> &'static str {
     match purpose {
         FolderPurpose::NotesFolder => "home folder",
         FolderPurpose::KnowledgeBase => "knowledge base folder",
+        FolderPurpose::TaskFolder => "task working folder",
     }
 }
 
@@ -239,6 +258,23 @@ fn check_agent_fields(current: &ConfigSnapshot, next: &ConfigSnapshot) -> Result
 mod tests {
     use super::*;
     use brauser_protocol::{AdapterDocument, StorageConfig};
+
+    #[test]
+    fn task_folder_grants_are_purpose_bound_and_consumed_only_after_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut authority = ConsentAuthority::new();
+        let home = mint(&mut authority, FolderPurpose::NotesFolder, dir.path());
+        assert!(authority.task_folder_grant(&home, "rev").is_err());
+        let token = mint(&mut authority, FolderPurpose::TaskFolder, dir.path());
+        assert!(authority.task_folder_grant(&token, "stale").is_err());
+        // The existing test helper binds grants to the fixture revision.
+        let revision = authority.picker_grants[&token].revision.clone();
+        let (path, identity) = authority.task_folder_grant(&token, &revision).unwrap();
+        assert_eq!(Path::new(&path), fs::canonicalize(dir.path()).unwrap());
+        assert_eq!(identity, selected_root_identity(Path::new(&path)).unwrap());
+        authority.consume_picker(&token);
+        assert!(authority.task_folder_grant(&token, &revision).is_err());
+    }
 
     #[test]
     fn fresh_picker_token_can_reconfirm_the_same_path() {

@@ -1830,3 +1830,11 @@ ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
 formatting, protocol generation, typecheck, lint, script tests, Markdown safety
 and queue consistency pass. Development tools pass 254 tests with 94 skips;
 accessibility passes two tests with 55 Chromium sandbox skips.
+## 2026-11-03 — Per-task project folders
+
+`brwr-zla` adds native-picked, host-owned task destinations, a per-task selector,
+and recorded working-folder context in history/Reuse. A queued task carries the
+immutable entry ID so removing and re-adding the same path never revives its
+prior authorization. The service checks the folder's recorded identity and the
+unchanged protected paths before launch. The default knowledge-base behavior
+and non-resumable task recovery remain in force; summaries are unchanged.
