@@ -2020,3 +2020,27 @@ integration fixtures in `test:queue`/`test:dev-tools`. The 2026-11-05 parallel
 run encountered heavy I/O pressure and an error in the no-TTY contract fixture;
 the unchanged fixture passed alone in 11.6 seconds and the full serial tooling
 suite passed all 252 cases. Retain the existing deadlines and assertions.
+
+## Recent artifact-day pagination
+
+`brwr-a30j` adds opt-in `list_artifacts` pages. After `npm run build:extension`,
+run the artifact wire tests, `cargo test --locked -p brauser recent_`, and
+`node --test --test-isolation=none extension/tests/panel/recent-worklog.test.mjs extension/tests/panel/page-summary.test.mjs`.
+The index traverses 80 matching artifact-days, checks order and exhausted pages,
+and rejects changed summaries, filters, caps, revisions and byte-identical rows
+in another home. Native tests keep the 32-row response cap and legacy wire shape.
+
+An actual host-port exit clears Recent rows and invalidates pending pages even
+when the host remains reachable. The page's own summary button still disables
+while disconnected; a fresh explicit Recent reload starts at offset zero and
+restores its summary buttons. Keep both assertions together in the page-summary
+regression: looking up the removed Recent button after exit is no longer valid.
+Recent tests also exit the port synchronously after an answer but before its
+promise resumes, covering both initial and continuation replies. The real-browser
+keyboard tests in `npm run test:a11y` cover append and conflict focus; sandbox
+skips do not establish browser acceptance. All fixtures use mocked hosts.
+
+Settings-change regressions also hold `get_config` across the reload debounce:
+both initial and continuation replies must be discarded as soon as the policy
+notice arrives. Even an unchanged revision must restart at offset zero after
+the reload completes.

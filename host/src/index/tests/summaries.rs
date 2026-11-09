@@ -365,6 +365,219 @@ fn a_recent_row_carries_only_its_own_days_latest_summary() {
 }
 
 #[test]
+fn recent_pages_reach_all_matching_days_and_ties_and_refuse_changed_snapshots() {
+    use crate::index::{RecentFilters, StaleRecentPage};
+    use brauser_protocol::{RecentPageRequest, SummaryReadingFilter};
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let other_root = TempDir::new().unwrap();
+    let other_cache = TempDir::new().unwrap();
+    let other = super::index(&other_root, &other_cache);
+    let filters = || RecentFilters {
+        artifact_type: Some("web.page"),
+        title_query: Some("MATCHING"),
+        reading: Some(SummaryReadingFilter::Limited),
+        limit: 32,
+    };
+    let start = Date::from_calendar_date(2026, time::Month::September, 1).unwrap();
+    for day in 0..40 {
+        for name in ["a", "b"] {
+            let date = start + time::Duration::days(day);
+            let mut event = web_summary(
+                &format!("https://example.com/{name}"),
+                &format!("{date}T08:00:00Z"),
+            );
+            event.title = "Matching title".into();
+            event.read_scope = Some(crate::answer::ReadScope::Partial);
+            index.record_summary(&event).unwrap();
+            other.record_summary(&event).unwrap();
+        }
+    }
+    let expected = index
+        .recent_with_reading(
+            Some("web.page"),
+            Some("matching"),
+            SummaryReadingFilter::Limited,
+            200,
+        )
+        .unwrap()
+        .0;
+    assert_eq!(expected.len(), 80);
+    let first = index
+        .recent_page(
+            filters(),
+            "config-1",
+            &RecentPageRequest {
+                offset: 0,
+                snapshot: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(first.items, expected[..32]);
+    let snapshot = first.page.snapshot.clone();
+    let second = index
+        .recent_page(
+            filters(),
+            "config-1",
+            &RecentPageRequest {
+                offset: 32,
+                snapshot: Some(snapshot.clone()),
+            },
+        )
+        .unwrap();
+    assert_eq!(second.items, expected[32..64]);
+    assert_eq!(second.page.next_offset, Some(64));
+    let last = index
+        .recent_page(
+            filters(),
+            "config-1",
+            &RecentPageRequest {
+                offset: 64,
+                snapshot: Some(snapshot.clone()),
+            },
+        )
+        .unwrap();
+    assert_eq!(last.items, expected[64..]);
+    assert_eq!(last.page.next_offset, None);
+    let exhausted = index
+        .recent_page(
+            filters(),
+            "config-1",
+            &RecentPageRequest {
+                offset: 80,
+                snapshot: Some(snapshot.clone()),
+            },
+        )
+        .unwrap();
+    assert!(exhausted.items.is_empty());
+    assert_eq!(exhausted.page.next_offset, None);
+    // All activity, title/type and reading are independent snapshot scopes.
+    for changed in [
+        RecentFilters {
+            title_query: Some("absent"),
+            ..filters()
+        },
+        RecentFilters {
+            artifact_type: Some("work.item"),
+            ..filters()
+        },
+        RecentFilters {
+            reading: None,
+            ..filters()
+        },
+        RecentFilters {
+            limit: 16,
+            ..filters()
+        },
+    ] {
+        assert!(
+            index
+                .recent_page(
+                    changed,
+                    "config-1",
+                    &RecentPageRequest {
+                        offset: 32,
+                        snapshot: Some(snapshot.clone())
+                    }
+                )
+                .unwrap_err()
+                .is::<StaleRecentPage>()
+        );
+    }
+    for request in [
+        RecentPageRequest {
+            offset: 32,
+            snapshot: None,
+        },
+        RecentPageRequest {
+            offset: 81,
+            snapshot: Some(snapshot.clone()),
+        },
+        RecentPageRequest {
+            offset: u32::MAX,
+            snapshot: Some(snapshot.clone()),
+        },
+        RecentPageRequest {
+            offset: 0,
+            snapshot: Some("Z".repeat(64)),
+        },
+    ] {
+        assert!(
+            index
+                .recent_page(filters(), "config-1", &request)
+                .unwrap_err()
+                .is::<StaleRecentPage>()
+        );
+    }
+    let resume = RecentPageRequest {
+        offset: 32,
+        snapshot: Some(snapshot.clone()),
+    };
+    assert!(
+        index
+            .recent_page(filters(), "config-2", &resume)
+            .unwrap_err()
+            .is::<StaleRecentPage>()
+    );
+    // A different home with byte-identical rendered rows must not accept it.
+    assert_eq!(
+        other
+            .recent_with_reading(
+                Some("web.page"),
+                Some("matching"),
+                SummaryReadingFilter::Limited,
+                200
+            )
+            .unwrap()
+            .0,
+        expected
+    );
+    assert!(
+        other
+            .recent_page(filters(), "config-1", &resume)
+            .unwrap_err()
+            .is::<StaleRecentPage>()
+    );
+    // Change an old row outside both loaded windows, including latest reading.
+    let mut changed = web_summary("https://example.com/a", "2026-09-01T09:00:00Z");
+    changed.title = "Matching title".into();
+    changed.read_scope = Some(crate::answer::ReadScope::Whole);
+    index.record_summary(&changed).unwrap();
+    assert!(
+        index
+            .recent_page(filters(), "config-1", &resume)
+            .unwrap_err()
+            .is::<StaleRecentPage>()
+    );
+    let fresh = index
+        .recent_page(
+            filters(),
+            "config-1",
+            &RecentPageRequest {
+                offset: 0,
+                snapshot: None,
+            },
+        )
+        .unwrap();
+    assert_ne!(fresh.page.snapshot, snapshot);
+    // Offset zero with a supplied snapshot is also a consistency check.
+    assert!(
+        index
+            .recent_page(
+                filters(),
+                "config-1",
+                &RecentPageRequest {
+                    offset: 0,
+                    snapshot: Some(snapshot)
+                }
+            )
+            .unwrap_err()
+            .is::<StaleRecentPage>()
+    );
+}
+
+#[test]
 fn recent_reading_filters_the_displayed_summary_before_counting_rows() {
     use crate::answer::ReadScope;
     use brauser_protocol::SummaryReadingFilter::{Limited, Unknown, Whole};

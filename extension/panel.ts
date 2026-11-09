@@ -45,6 +45,7 @@ import {
 } from "./artifact-refresh.js";
 import type {
   ArtifactListItem,
+  ArtifactListResult,
   ArtifactRefView,
   ArtifactView,
   ContainedArtifactView,
@@ -208,6 +209,8 @@ const recentTitle = element<HTMLInputElement>("recent-title");
 const recentReading = element<HTMLSelectElement>("recent-reading");
 const recentStatus = element<HTMLParagraphElement>("recent-status");
 const recentList = element<HTMLDivElement>("recent-list");
+const recentMore = element<HTMLButtonElement>("recent-more");
+const recentReload = element<HTMLButtonElement>("recent-reload");
 /** The worklog period's segments: one native radio group, so arrows move
  * the choice and the group is one tab stop. */
 const WORKLOG_PERIODS = ["today", "yesterday", "week"] as const;
@@ -373,6 +376,8 @@ let recentTimer: ReturnType<typeof setTimeout> | null = null;
 // The shown Recent rows' Open summary buttons, disabled with the host.
 let recentOpenButtons: HTMLButtonElement[] = [];
 let recentLoadSeq = 0;
+let recentResult: { scope: string; items: ArtifactListItem[]; page: ArtifactListResult["page"] } | null = null;
+let recentPageLoading = false;
 let recentWaitingForHost = false;
 let worklogWaitingForHost = false;
 let worklogLoadSeq = 0;
@@ -413,6 +418,10 @@ function resetWorklogSelection(): void {
 // connected means a host can be reached, even after its port exits. Invalidate
 // the sharing snapshot on the actual port lifecycle, including idle exits.
 session.host.onHostExit(() => {
+  invalidateRecent();
+  recentWaitingForHost = false;
+  recentStatus.textContent = "The host exited. Reload results to continue.";
+  recentReload.hidden = false;
   resetWorklogSelection();
   worklogWaitingForHost = false;
   worklogSelectionStatus.textContent = "Open Recent again to reload choices.";
@@ -1151,7 +1160,11 @@ function render(): void {
     worklogStorage = storage;
     resetWorklogSelection();
     worklogText.textContent = connected ? "Open Recent to generate a worklog." : "Waiting for the host…";
-    if (!recentView.hidden) void loadWorklog();
+    invalidateRecent();
+    if (!recentView.hidden) {
+      void loadWorklog();
+      void loadRecent();
+    }
   }
   const reconnected = connected && !artifactHostConnected;
   const generation = session.status?.delivered_batches ?? null;
@@ -1240,8 +1253,9 @@ function scheduleReload(): void {
         else void notes.retry();
         void refreshArtifact(true);
         // A policy signal can require a reload even when the host's actual
-        // revision is unchanged. Restore the invalidated sharing catalog too.
+        // revision is unchanged. Restore the invalidated history views too.
         if (!closed && !recentView.hidden && worklogReport === null) void loadWorklog();
+        if (!closed && !recentView.hidden && recentResult === null) void loadRecent();
       });
   }, 250);
 }
@@ -1961,10 +1975,13 @@ function recentRow(item: ArtifactListItem): HTMLElement {
   return row;
 }
 
-function renderRecent(items: readonly ArtifactListItem[]): void {
-  recentList.replaceChildren();
-  recentOpenButtons = [];
-  let day = "";
+function renderRecent(items: readonly ArtifactListItem[], append = false): HTMLElement | null {
+  if (!append) {
+    recentList.replaceChildren();
+    recentOpenButtons = [];
+  }
+  let first: HTMLElement | null = null;
+  let day = append ? recentResult?.items.at(-1)?.local_date ?? "" : "";
   for (const item of items) {
     if (item.local_date !== day) {
       day = item.local_date;
@@ -1972,19 +1989,100 @@ function renderRecent(items: readonly ArtifactListItem[]): void {
       heading.textContent = day;
       recentList.append(heading);
     }
-    recentList.append(recentRow(item));
+    const row = recentRow(item);
+    first ??= row.querySelector<HTMLAnchorElement>("a");
+    recentList.append(row);
   }
-  if (!items.length) {
+  if (!append && !items.length) {
     const empty = document.createElement("p");
     empty.textContent = recentReading.value
       ? "No matching saved summaries. Try another reading filter or All activity."
       : "No matching artifact activity yet.";
     recentList.append(empty);
   }
+  return first;
+}
+
+function recentScope(): string {
+  return JSON.stringify([session.config?.storage, session.revision,
+    recentType.value, recentTitle.value.trim(), recentReading.value]);
+}
+
+function invalidateRecent(): void {
+  ++recentLoadSeq;
+  recentResult = null;
+  recentPageLoading = false;
+  recentMore.hidden = true;
+  recentMore.setAttribute("aria-disabled", "false");
+  recentReload.hidden = true;
+  recentList.replaceChildren();
+  recentOpenButtons = [];
+}
+
+function validateRecentPage(response: ArtifactListResult, offset: number, snapshot?: string): void {
+  const page = response.page;
+  if (!page || !/^[a-f0-9]{64}$/.test(page.snapshot) || page.offset !== offset ||
+      (snapshot !== undefined && page.snapshot !== snapshot) || response.items.length > 32 ||
+      (page.next_offset !== null && (response.items.length === 0 || page.next_offset !== offset + response.items.length)) ||
+      response.truncated !== (page.next_offset !== null)) {
+    throw new Error("Recent changed or this page is unavailable. Reload results.");
+  }
+}
+
+function recentCount(count: number, more: boolean): void {
+  recentStatus.textContent = `${count} artifact-day entr${count === 1 ? "y" : "ies"}${more ? " · more available" : ""}`;
+}
+
+async function loadMoreRecent(): Promise<void> {
+  const result = recentResult;
+  const page = result?.page;
+  if (recentPageLoading || !result || !page || page.next_offset === null || !session.connected) return;
+  const scope = recentScope();
+  if (scope !== result.scope) return;
+  const seq = ++recentLoadSeq;
+  recentPageLoading = true;
+  // Native disabling blurs Chrome's focused button; the loading guard keeps
+  // this control inert while aria-disabled preserves keyboard focus.
+  recentMore.setAttribute("aria-disabled", "true");
+  recentStatus.textContent = "Loading more…";
+  try {
+    const response = await session.host.call({
+      type: "list_artifacts", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      artifact_type: recentType.value || null, title_query: recentTitle.value.trim() || null,
+      ...(recentReading.value === "limited" || recentReading.value === "whole" || recentReading.value === "unknown"
+        ? { summary_reading: recentReading.value } : {}),
+      limit: 32, page: { offset: page.next_offset, snapshot: page.snapshot },
+    }, "artifact_list_result");
+    if (closed || seq !== recentLoadSeq || !session.connected || scope !== recentScope()) return;
+    validateRecentPage(response, page.next_offset, page.snapshot);
+    const first = renderRecent(response.items, true);
+    recentResult = { scope, items: [...result.items, ...response.items], page: response.page };
+    const focusMore = document.activeElement === recentMore;
+    recentMore.setAttribute("aria-disabled", "false");
+    recentMore.hidden = response.page?.next_offset === null;
+    recentCount(recentResult.items.length, response.truncated);
+    if (focusMore) first?.focus();
+  } catch (error) {
+    if (closed || seq !== recentLoadSeq || !session.connected || scope !== recentScope()) return;
+    const focusMore = document.activeElement === recentMore;
+    recentMore.hidden = true;
+    recentReload.hidden = false;
+    recentStatus.textContent = error instanceof HostError && error.code === "conflict"
+      ? "Recent changed. Reload results to continue."
+      : `Could not load more Recent: ${describe(error)} Reload results to continue.`;
+    if (focusMore) recentReload.focus();
+  } finally {
+    if (seq === recentLoadSeq) {
+      recentPageLoading = false;
+      recentMore.setAttribute("aria-disabled", "false");
+    }
+  }
 }
 
 async function loadRecent(): Promise<void> {
-  const seq = ++recentLoadSeq;
+  invalidateRecent();
+  const seq = recentLoadSeq;
+  const scope = recentScope();
   const reading = recentReading.value;
   // The selector now describes a new result; do not leave old rows beneath it.
   recentList.replaceChildren();
@@ -2010,19 +2108,29 @@ async function loadRecent(): Promise<void> {
       ...(reading === "limited" || reading === "whole" || reading === "unknown"
         ? { summary_reading: reading } : {}),
       limit: 32,
+      page: { offset: 0 },
     }, "artifact_list_result");
-    if (seq !== recentLoadSeq) return;
+    if (closed || seq !== recentLoadSeq || !session.connected || scope !== recentScope()) return;
+    // Keep displaying an unpaged response if an older host supplies one.
+    if (response.page) validateRecentPage(response, 0);
     const selected = recentType.value;
     recentType.replaceChildren(new Option("All types", ""));
     for (const type of response.artifact_types) recentType.add(new Option(type, type));
+    if (selected && !response.artifact_types.includes(selected)) recentType.add(new Option(selected, selected));
     recentType.value = selected;
     renderRecent(response.items);
-    recentStatus.textContent = `${response.items.length} artifact-day entr${response.items.length === 1 ? "y" : "ies"}${response.truncated ? " · first 32 shown" : ""}`;
+    recentResult = { scope: recentScope(), items: response.items, page: response.page };
+    recentMore.hidden = !response.page || response.page.next_offset === null;
+    recentCount(response.items.length, response.truncated);
+    if (response.truncated && !response.page) recentStatus.textContent += " · rebuild the host to load more";
   } catch (error) {
-    if (seq !== recentLoadSeq) return;
+    if (closed || seq !== recentLoadSeq || !session.connected || scope !== recentScope()) return;
     recentStatus.textContent = reading && error instanceof HostError && error.code === "invalid_request"
       ? `Rebuild the ${APP_NAME} host to filter saved summary reading, or choose All activity.`
-      : `Could not load Recent: ${describe(error)}`;
+      : error instanceof HostError && error.code === "invalid_request"
+        ? `Rebuild the ${APP_NAME} host and extension together to page through Recent.`
+        : `Could not load Recent: ${describe(error)}`;
+    recentReload.hidden = false;
     recentList.replaceChildren();
   }
 }
@@ -2342,6 +2450,9 @@ sharingDraftPanel = new SharingDraftPanel({
 window.addEventListener("storage", () => sharingDraftPanel?.render());
 
 function scheduleRecent(): void {
+  // Invalidate immediately, before the debounce can let an old page append.
+  invalidateRecent();
+  recentStatus.textContent = "Loading…";
   if (recentTimer !== null) clearTimeout(recentTimer);
   recentTimer = setTimeout(() => {
     recentTimer = null;
@@ -2541,6 +2652,8 @@ for (const tab of [pageTab, recentTab]) {
 }
 recentType.addEventListener("change", () => void loadRecent());
 recentReading.addEventListener("change", () => void loadRecent());
+recentMore.addEventListener("click", () => void loadMoreRecent());
+recentReload.addEventListener("click", () => void loadRecent());
 recentTitle.addEventListener("input", scheduleRecent);
 for (const radio of worklogPeriodRadios.values()) {
   radio.addEventListener("change", () => {
@@ -2701,9 +2814,11 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   return false;
 });
 session.watchPolicy(() => {
-  // The config reload is debounced; invalidate sharing immediately so a
+  // The config reload is debounced; invalidate history immediately so a
   // reply from the old home/revision cannot publish during that wait.
   draftPolicyPending = true;
+  invalidateRecent();
+  recentStatus.textContent = "Settings changed. Reloading Recent…";
   resetWorklogSelection();
   sharingDraftPanel?.render();
   worklogText.textContent = "Settings changed. Reloading worklog…";

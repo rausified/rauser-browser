@@ -187,6 +187,219 @@ test("Recent sends reading filters with title and type, clears old rows and igno
   assert.equal(page.sent("start_run").length + page.sent("start_task").length, 0);
 });
 
+// Recent pages keep each artifact-day identity even when names/dates tie.
+function recentPageReply(request, start, count, next = null, snapshot = "a".repeat(64)) {
+  return {
+    type: "artifact_list_result", artifact_types: ["work.item", "web.page"], truncated: next !== null,
+    page: { offset: request.page.offset, snapshot, next_offset: next },
+    items: Array.from({ length: count }, (_, index) => ({
+      artifact_id: `work:example/${start + index}`, artifact_type: "work.item", title: `Matching report ${start + index}`,
+      url: `https://new.example/${start + index}`, local_date: "2026-10-27", focused_seconds: 0,
+      background_seconds: 0, opens: 1, why: null, summary: null,
+    })),
+  };
+}
+
+async function recentPaging(intercept) {
+  const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
+    if (request.type === "list_artifacts") return intercept(request);
+    return null;
+  } });
+  await until(() => page.sent("load_note").length > 0, "startup");
+  page.el("tab-recent").click();
+  await until(() => !page.el("recent-more").hidden, "first Recent page");
+  return page;
+}
+
+function recentRows(page) {
+  return page.el("recent-list").children.filter((row) => row.className === "recent-row");
+}
+
+test("Recent page metadata is optional and strictly validated before reaching the panel", () => {
+  const valid = { ...recentPageReply({ page: { offset: 0 } }, 0, 1, 1), protocol_version: PROTOCOL_VERSION, request_id: "page" };
+  assert.equal(isResponseShape(valid), true);
+  const legacy = structuredClone(valid);
+  delete legacy.page;
+  assert.equal(isResponseShape(legacy), true);
+  for (const mutate of [
+    (page) => { delete page.snapshot; }, (page) => { delete page.offset; }, (page) => { delete page.next_offset; },
+    (page) => { page.snapshot = "A".repeat(64); }, (page) => { page.offset = -1; },
+    (page) => { page.offset = 1.5; }, (page) => { page.offset = 0x100000000; },
+    (page) => { page.next_offset = "1"; }, (page) => { page.next_offset = 0; }, (page) => { page.extra = true; },
+  ]) {
+    const reply = structuredClone(valid);
+    mutate(reply.page);
+    assert.equal(isResponseShape(reply), false, JSON.stringify(reply.page));
+  }
+  assert.equal(isResponseShape({ ...valid, page: null }), false);
+});
+
+test("Recent continues past 32 matches without duplicate headings and focuses the new results", async () => {
+  const page = await recentPaging((request) => {
+    const offset = request.page.offset;
+    return recentPageReply(request, offset, offset < 64 ? 32 : 1, offset < 64 ? offset + 32 : null);
+  });
+  assert.deepEqual(page.sent("list_artifacts")[0].page, { offset: 0 });
+  document.activeElement = page.el("recent-more");
+  page.el("recent-more").click();
+  page.el("recent-more").click(); // The in-flight guard prevents a second request.
+  await until(() => recentRows(page).length === 64, "second Recent page");
+  assert.deepEqual(page.sent("list_artifacts")[1].page, { offset: 32, snapshot: "a".repeat(64) });
+  assert.equal(recentRows(page)[32].querySelector("a").focused, true);
+  assert.equal(page.el("recent-more").disabled, false);
+  assert.equal(page.el("recent-list").children.filter((row) => row.tagName === "H3").length, 1);
+  document.activeElement = page.el("recent-title");
+  page.el("recent-more").click();
+  await until(() => recentRows(page).length === 65, "final Recent page");
+  assert.equal(recentRows(page)[64].querySelector("a").focused, undefined);
+  assert.equal(page.el("recent-more").hidden, true);
+  assert.match(page.el("recent-status").textContent, /^65 artifact-day entries$/);
+  assert.equal(new Set(recentRows(page).map((row) => row.querySelector("a").href)).size, 65);
+  assert.equal(page.sent("start_run").length + page.sent("start_task").length, 0);
+});
+
+for (const boundary of ["title debounce", "type", "reading", "home", "disconnect", "refresh"]) {
+  test(`Recent refuses a delayed continuation after ${boundary}`, async () => {
+    let release, request;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const page = await recentPaging((message) => {
+      if (!message.page.offset) return recentPageReply(message, 0, 1, 1);
+      request = message;
+      return pending;
+    });
+    page.el("recent-more").click();
+    await until(() => request, "in-flight continuation");
+    if (boundary === "title debounce") {
+      page.el("recent-title").value = "new title";
+      page.el("recent-title").dispatch("input");
+    }
+    if (boundary === "type") { page.el("recent-type").value = "web.page"; page.el("recent-type").dispatch("change"); }
+    if (boundary === "reading") { page.el("recent-reading").value = "limited"; page.el("recent-reading").dispatch("change"); }
+    if (boundary === "home") {
+      page.state.config.storage.root = "/other-home";
+      page.state.revision = "2";
+      page.policyChanged();
+      await until(() => page.sent("list_artifacts").length >= 3, "new home request");
+    }
+    if (boundary === "disconnect") { page.state.hostDead = true; page.hostExits(); }
+    if (boundary === "refresh") page.el("tab-recent").click();
+    release(recentPageReply(request, 99, 1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.doesNotMatch(page.el("recent-list").textContent, /Matching report 99/);
+    if (boundary === "title debounce" || boundary === "disconnect") assert.equal(page.el("recent-more").hidden, true);
+    if (boundary === "reading") assert.equal(page.sent("list_artifacts").at(-1).summary_reading, "limited");
+    if (boundary === "type") assert.equal(page.sent("list_artifacts").at(-1).artifact_type, "web.page");
+    page.close();
+  });
+}
+
+for (const stage of ["initial", "continuation"]) {
+  for (const changedRevision of [false, true]) {
+    test(`Recent invalidates ${stage} results before a settings reload (${changedRevision ? "new" : "same"} revision)`, async () => {
+      let releaseRecent, releaseConfig, heldRequest;
+      let holdRecent = stage === "initial";
+      let holdConfig = false;
+      const pendingRecent = new Promise((resolve) => { releaseRecent = resolve; });
+      const pendingConfig = new Promise((resolve) => { releaseConfig = resolve; });
+      const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
+        if (request.type === "get_config" && holdConfig) return pendingConfig;
+        if (request.type !== "list_artifacts") return null;
+        if (holdRecent) { heldRequest = request; return pendingRecent; }
+        return recentPageReply(request, 0, 1, 1);
+      } });
+      try {
+        await until(() => page.sent("load_note").length > 0, "startup");
+        page.el("tab-recent").click();
+        if (stage === "continuation") {
+          await until(() => !page.el("recent-more").hidden, "first page");
+          holdRecent = true;
+          page.el("recent-more").click();
+        }
+        await until(() => heldRequest, "pending Recent request");
+        holdConfig = true;
+        if (changedRevision) {
+          page.state.config = { ...page.state.config, storage: { ...page.state.config.storage, root: "/other-home" } };
+          page.state.revision = "2";
+        }
+        page.policyChanged();
+        assert.equal(recentRows(page).length, 0, "clear the old home before the debounced reload");
+        assert.equal(page.el("recent-more").hidden, true);
+        holdRecent = false;
+        releaseRecent(recentPageReply(heldRequest, 99, 1));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.doesNotMatch(page.el("recent-list").textContent, /Matching report 99/);
+        await until(() => page.sent("get_config").length >= 2, "held configuration reload");
+        assert.equal(recentRows(page).length, 0);
+        holdConfig = false;
+        releaseConfig(null);
+        await until(() => recentRows(page).length === 1, "fresh Recent after settings reload");
+        const refreshed = page.sent("list_artifacts").at(-1);
+        assert.deepEqual(refreshed.page, { offset: 0 });
+        assert.doesNotMatch(page.el("recent-list").textContent, /Matching report 99/);
+      } finally {
+        releaseRecent(heldRequest ? recentPageReply(heldRequest, 99, 1) : null);
+        releaseConfig(null);
+        page.close();
+      }
+    });
+  }
+
+  test(`an answered host exiting before the ${stage} promise resumes invalidates Recent`, async () => {
+    const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, intercept(request) {
+      if (request.type === "list_artifacts") return recentPageReply(request, request.page.offset, 1, request.page.offset === 0 ? 1 : null);
+      return null;
+    } });
+    await until(() => page.sent("load_note").length > 0, "startup");
+    if (stage === "continuation") {
+      page.el("tab-recent").click();
+      await until(() => !page.el("recent-more").hidden, "first page");
+    }
+    let exited = false;
+    // HostClient receives and resolves the reply first; the next listener exits
+    // the answered port synchronously before the async consumer can resume.
+    page.state.ports.at(-1).onMessage.addListener((message) => {
+      if (!exited && message.type === "artifact_list_result") { exited = true; page.hostExits(); }
+    });
+    if (stage === "initial") page.el("tab-recent").click();
+    else page.el("recent-more").click();
+    await until(() => exited && page.el("recent-status").textContent.includes("host exited"), "answered host exit");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(recentRows(page).length, 0);
+    assert.equal(page.el("recent-more").hidden, true);
+    assert.equal(page.el("recent-reload").hidden, false);
+    page.el("recent-reload").click();
+    await until(() => !page.el("recent-more").hidden, "fresh port first page");
+    assert.deepEqual(page.sent("list_artifacts").at(-1).page, { offset: 0 });
+    assert.equal(recentRows(page).length, 1);
+  });
+}
+
+for (const failure of ["conflict", "different snapshot", "wrong offset", "no progress", "missing metadata"]) {
+  test(`Recent offers explicit reload after ${failure}`, async () => {
+    const page = await recentPaging((request) => {
+      if (!request.page.offset) return recentPageReply(request, 0, 1, 1);
+      if (failure === "conflict") return { type: "error", code: "conflict", message: "Recent changed" };
+      const response = recentPageReply(request, 99, 1);
+      if (failure === "different snapshot") response.page.snapshot = "b".repeat(64);
+      if (failure === "wrong offset") response.page.offset = 0;
+      if (failure === "no progress") { response.page.next_offset = 1; response.truncated = true; }
+      if (failure === "missing metadata") delete response.page;
+      return response;
+    });
+    document.activeElement = page.el("recent-more");
+    page.el("recent-more").click();
+    await until(() => !page.el("recent-reload").hidden, "reload available");
+    assert.equal(page.el("recent-more").hidden, true);
+    assert.equal(page.el("recent-reload").focused, true);
+    assert.doesNotMatch(page.el("recent-list").textContent, /Matching report 99/);
+    assert.equal(recentRows(page).length, 1);
+    page.el("recent-reload").click();
+    await until(() => !page.el("recent-more").hidden, "reloaded first page");
+    assert.equal(recentRows(page).length, 1);
+    assert.deepEqual(page.sent("list_artifacts").at(-1).page, { offset: 0 });
+  });
+}
+
 test("Recent reading has a named selector, honest empty results and older-host guidance", async () => {
   worklogOptions();
   assert.match(PANEL_HTML, /<label for="recent-reading">Saved summary reading<\/label>/);

@@ -274,7 +274,19 @@ export interface GetArtifactRequest {
   title: string | null;
 }
 
+export interface RecentPageRequest {
+  offset: number;
+  snapshot?: string;
+}
+
+export interface RecentPageInfo {
+  snapshot: string;
+  offset: number;
+  next_offset: number | null;
+}
+
 export interface ListArtifactsRequest {
+  page?: RecentPageRequest;
   type: "list_artifacts";
   protocol_version: 8;
   request_id: string;
@@ -558,6 +570,7 @@ export interface ArtifactResult {
 }
 
 export interface ArtifactListResult {
+  page?: RecentPageInfo;
   type: "artifact_list_result";
   protocol_version: 8;
   request_id: string;

@@ -257,7 +257,7 @@ test("following a new tab clears the previous page's summary before its lookup r
   assert.equal(page.el("page-summary").hidden, true);
 });
 
-test("Open summary buttons are disabled while the host is disconnected", async () => {
+test("host disconnect disables the page summary and clears Recent until reloaded", async () => {
   const items = [{
     local_date: "2026-10-27", artifact_id: "web:spec", artifact_type: "web.page", title: "Spec",
     url: "https://read.example/spec", focused_seconds: 0, background_seconds: 0, opens: 0, why: null,
@@ -286,11 +286,17 @@ test("Open summary buttons are disabled while the host is disconnected", async (
   page.titleChanged("Article (2)");
   await until(() => /unavailable/i.test(page.el("artifact-status").textContent), "the host-unavailable status");
   assert.equal(page.el("page-summary-open").disabled, true);
-  assert.equal(recentOpen().disabled, true);
+  // Recent's snapshot belongs to the exited host. Its rows and continuation
+  // are discarded rather than leaving Open summary on stale results.
+  assert.equal(recentOpen(), null);
+  assert.equal(page.el("recent-more").hidden, true);
 
   // The host is back; the next page's calls reach it.
   page.state.hostDead = false;
   page.followLink("https://read.example/next", "Next");
   await until(() => page.el("page-summary-open").disabled === false, "Open summary to enable again");
+  page.el("recent-reload").click();
+  await until(() => recentOpen() !== null, "fresh Recent summary button");
   assert.equal(recentOpen().disabled, false);
+  assert.deepEqual(page.sent("list_artifacts").at(-1).page, { offset: 0 });
 });
