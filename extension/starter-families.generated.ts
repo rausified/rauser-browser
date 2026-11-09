@@ -1263,18 +1263,26 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
               }
             },
             {
-              "path": "/(sp|esc|kb)",
+              "path": "/{_}",
               "query": {
                 "id": "kb_article",
                 "sysparm_article": "{number:token(3,40)|upper}"
-              }
+              },
+              "absent": [
+                "sys_id",
+                "sys_kb_id"
+              ]
             },
             {
-              "path": "/(sp|esc|kb)",
+              "path": "/{_}",
               "query": {
                 "id": "kb_article_view",
                 "sysparm_article": "{number:token(3,40)|upper}"
-              }
+              },
+              "absent": [
+                "sys_id",
+                "sys_kb_id"
+              ]
             }
           ],
           "id": "servicenow.kb:{host}/{number}"

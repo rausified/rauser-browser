@@ -41,7 +41,13 @@ Of the other 300 URLs:
    its own suffixes (`/helpzone`, `/policyhub`), not the documented defaults (`/sp`, `/esc`,
    `/kb`). The KB rules keyed on the path. Fix: match any single-segment portal path that has
    `id=kb_article` or `id=kb_article_view` and `sysparm_article=KB…`; the query is specific
-   enough on its own. **Lesson:** when a product lets each customer rename a route, key the
+   enough on its own. **Fixed (2026-11-09):** the adapter format first refused that rule
+   (`no_literal_segment`: a query never anchored a rule). `adapter-templates.md` §4.1 now lets a
+   literal query condition plus an identifier capture anchor one, and `servicenow.kb`'s portal
+   rules are `/{_}` with `id=kb_article` or `id=kb_article_view` and `sysparm_article`, with
+   `sys_id` and `sys_kb_id` absent. Synthetic `/helpzone?id=kb_article_view&sysparm_article=KB0012345`
+   and `/policyhub?id=kb_article&sysparm_article=KB0012345` match in both engines (the family's
+   vectors). **Lesson:** when a product lets each customer rename a route, key the
    rule on the query or the record ID and leave the configurable part as `{_}`.
 2. **Google: Gmail message permalinks.** `mail/u/<n>/?ik=…&view=pt&permmsgid=msg-f:…`
    (print view and permalink) uses the query, not the fragment. The researcher ruled out
