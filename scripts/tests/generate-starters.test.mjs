@@ -634,7 +634,8 @@ for (const [bad, why] of [
   [["fup_load-*"], "a character no DNS label has"],
   [["-x*"], "a leading hyphen"],
 ]) {
-  test(`origin.exclude refuses ${why}`, (t) => {
+  test(`origin.exclude refuses ${why}`, async (t) => {
+    if (await ipcDenied(t, "child-pipe")) return;
     const root = tmpRoot(t);
     const atlassian = readFamily(root, "atlassian");
     atlassian.origin.exclude = bad;
@@ -1199,7 +1200,8 @@ for (const [origin, message, why] of [
   [{ kind: "any", of: [{ kind: "subdomain", suffix: ".example.com" }, { kind: "subdomain", suffix: ".a.example.com", labels: 1 }] }, /origin\.of\[1\] overlaps origin\.of\[0\]/, "overlapping members"],
   [{ kind: "any", of: [{ kind: "exact", origin: "https://a.example.com" }, { kind: "exact", origin: "https://b.example.com" }], extra: 1 }, /origin unknown field "extra"/, "an unknown key"],
 ]) {
-  test(`a multi-origin family refuses ${why}`, (t) => {
+  test(`a multi-origin family refuses ${why}`, async (t) => {
+    if (await ipcDenied(t, "child-pipe")) return;
     const root = tmpRoot(t);
     const atlassian = readFamily(root, "atlassian");
     atlassian.origin = origin;

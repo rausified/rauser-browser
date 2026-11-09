@@ -3292,10 +3292,8 @@ fn validate_adapter_transition_with_history(
             .chain(&by_hand.contracts),
         &next_contracts,
     )?;
-    // Every contract this save adds or reshapes. The delta pairs a
-    // recognition edit that keeps its identity with the contract it replaces,
-    // so it is in neither list, yet widening its match can claim a retired
-    // route under its own ID just as an addition can.
+    // Every contract this save adds or reshapes: widening its match can claim
+    // a retired route under its own ID just as an addition can.
     let changed: Vec<_> = next_contracts
         .iter()
         .filter(|contract| !current_contracts.contains(contract))
@@ -3306,7 +3304,17 @@ fn validate_adapter_transition_with_history(
         .filter(|contract| current_contracts.contains(contract))
         .cloned()
         .collect();
-    let (removed, _added) = adapter_contract_delta_between(current_contracts, next_contracts);
+    // Keeping an ID does not prove that an edit still recognizes its old
+    // routes. Protect superseded shapes, including recognition edits, unless
+    // a same-identity contract demonstrably retains all its old rules.
+    let superseded: Vec<_> = current_contracts
+        .iter()
+        .filter(|old| {
+            !next_contracts
+                .iter()
+                .any(|new| preserves_recognition(old, new))
+        })
+        .collect();
     for candidate in &changed {
         // A contract that cannot be read back may be the one this adapter
         // would re-key, so the change waits for the record's repair.
@@ -3329,21 +3337,17 @@ fn validate_adapter_transition_with_history(
         }
         let earlier: Vec<&serde_json::Value> = retired
             .iter()
-            .chain(&removed)
+            .chain(superseded.iter().copied())
             .chain(&by_hand.contracts)
             .collect();
         refuse_rekeyed_routes(candidate, next, &earlier)?;
     }
-    // Removing a contract also exposes its routes to the unchanged contracts
-    // after it: a rule ahead of a catch-all hands its pages to the catch-all
-    // even though the catch-all itself did not change. That is the same
-    // re-key as adding the catch-all after the rule's removal, so the
-    // unchanged contracts are checked against the contracts this save
-    // removes (earlier retirements were checked when each was added).
-    let removed_here: Vec<&serde_json::Value> = removed.iter().collect();
-    if !removed_here.is_empty() {
+    // Removing or narrowing a contract can expose recorded routes to an
+    // unchanged catch-all, so check it too. Earlier retirements were checked
+    // when each unchanged contract was added.
+    if !superseded.is_empty() {
         for candidate in &unchanged {
-            refuse_rekeyed_routes(candidate, next, &removed_here)?;
+            refuse_rekeyed_routes(candidate, next, &superseded)?;
         }
     }
     Ok(())
@@ -3554,50 +3558,27 @@ fn declares_container(
     })
 }
 
-/// Pair unchanged contracts first, then pair recognition edits that retain the
-/// same origin, type, and ID. What remains is a real retirement or introduction.
-fn adapter_contract_delta_between(
-    current: Vec<serde_json::Value>,
-    next: Vec<serde_json::Value>,
-) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
-    let mut current_matched = vec![false; current.len()];
-    let mut next_matched = vec![false; next.len()];
-
-    for (old_index, old) in current.iter().enumerate() {
-        if let Some((new_index, _)) = next
-            .iter()
-            .enumerate()
-            .find(|(index, new)| !next_matched[*index] && *new == old)
-        {
-            current_matched[old_index] = true;
-            next_matched[new_index] = true;
-        }
+/// A small sufficient proof, not general template inclusion. Preserve the old
+/// winning rule order and every other matching setting. `within` is governed
+/// separately by validate_within_transition and cannot release recognition.
+fn preserves_recognition(previous: &serde_json::Value, next: &serde_json::Value) -> bool {
+    let (Some(old_rules), Some(new_rules)) =
+        (previous["match"].as_array(), next["match"].as_array())
+    else {
+        return false;
+    };
+    if !new_rules.starts_with(old_rules) {
+        return false;
     }
-    for (old_index, old) in current.iter().enumerate() {
-        if current_matched[old_index] {
-            continue;
-        }
-        if let Some((new_index, _)) = next.iter().enumerate().find(|(index, new)| {
-            !next_matched[*index]
-                && adapter_contract_identity(old) == adapter_contract_identity(new)
-                && adapter_contract_type(old) == adapter_contract_type(new)
-        }) {
-            current_matched[old_index] = true;
-            next_matched[new_index] = true;
-        }
+    let (Some(mut old), Some(mut new)) = (previous.as_object().cloned(), next.as_object().cloned())
+    else {
+        return false;
+    };
+    for field in ["match", "within"] {
+        old.remove(field);
+        new.remove(field);
     }
-
-    let removed = current
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, contract)| (!current_matched[index]).then_some(contract))
-        .collect();
-    let added = next
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, contract)| (!next_matched[index]).then_some(contract))
-        .collect();
-    (removed, added)
+    old == new
 }
 
 fn validate_adapter_history(history: &[serde_json::Value]) -> Result<()> {
@@ -6648,6 +6629,181 @@ mod tests {
             error.contains("cannot change until artifact migrations"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn narrowing_recognition_cannot_hand_recorded_routes_to_another_identity() {
+        let mut paths = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        paths["match"] = json!([{"path": "/items/{id:int}"}, {"path": "/docs/{id:int}"}]);
+        let mut fewer_paths = paths.clone();
+        fewer_paths["match"].as_array_mut().unwrap().pop();
+        let builtins = adapter(
+            "https://work.example",
+            "work.app",
+            "/app/{app:name}/(search|incident_review)",
+            "app:{host}/{app}",
+        );
+        let mut fewer_builtins = builtins.clone();
+        fewer_builtins["match"][0]["path"] = json!("/app/{app:name}/search");
+        let mut wrong_container = github_repo_adapter(&["a", "b"]);
+        wrong_container["id"] = json!("github.repo:{host}/{repo}/{owner}");
+        for (case, original, narrowed, receiver) in [
+            (
+                "removed path",
+                paths,
+                fewer_paths,
+                adapter(
+                    "https://work.example",
+                    "work.doc",
+                    "/docs/{id:int}",
+                    "doc:{host}/{id}",
+                ),
+            ),
+            (
+                "removed built-in",
+                builtins,
+                fewer_builtins,
+                adapter(
+                    "https://work.example",
+                    "work.dashboard",
+                    "/app/{app:name}/{view:name}",
+                    "dashboard:{host}/{app}/{view}",
+                ),
+            ),
+            (
+                "removed scope value",
+                github_pr_adapter(&["a", "b"]),
+                github_pr_adapter(&["a"]),
+                github_repo_adapter(&["a", "b"]),
+            ),
+            (
+                "another container ID",
+                within_github_repo(github_pr_adapter(&["a", "b"])),
+                within_github_repo(github_pr_adapter(&["a"])),
+                wrong_container,
+            ),
+        ] {
+            // Both an unchanged recipient and one edited in the same save
+            // must be checked against the superseded recognition shape.
+            for edit_receiver in [false, true] {
+                let folder = tempfile::tempdir().unwrap();
+                let path = folder.path().join("config.toml");
+                let mut store = ConfigStore::for_test(path.clone());
+                let revision = store
+                    .update(
+                        adapter_config(vec![original.clone(), receiver.clone()]),
+                        MISSING_REVISION,
+                    )
+                    .unwrap()
+                    .unwrap();
+                let before = fs::read(&path).unwrap();
+                let mut receiver = receiver.clone();
+                if edit_receiver {
+                    let rule = receiver["match"][0].clone();
+                    receiver["match"].as_array_mut().unwrap().push(rule);
+                }
+                let error = store
+                    .update(adapter_config(vec![narrowed.clone(), receiver]), &revision)
+                    .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("cannot change until artifact migrations"),
+                    "{case}, edited={edit_receiver}: {error:#}"
+                );
+                assert_eq!(fs::read(&path).unwrap(), before, "{case}");
+                assert_eq!(store.revision(), revision, "{case}");
+                assert_eq!(store.snapshot().adapters.artifacts[0], original, "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn appending_recognition_rules_preserves_existing_overlapping_routes() {
+        let first = adapter(
+            "https://work.example",
+            "work.item",
+            "/items/{id:int}",
+            "item:{host}/{id}",
+        );
+        let catch_all = adapter(
+            "https://work.example",
+            "work.page",
+            "/items/{id:int}",
+            "page:{host}/{id}",
+        );
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = ConfigStore::for_test(folder.path().join("config.toml"));
+        let revision = store
+            .update(
+                adapter_config(vec![first.clone(), catch_all.clone()]),
+                MISSING_REVISION,
+            )
+            .unwrap()
+            .unwrap();
+        let mut widened = first;
+        widened["match"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path": "/docs/{id:int}"}));
+        let revision = store
+            .update(adapter_config(vec![widened, catch_all]), &revision)
+            .unwrap()
+            .unwrap();
+        // Unrelated saves must not reconsider already-established overlaps.
+        let mut paused = store.snapshot().clone();
+        paused.capture_enabled = false;
+        let revision = store.update(paused, &revision).unwrap().unwrap();
+        let mut display = store.snapshot().clone();
+        display.adapters.artifacts[0]["title"] = json!("{title} - Work");
+        store.update(display, &revision).unwrap().unwrap();
+    }
+
+    #[test]
+    fn narrowing_recognition_keeps_safe_fall_throughs_and_disjoint_edits() {
+        for (original, narrowed, receiver) in [
+            (
+                within_github_repo(github_pr_adapter(&["a", "b"])),
+                within_github_repo(github_pr_adapter(&["a"])),
+                github_repo_adapter(&["a", "b"]),
+            ),
+            (
+                github_pr_adapter(&["a", "b"]),
+                github_pr_adapter(&["a"]),
+                github_pr_adapter(&["a", "b"]),
+            ),
+            (
+                github_pr_adapter(&["a", "b"]),
+                github_pr_adapter(&["a"]),
+                adapter(
+                    "https://github.com",
+                    "github.issue",
+                    "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}",
+                    "github.issue:{host}/{owner}/{repo}/{number}",
+                ),
+            ),
+        ] {
+            let mut receiver = receiver;
+            receiver["scope"] = json!({"owner": ["a", "b"]});
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = ConfigStore::for_test(folder.path().join("config.toml"));
+            let revision = store
+                .update(
+                    adapter_config(vec![original, receiver.clone()]),
+                    MISSING_REVISION,
+                )
+                .unwrap()
+                .unwrap();
+            store
+                .update(adapter_config(vec![narrowed, receiver]), &revision)
+                .unwrap()
+                .unwrap();
+        }
     }
 
     #[test]
