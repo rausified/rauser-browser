@@ -1843,6 +1843,35 @@
         }
       ]
     },
+    "query_anchor_lab": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "qa.kb",
+          "origin": "https://qa.example.com",
+          "match": [{"path": "/{_}", "query": {"id": "kb_article", "n": "{n:token(3,40)|upper}"}}],
+          "id": "qa.kb:{host}/{n}"
+        },
+        {
+          "type": "qa.ticket",
+          "origin": "https://qa.example.com",
+          "match": [{"path": "/{_}", "query": {"id": "ticket", "sys_id": "{n:hex(32)}"}}],
+          "id": "qa.ticket:{host}/{n}"
+        },
+        {
+          "type": "qa.classic",
+          "origin": "https://qa.example.com",
+          "match": [{"path": "/incident.do", "query": {"sys_id": "{n:hex(32)}"}}],
+          "id": "qa.classic:{host}/{n}"
+        },
+        {
+          "type": "qa.problem",
+          "origin": "https://qa.example.com",
+          "match": [{"path": "/problem.do", "query": {"sys_id": "{n:hex(32)}"}, "absent": ["id"]}],
+          "id": "qa.problem:{host}/{n}"
+        }
+      ]
+    },
     "overlap_lab": {
       "format": 1,
       "artifacts": [
@@ -9242,6 +9271,169 @@
             "type": "github.repo",
             "origin": "https://github.com",
             "match": [{"path": "/{repo:name}", "query": {"o": "{owner:name|lower}"}}],
+            "id": "github.repo:{host}/{owner}/{repo}",
+            "scope": {"owner": ["acme-corp"]}
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.query_literal_with_identifier_accepted",
+      "kind": "validate",
+      "why": "§4.1: a literal query condition plus an identifier capture in the query that the ID uses anchors a rule, so a portal path the customer renames can stay {_}",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"id": "kb_article", "n": "{n:token(3,40)|upper}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.anchor.query_literal_with_identifier_rest_accepted",
+      "kind": "validate",
+      "why": "§4.1: the query anchor stands in for a path anchor, so the path may be a bare rest",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{*}", "query": {"view": "article", "n": "{n:int}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.anchor.query_literal_without_query_identifier_rejected",
+      "kind": "validate",
+      "why": "§4.1: a literal query condition does not anchor when the identifier is in the path, not the query",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}/{n:int}", "query": {"view": "edit"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.query_identifier_without_literal_rejected",
+      "kind": "validate",
+      "why": "§4.1: an identifier capture in the query does not anchor without a literal query condition",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"n": "{n:token}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.query_presence_is_not_a_literal",
+      "kind": "validate",
+      "why": "§4.1: a presence condition ({_}) is not a literal, so it does not anchor",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"id": "{_}", "n": "{n:int}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.query_name_capture_is_not_an_identifier",
+      "kind": "validate",
+      "why": "§4.1: a name capture is not an identifier, so a literal plus a name capture in the query does not anchor",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"id": "kb_article", "n": "{n:name}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.query_alternation_capture_is_not_an_identifier",
+      "kind": "validate",
+      "why": "§4.1: a captured alternation is not an identifier, so it does not complete a query anchor",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"id": "kb_article", "n": "{n:(a|b)}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 0, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.query_anchor_is_per_rule",
+      "kind": "validate",
+      "why": "§4.1: the query anchor is checked per rule; the second rule has no literal query condition",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"id": "kb_article", "n": "{n:token(3,40)|upper}"}}, {"path": "/{_}", "query": {"n": "{n:token(3,40)|upper}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "expect": {"error": {"code": "no_literal_segment", "adapter": 0, "rule": 1, "entry": null}}
+    },
+    {
+      "id": "validate.anchor.query_anchor_with_scope_capture_only_rejected",
+      "kind": "validate",
+      "why": "§4.1: a scoped capture bound from the query is not an identifier the ID needs for the anchor; a literal plus that capture does not anchor",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "github.repo",
+            "origin": "https://github.com",
+            "match": [{"path": "/{repo:name}", "query": {"tab": "code", "o": "{owner:name|lower}"}}],
             "id": "github.repo:{host}/{owner}/{repo}",
             "scope": {"owner": ["acme-corp"]}
           }
@@ -19141,6 +19333,63 @@
       "url": "https://github.com/other-org/widgets/pull/42"
     },
     {
+      "id": "eval.anchor.query_anchored_any_portal",
+      "kind": "evaluate",
+      "why": "§4.1, §5.3: a query-anchored rule matches under any single-segment path",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"id": "kb_article", "n": "{n:token(3,40)|upper}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "url": "https://acme.example.com/helpzone?id=kb_article&sysparm_lang=en&n=kb0012345",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.article", "captures": {"n": "KB0012345"}, "artifact_id": "acme.article:acme.example.com/KB0012345", "mode": null}
+    },
+    {
+      "id": "eval.anchor.query_anchored_other_literal_no_match",
+      "kind": "evaluate",
+      "why": "§4.1, §5.3: a query-anchored rule still needs its literal; another value matches nothing",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"id": "kb_article", "n": "{n:token(3,40)|upper}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "url": "https://acme.example.com/helpzone?id=kb_search&n=KB0012345",
+      "expect": {"match": false, "reason": "no_rule"}
+    },
+    {
+      "id": "eval.anchor.query_anchored_two_segments_no_match",
+      "kind": "evaluate",
+      "why": "§4.1, §4.3: {_} is one segment, so a deeper path does not match",
+      "impls": ["rust", "ts"],
+      "doc": {
+        "format": 1,
+        "artifacts": [
+          {
+            "type": "acme.article",
+            "origin": "https://acme.example.com",
+            "match": [{"path": "/{_}", "query": {"id": "kb_article", "n": "{n:token(3,40)|upper}"}}],
+            "id": "acme.article:{host}/{n}"
+          }
+        ]
+      },
+      "url": "https://acme.example.com/help/zone?id=kb_article&n=KB0012345",
+      "expect": {"match": false, "reason": "no_rule"}
+    },
+    {
       "id": "eval.anchor.scoped_tenant_home",
       "kind": "evaluate",
       "why": "§4.1/§6: a template anchored only by its scoped owner matches the repository home",
@@ -24570,6 +24819,36 @@
       "expect": {"segments": ["x", "y"]}
     },
     {
+      "id": "overlap.query_anchor.literal_differs",
+      "kind": "overlap",
+      "why": "§10.3: two query-anchored {_} rules whose literals on one key differ are disjoint",
+      "impls": ["rust"],
+      "doc": {"$fixture": "query_anchor_lab"},
+      "a": [0, 0],
+      "b": [1, 0],
+      "expect": {"overlap": "disjoint"}
+    },
+    {
+      "id": "overlap.query_anchor.wildcard_path_covers_classic",
+      "kind": "overlap",
+      "why": "§10.3: a query-anchored {_} rule's path covers a literal one-segment path, so with no query proof the rules may overlap",
+      "impls": ["rust"],
+      "doc": {"$fixture": "query_anchor_lab"},
+      "a": [1, 0],
+      "b": [2, 0],
+      "expect": {"overlap": "may_overlap"}
+    },
+    {
+      "id": "overlap.query_anchor.absent_key_separates",
+      "kind": "overlap",
+      "why": "§10.3: a key the query-anchored rule requires and the other rule lists in absent proves disjointness",
+      "impls": ["rust"],
+      "doc": {"$fixture": "query_anchor_lab"},
+      "a": [1, 0],
+      "b": [3, 0],
+      "expect": {"overlap": "disjoint"}
+    },
+    {
       "id": "overlap.literal_differs",
       "kind": "overlap",
       "why": "§10.3: different literals at one position",
@@ -26817,6 +27096,16 @@
       "expect": {"match": false, "reason": "id_too_long"},
       "doc": {"$fixture": "long_once"},
       "url": "https://l.example.com/i/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    },
+    {
+      "id": "draft_rules.query_anchor_does_not_anchor_a_draft",
+      "kind": "draft_rules",
+      "why": "§10.4: a literal query condition plus an identifier capture anchors a hand-written rule (§4.1) but not a drafted one, whose query values are page-controlled",
+      "impls": ["rust"],
+      "existing": {"format": 1, "artifacts": []},
+      "draft": {"type": "x.item", "origin": "https://tools.example.com", "match": [{"path": "/items/{id:int}"}, {"path": "/{_}", "query": {"view": "item", "id": "{id:int}"}}], "id": "x:{host}/{id}"},
+      "provenance": ["drafted", "drafted"],
+      "expect": {"scope": "not_shared", "rules": ["kept", {"dropped": "draft_no_leading_literal"}]}
     },
     {
       "id": "draft_rules.drop_only_the_failing_rule",

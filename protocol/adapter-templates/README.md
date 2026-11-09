@@ -328,7 +328,7 @@ The first failing check is reported.
       6. `scope_capture_not_bound`, per rule. A scoped capture that is optional counts as not bound.
       7. `scope_bad_value`: each listed value must be the canonical value of the capture as at least one rule binds it. Only `mode` can differ between rules (SQ-V22).
       8. `shared_origin_unscoped`
-      9. `no_literal_segment`, per rule, unless some required path segment is an anchor (§4.1) or is a required path capture whose name is a `scope` key. A capture bound from a query value never anchors, and an `unscoped` adapter gets no scope anchor. This check follows scope so that scope keys are in view.
+      9. `no_literal_segment`, per rule, unless some required path segment is an anchor (§4.1) or is a required path capture whose name is a `scope` key, or the rule's query anchors it (§4.1, amended 2026-11-09): at least one literal condition (not presence) and at least one capture of type `int`, `hex`, `uuid`, `jira_key` or `token` that the ID uses and no `scope` key names. A scoped capture bound from a query value never anchors, and an `unscoped` adapter gets no scope anchor. The error location is unchanged (`rule`, path character 0). This check follows scope so that scope keys are in view.
    8. **`title`.**
       - For the list: a value that is neither a string nor a list gives `wrong_type`. Then `empty_title_list` and `too_many_titles`.
       - For each entry, which sets `entry`:
