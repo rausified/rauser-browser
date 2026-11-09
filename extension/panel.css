@@ -630,6 +630,9 @@ body.panel-page {
 .panel-page #copy-worklog { display: inline-flex; align-items: center; gap: 6px; }
 .worklog-choices { border: 0; padding: 0; margin: 8px 0; min-width: 0; }
 .worklog-choices .check-label { align-items: flex-start; margin: 8px 0; overflow-wrap: anywhere; }
+#sharing-drafts { margin-top: 12px; }
+#sharing-drafts > label, #sharing-drafts > input, #sharing-drafts > select { display: block; margin: 8px 0; width: 100%; }
+#sharing-draft-rows span { white-space: pre-line; }
 
 /* Capture strip */
 .panel-page .capture-bar {

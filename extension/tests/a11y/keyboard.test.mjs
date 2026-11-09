@@ -151,6 +151,49 @@ test("worklog curation selects and copies checked work entirely by keyboard", as
   await audit(t, page, "panel/selected-work-all");
 });
 
+test("sharing drafts survive reload and support explicit keyboard copy, comparison and deletion", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  const choice = page.locator('#worklog-choices input[type="checkbox"]').first();
+  await choice.waitFor();
+  await activate(page, choice, "Space");
+  const original = await page.locator("#worklog-text").textContent();
+  if (!await page.locator("#sharing-drafts").evaluate((node) => node.open)) await activate(page, "#sharing-drafts > summary");
+  await activate(page, "#sharing-draft-name", null);
+  await page.keyboard.type("Release handoff");
+  await activate(page, "#sharing-draft-save");
+  await page.locator("#sharing-draft-status").filter({ hasText: "Draft saved" }).waitFor();
+  await focused(page, "#sharing-draft-save");
+  assert.equal(await page.locator("#sharing-draft-original").textContent(), original);
+  await page.reload();
+  await page.locator("#note-body:enabled").waitFor();
+  await enterPanelTab(page, "tab-recent");
+  if (!await page.locator("#sharing-drafts").evaluate((node) => node.open)) await activate(page, "#sharing-drafts > summary");
+  await activate(page, "#sharing-draft-list", null);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await page.locator("#sharing-draft-view:visible").waitFor();
+  await focused(page, "#sharing-draft-list");
+  assert.equal(await page.locator("#sharing-draft-original").textContent(), original);
+  assert.deepEqual(await page.evaluate(() => fixture.copied), []);
+  await activate(page, "#sharing-draft-copy", "Space");
+  await page.waitForFunction(() => fixture.copied.length === 1);
+  assert.equal(await page.evaluate(() => fixture.copied[0]), original);
+  await activate(page, "#sharing-draft-refresh");
+  await page.locator("#sharing-draft-review:visible").waitFor();
+  await focused(page, "#sharing-draft-refresh");
+  const rows = page.locator('#sharing-draft-rows input[type="checkbox"]');
+  assert.equal(await rows.count(), 1);
+  assert.equal(await rows.first().isChecked(), true);
+  await audit(t, page, "panel/sharing-draft-review");
+  await activate(page, "#sharing-draft-delete", "Space");
+  await page.locator("#sharing-draft-status").filter({ hasText: "Draft deleted" }).waitFor();
+  await focused(page, "#sharing-draft-list");
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task" || r.type === "save_note")), false);
+});
+
 test("sharing a recorded focus session is named, keyboard operable and copies the exact preview", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;
