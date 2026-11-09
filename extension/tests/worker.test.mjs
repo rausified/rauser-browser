@@ -936,6 +936,17 @@ test("a generic title never replaces the live hour's title", async () => {
     [live] = await send({ kind: "get_activity" });
     assert.equal(live.title, "Plan", title);
   }
+
+  // A same-document navigation within the same artifact whose current title
+  // is generic keeps the hour's title rather than clearing it.
+  tabs.set(9, { id: 9, url: `${origin}/items/a?view=1`, title: "Sign in - Acme", incognito: false });
+  onHistoryStateUpdated({
+    tabId: 9, frameId: 0, documentId: "doc-generic", documentLifecycle: "active",
+    url: `${origin}/items/a?view=1`, timeStamp: Date.now(),
+  });
+  await flush();
+  [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, "Plan");
 });
 
 test("a stored visit without a dispatch flag is never patched", async () => {

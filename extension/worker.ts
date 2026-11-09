@@ -991,11 +991,13 @@ async function captureNavigation(
   }
   // A generic title (§9.4), such as a sign-in, password or loading page's,
   // names no artifact: record no title rather than that one.
-  if (title !== null && matchingArtifact(lease, details.url, title)?.title === null) title = null;
+  const genericTitle = title !== null && matchingArtifact(lease, details.url, title)?.title === null;
+  if (genericTitle) title = null;
 
   const activity = await readActivity();
   recordNavigation(activity, {
     tab_id: details.tabId, window_id: tab.windowId ?? -1, url: details.url, title,
+    ...(genericTitle ? { generic_title: true } : {}),
     transition: details.transitionType ?? "unknown",
     qualifiers: details.transitionQualifiers ?? [],
     reload: details.transitionType === "reload",
