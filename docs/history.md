@@ -1689,3 +1689,26 @@ prove real IPC execution. Real Chromium/strict IPC acceptance, queue
 sync/export/consistency, independent driver review and publication remain
 driver-owned. Complete feature diff and the small review/guard fixes were
 read afresh; no further confirmed findings remain.
+
+## 2026-11-09 — Guard narrowed recognition against identity handoffs
+
+`brwr-obqb`: `validate_adapter_transition_with_history` protects superseded
+current shapes, not only contracts left unmatched by a same-ID pairing.
+Changed and unchanged recipients pass through the same overlap and
+container-declaration guard. `preserves_recognition` proves only exact old
+rule-prefix retention with identical other matching settings; `within` remains
+under its existing frozen-container validator. Other edits use conservative
+whole-contract overlap. Exact retired-history retention and ordinary ID
+freezing remain unchanged. The failing-first revision-checked regression
+covers removed paths, built-in alternatives, scope edits and another container
+ID, each with unchanged and simultaneously edited recipients. Allowed-case
+coverage preserves append-only widening, display/unrelated changes, declared
+containers, same-identity fall-through and disjoint routes. Config refusals
+retain exact bytes, revision and active policy. Live precedence changes remain
+separately tracked as `brwr-qbub`.
+
+`brwr-vyg5`: supplemental script testing exposed two loop-generated CLI test
+groups omitted from the previous child-pipe guard pass. Both now use the
+existing probe before fixtures, covering fourteen cases without changing
+validation assertions or strict-mode behavior. TESTING.md describes this audit
+boundary without stale fixed test counts.

@@ -1325,6 +1325,15 @@ The host works on two record types. A `PageNote` has `url`, `canonical_url`, a r
 
 Because `artifact_id` is the record key below, an `id` template is durable. The adapter template `format` number versions the language, and a later format never changes how a template in an older format builds an ID. Changing the `id` template of an adapter that has recorded activity is a **migration**: the host shows how many artifacts are affected and, on confirmation, writes one `alias` event from each old ID to its new one, so no history, note, or summary is orphaned (adapter-templates.md §8.2). Aliases arrive in M1.5b, so until then the host refuses an `id` change on an adapter with recorded activity. Removing an adapter or changing its recognition rules does not erase this constraint: `config.toml` keeps a host-owned, extension-invisible history of every superseded recognition contract and ID. The same ID may be restored, and a genuinely disjoint route may introduce a new ID, but an overlapping route cannot return under a different type or ID until migrations exist. Only restoring the exact historical contract removes that redundant history entry; a disjoint adapter that happens to reuse the same ID does not.
 
+Narrowing a live recognition contract is guarded in the same save as its
+retirement: another adapter, including an unchanged catch-all, cannot take
+its former routes under a different type or ID. The existing declared-container
+exception still applies. Appending match rules while retaining the complete old
+rule prefix and identical other recognition settings proves that the old routes
+remain recognized; other rewrites use the conservative historical overlap check.
+This does not attempt general template inclusion, so an edit whose safety cannot
+be proved may be refused even when particular URLs would retain their identity.
+
 The frozen-ID transition check compares counted template sets within each origin and type, so removing one of two same-type adapters narrows policy without mistaking the surviving sibling for an ID edit, while a real replacement remains refused.
 
 **Retired history budget.** Growing
