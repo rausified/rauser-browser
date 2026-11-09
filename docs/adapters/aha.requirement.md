@@ -66,9 +66,12 @@ A synthetic equivalent of the recorded shape, on `acme.aha.io`:
 | `/requirements/<ref>` | `PRJ-123-1 Validate card number \| Aha!` | that reference number, title `Validate card number` |
 
 The blind research scored 90 synthetic vectors across this family's seven
-drafted types; this PR carries over 8 `aha.requirement` cases, all correctly
-classified by the research's own draft and re-verified against this
-family's own fixture through both adapter-template engines. Graded later
+drafted types. This type has 9 vectors: the research's 8 requirement
+cases (`req.*` there, `eval.aha.requirement.*` here), all correctly
+classified by the research's own draft, and one new negative,
+`eval.aha.neg.short_word_requirement` (`/requirements/new`). All 9 are
+re-verified against this family's own fixture through both adapter-template
+engines. Graded later
 against 2 real, held-back Aha! browsing visits
 (`docs/research/blind/SCORECARD.md`), the research matched Aha!'s site-wide
 result of 2 of 2 correct — not broken out per type, since neither of those 2

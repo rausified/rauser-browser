@@ -25,8 +25,8 @@ type   = "servicenow.kb"
 origin = "https://acme.service-now.com"
 match  = [
   { path = "/kb_view.do", query = { sysparm_article = "{number:token(3,40)|upper}" } },
-  { path = "/(sp|esc|kb)", query = { id = "kb_article", sysparm_article = "{number:token(3,40)|upper}" } },
-  { path = "/(sp|esc|kb)", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" } },
+  { path = "/{_}", query = { id = "kb_article", sysparm_article = "{number:token(3,40)|upper}" }, absent = ["sys_id", "sys_kb_id"] },
+  { path = "/{_}", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" }, absent = ["sys_id", "sys_kb_id"] },
 ]
 id     = "servicenow.kb:{host}/{number}"
 ```
@@ -36,12 +36,26 @@ id     = "servicenow.kb:{host}/{number}"
 1. **Platform article view**, `/kb_view.do?sysparm_article=<number>`. A
    trailing slash (`/kb_view.do/`) and extra parameters such as
    `sysparm_language` are ignored.
-2. **Portal article page, `kb_article`**, on the default Service Portal
-   (`/sp`), Employee Center (`/esc`) and Knowledge portal (`/kb`), with
-   `?id=kb_article&sysparm_article=<number>`.
-3. **Portal article page, `kb_article_view`**, the same three portals with
+2. **Portal article page, `kb_article`**, on any portal: the default
+   Service Portal (`/sp`), Employee Center (`/esc`), Knowledge portal
+   (`/kb`), or a portal the instance has renamed, such as `/helpzone`, with
+   `?id=kb_article&sysparm_article=<number>`. The portal path is `{_}`, one
+   segment of any name. The rule is anchored by its query
+   (`adapter-templates.md` §4.1): the literal `id=kb_article` routes the page
+   and the `sysparm_article` capture names the article.
+3. **Portal article page, `kb_article_view`**, the same on any portal with
    `?id=kb_article_view&sysparm_article=<number>`. Search-ranking noise
    (`sysparm_rank`, `sysparm_tsqueryId`) and the fragment are ignored.
+
+Both portal rules require `sys_id` and `sys_kb_id` to be absent. A portal
+link that carries one of them as well as the number, such as
+`/sp?id=kb_article&sysparm_article=KB0010035&sys_id=<sys_id>`, names a
+version as well as the article, and the research leaves every version link
+unrecorded (below): which of the two the page shows is not documented. The
+`absent` keys also prove the portal rules disjoint from the incident,
+requested item and change classic forms (`/incident.do?sys_id=…`), whose
+one-segment paths `{_}` covers; without them the family's overlap report
+would list six pairs.
 
 The number capture is `token(3,40)|upper`. KB prefixes are configurable per
 instance (`HRKB0001001` is recorded too), and `|upper` folds `kb0010035`
@@ -64,9 +78,10 @@ Synthetic equivalents of the recorded shapes, on `acme.service-now.com`:
 Graded against real, held-back browsing (`docs/research/blind/SCORECARD.md`),
 the research matched **0 of 4** ServiceNow URLs. All four were knowledge
 articles on customer-renamed portal paths: the instance served its portal
-under its own names, not `/sp`, `/esc` or `/kb`. This draft still misses that
-form (Known limits, below). The scorecard's suggested fix, a `/{_}` path keyed
-on the query, is not a valid rule in the adapter format today.
+under its own names, not `/sp`, `/esc` or `/kb`. The portal rules now take
+any one-segment portal path, so this draft records that form: synthetic
+`/helpzone?id=kb_article_view&sysparm_article=KB0012345` and
+`/policyhub?id=kb_article&sysparm_article=KB0012345` are vectors that match.
 
 `samples_shape` is `false`: the article is routed by the query, so the
 structural drafter's path shapes cannot tell article pages from other portal
@@ -78,28 +93,21 @@ pages.
   `?id=kb_article_view&sys_kb_id=…`, `?id=kb_article&sys_id=…`,
   `/now/sow/kb_view/kb_knowledge/<sys_id>` and `kb_knowledge.do?sys_id=…`.
   Each names one version, and one adapter cannot build the number-based ID
-  from it, so recording them would split one article across two IDs;
-- knowledge home and search: `?id=kb_home`, `?id=kb_search`, `kb_find.do`;
+  from it, so recording them would split one article across two IDs. A
+  portal link with both the number and a `sys_id` or `sys_kb_id` is not
+  recorded either (above);
+- knowledge home and search, on any portal: `?id=kb_home`, `?id=kb_search`,
+  `kb_find.do`;
+- a portal path of more than one segment (`/helpzone/extra?id=kb_article&…`);
 - a portal article page with no `sysparm_article`, a duplicated
   `sysparm_article`, or a value containing `/`.
 
 ## Known limits
 
-- **Articles on a customer-renamed portal are not recorded.** Instances
-  often serve the portal under their own path, such as
-  `/helpzone?id=kb_article_view&sysparm_article=KB0012345`. Every rule must
-  have a fixed path segment to anchor it (`adapter-templates.md` §4.1): a
-  `{_}` wildcard is not an anchor, and a query condition never anchors. So
-  the format cannot say "any portal with `id=kb_article_view`". Two vectors
-  pin the gap as non-matches. Covering it needs a format change, for example
-  letting a query literal plus an identifier capture anchor a rule. That is
-  listed in the D3 pull request as a follow-up, with a bead to follow. This
-  was the only miss the scorecard recorded for ServiceNow. Until then, an
-  instance with its own portal name can add it by hand in settings'
-  advanced rule editor: a rule such as
-  `{ path = "/(sp|esc|kb|helpzone)", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" } }`
-  is valid, because the literal portal names anchor it, and records the
-  same `KB…` ID.
+- The portal rules accept any one-segment path with `id=kb_article` or
+  `id=kb_article_view`. A non-portal page that carries those parameters
+  would be recorded as the article it names (low risk: the parameters are
+  the portal's own page selector).
 - `token` cannot require the `KB` prefix, so any `sysparm_article` value on
   these routes is accepted.
 - `|upper` assumes number lookup is case-insensitive (low confidence).
@@ -119,10 +127,10 @@ with real Chrome and a real ServiceNow account:
 1. Open an article from `kb_view.do`, from a portal search result and from a
    shared link; record each URL and tab title. Is the number always in
    `sysparm_article`, or do search results link by `sys_kb_id`?
-2. Note the portal path the instance uses. If it is not `/sp`, `/esc` or
-   `/kb`, this draft records nothing there (Known limits); try adding the
-   portal name to the rules' alternation in the advanced rule editor and
-   confirm the article is recorded.
+2. Note the portal path the instance uses, and confirm an article opened
+   there is recorded whether or not the path is `/sp`, `/esc` or `/kb`.
+   Check whether an article link ever carries a `sys_id` or `sys_kb_id`
+   beside `sysparm_article`; if it does, note which version the page shows.
 3. Open a lowercase `sysparm_article` link; confirm the instance opens the
    same article (the `|upper` assumption).
 4. Publish or find a second version of one article; confirm both visits

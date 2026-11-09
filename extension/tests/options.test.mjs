@@ -1243,6 +1243,23 @@ test("the gallery hint names the first three families and counts the rest", asyn
   assert.deepEqual(names.slice(0, 3), ["Atlassian Cloud (Jira or Confluence)", "SharePoint/OneDrive", "GitHub"]);
 });
 
+test("the gallery hint names a fourth family rather than counting \"1 more\"", async (t) => {
+  // With exactly four families, "or one of 1 more work tools'" names one
+  // tool by count; naming it is shorter and reads right.
+  const four = starterFamilies().slice(0, 4);
+  setStarterFamiliesForTest(four);
+  t.after(() => setStarterFamiliesForTest(null));
+  install();
+  await openSettings();
+  const hint = nodeText(env.elements.get("starter-gallery")).trim();
+  const names = four.map((family) => family.display_name);
+  assert.equal(
+    hint,
+    `Enter an ${names.slice(0, 3).join(", ")}, or ${names[3]} site address above to see starter drafts.`,
+  );
+  assert.doesNotMatch(hint, /1 more/);
+});
+
 test("gallery cards say whether each starter is certified", async () => {
   install();
   await openSettings();
