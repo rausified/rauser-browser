@@ -5,7 +5,8 @@ import { quietGitEnv } from "./git-test-env.mjs";
 import { spawnSync as spawnSyncTop } from "node:child_process";
 
 import {
-  MARKER, adoptArgs, classifyPr, commentBody, resolveAppendOnly, tryRepair,
+  MARKER, QUEUE_COMMENT, adoptArgs, classifyPr, commentBody, needsRequeue, requeueAfterPush,
+  resolveAppendOnly, tryRepair,
 } from "../pr-doctor.mjs";
 
 // --- resolveAppendOnly: diff3 hunks whose base is empty ----------------------
@@ -261,4 +262,58 @@ test("scratch-repo git env turns background maintenance off and keeps existing e
   assert.equal(env.GIT_CONFIG_KEY_0, "credential.helper");
   const pairs = Object.fromEntries([1, 2, 3].map((i) => [env[`GIT_CONFIG_KEY_${i}`], env[`GIT_CONFIG_VALUE_${i}`]]));
   assert.deepEqual(pairs, { "maintenance.auto": "false", "gc.auto": "0", "gc.autoDetach": "false" });
+});
+
+// --- requeue after a repair push ---------------------------------------------
+// A push after an `@Mergifyio queue` request cancels it, whoever pushes (#318:
+// the doctor's merge push at 04:43Z on 2026-11-05 cancelled the 02:11Z request
+// and nothing requeued it). So after pushing a repair to a queued PR the
+// doctor comments again, once GitHub reports the pushed head.
+
+test("only a repaired PR carrying the queue label is requeued", () => {
+  const labelled = { labels: [{ name: "queue" }] };
+  assert.equal(needsRequeue(labelled, "repaired"), true);
+  assert.equal(needsRequeue(labelled, "needs-person"), false);
+  assert.equal(needsRequeue(labelled, "report-only"), false);
+  assert.equal(needsRequeue({ labels: [], autoMergeRequest: {} }, "repaired"), false);
+  assert.equal(needsRequeue({}, "repaired"), false);
+});
+
+test("the requeue waits until GitHub shows the pushed head, then comments once", () => {
+  const heads = ["old", "old", "new"];
+  const comments = [];
+  const waits = [];
+  const result = requeueAfterPush({
+    sha: "new",
+    headOf: () => heads.shift(),
+    comment: (body) => comments.push(body),
+    wait: (ms) => waits.push(ms),
+  });
+  assert.deepEqual(comments, [QUEUE_COMMENT]);
+  assert.equal(QUEUE_COMMENT, "@Mergifyio queue");
+  assert.deepEqual(waits, [5000, 5000]);
+  assert.deepEqual(result, { settled: true, seen: "new" });
+});
+
+test("the requeue poll is bounded and still comments when the head never shows", () => {
+  let reads = 0;
+  const comments = [];
+  const result = requeueAfterPush({
+    sha: "new",
+    headOf: () => { reads++; if (reads === 2) throw new Error("gh: 502"); return "old"; },
+    comment: (body) => comments.push(body),
+    wait: () => {},
+    limitMs: 20000,
+    stepMs: 5000,
+  });
+  assert.equal(reads, 5);
+  assert.deepEqual(comments, [QUEUE_COMMENT]);
+  assert.equal(result.settled, false);
+  assert.equal(result.seen, "old");
+});
+
+test("a repaired comment for a queued PR says the doctor requeued it", () => {
+  const body = commentBody({ outcome: "repaired", files: ["docs/history.md"], sha: "abc123", requeued: true });
+  assert.match(body, /`@Mergifyio queue`/);
+  assert.doesNotMatch(commentBody({ outcome: "repaired", files: ["a"], sha: "abc123" }), /Mergifyio/);
 });
