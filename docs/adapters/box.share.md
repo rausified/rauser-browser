@@ -89,6 +89,12 @@ the latter needs a rule, as researched.
 - the legacy shared-tree form `/s/<name>/1/<folder>/<file>/1`, which returns
   404 today even where `/s/<name>` itself still works;
 - `/shared/static/<name>.<ext>`, a direct download, not a page;
+- a shared link on the bare company host, `<company>.box.com/s/<name>`
+  (no `app.` label). Box redirects it to `<company>.app.box.com/s/<name>`,
+  which this type records: in real browsing (2026-11-09, 2 links) each bare
+  link had the same visit count and title as its `app.` twin. The family
+  does not claim `<company>.box.com`, since the ID's `{host}` would record
+  the redirect hop as a second artifact for the same link;
 - an unknown sub-route under a shared link (`/s/<name>/preview` and the
   like), since the rule has no rest segment;
 - a vanity name containing a character outside `token`'s alphabet (for

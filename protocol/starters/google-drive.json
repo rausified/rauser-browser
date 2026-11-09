@@ -1,0 +1,297 @@
+{
+  "family": "google-drive",
+  "display_name": "Google Drive",
+  "review_prompt": null,
+  "origin": {
+    "kind": "exact",
+    "origin": "https://drive.google.com"
+  },
+  "scope": null,
+  "sample_origin": "https://drive.google.com",
+  "sample_scope": [],
+  "overlaps": [],
+  "types": [
+    {
+      "type": "google.drivefolder",
+      "key": "google.drivefolder",
+      "label": "Google Drive folders",
+      "label_variants": [],
+      "description": "Each Drive folder, including a shared-drive folder, becomes one artifact, keyed by its permanent folder ID, however it was opened or shared. Records folders from every Google account signed in to this Chrome profile.",
+      "record_label": "folders",
+      "example_path": null,
+      "adapter": {
+        "type": "google.drivefolder",
+        "match": [
+          {
+            "path": "/drive/folders/{id:token(20,128)}"
+          },
+          {
+            "path": "/drive/u/{_}/folders/{id:token(20,128)}"
+          }
+        ],
+        "id": "google.drivefolder:{host}/{id}",
+        "title": [
+          "{title} - Google Drive",
+          "{title} – Google Drive"
+        ]
+      },
+      "history": [],
+      "status": {
+        "state": "development",
+        "method": null,
+        "checked_on": null,
+        "checked_by": null
+      },
+      "docs": "docs/adapters/google.drivefolder.md",
+      "samples": [
+        {
+          "note": "Drive folder opened from a share link",
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345?usp=sharing",
+          "title": "Team Templates - Google Drive",
+          "shape": "/drive/folders/{id}"
+        },
+        {
+          "note": "Drive folder in a second signed-in account",
+          "url": "https://drive.google.com/drive/u/1/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+          "title": "Team Templates – Google Drive",
+          "shape": "/drive/u/{_}/folders/{id}"
+        }
+      ],
+      "samples_shape": true,
+      "vectors": [
+        {
+          "id": "eval.google.drivefolder.folder",
+          "kind": "evaluate",
+          "why": "folder by ID, hyphen title",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "google.drivefolder",
+            "captures": {
+              "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+            },
+            "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+            "mode": null,
+            "title": "Team Templates",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+          "title": "Team Templates - Google Drive"
+        },
+        {
+          "id": "eval.google.drivefolder.folder_endash",
+          "kind": "evaluate",
+          "why": "en dash title form",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "google.drivefolder",
+            "captures": {
+              "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+            },
+            "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+            "mode": null,
+            "title": "Team Templates",
+            "title_entry": 1,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+          "title": "Team Templates – Google Drive"
+        },
+        {
+          "id": "eval.google.drivefolder.share_params",
+          "kind": "evaluate",
+          "why": "share-link params ignored",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "google.drivefolder",
+            "captures": {
+              "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+            },
+            "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+            "mode": null
+          },
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345?usp=sharing_eip&ts=0a1b2c3d"
+        },
+        {
+          "id": "eval.google.drivefolder.slash",
+          "kind": "evaluate",
+          "why": "trailing slash",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "google.drivefolder",
+            "captures": {
+              "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+            },
+            "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+            "mode": null
+          },
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/"
+        },
+        {
+          "id": "eval.google.drivefolder.account",
+          "kind": "evaluate",
+          "why": "second signed-in account: same ID",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 1,
+            "type": "google.drivefolder",
+            "captures": {
+              "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+            },
+            "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+            "mode": null
+          },
+          "url": "https://drive.google.com/drive/u/1/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        {
+          "id": "eval.google.drivefolder.legacy_id",
+          "kind": "evaluate",
+          "why": "older shorter folder ID",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "google.drivefolder",
+            "captures": {
+              "id": "0BxAcmeExampleFolderId_-9z"
+            },
+            "artifact_id": "google.drivefolder:drive.google.com/0BxAcmeExampleFolderId_-9z",
+            "mode": null
+          },
+          "url": "https://drive.google.com/drive/folders/0BxAcmeExampleFolderId_-9z"
+        },
+        {
+          "id": "eval.google.drivefolder.generic_title",
+          "kind": "evaluate",
+          "why": "access-denied page: whole tab title recorded",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "google.drivefolder",
+            "captures": {
+              "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+            },
+            "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+            "mode": null,
+            "title": "Access denied",
+            "title_entry": null,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+          "title": "Access denied"
+        },
+        {
+          "id": "eval.google.drivefolder.home",
+          "kind": "evaluate",
+          "why": "My Drive home is not a folder",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": false,
+            "reason": "no_rule"
+          },
+          "url": "https://drive.google.com/drive/u/1/home"
+        },
+        {
+          "id": "eval.google.drivefolder.root",
+          "kind": "evaluate",
+          "why": "Drive root is not a folder",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": false,
+            "reason": "no_rule"
+          },
+          "url": "https://drive.google.com/drive/my-drive"
+        },
+        {
+          "id": "eval.google.drivefolder.short_id",
+          "kind": "evaluate",
+          "why": "ID shorter than 20 is not a folder ID",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": false,
+            "reason": "no_rule"
+          },
+          "url": "https://drive.google.com/drive/folders/abc123"
+        },
+        {
+          "id": "eval.google.drivefolder.file",
+          "kind": "evaluate",
+          "why": "a Drive file view is not a folder",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": false,
+            "reason": "no_rule"
+          },
+          "url": "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view"
+        },
+        {
+          "id": "eval.google.drivefolder.nested",
+          "kind": "evaluate",
+          "why": "extra segment after the folder ID",
+          "impls": [
+            "rust",
+            "ts"
+          ],
+          "expect": {
+            "match": false,
+            "reason": "no_rule"
+          },
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/extra"
+        }
+      ]
+    }
+  ]
+}
