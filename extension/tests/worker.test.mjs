@@ -903,6 +903,41 @@ test("a committed page updates the live hourly activity title before freezing", 
   assert.equal(live.title, "x".repeat(300));
 });
 
+test("a generic title never replaces the live hour's title", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://generic.example";
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin),
+    adapters: { format: 1, artifacts: [artifact(origin, { title: "{title} - Acme", generic_titles: ["Sign in"] })] },
+  });
+  // A same-document update reads the tab's current title, here a sign-in
+  // page's: it is generic, so the hour records no title rather than it.
+  tabs.set(9, { id: 9, url: `${origin}/items/a`, title: "Sign in - Acme", incognito: false });
+  onHistoryStateUpdated({
+    tabId: 9, frameId: 0, documentId: "doc-generic", documentLifecycle: "active",
+    url: `${origin}/items/a`, timeStamp: Date.now(),
+  });
+  await flush();
+  let [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, null);
+
+  onTabUpdated(9, { title: "Plan - Acme" }, { id: 9, url: `${origin}/items/a`, incognito: false });
+  await flush();
+  [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, "Plan");
+
+  // A later sign-in page, the browser's host placeholder, or an empty title
+  // keeps the real name.
+  for (const title of ["Sign in - Acme", "SIGN IN", "generic.example/items/a", ""]) {
+    onTabUpdated(9, { title }, { id: 9, url: `${origin}/items/a`, incognito: false });
+    await flush();
+    [live] = await send({ kind: "get_activity" });
+    assert.equal(live.title, "Plan", title);
+  }
+});
+
 test("a stored visit without a dispatch flag is never patched", async () => {
   values.clear();
   sessionValues.clear();

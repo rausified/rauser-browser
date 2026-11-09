@@ -29,6 +29,7 @@
         ],
         "unscoped": "acknowledged",
         "id": "figma.file:{host}/{key}",
+        "generic_titles": ["Figma"],
         "title": ["{~} · {title} - Figma Slides", "{title} – {~}", "{title} - {~}"]
       },
       "history": [],
@@ -165,13 +166,13 @@
         {
           "id": "eval.figma.file.loading",
           "kind": "evaluate",
-          "why": "while a file loads the tab title is just Figma; no entry matches, so the whole title is recorded",
+          "why": "while a file loads the tab title is just Figma; no entry matches, and that title is generic (adapter-templates.md §9.4): no title",
           "impls": ["rust", "ts"],
           "expect": {
             "match": true, "adapter": 0, "rule": 1, "type": "figma.file",
             "captures": {"key": "AbCdEfGhIjKlMnOpQrStUv"},
             "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
-            "mode": null, "title": "Figma", "title_entry": null, "alias_id": null, "refs": []
+            "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []
           },
           "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow",
           "title": "Figma"
@@ -511,6 +512,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "path_rejected"},
           "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv%2FCheckout-Flow"
+        },
+        {
+          "id": "eval.figma.file.generic_title_loading_shell",
+          "kind": "evaluate",
+          "why": "the app shell's loading title is generic (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 1, "type": "figma.file", "captures": {"key": "AbCdEfGhIjKlMnOpQrStUv"}, "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow",
+          "title": "Figma"
         }
       ]
     },
@@ -532,6 +542,7 @@
         ],
         "unscoped": "acknowledged",
         "id": "figma.branch:{host}/{branch}",
+        "generic_titles": ["Figma"],
         "title": ["{~} · {title} - Figma Slides", "{title} – {~}", "{title} - {~}"]
       },
       "history": [],
@@ -680,6 +691,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/short/Checkout-Flow"
+        },
+        {
+          "id": "eval.figma.branch.generic_title_loading_shell",
+          "kind": "evaluate",
+          "why": "the app shell's loading title is generic (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 1, "rule": 1, "type": "figma.branch", "captures": {"branch": "BrAnChKeYaBcDeFgHiJkLm"}, "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow?node-id=1-2",
+          "title": "Figma"
         }
       ]
     }

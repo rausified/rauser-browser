@@ -32,7 +32,8 @@ export type NoMatchReason =
   | "url_too_long" | "url_invalid" | "no_adapter" | "path_rejected" | "no_rule" | "out_of_scope" | "id_too_long";
 
 export type TitleResult = {
-  title: string; title_entry: number | null; alias_id: string | null; refs: { type: string; value: string }[];
+  /** null when the title is generic (§9.4): the page names no artifact. */
+  title: string | null; title_entry: number | null; alias_id: string | null; refs: { type: string; value: string }[];
 };
 
 /** A validated document, ready for evaluate(). Opaque to callers. */
@@ -50,6 +51,9 @@ const MAX_LITERAL_CHARS = 64;
 const MAX_QUERY = 8;
 const MAX_ABSENT = 8;
 const MAX_TITLES = 4;
+/** §9.4: at most 16 generic titles of 1 to 128 scalar values each. */
+const MAX_GENERIC_TITLES = 16;
+const MAX_GENERIC_TITLE_CHARS = 128;
 const MAX_SCOPE_VALUES = 64;
 const MAX_REF_SPECS = 8;
 const MAX_URL_CHARS = 2048;
@@ -75,8 +79,8 @@ const REF_FINDS: readonly RefFind[] = ["jira_key", "int", "hex", "uuid"];
 const MODES: readonly Mode[] = ["view", "edit", "review"];
 const DOC_KEYS: ReadonlySet<string> = new Set(["format", "artifacts"]);
 const ADAPTER_KEYS: ReadonlySet<string> = new Set([
-  "type", "origin", "match", "id", "title", "alias", "refs", "modes", "scope", "unscoped", "path_case", "fields",
-  "within",
+  "type", "origin", "match", "id", "title", "generic_titles", "alias", "refs", "modes", "scope", "unscoped",
+  "path_case", "fields", "within",
 ]);
 const REQUIRED_ADAPTER_KEYS = ["type", "origin", "match", "id"] as const;
 const RULE_KEYS: ReadonlySet<string> = new Set(["path", "query", "absent", "mode"]);
@@ -125,7 +129,7 @@ type CompiledAdapter = {
   type: string; origin: string; host: string; insensitive: boolean; rules: readonly CompiledRule[];
   scheme: string; idParts: readonly IdPart[]; modes: ReadonlyMap<string, Mode>;
   scope: ReadonlyMap<string, readonly string[]>; captureTypes: ReadonlyMap<string, CType>;
-  titles: readonly TitleEntry[] | null; aliasCapture: string | null; refs: readonly { type: string; find: RefFind }[];
+  titles: readonly TitleEntry[] | null; genericTitles: readonly string[]; aliasCapture: string | null; refs: readonly { type: string; find: RefFind }[];
   within?: { type: string; scheme: string; idParts: readonly IdPart[] };
 };
 
@@ -497,6 +501,27 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
     titles = list.map((entry, e) => compileTitleEntry(entry, captureTypes, (code) => fail(code, null, e)));
   }
 
+  // 8b. generic_titles (§9.4). Braces are reserved so a later format can add
+  // patterns without changing what a valid list means.
+  const genericTitles: string[] = [];
+  if ("generic_titles" in raw) {
+    if (!Array.isArray(raw.generic_titles)) fail("wrong_type");
+    const list = raw.generic_titles as unknown[];
+    if (list.length === 0) fail("empty_generic_titles");
+    if (list.length > MAX_GENERIC_TITLES) fail("too_many_generic_titles");
+    list.forEach((entry, e) => {
+      if (typeof entry !== "string") return fail("wrong_type", null, e);
+      const length = scalarLength(entry);
+      const bad = length === 0 || length > MAX_GENERIC_TITLE_CHARS || trimWhiteSpace(entry) !== entry
+        || Array.from(entry).some((char) => {
+          const code = char.codePointAt(0) ?? 0;
+          return code === 0x7b || code === 0x7d || code < 0x20 || code === 0x7f;
+        });
+      if (bad) fail("bad_generic_title", null, e);
+      genericTitles.push(asciiLower(entry));
+    });
+  }
+
   // 9. alias.
   let aliasCapture: string | null = null;
   if ("alias" in raw) {
@@ -581,7 +606,7 @@ function compileAdapter(raw: unknown, a: number): CompiledAdapter {
 
   return {
     type, origin, host, insensitive: pathCase === "insensitive", rules, scheme: parsedId.scheme,
-    idParts: parsedId.parts, modes, scope, captureTypes, titles, aliasCapture, refs,
+    idParts: parsedId.parts, modes, scope, captureTypes, titles, genericTitles, aliasCapture, refs,
     ...(within ? { within } : {}),
   };
 }
@@ -1147,9 +1172,27 @@ function matchTitle(
       const candidate = buildId(adapter.scheme, adapter.host, adapter.idParts, aliased);
       if (candidate !== null && candidate !== artifactId) aliasId = candidate;
     }
+    // The first matching entry decides; a generic title names no artifact,
+    // so it yields no alias or refs.
+    if (isGenericTitle(adapter, found.title)) return { title: null, title_entry: null, alias_id: null, refs: [] };
     return { title: found.title, title_entry: e, alias_id: aliasId, refs: findRefs(adapter, found.title) };
   }
+  if (isGenericTitle(adapter, prepared)) return { title: null, title_entry: null, alias_id: null, refs: [] };
   return { title: prepared, title_entry: null, alias_id: null, refs: findRefs(adapter, prepared) };
+}
+
+/** §9.4: whether a title, extracted or fallback, is generic. Trimmed of white
+ * space and with ASCII case folded, it is empty, one of the adapter's
+ * generic_titles, or the browser's placeholder for a page with no title: the
+ * URL's host (with any port), optionally after http:// or https://, alone or
+ * followed by "/", "?" or "#". */
+function isGenericTitle(adapter: CompiledAdapter, title: string): boolean {
+  const folded = asciiLower(trimWhiteSpace(title));
+  if (folded === "" || adapter.genericTitles.includes(folded)) return true;
+  const rest = folded.startsWith("https://") ? folded.slice(8) : folded.startsWith("http://") ? folded.slice(7) : folded;
+  if (!rest.startsWith(adapter.host)) return false;
+  const after = rest.slice(adapter.host.length);
+  return after === "" || after.startsWith("/") || after.startsWith("?") || after.startsWith("#");
 }
 
 /** Matches P forward and Q backward (§9.1). Returns the trimmed title and the

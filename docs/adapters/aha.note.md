@@ -34,8 +34,14 @@ match  = [
 ]
 id     = "aha.note:{host}/{ref}"
 title  = ["{ref:name} {title} | Aha!{~}", "{title} | Aha!{~}"]
+generic_titles = ["Log in to your workspace", "Login"]
 refs   = [{ type = "aha.feature", find = "jira_key" }]
 ```
+
+`generic_titles` lists the titles shown by Aha!'s sign-in page instead of the
+item's own name (`adapter-templates.md` §9.4). A visit whose title is one of
+them, ASCII case aside, or is empty or the bare host, records no title, so the
+artifact keeps the title it already has ("Untitled" for a new one).
 
 ## What each rule covers
 

@@ -30,6 +30,13 @@ with the pull request ID. The `github.repo` draft (`github.repo.md`) builds the 
 ID for the repository's own pages and must come after this one on the origin;
 settings keeps that order.
 
+`generic_titles = ["Sign in to GitHub · GitHub", "Page not found · GitHub",
+"Page not found · GitHub · GitHub"]` lists the titles shown by GitHub's
+sign-in and not-found pages instead of the item's own name
+(`adapter-templates.md` §9.4). A visit whose title is one of them, ASCII case
+aside, or is empty or the bare host, records no title, so the artifact keeps
+the title it already has ("Untitled" for a new one).
+
 Known limits: personal repositories are not captured unless their owner is
 explicitly entered as a scope, enterprise GitHub on a private origin is not
 auto-suggested, and organization and repository rename handling waits for the

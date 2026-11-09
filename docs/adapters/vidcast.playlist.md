@@ -30,7 +30,14 @@ match  = [
 ]
 id     = "vidcast.playlist:{host}/{playlist}"
 title  = "Vidcast - Playlist - {title}"
+generic_titles = ["Vidcast", "Vidcast - Sign In"]
 ```
+
+`generic_titles` lists the titles shown by Vidcast's app shell, sign-in page
+and editor instead of the item's own name (`adapter-templates.md` §9.4). A
+visit whose title is one of them, ASCII case aside, or is empty or the bare
+host, records no title, so the artifact keeps the title it already has
+("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -60,7 +67,8 @@ prefix for a playlist page. Only this exact entry is listed, so a title that
 is not a playlist name — bare `Vidcast` (the embed page or the legacy
 redirect before it resolves), `Vidcast - Request Access`, or `Vidcast - Not
 Found` — matches no entry and is recorded whole rather than mistaken for a
-playlist's name.
+playlist's name, except that bare `Vidcast` and `Vidcast - Sign In` are
+generic titles and record no title.
 
 ## Recorded samples
 
@@ -95,9 +103,10 @@ per-type, since none of those 11 real visits happened to be a playlist.
 ## Known limits
 
 - **Access and error states are recorded as artifacts.** `Vidcast - Request
-  Access`, `Vidcast - Not Found`, and the bare `Vidcast` embed title are all
-  recorded whole, under this playlist's ID, because the URL is still a valid
-  playlist share URL even when its title says otherwise.
+  Access` and `Vidcast - Not Found` are recorded whole, under this playlist's
+  ID, because the URL is still a valid playlist share URL even when its title
+  says otherwise. The bare `Vidcast` embed title is generic and records no
+  title.
 - **Real old `/collections/share/<id>` links are unconfirmed.** The research
   is confident the redirect exists in the bundle, but not confident real
   links of that legacy form still circulate.

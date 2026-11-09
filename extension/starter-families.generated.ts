@@ -116,6 +116,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "aha.feature:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:jira_key} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -155,6 +159,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "aha.requirement:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -194,6 +202,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "aha.epic:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -230,6 +242,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "aha.release:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -269,6 +285,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "aha.idea:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -311,6 +331,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "aha.note:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -365,6 +389,12 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "jira:{host}/{key}",
+          "generic_titles": [
+            "Jira",
+            "Log in with Atlassian account",
+            "Log in to continue - Log in with Atlassian account",
+            "Choose an account to continue - Log in with Atlassian account"
+          ],
           "title": "[{key:jira_key}] {title} - Jira",
           "alias": {
             "from": "tab_title",
@@ -416,6 +446,13 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "confluence.page:{host}/{id}",
+          "generic_titles": [
+            "Confluence",
+            "For you - Confluence",
+            "Log in with Atlassian account",
+            "Log in to continue - Log in with Atlassian account",
+            "Choose an account to continue - Log in with Atlassian account"
+          ],
           "title": [
             "Version history - {title} - {~} - Confluence",
             "{title} - {~} - Confluence"
@@ -622,6 +659,9 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
           ],
           "unscoped": "acknowledged",
           "id": "figma.file:{host}/{key}",
+          "generic_titles": [
+            "Figma"
+          ],
           "title": [
             "{~} · {title} - Figma Slides",
             "{title} – {~}",
@@ -665,6 +705,9 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
           ],
           "unscoped": "acknowledged",
           "id": "figma.branch:{host}/{branch}",
+          "generic_titles": [
+            "Figma"
+          ],
           "title": [
             "{~} · {title} - Figma Slides",
             "{title} – {~}",
@@ -720,6 +763,11 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             "checks": "view"
           },
           "id": "github.pr:{host}/{owner}/{repo}/{number}",
+          "generic_titles": [
+            "Sign in to GitHub · GitHub",
+            "Page not found · GitHub",
+            "Page not found · GitHub · GitHub"
+          ],
           "title": "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
           "refs": [
             {
@@ -762,6 +810,11 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           },
           "id": "github.issue:{host}/{owner}/{repo}/{number}",
+          "generic_titles": [
+            "Sign in to GitHub · GitHub",
+            "Page not found · GitHub",
+            "Page not found · GitHub · GitHub"
+          ],
           "title": "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
           "refs": [
             {
@@ -1084,6 +1137,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "miro.board:{host}/{board}",
+          "generic_titles": [
+            "Miro",
+            "Sign in | Miro | The Visual Workspace for Innovation"
+          ],
           "title": "{title} - Miro"
         },
         "history": [],
@@ -1412,7 +1469,15 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
               }
             }
           ],
-          "id": "sharepoint:{host}/{doc}"
+          "id": "sharepoint:{host}/{doc}",
+          "generic_titles": [
+            "Working...",
+            "Working…",
+            "Login",
+            "Redirecting",
+            "Error",
+            "Sign in is not complete"
+          ]
         },
         "history": [
           {
@@ -1523,6 +1588,9 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             "edit": "edit"
           },
           "id": "splunk.dashboard:{host}/{app}/{view}",
+          "generic_titles": [
+            "Dashboard"
+          ],
           "title": [
             "{title} | Splunk {~}",
             "{title} | Splunk"
@@ -1578,6 +1646,11 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "vidcast.video:{host}/{video}",
+          "generic_titles": [
+            "Vidcast",
+            "Sign In",
+            "Video Edit"
+          ],
           "title": "Vidcast - {title}"
         },
         "history": [],
@@ -1614,6 +1687,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "vidcast.playlist:{host}/{playlist}",
+          "generic_titles": [
+            "Vidcast",
+            "Vidcast - Sign In"
+          ],
           "title": "Vidcast - Playlist - {title}"
         },
         "history": [],
@@ -1650,6 +1727,11 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             }
           ],
           "id": "vidcast.page:{host}/{page}",
+          "generic_titles": [
+            "Vidcast",
+            "Sign In",
+            "Page Edit"
+          ],
           "title": "Vidcast - {title}"
         },
         "history": [],

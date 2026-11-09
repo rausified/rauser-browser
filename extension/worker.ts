@@ -989,6 +989,9 @@ async function captureNavigation(
       title = tab.title?.slice(0, MAX_TITLE_CHARS) ?? null;
     }
   }
+  // A generic title (§9.4), such as a sign-in, password or loading page's,
+  // names no artifact: record no title rather than that one.
+  if (title !== null && matchingArtifact(lease, details.url, title)?.title === null) title = null;
 
   const activity = await readActivity();
   recordNavigation(activity, {
@@ -1021,7 +1024,9 @@ async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
   const title = rawTitle.slice(0, MAX_TITLE_CHARS);
   const titleMatch = mapped && withoutHash(mapped.url) === current
     ? matchingArtifact(lease, mapped.url, title) : null;
-  if (mapped && titleMatch) {
+  // A generic title (§9.4) never replaces the title already recorded for the
+  // tab, so a sign-in, password or loading page keeps the item's real name.
+  if (mapped && titleMatch && titleMatch.title !== null) {
     mapped.title = title;
     const hour = [...activity.totals].reverse().find((total) =>
       total.artifact_id === mapped.artifact_id);
@@ -1048,7 +1053,7 @@ async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
   // Only the tab's newest visit may take the title, and only before the panel
   // has seen it. A dispatched event may already be partly written by the host.
   if (!latest || latest.dispatched !== false || withoutHash(latest.event.url) !== current ||
-      !matchingArtifact(lease, latest.event.url)) {
+      !matchingArtifact(lease, latest.event.url) || matchingArtifact(lease, latest.event.url, title)?.title === null) {
     return;
   }
   if (latest.event.title === title) return;

@@ -21,6 +21,9 @@ pub const MAX_RULES: usize = 16;
 const MAX_QUERY: usize = 8;
 const MAX_ABSENT: usize = 8;
 const MAX_TITLES: usize = 4;
+/// §9.4: at most 16 generic titles of 1 to 128 scalar values each.
+const MAX_GENERIC_TITLES: usize = 16;
+const MAX_GENERIC_TITLE_CHARS: usize = 128;
 pub(crate) const MAX_SCOPE_VALUES: usize = 64;
 const MAX_REF_SPECS: usize = 8;
 const MAX_TYPE: usize = 32;
@@ -42,6 +45,7 @@ const ADAPTER_KEYS: &[&str] = &[
     "match",
     "id",
     "title",
+    "generic_titles",
     "alias",
     "refs",
     "modes",
@@ -305,6 +309,8 @@ pub struct Adapter {
     pub(crate) rules: Vec<Rule>,
     pub(crate) id: IdTemplate,
     pub(crate) titles: Vec<TitleTemplate>,
+    /// §9.4: the generic titles, ASCII-lowercased for comparison.
+    pub(crate) generic_titles: Vec<String>,
     pub(crate) alias: Option<Alias>,
     pub(crate) refs: Vec<RefSpec>,
     pub(crate) modes: Vec<(String, Mode)>,
@@ -773,6 +779,12 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
         Some(t) => validate_titles(t, &rules, at)?,
     };
 
+    // 8b. Generic titles (§9.4).
+    let generic_titles = match v.get("generic_titles") {
+        None => Vec::new(),
+        Some(g) => validate_generic_titles(g, at)?,
+    };
+
     // 9. Alias (§9.3).
     let alias = match v.get("alias") {
         None => None,
@@ -847,6 +859,7 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
         rules,
         id,
         titles,
+        generic_titles,
         alias,
         refs,
         modes,
@@ -854,6 +867,37 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
         fields,
         within,
     })
+}
+
+/// §9.4: a list of 1 to 16 plain titles. Each is 1 to 128 scalar values with
+/// no surrounding white space, no control character, and no brace, which is
+/// reserved so a later format can add patterns without changing a valid list.
+fn validate_generic_titles(g: &Value, at: At) -> VResult<Vec<String>> {
+    let list = g.as_array().ok_or(at.err(ErrorCode::WrongType))?;
+    if list.is_empty() {
+        return Err(at.err(ErrorCode::EmptyGenericTitles));
+    }
+    if list.len() > MAX_GENERIC_TITLES {
+        return Err(at.err(ErrorCode::TooManyGenericTitles));
+    }
+    list.iter()
+        .enumerate()
+        .map(|(e, entry)| {
+            let at = at.entry(e);
+            let text = entry.as_str().ok_or(at.err(ErrorCode::WrongType))?;
+            let len = text.chars().count();
+            let bad = len == 0
+                || len > MAX_GENERIC_TITLE_CHARS
+                || text.trim_matches(char::is_whitespace) != text
+                || text
+                    .chars()
+                    .any(|c| matches!(c, '{' | '}' | '\0'..='\x1f' | '\x7f'));
+            if bad {
+                return Err(at.err(ErrorCode::BadGenericTitle));
+            }
+            Ok(text.to_ascii_lowercase())
+        })
+        .collect()
 }
 
 fn validate_rule(v: &Value, at: At) -> VResult<Rule> {

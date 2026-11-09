@@ -25,7 +25,14 @@ origin = "https://miro.com"
 match  = [{ path = "/app/board/{board:token(12)}" }]
 id     = "miro.board:{host}/{board}"
 title  = "{title} - Miro"
+generic_titles = ["Miro", "Sign in | Miro | The Visual Workspace for Innovation"]
 ```
+
+`generic_titles` lists the titles shown by Miro's app shell and sign-in page
+instead of the item's own name (`adapter-templates.md` §9.4). A visit whose
+title is one of them, ASCII case aside, or is empty or the bare host, records
+no title, so the artifact keeps the title it already has ("Untitled" for a new
+one).
 
 Recorded samples. Each one is a shared vector (`eval.miro.*` in
 `protocol/adapter-templates/vectors.json`):
@@ -60,11 +67,10 @@ for personal Miro work if you do not want it recorded.
 **Known limits.**
 
 - While a board loads, Miro's tab title is `Miro - Miro`, which the title
-  entry would record as `Miro`. The worker holds a new visit briefly and takes
-  its title from a later title update (DESIGN.md §5.1), so the board name
-  usually wins. A visit that ends before the board finishes loading can still
-  be recorded as `Miro`. An untitled board's title is `Untitled - Miro` and is
-  recorded as `Untitled`.
+  entry extracts as `Miro`, a generic title, so the visit records no title and
+  the board keeps its own name. A visit that ends before the board finishes
+  loading records no title. An untitled board's title is `Untitled - Miro` and
+  is recorded as `Untitled`, which is the board's real name.
 - Embedded boards (`/app/live-embed/<id>/`) and board links on other origins
   are not recorded. Each needs its own recorded sample before it joins the
   starter.

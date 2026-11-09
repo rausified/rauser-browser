@@ -703,7 +703,7 @@ function parseDraftAdapters(text: string, origin: string): { ok: true; adapters:
 
 // Keys a user adds by hand. The drafter never writes them, so an adapter
 // carrying one is the user's own and all its rules are user-written.
-const HAND_WRITTEN_KEYS = ["alias", "fields", "path_case"];
+const HAND_WRITTEN_KEYS = ["alias", "fields", "path_case", "generic_titles"];
 // The overlays the review owns. They are stripped from the checked tables;
 // the scope travels as its own field.
 const OVERLAY_KEYS = new Set(["title", "scope", "unscoped"]);

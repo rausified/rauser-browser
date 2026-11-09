@@ -386,6 +386,7 @@
           "edit": "edit"
         },
         "id": "splunk.dashboard:{host}/{app}/{view}",
+        "generic_titles": ["Dashboard"],
         "title": [
           "{title} | Splunk {~}",
           "{title} | Splunk"
@@ -948,6 +949,15 @@
             "reason": "no_adapter"
           },
           "url": "https://acme-dev.splunkcloud.com/en-US/app/search/web_traffic_overview"
+        },
+        {
+          "id": "eval.splunk.dashboard.generic_title_loading_shell",
+          "kind": "evaluate",
+          "why": "the app shell's loading title is generic (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 1, "rule": 0, "type": "splunk.dashboard", "captures": {"app": "search", "view": "web_traffic_overview"}, "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": [], "within": {"type": "splunk.app", "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"}},
+          "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+          "title": "Dashboard | Splunk 9.4.2"
         }
       ]
     }

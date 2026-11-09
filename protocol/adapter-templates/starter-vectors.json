@@ -20,6 +20,12 @@
             }
           ],
           "id": "jira:{host}/{key}",
+          "generic_titles": [
+            "Jira",
+            "Log in with Atlassian account",
+            "Log in to continue - Log in with Atlassian account",
+            "Choose an account to continue - Log in with Atlassian account"
+          ],
           "title": "[{key:jira_key}] {title} - Jira",
           "alias": {
             "from": "tab_title",
@@ -55,6 +61,13 @@
             }
           ],
           "id": "confluence.page:{host}/{id}",
+          "generic_titles": [
+            "Confluence",
+            "For you - Confluence",
+            "Log in with Atlassian account",
+            "Log in to continue - Log in with Atlassian account",
+            "Choose an account to continue - Log in with Atlassian account"
+          ],
           "title": [
             "Version history - {title} - {~} - Confluence",
             "{title} - {~} - Confluence"
@@ -95,7 +108,15 @@
               }
             }
           ],
-          "id": "sharepoint:{host}/{doc}"
+          "id": "sharepoint:{host}/{doc}",
+          "generic_titles": [
+            "Working...",
+            "Working…",
+            "Login",
+            "Redirecting",
+            "Error",
+            "Sign in is not complete"
+          ]
         }
       ]
     },
@@ -121,6 +142,11 @@
             "checks": "view"
           },
           "id": "github.pr:{host}/{owner}/{repo}/{number}",
+          "generic_titles": [
+            "Sign in to GitHub · GitHub",
+            "Page not found · GitHub",
+            "Page not found · GitHub · GitHub"
+          ],
           "title": "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
           "refs": [
             {
@@ -147,6 +173,11 @@
             ]
           },
           "id": "github.issue:{host}/{owner}/{repo}/{number}",
+          "generic_titles": [
+            "Sign in to GitHub · GitHub",
+            "Page not found · GitHub",
+            "Page not found · GitHub · GitHub"
+          ],
           "title": "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
           "refs": [
             {
@@ -188,6 +219,10 @@
             }
           ],
           "id": "miro.board:{host}/{board}",
+          "generic_titles": [
+            "Miro",
+            "Sign in | Miro | The Visual Workspace for Innovation"
+          ],
           "title": "{title} - Miro"
         }
       ]
@@ -368,6 +403,9 @@
           ],
           "unscoped": "acknowledged",
           "id": "figma.file:{host}/{key}",
+          "generic_titles": [
+            "Figma"
+          ],
           "title": [
             "{~} · {title} - Figma Slides",
             "{title} – {~}",
@@ -395,6 +433,9 @@
           ],
           "unscoped": "acknowledged",
           "id": "figma.branch:{host}/{branch}",
+          "generic_titles": [
+            "Figma"
+          ],
           "title": [
             "{~} · {title} - Figma Slides",
             "{title} – {~}",
@@ -424,6 +465,11 @@
             }
           ],
           "id": "vidcast.video:{host}/{video}",
+          "generic_titles": [
+            "Vidcast",
+            "Sign In",
+            "Video Edit"
+          ],
           "title": "Vidcast - {title}"
         },
         {
@@ -444,6 +490,10 @@
             }
           ],
           "id": "vidcast.playlist:{host}/{playlist}",
+          "generic_titles": [
+            "Vidcast",
+            "Vidcast - Sign In"
+          ],
           "title": "Vidcast - Playlist - {title}"
         },
         {
@@ -464,6 +514,11 @@
             }
           ],
           "id": "vidcast.page:{host}/{page}",
+          "generic_titles": [
+            "Vidcast",
+            "Sign In",
+            "Page Edit"
+          ],
           "title": "Vidcast - {title}"
         }
       ]
@@ -590,6 +645,10 @@
             }
           ],
           "id": "aha.feature:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:jira_key} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -613,6 +672,10 @@
             }
           ],
           "id": "aha.requirement:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -636,6 +699,10 @@
             }
           ],
           "id": "aha.epic:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -656,6 +723,10 @@
             }
           ],
           "id": "aha.release:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -679,6 +750,10 @@
             }
           ],
           "id": "aha.idea:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -705,6 +780,10 @@
             }
           ],
           "id": "aha.note:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -956,6 +1035,9 @@
             "edit": "edit"
           },
           "id": "splunk.dashboard:{host}/{app}/{view}",
+          "generic_titles": [
+            "Dashboard"
+          ],
           "title": [
             "{title} | Splunk {~}",
             "{title} | Splunk"
@@ -982,6 +1064,9 @@
             "edit": "edit"
           },
           "id": "splunk.dashboard:{host}/{app}/{view}",
+          "generic_titles": [
+            "Dashboard"
+          ],
           "title": [
             "{title} | Splunk {~}",
             "{title} | Splunk"
@@ -3109,7 +3194,7 @@
     {
       "id": "eval.figma.file.loading",
       "kind": "evaluate",
-      "why": "while a file loads the tab title is just Figma; no entry matches, so the whole title is recorded",
+      "why": "while a file loads the tab title is just Figma; no entry matches, and that title is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -3127,7 +3212,7 @@
         },
         "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
         "mode": null,
-        "title": "Figma",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -3841,6 +3926,35 @@
       "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv%2FCheckout-Flow"
     },
     {
+      "id": "eval.figma.file.generic_title_loading_shell",
+      "kind": "evaluate",
+      "why": "the app shell's loading title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow",
+      "title": "Figma"
+    },
+    {
       "id": "eval.figma.branch.design",
       "kind": "evaluate",
       "why": "a branch of a design file, keyed by the branch key alone",
@@ -4119,6 +4233,35 @@
       "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/short/Checkout-Flow"
     },
     {
+      "id": "eval.figma.branch.generic_title_loading_shell",
+      "kind": "evaluate",
+      "why": "the app shell's loading title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow?node-id=1-2",
+      "title": "Figma"
+    },
+    {
       "id": "validate.starter.vidcast",
       "kind": "validate",
       "why": "generated: the synthesized starter:vidcast fixture (protocol/starters/vidcast.json) is a valid format-1 document",
@@ -4386,7 +4529,7 @@
     {
       "id": "eval.vidcast.video.embed",
       "kind": "evaluate",
-      "why": "embed link opened top-level; bare 'Vidcast' title matches no entry and is recorded whole",
+      "why": "embed link opened top-level; the bare 'Vidcast' title matches no entry and is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -4404,7 +4547,7 @@
         },
         "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
         "mode": "view",
-        "title": "Vidcast",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -4439,7 +4582,7 @@
     {
       "id": "eval.vidcast.video.edit",
       "kind": "evaluate",
-      "why": "editor; known limit: fixed editor title",
+      "why": "editor; its fixed 'Video Edit' title is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -4457,8 +4600,8 @@
         },
         "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
         "mode": "edit",
-        "title": "Video Edit",
-        "title_entry": 0,
+        "title": null,
+        "title_entry": null,
         "alias_id": null,
         "refs": []
       },
@@ -4825,6 +4968,35 @@
       "url": "https://app.vidcast.io/Share/0a1b2c3d-0000-4000-8000-00000000c0de"
     },
     {
+      "id": "eval.vidcast.video.generic_title_editor_title",
+      "kind": "evaluate",
+      "why": "the editor's own title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de",
+      "title": "Vidcast - Video Edit"
+    },
+    {
       "id": "eval.vidcast.playlist.page",
       "kind": "evaluate",
       "why": "playlist page",
@@ -4957,7 +5129,7 @@
     {
       "id": "eval.vidcast.playlist.embed",
       "kind": "evaluate",
-      "why": "help-article embed query form; bare title recorded whole",
+      "why": "help-article embed query form; the bare 'Vidcast' title is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -4975,7 +5147,7 @@
         },
         "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
         "mode": "view",
-        "title": "Vidcast",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -5136,6 +5308,35 @@
       "url": "https://app.vidcast.io/playlists/embed/playlist_link?index=3"
     },
     {
+      "id": "eval.vidcast.playlist.generic_title_loading_shell",
+      "kind": "evaluate",
+      "why": "the app shell's loading title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444",
+      "title": "Vidcast"
+    },
+    {
       "id": "eval.vidcast.page.view",
       "kind": "evaluate",
       "why": "published page (ID shape assumed uuid; low confidence)",
@@ -5239,7 +5440,7 @@
     {
       "id": "eval.vidcast.page.edit",
       "kind": "evaluate",
-      "why": "page editor; fixed title",
+      "why": "page editor; its fixed 'Page Edit' title is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -5257,8 +5458,8 @@
         },
         "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
         "mode": "edit",
-        "title": "Page Edit",
-        "title_entry": 0,
+        "title": null,
+        "title_entry": null,
         "alias_id": null,
         "refs": []
       },
@@ -5370,6 +5571,35 @@
         "reason": "no_rule"
       },
       "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/more"
+    },
+    {
+      "id": "eval.vidcast.page.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "view",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc",
+      "title": "Vidcast - Sign In"
     },
     {
       "id": "validate.starter.box",
@@ -7978,7 +8208,7 @@
     {
       "id": "eval.aha.feature.login_title",
       "kind": "evaluate",
-      "why": "KNOWN LIMIT: a login tab's title on a record URL is recorded whole until the real title loads",
+      "why": "a login tab's title on a record URL is generic (adapter-templates.md §9.4): no title until the real title loads",
       "impls": [
         "rust",
         "ts"
@@ -7996,8 +8226,37 @@
         },
         "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
         "mode": null,
-        "title": "Log in to your workspace",
-        "title_entry": 1,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/features/PRJ-123",
+      "title": "Log in to your workspace | Aha!"
+    },
+    {
+      "id": "eval.aha.feature.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
         "alias_id": null,
         "refs": []
       },
@@ -8229,6 +8488,35 @@
       "url": "https://acme.aha.io/requirements/new"
     },
     {
+      "id": "eval.aha.requirement.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "PRJ-123-1"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/PRJ-123-1",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/requirements/PRJ-123-1",
+      "title": "Log in to your workspace | Aha!"
+    },
+    {
       "id": "eval.aha.epic.basic",
       "kind": "evaluate",
       "why": "epic.basic",
@@ -8446,6 +8734,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.aha.io/epics/PRJ-E-12/features"
+    },
+    {
+      "id": "eval.aha.epic.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "PRJ-E-12"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/epics/PRJ-E-12",
+      "title": "Log in to your workspace | Aha!"
     },
     {
       "id": "eval.aha.release.basic",
@@ -8694,6 +9011,35 @@
       "url": "https://acme.aha.io/releases/new"
     },
     {
+      "id": "eval.aha.release.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-3",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/releases/PRJ-R-3",
+      "title": "Log in to your workspace | Aha!"
+    },
+    {
       "id": "eval.aha.idea.basic",
       "kind": "evaluate",
       "why": "idea.basic",
@@ -8928,6 +9274,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.aha.io/ideas/PRJ-I-45"
+    },
+    {
+      "id": "eval.aha.idea.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45",
+      "title": "Log in to your workspace | Aha!"
     },
     {
       "id": "eval.aha.note.basic",
@@ -9171,6 +9546,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.aha.io/pages/new"
+    },
+    {
+      "id": "eval.aha.note.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/pages/PRJ-N-67",
+      "title": "Log in to your workspace | Aha!"
     },
     {
       "id": "validate.starter.servicenow",
@@ -12719,6 +13123,40 @@
       "url": "https://acme-dev.splunkcloud.com/en-US/app/search/web_traffic_overview"
     },
     {
+      "id": "eval.splunk.dashboard.generic_title_loading_shell",
+      "kind": "evaluate",
+      "why": "the app shell's loading title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": [],
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        }
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+      "title": "Dashboard | Splunk 9.4.2"
+    },
+    {
       "id": "eval.splunk.dashboard.dashboard_view_mode_classic_versioned_title.alone",
       "kind": "evaluate",
       "why": "generated: dashboard view mode, Classic, versioned title, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
@@ -13080,6 +13518,36 @@
       },
       "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
       "title": "Loading..."
+    },
+    {
+      "id": "eval.splunk.dashboard.generic_title_loading_shell.alone",
+      "kind": "evaluate",
+      "why": "generated: the app shell's loading title is generic (§9.4): no title, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+      "title": "Dashboard | Splunk 9.4.2"
     }
   ]
 }
