@@ -1887,7 +1887,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
         Ok(mut stored) => {
             let root_identity = stored.root_identity.clone();
             let knowledge_base_identity = stored.knowledge_base_identity.clone();
-            task_folders::validate(&stored.task_folders)?;
+            let invalid_task_folders = task_folders::validate(&stored.task_folders).is_err();
             let task_folders = std::mem::take(&mut stored.task_folders);
             let retired_adapter_contracts = std::mem::take(&mut stored.adapter_id_history);
             let adapter_extensions = std::mem::take(&mut stored.adapters.extensions);
@@ -1898,7 +1898,7 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
             let mut config: ConfigSnapshot = stored.into();
             config.agent = agent.agent();
             upgrade_default_document_types(&mut config.summary_vocabulary);
-            if root_unconfirmed || validate_base(&config).is_err() {
+            if root_unconfirmed || invalid_task_folders || validate_base(&config).is_err() {
                 let retired_adapter_contracts = repairable_history(retired_adapter_contracts);
                 let issue = if root_unconfirmed {
                     "This home folder predates native picker confirmation. Choose it again to activate capture; the original config will be backed up."

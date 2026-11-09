@@ -1838,3 +1838,19 @@ immutable entry ID so removing and re-adding the same path never revives its
 prior authorization. The service checks the folder's recorded identity and the
 unchanged protected paths before launch. The default knowledge-base behavior
 and non-resumable task recovery remain in force; summaries are unchanged.
+
+## 2026-11-03 — Keep task-folder config errors repairable
+
+`brwr-pf8o` routes typed but invalid task-folder entries through the existing
+invalid-config repair state. They previously escaped as read errors, losing
+the actual revision and preventing picker-confirmed repair. Invalid entries
+now expose no task destinations, retain a revision of the original bytes and
+require the normal explicit repair, which backs those bytes up before saving.
+The service-only task-folder resolver is compiled on Unix and in tests.
+
+The regression covers invalid UUIDs, relative paths and empty identities,
+including exact backup contents. Workspace Rust tests report 1,563 passes
+(94 explicit sandbox IPC skips included) and two ignored tests. Frontend
+validation remains pending: the sandbox could not reinstall the locked npm
+dependencies after an offline cache miss. The external driver must reinstall,
+rebuild and run its complete gate before this repair is marked shipped.

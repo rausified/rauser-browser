@@ -2049,7 +2049,9 @@ the reload completes.
 `cargo test --locked -p brauser task_folder --lib` checks bounded host-owned
 allowlist entries, purpose-bound picker grants, stale revisions, ordinary-save
 preservation, immutable IDs after remove/re-add, filesystem replacement and
-queued launch checks. Its direct service test runs the existing fake harness in
+queued launch checks. Malformed task-folder entries must retain a usable config
+revision and allow a picker-confirmed repair that backs up the original bytes.
+Its direct service test runs the existing fake harness in
 a temporary selected project with the default knowledge base unavailable,
 checks the prompt's protected paths, and uses no socket or real harness.
 `protocol/tests/wire_tasks.rs` refuses client paths in list/add/remove/start

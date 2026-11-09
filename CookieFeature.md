@@ -1836,3 +1836,22 @@ gates pass: 1,562 Rust-reported outcomes (94 explicit IPC skips, two ignored), a
 43 browser cases, including a new keyboard selection journey, skip explicitly
 inside this sandbox and remain for the driver's real-browser gate. The single
 independent review's two P2s and one P3 were reproduced first and fixed.
+
+## 2026-11-03 — Recover settings with an invalid task-folder entry (brwr-pf8o)
+
+The pending repair inherited by this cycle keeps a malformed project-folder
+entry from trapping settings in an unreadable state. Brauser now retains the
+configuration's actual revision, disables the invalid destinations and offers
+its existing picker-confirmed repair. Saving that repair first preserves the
+exact original file in a backup. A regression exercises an invalid folder ID,
+a relative path and an empty filesystem identity, then checks the repaired
+configuration and original backup. The Unix-only service helper is also gated
+so it does not create a Windows dead-code warning.
+
+Source review, the Rust build, formatting, workspace Clippy and all 1,563
+Rust-reported test outcomes pass, with 94 explicit IPC skips and two ignored
+tests. This is source ready, not marked shipped: an offline npm installation
+cleared node_modules before reporting a missing cache entry, and the sandbox
+blocks the reinstall. The outer driver must install the exact lockfile,
+rebuild the extension and pass its complete independent gate. No new feature
+was started from that failed health gate.

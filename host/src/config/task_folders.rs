@@ -46,6 +46,7 @@ impl ConfigStore {
 
     /// Call after refreshing under the config lock. Missing/replaced folders
     /// fail only the task that selects them, not unrelated configuration saves.
+    #[cfg(any(unix, test))]
     pub(crate) fn task_folder(&self, id: &str) -> Result<PathBuf> {
         let folder = self
             .task_folders
@@ -270,6 +271,55 @@ mod tests {
         store.update(next, &rev).unwrap().unwrap();
         assert_eq!(store.task_folder_choices()[0].id, id);
         assert!(store.task_folder("/arbitrary/path").is_err());
+    }
+
+    #[test]
+    fn invalid_task_folder_entries_can_be_backed_up_and_repaired() {
+        for entry in [
+            "id = 'not-a-uuid'\npath = '/project'\nidentity = 'picked'",
+            "id = '00000000-0000-4000-8000-000000000001'\npath = 'relative'\nidentity = 'picked'",
+            "id = '00000000-0000-4000-8000-000000000001'\npath = '/project'\nidentity = ''",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = configured(dir.path());
+            let next = store.snapshot().clone();
+            let root = Path::new(&next.storage.as_ref().unwrap().root);
+            let original = format!(
+                "{}\n[[task_folders]]\n{entry}\n",
+                fs::read_to_string(&store.path).unwrap()
+            );
+            fs::write(&store.path, &original).unwrap();
+
+            // A readable invalid entry must keep a real revision, so the
+            // native picker and ordinary revision-checked repair still work.
+            store.refresh().unwrap();
+            assert!(store.config_issue().is_some());
+            assert_ne!(store.revision(), UNREADABLE_REVISION);
+            assert!(store.task_folder_choices().is_empty());
+            let revision = store.revision().to_owned();
+            store
+                .update_with_root_identity(
+                    next.clone(),
+                    &revision,
+                    Some(&selected_root_identity(root).unwrap()),
+                )
+                .unwrap()
+                .unwrap();
+            assert!(store.config_issue().is_none());
+            assert_eq!(store.snapshot(), &next);
+            let backups: Vec<_> = fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("config-invalid-")
+                })
+                .collect();
+            assert_eq!(backups.len(), 1);
+            assert_eq!(fs::read_to_string(&backups[0]).unwrap(), original);
+        }
     }
 
     #[test]
