@@ -1741,3 +1741,29 @@ Compare with current evidence revisits only the originally selected artifact-day
 ## 2026-11-09 — Keep generator checks honest in restricted runners
 
 The supplementary gate found 36 starter-generator CLI cases that captured child output without first checking whether this runner permits local IPC. Those cases now use the repository's existing child-pipe probe before creating fixtures or spawning the CLI. Their real validation assertions are unchanged, pure checks still execute, and strict CI still fails on a denied pipe instead of skipping. Real and simulated restrictions both report 13 pure passes and 66 explicit integration skips; simulated strict mode fails as required.
+
+## 2026-11-09 — Preserve recorded identities when capture rules shrink
+
+Changing which pages an adapter recognizes can now refuse the same accidental
+identity change as deleting the adapter. Previously, keeping its type and ID
+while removing a path or built-in page name bypassed the history guard: an
+unchanged later rule could start naming those pages as another artifact.
+The host now checks superseded recognition shapes against both new and
+unchanged adapters before replacing settings. A refusal keeps the exact config
+bytes, revision and active policy. Existing declared-container fall-throughs
+remain allowed, as do disjoint edits, same-identity fall-through and appending
+rules after an unchanged old rule prefix. Arbitrary rewrites retain the existing
+conservative overlap policy, which can refuse an edit without proving a live
+handoff. No migration is enabled. The three new tests exercise eight refusal
+variants and allowed edits through real revision-checked saves.
+
+## 2026-11-09 — Guard parameterized generator checks in restricted runners
+
+The supplemental script suite exposed fourteen starter-generator CLI cases
+that still tried to capture denied child output. The earlier guard pass had
+covered ordinary tests but missed two loop-generated groups for excluded host
+labels and multi-origin families. Both callbacks now run the existing pipe
+probe before creating fixtures. Real validation assertions remain intact;
+restricted runs explicitly skip affected CLI cases, pure validation still runs,
+and strict IPC mode still fails rather than treating skipped integration as
+successful validation.
