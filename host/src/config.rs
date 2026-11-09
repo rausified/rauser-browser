@@ -3172,7 +3172,14 @@ fn refuse_rekeyed_routes(
     let Some(artifact_type) = adapter_contract_type(candidate) else {
         return Ok(());
     };
+    let live = adapter_contracts(next);
     for previous in earlier.iter().copied() {
+        // A recorded contract this save puts back exactly is live again, not
+        // retired: its routes keep its identity, as when it is re-added on
+        // its own before `candidate`, so it is not a re-key here.
+        if live.contains(previous) {
+            continue;
+        }
         let Some((previous_origin, previous_id)) = adapter_contract_identity(previous) else {
             continue;
         };
@@ -3859,6 +3866,122 @@ mod tests {
                     .unwrap_err()
                     .to_string()
                     .contains("overlap")
+            );
+        }
+
+        /// The Splunk starter's apps and dashboards overlap on purpose: the
+        /// app's built-in views win (protocol/starters/README.md
+        /// "container_first"). Restoring the recorded pair is still refused,
+        /// like any overlap, but re-adding the same shipped adapters keeps
+        /// every recorded identity, so the save checks accept it, both after
+        /// a settings removal and against recorded contracts alone.
+        fn splunk() -> [serde_json::Value; 2] {
+            [
+                json!({"type":"splunk.app", "origin":"https://acme.splunkcloud.com", "match":[{"path":"/{_}/app/{app:name}"}, {"path":"/{_}/app/{app:name}/(search|dashboards|reports|alerts|datasets|report|alert|dataset|job_manager|analytics_workspace|pivot|field_extractor|home|configuration|inputs)"}], "id":"splunk.app:{host}/app/{app}"}),
+                json!({"type":"splunk.dashboard", "origin":"https://acme.splunkcloud.com", "match":[{"path":"/{_}/app/{app:name}/{view:name}/{mode?:(edit)}"}], "modes":{"edit":"edit"}, "id":"splunk.dashboard:{host}/{app}/{view}", "title":["{title} | Splunk {~}", "{title} | Splunk"], "within":{"type":"splunk.app","id":"splunk.app:{host}/app/{app}"}}),
+            ]
+        }
+
+        #[test]
+        fn a_removed_container_first_starter_is_refused_restore_but_may_be_re_added() {
+            let origin = "https://acme.splunkcloud.com";
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            let save = |store: &mut ConfigStore, adapters: Vec<serde_json::Value>| {
+                let mut next = store.snapshot().clone();
+                next.adapters.artifacts = adapters;
+                let revision = store.revision().to_owned();
+                store
+                    .update(next, &revision)
+                    .unwrap_or_else(|error| panic!("{error:#}"))
+                    .expect("no conflict");
+            };
+            save(&mut store, splunk().to_vec());
+            save(&mut store, Vec::new());
+            let refusal = store.site_restore(origin).unwrap_err().to_string();
+            assert!(refusal.contains("overlap"), "{refusal}");
+            // Capture Site's starter offer is checked, then saved, as is.
+            let mut proposal = store.snapshot().adapters.clone();
+            proposal.artifacts.extend(splunk());
+            store
+                .check_capture_site(&proposal)
+                .unwrap_or_else(|error| panic!("{error:#}"));
+            save(&mut store, splunk().to_vec());
+        }
+
+        /// Dashboards saved alone, removed, then saved with apps: the app's
+        /// built-in views move from the retired dashboard's routes to the
+        /// app. That is the established container allowance
+        /// (`declares_container`: a contract declaring `candidate` as its
+        /// container lets the container take its routes, as a repository
+        /// does a removed pull request's), not the re-added-contract rule:
+        /// the same save passes with the dashboard left out, and with the
+        /// app added first and the dashboard after.
+        #[test]
+        fn a_container_may_take_a_retired_contained_contracts_routes() {
+            let [app, dashboard] = splunk();
+            let saves: [&[Vec<serde_json::Value>]; 3] = [
+                &[
+                    vec![dashboard.clone()],
+                    Vec::new(),
+                    vec![app.clone(), dashboard.clone()],
+                ],
+                &[vec![dashboard.clone()], Vec::new(), vec![app.clone()]],
+                &[
+                    vec![dashboard.clone()],
+                    Vec::new(),
+                    vec![app.clone()],
+                    vec![app.clone(), dashboard.clone()],
+                ],
+            ];
+            for (case, steps) in saves.into_iter().enumerate() {
+                let folder = tempfile::tempdir().unwrap();
+                let mut store = loaded(&folder.path().join("config.toml"));
+                for (step, adapters) in steps.iter().enumerate() {
+                    let mut next = store.snapshot().clone();
+                    next.adapters.artifacts = adapters.clone();
+                    let revision = store.revision().to_owned();
+                    store
+                        .update(next, &revision)
+                        .unwrap_or_else(|error| panic!("case {case} step {step}: {error:#}"))
+                        .expect("no conflict");
+                }
+            }
+        }
+
+        /// Re-adding a removed container and its contained type in one save
+        /// is the same as re-adding the container first, then the contained
+        /// type: the container's recorded routes keep its identity.
+        #[test]
+        fn a_removed_container_and_contained_pair_may_be_re_added_in_one_save() {
+            let repo = json!({"type":"github.repo", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/{*}"}], "id":"github:{host}/{owner}/{repo}", "scope":{"owner":["acme-corp"]}});
+            let pr = json!({"type":"github.pr", "origin":"https://github.com", "match":[{"path":"/{owner:name}/{repo:name}/pull/{n:int}/{*}"}], "id":"github:{host}/{owner}/{repo}/pull/{n}", "scope":{"owner":["acme-corp"]}, "within":{"type":"github.repo","id":"github:{host}/{owner}/{repo}"}});
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = loaded(&folder.path().join("config.toml"));
+            let both = vec![pr.clone(), repo.clone()];
+            for (step, adapters) in [both.clone(), Vec::new(), both].into_iter().enumerate() {
+                let mut next = store.snapshot().clone();
+                next.adapters.artifacts = adapters;
+                let revision = store.revision().to_owned();
+                store
+                    .update(next, &revision)
+                    .unwrap_or_else(|error| panic!("step {step}: {error:#}"))
+                    .expect("no conflict");
+            }
+            // A different contained ID over the re-added container is still refused.
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts.clear();
+            let revision = store.revision().to_owned();
+            store.update(next, &revision).unwrap().unwrap();
+            let mut rekeyed = pr;
+            rekeyed["id"] = json!("github:{host}/{owner}/{repo}/pulls/{n}");
+            let mut next = store.snapshot().clone();
+            next.adapters.artifacts = vec![rekeyed, repo];
+            let revision = store.revision().to_owned();
+            let error = store.update(next, &revision).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("cannot change until artifact migrations"),
+                "{error:#}"
             );
         }
 
