@@ -16,3 +16,4 @@ Where: `scripts/tests/pr-watch.test.mjs` (the `mq()` helper and
 `WAITING_META`), a capture step (`gh api repos/<repo>/commits/<sha>/check-runs`)
 recorded in a fixture README, and `scripts/dev/pr-watch.mjs`
 `mergifyQueueStatus`.
+- Done 2026-11-09: #346 (brwr-69tz): pr-watch tests now run on Mergify comments recorded from this repository (scripts/tests/fixtures/mergify-comments.json: waiting, checking, merged, dequeued, cancelled, refreshed and the #346 rewrite race).
