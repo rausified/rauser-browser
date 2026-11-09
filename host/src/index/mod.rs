@@ -1082,7 +1082,22 @@ impl ArtifactIndex {
         end: Date,
         session_id: Option<&str>,
     ) -> Result<focus::FocusChoices> {
-        self.read(|tx| focus::choices(tx, start, end, session_id))
+        self.read(|tx| focus::choices(tx, start, end, session_id, None))
+    }
+
+    pub(crate) fn worklog_focus_choices_page(
+        &self,
+        start: Date,
+        end: Date,
+        session_id: Option<&str>,
+        page: &brauser_protocol::WorklogChoicesPageRequest,
+    ) -> Result<focus::FocusChoices> {
+        let scope = serde_json::to_vec(&(
+            &self.storage,
+            &self.root_identity,
+            self.adapters_fingerprint(),
+        ))?;
+        self.read(|tx| focus::choices(tx, start, end, session_id, Some((&scope, page))))
     }
 
     /// Run one read in a single `read_txn` over `index.db`'s committed

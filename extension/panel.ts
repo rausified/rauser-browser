@@ -229,6 +229,7 @@ const worklogChoicesArea = element<HTMLElement>("worklog-choices-area");
 const worklogShareScope = element<HTMLSelectElement>("worklog-share-scope");
 const worklogFocusArea = element<HTMLElement>("worklog-focus-area");
 const worklogFocusSession = element<HTMLSelectElement>("worklog-focus-session");
+const worklogFocusMore = element<HTMLButtonElement>("worklog-focus-more");
 const worklogFocusStatus = element<HTMLElement>("worklog-focus-status");
 const worklogChoices = element<HTMLFieldSetElement>("worklog-choices");
 const worklogMore = element<HTMLButtonElement>("worklog-more");
@@ -416,6 +417,8 @@ let worklogScope = "";
 let worklogStorage = "";
 let worklogPageLoading = false;
 let worklogPageNotice = "";
+let worklogSessionCatalog: { scope: string; sessions: FocusSession[]; page: WorklogFocusChoicesResult["sessions_page"] } | null = null;
+let worklogSessionLoading = false;
 const selectedWork = new Set<string>();
 const worklogChoiceKey = choiceKey;
 let sharingDraftPanel: SharingDraftPanel | null = null;
@@ -428,6 +431,9 @@ function resetWorklogSelection(): void {
   worklogFocusSession.replaceChildren();
   worklogFocusSession.disabled = true;
   worklogFocusStatus.textContent = "";
+  worklogSessionCatalog = null;
+  worklogSessionLoading = false;
+  worklogFocusMore.hidden = true;
   ++worklogLoadSeq;
   worklogReport = null;
   worklogValidated = null;
@@ -2188,6 +2194,9 @@ async function loadWorklog(): Promise<void> {
   worklogChoicesArea.hidden = !curateWorklog.checked;
   const focusOnly = curateWorklog.checked && worklogShareScope.value === "focus";
   worklogFocusArea.hidden = !focusOnly;
+  worklogFocusMore.hidden = true;
+  worklogSessionLoading = false;
+  worklogFocusMore.setAttribute("aria-disabled", "false");
   // Keep an existing catalog usable: disabling a native select drops its
   // keyboard focus. The sequence guard discards superseded selections.
   worklogFocusStatus.textContent = focusOnly ? "Loading recorded sessions…" : "";
@@ -2220,7 +2229,7 @@ async function loadWorklog(): Promise<void> {
     const dates = { protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), start_date: range.start, end_date: range.end };
     const response = focusOnly
       ? await session.host.call({ ...dates, type: "worklog_focus_choices", expected_revision: revision,
-        focus_session_id: sessionId }, "worklog_focus_choices_result")
+        focus_session_id: sessionId, sessions_page: { offset: 0 } }, "worklog_focus_choices_result")
       : curateWorklog.checked
       ? await session.host.call({ ...dates, type: "worklog_choices", expected_revision: revision, page: { offset: 0 } }, "worklog_choices_result")
       : await session.host.call({ ...dates, type: "worklog_report" }, "worklog_reported");
@@ -2250,25 +2259,119 @@ async function loadWorklog(): Promise<void> {
     }
     if (response.type === "worklog_focus_choices_result") {
       if (response.focus_session_id !== sessionId) throw new Error("The host returned a different focus session. Try again.");
+      if (response.sessions_page) validateSessionPage(response, 0);
+      const catalog = worklogSessionCatalog;
+      const catalogScope = sessionCatalogScope(range);
+      if (catalog?.scope === catalogScope && catalog.page && response.sessions_page?.snapshot === catalog.page.snapshot) {
+        response.sessions = catalog.sessions;
+        response.sessions_page = catalog.page;
+        response.sessions_truncated = catalog.page.next_offset !== null;
+      }
+      worklogSessionCatalog = { scope: catalogScope, sessions: response.sessions, page: response.sessions_page };
       renderWorklogSessions(response);
     }
     worklogReport = response;
     worklogValidated = response.type === "worklog_choices_result" ? { scope, report: response } : null;
     // A delivery refresh removes the old checkbox. Restore its stable identity
     // only if the user has not moved focus elsewhere while the host answered.
-    const restoreFocus = focusedScope === scope &&
-      (document.activeElement === focused || document.activeElement === document.body);
+    const focusUnmoved = document.activeElement === focused || document.activeElement === document.body;
+    const restoreFocus = focusedScope === scope && focusUnmoved;
     renderWorklogChoices(restoreFocus ? focusedKey : null);
     renderWorklog();
     if (restoreFocus && focused === worklogMore && !worklogMore.hidden) worklogMore.focus();
+    // Refresh and Reload sessions hide the paging button while loading. Restore
+    // its focus even when reload cleared the previously selected session.
+    if (focusOnly && focused === worklogFocusMore && focusUnmoved) {
+      (worklogFocusMore.hidden ? worklogFocusSession : worklogFocusMore).focus();
+    }
   } catch (error) {
     if (seq !== worklogLoadSeq || closed) return;
     worklogValidated = null;
+    worklogSessionCatalog = null;
     worklogSelectionStatus.textContent = "Choices unavailable. Open Recent again to retry.";
     worklogFocusStatus.textContent = focusOnly ? "Recorded sessions unavailable. Open Recent again to retry." : "";
     worklogText.textContent = error instanceof HostError && error.code === "invalid_request" && /unsupported request/.test(error.message)
       ? "Rebuild the Brauser host and extension together, then reopen Recent to generate this worklog."
       : `Could not generate worklog: ${describe(error)}`;
+  }
+}
+
+function sessionCatalogScope(range = worklogRange()): string {
+  return JSON.stringify([session.config?.storage, session.revision, range.start, range.end]);
+}
+
+function validateSessionPage(report: WorklogFocusChoicesResult, offset: number, snapshot?: string): void {
+  const page = report.sessions_page;
+  if (!page || !/^[a-f0-9]{64}$/.test(page.snapshot) || page.offset !== offset ||
+      (snapshot !== undefined && page.snapshot !== snapshot) || page.omitted ||
+      report.sessions.length > 64 || new Set(report.sessions.map((s) => s.id)).size !== report.sessions.length ||
+      (page.next_offset !== null && (report.sessions.length === 0 || page.next_offset !== offset + report.sessions.length)) ||
+      report.sessions_truncated !== (page.next_offset !== null)) {
+    throw new Error("The host returned an invalid session page. Reload sessions.");
+  }
+}
+
+async function loadMoreSessions(): Promise<void> {
+  if (worklogSessionLoading) return;
+  const report = worklogReport;
+  const catalog = worklogSessionCatalog;
+  if (!report || report.type !== "worklog_focus_choices_result" || !catalog) {
+    await loadWorklog();
+    return;
+  }
+  if (catalog.scope !== sessionCatalogScope()) {
+    await loadWorklog();
+    return;
+  }
+  if (!catalog.page || catalog.page.next_offset === null || !session.connected) return;
+  const seq = worklogLoadSeq;
+  const offset = catalog.page.next_offset;
+  const snapshot = catalog.page.snapshot;
+  worklogSessionLoading = true;
+  worklogFocusMore.setAttribute("aria-disabled", "true");
+  worklogFocusStatus.textContent = "Loading more recorded sessions…";
+  try {
+    const response = await session.host.call({ type: "worklog_focus_choices", protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(), expected_revision: session.revision ?? "",
+      start_date: report.start_date, end_date: report.end_date, focus_session_id: null,
+      sessions_page: { offset, snapshot } }, "worklog_focus_choices_result");
+    if (seq !== worklogLoadSeq || closed || catalog !== worklogSessionCatalog || catalog.scope !== sessionCatalogScope() || !session.connected) return;
+    validateSessionPage(response, offset, snapshot);
+    const known = new Set(catalog.sessions.map((s) => s.id));
+    if (response.start_date !== report.start_date || response.end_date !== report.end_date ||
+        response.focus_session_id !== null || response.selected_session !== null || response.choices.length !== 0 ||
+        response.sessions.some((s) => known.has(s.id))) throw new Error("The host returned a different session catalog. Reload sessions.");
+    catalog.sessions = [...catalog.sessions, ...response.sessions];
+    catalog.page = response.sessions_page!;
+    report.sessions = catalog.sessions;
+    report.sessions_page = catalog.page;
+    report.sessions_truncated = response.sessions_truncated;
+    const focusMore = document.activeElement === worklogFocusMore;
+    renderWorklogSessions(report);
+    if (worklogFocusMore.hidden && focusMore) worklogFocusSession.focus();
+  } catch (error) {
+    if (seq !== worklogLoadSeq || closed || catalog !== worklogSessionCatalog) return;
+    worklogSessionCatalog = null;
+    worklogReport = null;
+    selectedWork.clear();
+    worklogChoices.replaceChildren();
+    worklogGaps.hidden = true;
+    worklogSelectAll.disabled = true;
+    worklogClear.disabled = true;
+    copyWorklogButton.disabled = true;
+    worklogFocusSession.value = "";
+    worklogFocusSession.replaceChildren();
+    worklogFocusSession.disabled = true;
+    worklogFocusMore.hidden = false;
+    worklogFocusMore.textContent = "Reload sessions";
+    worklogFocusStatus.textContent = `Could not load more sessions: ${describe(error)}`;
+    worklogText.textContent = "Recorded sessions changed or are unavailable. Reload sessions before sharing work.";
+    sharingDraftPanel?.render();
+  } finally {
+    if (seq === worklogLoadSeq && !closed) {
+      worklogSessionLoading = false;
+      worklogFocusMore.setAttribute("aria-disabled", "false");
+    }
   }
 }
 
@@ -2377,8 +2480,10 @@ function renderWorklogSessions(report: WorklogFocusChoicesResult): void {
       : report.selected_session === null
         ? "Choose a session, then check entries to include."
         : `Only this session’s direct activity is offered.${report.name_changed ? " Its name changed in this period." : ""}`;
+  worklogFocusMore.textContent = "More sessions";
+  worklogFocusMore.hidden = !report.sessions_page || report.sessions_page.next_offset === null;
   worklogFocusStatus.textContent = state + (report.sessions_truncated
-    ? " More sessions omitted; choose a shorter period to find them." : "");
+    ? report.sessions_page ? " More recorded sessions are available." : " More sessions omitted; rebuild the host to load more." : "");
 }
 
 function renderWorklogChoices(focusedKey: string | null = null): void {
@@ -2701,6 +2806,7 @@ worklogShareScope.addEventListener("change", () => {
   void loadWorklog();
 });
 worklogFocusSession.addEventListener("change", () => void loadWorklog());
+worklogFocusMore.addEventListener("click", () => void loadMoreSessions());
 worklogMore.addEventListener("click", () => void loadMoreWorklog());
 worklogSelectAll.addEventListener("click", () => {
   if (!worklogReport || worklogReport.type === "worklog_reported") return;

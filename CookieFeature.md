@@ -1812,6 +1812,27 @@ awaits its documented recovery and downgrade decisions.
 Recent now offers Load more to reach artifact-days beyond the first 32, including title, type and saved-summary reading filters. Each page keeps the existing measured order and each day's latest displayed summary. The host checks a snapshot of the complete matching result and its home/configuration before returning another bounded page; changed history offers an explicit Reload results action. The panel rejects late replies after filter edits, home changes or actual host exits, and keeps keyboard focus on the first newly appended result or the reload action. Review corrected Chrome's disabled-button focus behavior and an answered-host exit race. Tests exercise 80 matching artifact-days, tied names and dates, identical data in different homes, changed old summaries, exhausted pages and malformed metadata. Paging keeps one response window in host memory but scans matching history per request. No agent runs or content changes. Re-learn apply remains blocked on its documented coordinator decisions.
 
 The driver quarantined the first attempt because an older disconnect test still expected Recent rows to remain visible. Recovery keeps the new stale-result invalidation and updates that regression to check that rows disappear, the page summary disables while offline, and explicit reload restores enabled Recent summary buttons from offset zero. The follow-up for retaining the reading position is now brwr-0401 after the quarantine removed its original bead.
+
+## 2026-11-09 — Reach every recorded focus session when sharing work
+
+The sharing selector now has a More sessions button, so a busy day with more
+than 64 recorded focus sessions no longer hides earlier work. Loading another
+page keeps the selected session, checked entries and exact sharing preview;
+it does not select work automatically. Duplicate names stay attached to their
+recorded IDs. The host binds each page to the home folder, adapter policy,
+period and complete scanned activity, so changed history offers an explicit
+Reload sessions action instead of shifting the list underneath the user. An
+unchanged refresh keeps loaded pages; a changed one preserves the selected ID
+while dropping later catalog pages. The final paging action returns keyboard
+focus to the selector. Two new host regressions cover 140 tied sessions and
+cache-independent continuations; 16 new panel cases cover selection, stale
+replies and malformed pages. All 121 panel/sharing-draft tests and the focused
+host/wire checks pass. A new real-browser keyboard case awaits the driver's
+unsandboxed gate; the local accessibility run passes its two transport tests
+and explicitly skips 56 browser cases. Re-learn apply still awaits its open
+coordinator decisions. Evidence comparison was marked blocked because its
+historically closed evidence-card prerequisite is absent from this checkout;
+brwr-n4ga requests publication reconciliation rather than a duplicate build.
 ## 2026-11-03 — Choose a project folder for a task (brwr-zla)
 
 A task can now begin beside the project it is meant to work on. Settings lets
