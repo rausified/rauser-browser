@@ -960,6 +960,16 @@ test("a list error clears once a refresh works", async () => {
   await afterPoll(() => page.el("tasks-status-box").hidden, "the list error to clear");
 });
 
+test("Tasks shows the recorded working folder and preserves its ID through Reuse", async () => {
+  const page = await openTasks({ runs: [task(1, { task_folder_id: "project-id", cwd: "/work/<project>" })] });
+  await listed(page);
+  await until(() => buttonIn(page.el("tasks-detail"), "Reuse"), "Reuse with full instruction");
+  assert.match(page.el("tasks-detail").textContent, /Working folder: \/work\/<project>/);
+  buttonIn(page.el("tasks-detail"), "Reuse").click();
+  await until(() => page.state.session.has(storageKey("task_reuse_v1")), "folder handoff");
+  assert.equal(page.state.session.get(storageKey("task_reuse_v1")).task_folder_id, "project-id");
+});
+
 test("Reuse still hands off the instruction when its page cannot be opened, and says so", async () => {
   const page = await openTasks({ windowId: 9, createFails: true });
   await listed(page);

@@ -28,7 +28,7 @@ test("the offline host fixture emits valid wire replies for every exercised requ
     { type: "list_runs" }, { type: "get_run", run_id: task(1).run_id },
     { type: "cancel_run", run_id: task(1).run_id }, { type: "discover_harnesses" },
     { type: "set_up_harness" },
-    { type: "choose_folder" }, { type: "refresh_artifacts" }, { type: "open_path" },
+    { type: "list_task_folders" }, { type: "choose_folder" }, { type: "refresh_artifacts" }, { type: "open_path" },
     { type: "list_task_commands" }, { type: "start_task" }, { type: "start_run" },
     { type: "get_task_command_settings", expected_revision: scope.fixture.revision },
     { type: "save_task_commands", expected_revision: scope.fixture.revision, commands_toml: "commands = []" },

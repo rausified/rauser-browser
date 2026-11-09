@@ -172,6 +172,8 @@ export function hostReply(request, config = CONFIG) {
         adapter_issue: null, adapter_warnings: [],
         adopted_state: { issue: null, revision: "missing", warnings: [], full: false },
       };
+    case "list_task_folders":
+      return { type: "task_folders_listed", revision: "1", folders: [] };
     case "get_site_restore":
       return { type: "site_restore_loaded", origin: request.origin, revision: request.expected_revision, adapters: { format: 1, artifacts: [] } };
     case "check_capture_site":

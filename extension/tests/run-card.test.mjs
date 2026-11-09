@@ -1409,7 +1409,7 @@ test("TaskDetail shows Running with live output open, then Done with the report 
   ]);
   assert.equal(byClass(detail.element, "task-detail-instruction").tagName, "H2");
   assert.equal(byClass(detail.element, "task-detail-meta").textContent,
-    `on A readable article · Codex · started ${started} · Running · 30s`);
+    `on A readable article · Codex · started ${started} · Running · 30s · Working folder: /Users/me/Notes`);
   assert.equal(byClass(detail.element, "task-detail-report").hidden, true);
   assert.equal(byClass(detail.element, "task-detail-report-label").hidden, true);
   assert.equal(output(detail).open, true);
@@ -1419,7 +1419,7 @@ test("TaskDetail shows Running with live output open, then Done with the report 
   assert.deepEqual(buttonTexts(detail.element), ["Cancel", "Open in Codex", "Open page"]);
   await tick();
   assert.equal(byClass(detail.element, "task-detail-meta").textContent,
-    `on A readable article · Codex · started ${started} · Done · 40s`);
+    `on A readable article · Codex · started ${started} · Done · 40s · Working folder: /Users/me/Notes`);
   const report = byClass(detail.element, "task-detail-report");
   assert.equal(report.hidden, false);
   assert.equal(report.textContent, "Three links.");
@@ -1438,7 +1438,7 @@ test("TaskDetail shows Running with live output open, then Done with the report 
   // A queued task has no start time yet; a canceled one after it started notes that changes stay.
   const queued = detailSetup(taskView({ state: "queued", started_at: null, harness: "claude", title: "" }));
   assert.equal(byClass(queued.detail.element, "task-detail-meta").textContent,
-    "on https://read.example/a · Claude Code · Queued");
+    "on https://read.example/a · Claude Code · Queued · Working folder: /Users/me/Notes");
   queued.detail.dispose();
   const canceled = taskView({ state: "canceled", finished_at: "2026-10-27T16:00:10Z", error: "Canceled.", error_kind: "canceled" });
   const stopped = detailSetup(canceled, {

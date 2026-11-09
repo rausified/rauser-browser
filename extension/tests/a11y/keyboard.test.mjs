@@ -373,6 +373,25 @@ test("task Run, Tasks and Summarize activate without a mouse and expose failure 
   await audit(t, page, "panel/agent-start-error");
 });
 
+test("task working folder can be selected by keyboard without starting a task", async (t) => {
+  const page = await browserFixture(t, "panel", "configured", {
+    taskFolders: [{ id: "project-id", path: "/work/project" }],
+  });
+  if (!page) return;
+  await page.locator("#task-folder option[value='project-id']").waitFor({ state: "attached" });
+  await activate(page, "#task-input", null);
+  await page.keyboard.type("Inspect this project");
+  await activate(page, "#task-folder", null);
+  await selectByKeyboard(page, "#task-folder", 1);
+  assert.equal(await page.locator("#task-folder").inputValue(), "project-id");
+  assert.equal(await page.locator("#task-input").inputValue(), "Inspect this project");
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
+  await audit(t, page, "panel/task-project-folder");
+  await activate(page, "#task-run");
+  await page.waitForFunction(() => fixture.requests.some((r) => r.type === "start_task"));
+  assert.equal(await page.evaluate(() => fixture.requests.find((r) => r.type === "start_task").task_folder_id), "project-id");
+});
+
 test("task page scope can be changed by keyboard without submitting or losing a draft", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

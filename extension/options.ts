@@ -1,3 +1,4 @@
+import { listTaskFolders } from "./task-folders.js";
 import type {
   AdapterDocument, AdapterWarning, ConfigSnapshot, FolderPurpose, HarnessFound, HarnessId, RuleProvenance, ScopeChoiceView,
   StorageConfig,
@@ -86,6 +87,11 @@ function showHostBuild(version: string): void {
   hostBuild.textContent = hostBuildText(buildId.textContent ?? "", version);
 }
 const folderPath = element<HTMLOutputElement>("folder-path");
+const taskFoldersList = element<HTMLUListElement>("task-folders-list");
+const taskFoldersStatus = element<HTMLParagraphElement>("task-folders-status");
+const addTaskFolder = element<HTMLButtonElement>("add-task-folder");
+let taskFoldersRevision: string | null = null;
+let folderListSeq = 0;
 const chooseFolderButton = element<HTMLButtonElement>("choose-folder");
 const siteOrigin = element<HTMLInputElement>("site-origin");
 const pauseButton = element<HTMLButtonElement>("pause-capture");
@@ -261,6 +267,9 @@ function updateControls(): void {
   const repairing = session.configIssue !== null;
   const repairingAdapters = session.adapterIssue !== null;
   chooseFolderButton.disabled = !connected || busy;
+  addTaskFolder.disabled = !connected || busy || repairing || !session.config?.storage;
+  element<HTMLButtonElement>("refresh-task-folders").disabled = busy || !connected;
+  for (const button of taskFoldersList.querySelectorAll("button")) button.disabled = busy || !connected;
   pauseButton.disabled = !connected || busy || repairing || session.config?.capture_enabled !== true;
   // The host refuses capture without a home folder, and capture has nothing
   // to record until some site has an adapter.
@@ -1495,6 +1504,7 @@ function renderConfig(): void {
 
 async function reloadConfig(): Promise<void> {
   await session.reload();
+  void refreshTaskFolders();
   showConfigState();
   if (session.status?.pause_pending && session.config?.capture_enabled && !session.configIssue) {
     show("Capture is paused locally. Use Pause capture to finish saving this setting in the host.", true);
@@ -1531,6 +1541,64 @@ function storageFor(root: string, current: StorageConfig | null): StorageConfig 
     ...HOME_LAYOUT,
     knowledge_base_dir: current?.knowledge_base_dir ?? null,
   };
+}
+
+async function refreshTaskFolders(): Promise<void> {
+  const seq = ++folderListSeq;
+  try {
+    const response = await listTaskFolders(session.host);
+    if (seq !== folderListSeq) return;
+    taskFoldersRevision = response.revision;
+    taskFoldersList.replaceChildren();
+    for (const folder of response.folders) {
+      const row = document.createElement("li");
+      const path = document.createElement("span");
+      path.textContent = folder.path;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary compact";
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", `Remove task folder ${folder.path}`);
+      remove.addEventListener("click", () => void changeTaskFolder(folder.id));
+      row.append(path, remove);
+      taskFoldersList.append(row);
+    }
+    taskFoldersStatus.textContent = response.folders.length ? "Choose a working folder in the task bar before Run." : "No project folders configured.";
+  } catch (error) {
+    if (seq !== folderListSeq) return;
+    taskFoldersRevision = null;
+    taskFoldersStatus.textContent = `Could not read task folders: ${describe(error)}`;
+  }
+}
+
+async function changeTaskFolder(removeId: string | null = null): Promise<void> {
+  if (busy || !session.config?.storage || session.configIssue) return;
+  busy = true;
+  ++folderListSeq;
+  updateControls();
+  try {
+    // The existing revision-bound picker grants authorize only this purpose.
+    if (removeId === null) {
+      const picked = await pickFolder("task_folder");
+      await withConfigMutationLock(() => session.host.call({
+        type: "add_task_folder", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        expected_revision: session.revision!, picker_token: picked.picker_token,
+      }, "task_folders_listed"));
+    } else {
+      await withConfigMutationLock(() => session.host.call({
+        type: "remove_task_folder", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        expected_revision: taskFoldersRevision ?? session.revision!, folder_id: removeId,
+      }, "task_folders_listed"));
+    }
+    await reloadConfig();
+    await refreshTaskFolders();
+  } catch (error) {
+    taskFoldersStatus.textContent = `Could not change task folders: ${describe(error)}`;
+    if (error instanceof HostError && error.code === "conflict") await reloadConfig().catch(() => undefined);
+  } finally {
+    busy = false;
+    updateControls();
+  }
 }
 
 /** Ask the host to show its native folder picker for one setting. */
@@ -1880,6 +1948,8 @@ autoSummaryDwell.addEventListener("input", () => { autoSummaryEdited = true; });
 timeoutInput.addEventListener("input", () => { timeoutEdited = true; });
 vocabularyTypes.addEventListener("input", () => { vocabularyEdited = true; });
 vocabularyCategories.addEventListener("input", () => { vocabularyEdited = true; });
+addTaskFolder.addEventListener("click", () => void changeTaskFolder());
+element("refresh-task-folders").addEventListener("click", () => void refreshTaskFolders());
 chooseFolderButton.addEventListener("click", () => void chooseFolder());
 chooseKnowledgeBaseButton.addEventListener("click", () => void chooseKnowledgeBase());
 knowledgeBaseUseNotesButton.addEventListener("click", () => void useNotesFolderAsKnowledgeBase());

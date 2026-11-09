@@ -128,6 +128,7 @@ function install({
     ["cancel-adapter", "button"],
     ["harness-warning", "p"], ["harness-state", "p"], ["detect-harnesses", "button"], ["harness-list", "ul"],
     ["harness-timeout", "input"], ["test-harness", "button"], ["remove-harness", "button"],
+    ["task-folders-list", "ul"], ["task-folders-status", "p"], ["add-task-folder", "button"], ["refresh-task-folders", "button"],
     ["kb-path", "output"], ["choose-kb", "button"], ["kb-use-notes", "button"],
     ["agent-env-names", "p"], ["reveal-agent-env", "button"],
     ["vocab-types", "textarea"], ["vocab-categories", "textarea"], ["save-vocabulary", "button"],
@@ -168,6 +169,8 @@ function install({
       case "forget_adopted_contracts":
         state.adoptedState = { issue: null, revision: "sha256:fresh", warnings: [], full: false };
         return hostReply({ ...request, type: "get_config" });
+      case "list_task_folders":
+        return { type: "task_folders_listed", revision: String(state.revision), folders: [] };
       case "choose_folder":
         return { type: "folder_chosen", path: "/vault", picker_token: `picker-${state.connects}` };
       case "update_config":
@@ -1829,6 +1832,48 @@ test("a folder selection the host did not save is saved with the next adapter", 
   assert.equal(lastUpdate().picker_token, "picker-1");
   assert.equal(state.config.storage?.root, "/vault");
   assert.equal(state.config.capture_enabled, true);
+});
+
+test("settings adds a task folder with a purpose-bound token and removes only its ID", async () => {
+  let folders = [];
+  const state = install({ host: {
+    list_task_folders: (_request, state) => ({ type: "task_folders_listed", revision: String(state.revision), folders }),
+    choose_folder: (request) => {
+      assert.equal(request.purpose, "task_folder");
+      return { type: "folder_chosen", path: "/work/<project>", picker_token: "task-token" };
+    },
+    add_task_folder: (request, state) => {
+      assert.equal(request.picker_token, "task-token");
+      assert.equal(request.expected_revision, String(state.revision));
+      assert.equal(Object.hasOwn(request, "path"), false);
+      folders = [{ id: "project-id", path: "/work/<project>" }];
+      state.revision += 1;
+      return { type: "task_folders_listed", revision: String(state.revision), folders };
+    },
+    remove_task_folder: (request, state) => {
+      assert.equal(request.folder_id, "project-id");
+      assert.equal(request.expected_revision, String(state.revision));
+      folders = [];
+      state.revision += 1;
+      return { type: "task_folders_listed", revision: String(state.revision), folders };
+    },
+  } });
+  await openSettings();
+  env.elements.get("add-task-folder").click();
+  await until(() => idle() && env.elements.get("task-folders-list").children.length === 1, "project folder saved");
+  const row = env.elements.get("task-folders-list").children[0];
+  assert.equal(row.children[0].textContent, "/work/<project>");
+  row.children[1].click();
+  await until(() => idle() && env.elements.get("task-folders-list").children.length === 0, "project folder removed");
+  assert.equal(state.requests.some((request) => request.type === "update_config"), false);
+});
+
+test("a canceled task folder picker leaves the list unchanged and sends no add", async () => {
+  const state = install({ host: { choose_folder: () => ({ type: "error", code: "cancelled", message: "canceled" }) } });
+  await openSettings();
+  env.elements.get("add-task-folder").click();
+  await until(() => idle() && env.elements.get("task-folders-status").textContent.includes("canceled"), "canceled picker");
+  assert.equal(state.requests.some((request) => request.type === "add_task_folder"), false);
 });
 
 test("choosing a knowledge base folder saves it with its own token", async () => {
