@@ -411,7 +411,8 @@ test('example_path must start with "/"', async (t) => {
     /protocol\/starters\/atlassian\.json: types\[0\]\.example_path must start with "\/"/);
 });
 
-test("a missing samples names the file and field", (t) => {
+test("a missing samples names the file and field", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   delete miro.types[0].samples;
@@ -421,7 +422,8 @@ test("a missing samples names the file and field", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/miro\.json: types\[0\]\.samples is required/);
 });
 
-test("a sample URL off the family's origin is refused", (t) => {
+test("a sample URL off the family's origin is refused", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.types[0].samples[0].url = "https://example.com/app/board/x=/";
@@ -434,7 +436,8 @@ test("a sample URL off the family's origin is refused", (t) => {
   );
 });
 
-test("samples_shape false may still carry a titled sample, but renderStarterShapes leaves it out", (t) => {
+test("samples_shape false may still carry a titled sample, but renderStarterShapes leaves it out", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   // samples_shape controls only whether renderStarterShapes carries a type's
   // samples into starter-shapes.json, not whether the type may have samples
   // at all. A type the structural drafter cannot learn (a query-routed
@@ -462,7 +465,8 @@ test("samples_shape false may still carry a titled sample, but renderStarterShap
   assert.ok(!starterShapes.accept.some((row) => row.url === "https://github.com/acme/widget"));
 });
 
-test("samples must not be empty when samples_shape is true", (t) => {
+test("samples must not be empty when samples_shape is true", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.types[0].samples = [];
@@ -475,7 +479,8 @@ test("samples must not be empty when samples_shape is true", (t) => {
   );
 });
 
-test("a stale starter-shapes.json fails --check", (t) => {
+test("a stale starter-shapes.json fails --check", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const starterShapesPath = path.join(root, STARTER_SHAPES_JSON);
   const starterShapes = JSON.parse(readFileSync(starterShapesPath, "utf8"));
@@ -600,7 +605,8 @@ test("familyClaims agrees with starterKind on the strict-subdomain origins", () 
   }
 });
 
-test("origin.labels must be 1", (t) => {
+test("origin.labels must be 1", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.origin.labels = 2;
@@ -610,7 +616,8 @@ test("origin.labels must be 1", (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: origin\.labels must be 1/);
 });
 
-test("origin.exclude must be a list of lowercase DNS labels", (t) => {
+test("origin.exclude must be a list of lowercase DNS labels", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.origin.exclude = ["WWW"];
@@ -623,7 +630,8 @@ test("origin.exclude must be a list of lowercase DNS labels", (t) => {
   );
 });
 
-test("origin.suffix without a leading dot is refused (Minor 1)", (t) => {
+test("origin.suffix without a leading dot is refused (Minor 1)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   // Without this check, a dotless suffix such as "service-now.com" claims
   // "evilservice-now.com" and the bare "service-now.com" through
   // familyClaims's suffix-match, and refuses "acme.service-now.com", the
@@ -641,7 +649,8 @@ test("origin.suffix without a leading dot is refused (Minor 1)", (t) => {
   );
 });
 
-test("origin.origin must be a canonical https origin (Minor 1)", (t) => {
+test("origin.origin must be a canonical https origin (Minor 1)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   // A trailing slash (or any path/query/credentials) otherwise surfaces
   // only indirectly, as "sample_origin is not on this family's origin",
   // which points at the wrong field (final review, Minor 1).
@@ -657,7 +666,8 @@ test("origin.origin must be a canonical https origin (Minor 1)", (t) => {
   );
 });
 
-test('origin unknown field "labels" on an exact origin', (t) => {
+test('origin unknown field "labels" on an exact origin', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.origin.labels = 1;
@@ -667,7 +677,8 @@ test('origin unknown field "labels" on an exact origin', (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/miro\.json: origin unknown field "labels"/);
 });
 
-test("sample_scope must not be empty for a scoped family", (t) => {
+test("sample_scope must not be empty for a scoped family", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const github = readFamily(root, "github");
   github.sample_scope = [];
@@ -680,7 +691,8 @@ test("sample_scope must not be empty for a scoped family", (t) => {
   );
 });
 
-test("sample_scope must be empty for an unscoped family", (t) => {
+test("sample_scope must be empty for an unscoped family", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.sample_scope = ["acme"];
@@ -693,7 +705,8 @@ test("sample_scope must be empty for an unscoped family", (t) => {
   );
 });
 
-test("sample_origin must be on the family's own origin", (t) => {
+test("sample_origin must be on the family's own origin", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.sample_origin = "https://example.com";
@@ -706,7 +719,8 @@ test("sample_origin must be on the family's own origin", (t) => {
   );
 });
 
-test('overlaps[].expect must be "disjoint"', (t) => {
+test('overlaps[].expect must be "disjoint"', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.overlaps[0].expect = "may_overlap";
@@ -719,7 +733,8 @@ test('overlaps[].expect must be "disjoint"', (t) => {
   );
 });
 
-test("overlaps[].a and .b must name a type in this family", (t) => {
+test("overlaps[].a and .b must name a type in this family", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.overlaps[0].b = "jira.page";
@@ -732,7 +747,8 @@ test("overlaps[].a and .b must name a type in this family", (t) => {
   );
 });
 
-test("every pair of types that is not a within container needs an overlaps entry", (t) => {
+test("every pair of types that is not a within container needs an overlaps entry", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const atlassian = readFamily(root, "atlassian");
   atlassian.overlaps = [];
@@ -745,7 +761,8 @@ test("every pair of types that is not a within container needs an overlaps entry
   );
 });
 
-test("a within container is exempt from the pair-coverage check", (t) => {
+test("a within container is exempt from the pair-coverage check", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const github = readFamily(root, "github");
   github.overlaps = [];
@@ -758,7 +775,8 @@ test("a within container is exempt from the pair-coverage check", (t) => {
   assert.doesNotMatch(output, /github\.issue and github\.repo have no overlaps entry/);
 });
 
-test('a vector must not carry "doc"', (t) => {
+test('a vector must not carry "doc"', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.types[0].vectors.push({ id: "eval.miro.extra", doc: { "$fixture": "starters" } });
@@ -771,7 +789,8 @@ test('a vector must not carry "doc"', (t) => {
   );
 });
 
-test("a vector URL off the family's origin is refused", (t) => {
+test("a vector URL off the family's origin is refused", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.types[0].vectors.push({ id: "eval.miro.extra", url: "https://example.com/app/board/x=/" });
@@ -784,7 +803,8 @@ test("a vector URL off the family's origin is refused", (t) => {
   );
 });
 
-test("a vector missing id, kind, impls or expect is reported, field by field (deferred T2)", (t) => {
+test("a vector missing id, kind, impls or expect is reported, field by field (deferred T2)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   // PR D authors write vectors by hand; a missing key otherwise serialises
   // with the key simply absent (undefined drops from JSON.stringify) and
   // the failure only surfaces inside the engine harness, far from the
@@ -802,7 +822,8 @@ test("a vector missing id, kind, impls or expect is reported, field by field (de
   assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.expect is required/);
 });
 
-test("a vector's kind and impls must be from the engines' own known values (deferred T2)", (t) => {
+test("a vector's kind and impls must be from the engines' own known values (deferred T2)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.types[0].vectors.push({
@@ -816,7 +837,8 @@ test("a vector's kind and impls must be from the engines' own known values (defe
   assert.match(output, /protocol\/starters\/miro\.json: types\[0\]\.vectors\[0\]\.impls must be a non-empty array of rust, ts/);
 });
 
-test("a vector id duplicating a legacy vectors.json case is caught", (t) => {
+test("a vector id duplicating a legacy vectors.json case is caught", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.types[0].vectors.push({ id: "eval.miro.title" });
@@ -847,7 +869,8 @@ test("the test-only tenant_name, unscoped and strict-subdomain fixtures pass the
 
 // --- Task 5: shared-origin policy (checks 6, 7, gaps 1, 6, 8) --------------
 
-test('scope "unscoped" needs a shared exact origin (gap 1)', (t) => {
+test('scope "unscoped" needs a shared exact origin (gap 1)', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.review_prompt = "Choose whether to remember Miro boards.";
@@ -862,7 +885,8 @@ test('scope "unscoped" needs a shared exact origin (gap 1)', (t) => {
   );
 });
 
-test("a suffix nested inside another suffix always collides (check 6)", (t) => {
+test("a suffix nested inside another suffix always collides (check 6)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const sharepoint = readFamily(root, "sharepoint");
   const onedrive = {
@@ -890,7 +914,8 @@ test("a suffix nested inside another suffix always collides (check 6)", (t) => {
   );
 });
 
-test("an exact origin collides with a subdomain family that would claim it (check 6)", (t) => {
+test("an exact origin collides with a subdomain family that would claim it (check 6)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const extra = {
     family: "zzzacme",
@@ -927,7 +952,8 @@ test("an exact origin collides with a subdomain family that would claim it (chec
   );
 });
 
-test('scope "github_org" is only for https://github.com (gap 8)', (t) => {
+test('scope "github_org" is only for https://github.com (gap 8)', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const miro = readFamily(root, "miro");
   miro.review_prompt = "Choose whether to remember Miro boards.";
@@ -943,7 +969,8 @@ test('scope "github_org" is only for https://github.com (gap 8)', (t) => {
   );
 });
 
-test("a tenant_name family's adapter.scope key must be the host's own tenant capture (gap 6)", (t) => {
+test("a tenant_name family's adapter.scope key must be the host's own tenant capture (gap 6)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const notion = {
     family: "notionteam",
@@ -985,7 +1012,8 @@ test("a tenant_name family's adapter.scope key must be the host's own tenant cap
   );
 });
 
-test('"tenant_name" cannot be used where URLs name no tenant (gap 6)', (t) => {
+test('"tenant_name" cannot be used where URLs name no tenant (gap 6)', async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const gdocsteam = {
     family: "gdocsteam",
@@ -1027,7 +1055,8 @@ test('"tenant_name" cannot be used where URLs name no tenant (gap 6)', (t) => {
   );
 });
 
-test("a shared origin always needs account values (check 7)", (t) => {
+test("a shared origin always needs account values (check 7)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const linearteam = {
     family: "linearteam",
@@ -1068,7 +1097,8 @@ test("a shared origin always needs account values (check 7)", (t) => {
   );
 });
 
-test("a subdomain family whose suffix covers a shared origin still gets check 7 (Minor 7)", (t) => {
+test("a subdomain family whose suffix covers a shared origin still gets check 7 (Minor 7)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   // .google.com claims docs.google.com (a real shared_origins entry) just
   // as readily as it claims mail.google.com. Before Minor 7's fix, check 7
   // only ever looked at shared_origins[exactOrigin], which is always
@@ -1098,7 +1128,8 @@ test("a subdomain family whose suffix covers a shared origin still gets check 7 
 
 // --- Task 5: registry cross-checks (spec §4 check 2 reverse, check 3) -----
 
-test("a stray docs/adapters/*.md file names no family type (check 2 reverse)", (t) => {
+test("a stray docs/adapters/*.md file names no family type (check 2 reverse)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   writeFileSync(path.join(root, "docs", "adapters", "stray.md"), "# Stray\n\nStatus: development draft.\n");
   const result = run(["--check", "--root", root]);
@@ -1106,7 +1137,8 @@ test("a stray docs/adapters/*.md file names no family type (check 2 reverse)", (
   assert.match(result.stdout + result.stderr, /docs\/adapters\/stray\.md: no family type/);
 });
 
-test("a shapes.json row naming a starter doc belongs in a family file's samples (check 2 reverse)", (t) => {
+test("a shapes.json row naming a starter doc belongs in a family file's samples (check 2 reverse)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const shapesPath = path.join(root, SHAPES_JSON);
   const shapes = JSON.parse(readFileSync(shapesPath, "utf8"));
@@ -1124,7 +1156,8 @@ test("a shapes.json row naming a starter doc belongs in a family file's samples 
   );
 });
 
-test("a type's missing doc page names the file and field (check 3)", (t) => {
+test("a type's missing doc page names the file and field (check 3)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   rmSync(path.join(root, "docs", "adapters", "miro.board.md"));
   const result = run(["--check", "--root", root]);
@@ -1135,7 +1168,8 @@ test("a type's missing doc page names the file and field (check 3)", (t) => {
   );
 });
 
-test("a certified doc's Status line disagreeing with its checked_on is caught (check 3)", (t) => {
+test("a certified doc's Status line disagreeing with its checked_on is caught (check 3)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const docPath = path.join(root, "docs", "adapters", "jira.issue.md");
   writeFileSync(docPath, readFileSync(docPath, "utf8").replace("2026-11-02", "2026-11-03"));
@@ -1147,7 +1181,8 @@ test("a certified doc's Status line disagreeing with its checked_on is caught (c
   );
 });
 
-test("a development type's doc wrongly claiming certification is caught (check 3)", (t) => {
+test("a development type's doc wrongly claiming certification is caught (check 3)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
   const docPath = path.join(root, "docs", "adapters", "confluence.page.md");
   const updated = readFileSync(docPath, "utf8").replace(/^Status:.*$/m, "Status: release-certified 2026-11-02.");
@@ -1162,7 +1197,8 @@ test("a development type's doc wrongly claiming certification is caught (check 3
 
 // --- Task 5: one pass -------------------------------------------------------
 
-test("validation, policy and registry problems are all reported in one pass", (t) => {
+test("validation, policy and registry problems are all reported in one pass", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
 
   // A family validation problem (unknown field).

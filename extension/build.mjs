@@ -49,6 +49,7 @@ await copyFile(join(readabilityDir, "LICENSE.md"), join(outputDir, "vendor", "re
 for (const name of [
   "adapter-repair-settings.js",
   "task-command-settings.js",
+  "sharing-drafts.js", "sharing-draft-panel.js",
   "task-notifications.js", "task-notification-settings.js",
   "capture-site.js", "capture-site-handoff.js", "capture-site-panel.js", "activity.js", "adapter-review.js", "adopted-state-settings.js", "artifact-refresh.js", "auto-summary.js", "adapter-templates.js", "agent.js", "brand.js", "build-info.js", "build-update.js", "coordination.js", "diag.js", "extract.js",
   "focus-session.js", "model.js", "native.js", "note-editor.js", "note-recovery.js", "options.js", "panel.js", "panel-look.js", "protocol-shape.js",
