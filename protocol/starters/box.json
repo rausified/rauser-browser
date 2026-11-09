@@ -3,12 +3,32 @@
   "display_name": "Box",
   "review_prompt": "Choose the kinds of Box items to remember on this Box site.",
   "origin": {
-    "kind": "subdomain",
-    "suffix": ".app.box.com",
-    "labels": 1,
-    "exclude": [
-      "www",
-      "cloud"
+    "kind": "any",
+    "of": [
+      {
+        "kind": "exact",
+        "origin": "https://app.box.com"
+      },
+      {
+        "kind": "subdomain",
+        "suffix": ".app.box.com",
+        "labels": 1,
+        "exclude": [
+          "www",
+          "cloud",
+          "fupload-*"
+        ]
+      },
+      {
+        "kind": "subdomain",
+        "suffix": ".ent.box.com",
+        "labels": 1,
+        "exclude": [
+          "www",
+          "cloud",
+          "fupload-*"
+        ]
+      }
     ]
   },
   "scope": null,

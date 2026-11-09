@@ -6,6 +6,7 @@ import {
   STARTER_FAMILY_IDS,
   type StarterFamilyData,
   type StarterFamilyId,
+  type StarterOriginData,
   type StarterTypeData,
 } from "./starter-families.generated.js";
 
@@ -76,6 +77,19 @@ function secureHostname(origin: string): string | null {
   }
 }
 
+/** Whether a subdomain origin's `exclude` list refuses a host whose first
+ * label is `label`: an entry is a whole label (`www`) or a label prefix
+ * ending in one `*` (`fupload-*`). Same rule as the generator's `excludes`. */
+function excludes(exclude: readonly string[], label: string): boolean {
+  return exclude.some((entry) => (entry.endsWith("*") ? label.startsWith(entry.slice(0, -1)) : label === entry));
+}
+
+/** The single-kind origins `family` is offered on: a multi-origin family's
+ * (`kind: "any"`) `of` members, otherwise its one `origin`. */
+function originMembers(family: StarterFamilyData): readonly StarterOriginData[] {
+  return family.origin.kind === "any" ? family.origin.of : [family.origin];
+}
+
 /** The starter family `origin` belongs to, from the test-seam-aware
  * `families` list: today's private `familyFor`, exported so Capture Site and
  * the gallery (Tasks 2-4) can build their UI from the family's own data
@@ -84,25 +98,33 @@ function secureHostname(origin: string): string | null {
  * permissive rule holds, `prefix` is the host's labels before the suffix.
  * `labels: 1` refuses a `prefix` with more than one label (a dot in it);
  * `exclude` refuses a `prefix` whose first label names an excluded product
- * host (`www`, `signin`). Same rule as the generator's `familyClaims`. */
+ * host (`www`, `signin`) or starts with an excluded prefix (`fupload-*`).
+ * A multi-origin family (`kind: "any"`, e.g. Box's personal, company and
+ * enterprise hosts) is tried through each of its members. Exact origins
+ * win first, then the longest matching suffix. Same rule as the
+ * generator's `familyClaims`. */
 export function starterFamily(origin: string): StarterFamilyData | null {
   for (const family of families) {
-    if (family.origin.kind === "exact" && origin === family.origin.origin) return family;
+    for (const member of originMembers(family)) {
+      if (member.kind === "exact" && origin === member.origin) return family;
+    }
   }
   const host = secureHostname(origin);
   if (!host) return null;
   let best: StarterFamilyData | null = null;
   let bestSuffixLength = -1;
   for (const family of families) {
-    if (family.origin.kind !== "subdomain") continue;
-    const { suffix, labels, exclude } = family.origin;
-    if (!(host.endsWith(suffix) && host !== suffix.slice(1))) continue;
-    const prefix = host.slice(0, -suffix.length);
-    if (labels && prefix.includes(".")) continue;
-    if (exclude && exclude.includes(prefix.split(".")[0] ?? prefix)) continue;
-    if (suffix.length > bestSuffixLength) {
-      best = family;
-      bestSuffixLength = suffix.length;
+    for (const member of originMembers(family)) {
+      if (member.kind !== "subdomain") continue;
+      const { suffix, labels, exclude } = member;
+      if (!(host.endsWith(suffix) && host !== suffix.slice(1))) continue;
+      const prefix = host.slice(0, -suffix.length);
+      if (labels && prefix.includes(".")) continue;
+      if (exclude && excludes(exclude, prefix.split(".")[0] ?? prefix)) continue;
+      if (suffix.length > bestSuffixLength) {
+        best = family;
+        bestSuffixLength = suffix.length;
+      }
     }
   }
   return best;

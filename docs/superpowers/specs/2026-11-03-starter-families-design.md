@@ -111,6 +111,8 @@ JSON rather than TOML: Node has no stdlib TOML parser and the repo pins its depe
   "origin": { "kind": "subdomain", "suffix": ".atlassian.net" },
   //   { "kind": "exact", "origin": "https://miro.com" }
   //   { "kind": "subdomain", "suffix": ".webex.com", "labels": 1, "exclude": ["www", "signin"] }
+  //   { "kind": "subdomain", "suffix": ".app.box.com", "labels": 1, "exclude": ["www", "fupload-*"] }
+  //   { "kind": "any", "of": [{ "kind": "exact", "origin": "https://app.box.com" }, { "kind": "subdomain", ... }] }
   "scope": null,
   //   { "kind": "github_org", "capture": "owner", "max": 32, "required": true }
   //   { "kind": "tenant_name", "capture": "workspace", "max": 16 }
@@ -179,7 +181,7 @@ The generated TS has to sit under `extension/`. Every existing `protocol/ts/gene
 
 ## 3. Driving the extension from the family list
 
-- **`starterKind(origin)`** returns `family: string`. Lookup order: exact origins first, then the longest subdomain suffix, using the same `secureHostname` and `endsWith`/`!==` test as today (`:27-42`). Atlassian and SharePoint keep their permissive any-prefix matching; new families can set `labels: 1` and `exclude`.
+- **`starterKind(origin)`** returns `family: string`. Lookup order: exact origins first, then the longest subdomain suffix, using the same `secureHostname` and `endsWith`/`!==` test as today (`:27-42`). Atlassian and SharePoint keep their permissive any-prefix matching; new families can set `labels: 1` and `exclude` (whole first labels, or first-label prefixes ending in one `*`). A multi-origin family (`kind: "any"`) takes part through each of its members.
 - **`starterOffers(origin, scopes: Record<family, string[]>)`** becomes one generic loop over `types`: fill `origin`, substitute `{"$scope": true}`, apply `label_variants`, and set `adapter: null` when the scope is required and empty (today's `:269,279`). `STARTER_HISTORY` is read from data. `matchingStarter`, `starterRuleUpdate`, `starterRuleAddition` and `hasAdapter` don't change.
 - **Containers.** `GITHUB_REPOSITORY`, `LINKABLE_TO_REPOSITORY` (`:441`) and `GITHUB_RECORD_*` (`site-coverage.ts:14-19`) are derived: a type is linkable if its template declares `within.type` and that container is a type in the same family. `orderContainedFirst` and `linkedToPresentContainers` (`:511-559`) are already generic.
 - **Capture Site.**
@@ -222,7 +224,7 @@ The generated TS has to sit under `extension/`. Every existing `protocol/ts/gene
 3. The doc exists and its first `Status:` line agrees with `status` (state and date).
 4. Every `match` rule index is hit by at least one positive evaluate vector; every type has at least one negative vector and at least one sample whose title the type's title template accepts.
 5. Every pair of types in a family has an `overlaps` entry, unless one is the other's `within` container.
-6. No two families' origin models can claim the same origin: suffix inside suffix, an exact origin under a suffix, or a repeated exact origin.
+6. No two families' origin models can claim the same origin: the same suffix, a suffix inside a suffix (unless the shallower family has `labels: 1`, which proves the two disjoint), an exact origin under a suffix, or a repeated exact origin. A multi-origin family is checked member by member.
 7. A family whose exact origin is in catalog `shared_origins` has a scope kind other than `null` (spec `adapter-templates.md:190-200`).
 8. `gen:starters --check` is clean.
 
@@ -276,6 +278,12 @@ PR A step 3 and PR C need the `final-stretch` label (`AGENTS.md:153,157`). Land 
 7. How strict new subdomain families are: one label only, plus excluded hosts such as `www.webex.com` and `signin.webex.com`.
 8. The offer-key convention for new types (today's keys are inconsistent: `jira:<origin>`, `confluence.page:<origin>`, `miro.board`, `github.pr`).
 9. Whether the first new families can ship in the same PR as PR C, under the batching rule (`AGENTS.md:157`).
+
+## Origin model decisions (2026-11-09)
+
+- **`exclude` prefixes.** An `exclude` entry ending in a single `*` names a first-label prefix (`fupload-*`). Only a trailing `*` after a non-empty DNS-label prefix is accepted. A leading or inner `*` is refused: the one Webex media host on record (`nsj1wss`) puts its varying part first, and a suffix pattern such as `*wss` could also exclude a real customer site, so it is excluded by its whole label instead.
+- **Nested suffixes.** A family on a suffix nested inside another's may coexist with it when the shallower family has `labels: 1`, because every host the deeper family claims then has at least two labels before the shallower suffix. That is a proof from the origin models alone, so the check stays a pure registry check. `exclude` is not accepted as a proof, since the deeper family's first label varies. The Aha! ideas portal (`aha-ideas`, `.ideas.aha.io`) is a second family next to `aha` (`.aha.io`, `labels: 1`), not a second origin on `aha`: otherwise every in-app type would also be offered on portals.
+- **Multi-origin families.** Box serves the same web app on personal `app.box.com` (an exact host), `<company>.app.box.com` and `<company>.ent.box.com`. A family `origin` may now be `{"kind": "any", "of": [...]}`: two or more exact or subdomain origins, no nesting, no overlap between members. This keeps one family and the shipped type names, so `box.file`, `box.folder` and `box.share` keep their frozen `ids.lock.json` templates. Separate families were ruled out because a type name may appear in only one family, and new type names would split one Box item's artifacts across schemes. The ID templates carry `{host}`, so the same item on two Box hosts still gets two IDs; making them identical would mean changing a frozen template, which `ids.lock.json` forbids.
 
 ## Follow-ups
 
