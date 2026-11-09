@@ -6,10 +6,6 @@ Status: development draft. The URL and tab-title formats were checked on
 samples below. A live check in the Capture Site review is still needed before
 this draft is release-certified.
 
-History check (2026-11-09): graded against real browsing history: no
-real visits of this type, so 0/1 rules confirmed. Not every rule and
-title was confirmed, so this type stays a development draft.
-
 Brauser offers this draft on the exact origin `https://miro.com`. It records
 one artifact per board:
 

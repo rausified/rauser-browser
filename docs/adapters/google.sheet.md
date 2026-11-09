@@ -6,8 +6,9 @@ only, no browsing history, cookies or Google account. Both adapter-template
 engines verify the samples below. A live check with a real Google account is
 still needed before this draft is release-certified.
 
-History check (2026-11-09): graded against real browsing history: no
-real visits of this type, so 0/3 rules confirmed. Not every rule and
+History check (2026-11-09): graded against a held-back sample of real
+browsing history (real URLs from eight researched sites): no visits of
+this type in the sample, so 0/3 rules confirmed. Not every rule and
 title was confirmed, so this type stays a development draft.
 
 Brauser offers this draft on the exact origin `https://docs.google.com`,

@@ -7,10 +7,6 @@ Both adapter-template engines verify the samples below. A live check in the
 Capture Site review and the settings gallery is still needed before this draft
 is release-certified (bead `brwr-cf2`).
 
-History check (2026-11-09): graded against real browsing history: no
-real visits of this type, so 0/4 rules confirmed. Not every rule and
-title was confirmed, so this type stays a development draft.
-
 Brauser offers this draft when an enabled exact HTTPS origin is an Atlassian
 Cloud site, such as `https://acme.atlassian.net`, the same origin family as the
 Jira issue starter. That origin offers two starters, **Jira issues** and

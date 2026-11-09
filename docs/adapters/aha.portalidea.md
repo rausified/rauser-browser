@@ -5,8 +5,9 @@ Status: development draft. The URL and title rules come from
 browsing history, cookies or an Aha! account. The idea page and its title
 were observed logged-out on a public ideas portal.
 
-History check (2026-11-09): graded against real browsing history: no
-real visits of this type, so 0/1 rules confirmed. Not every rule and
+History check (2026-11-09): graded against a held-back sample of real
+browsing history (real URLs from eight researched sites): no visits of
+this type in the sample, so 0/1 rules confirmed. Not every rule and
 title was confirmed, so this type stays a development draft.
 
 Brauser offers this draft on an Aha! ideas portal, `<portal>.ideas.aha.io`

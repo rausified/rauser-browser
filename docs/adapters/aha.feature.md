@@ -4,10 +4,11 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/aha/`, researched blind: public sources only, no
 browsing history, cookies or an Aha! account.
 
-History check (2026-11-09): graded against real browsing history: 2 real
-URLs (4 visits) matched, 1/2 rules confirmed, the recorded title right
-on 1/2. Not every rule and title was confirmed, so this type stays a
-development draft.
+History check (2026-11-09): graded against a held-back sample of real
+browsing history (real URLs from eight researched sites): 2 real URLs (4
+visits) matched, 1/2 rules confirmed, the recorded title right on 1/2.
+Not every rule and title was confirmed, so this type stays a development
+draft.
 
 Brauser offers this draft on an Aha! account's tenant subdomain,
 `<account>.aha.io` (the `aha` family's strict subdomain origin,
