@@ -258,10 +258,12 @@ unaffected):
   `container_order_and_history_guards_preserve_recorded_winners` (2,000
   sequences, exact-path adapters) checks each accepted save against the
   one before it. `recorded_splunk_pages_keep_their_recorder_across_coverage_edits`
-  (60 sequences, Splunk-shaped rules on the real engine, every save through
+  (2,000 sequences, the Splunk starter's own rules from `splunk.json` and
+  edits of them on the real engine, every save through
   `ConfigStore::update`) checks that a page keeps the adapter that first
   recorded it for the whole sequence, even after that adapter is removed
-  or narrowed, except that it may fall through to its declared container.
+  or narrowed, except that it may fall through to its declared container
+  once that adapter no longer matches it.
   Both also check that every kind of save, safe widening and safe
   narrowing are accepted sometimes and that unsafe widening is refused. A family without a `"container_first"`
   entry is unaffected.

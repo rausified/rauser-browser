@@ -4719,14 +4719,34 @@ mod tests {
         }
 
         const SPLUNK_SEED: u64 = 0x5eed_2026_1109_0c0c;
-        const SPLUNK_SEQUENCES: usize = 60;
+        const SPLUNK_SEQUENCES: usize = 2000;
         const SPLUNK_STEPS: usize = 10;
 
-        /// Splunk-shaped adapters for the real-save model, by identity, each
-        /// with variants that keep, widen or narrow the pages it matches.
-        /// Index 0 is the shipped (or hand-written) shape.
+        /// The Splunk starter's adapters exactly as the family file ships
+        /// them, on ACME: [app, dashboard].
+        fn splunk_starter() -> [serde_json::Value; 2] {
+            let family: serde_json::Value =
+                serde_json::from_str(include_str!("../../protocol/starters/splunk.json")).unwrap();
+            let adapter = |kind: &str| {
+                let mut adapter = family["types"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["type"] == kind)
+                    .unwrap()["adapter"]
+                    .clone();
+                adapter["origin"] = json!(ACME);
+                adapter
+            };
+            [adapter("splunk.app"), adapter("splunk.dashboard")]
+        }
+
+        /// The real-save model's adapters, by identity, each with variants
+        /// that widen or narrow the pages it matches. Index 0 is the shape
+        /// the Splunk starter ships (or, for the third identity, a
+        /// hand-written manager-page adapter).
         fn splunk_variants() -> Vec<Vec<serde_json::Value>> {
-            let [app, dashboard] = splunk();
+            let [app, dashboard] = splunk_starter();
             let with_rules = |base: &serde_json::Value, rules: serde_json::Value| {
                 let mut edited = base.clone();
                 edited["match"] = rules;
@@ -4831,8 +4851,8 @@ mod tests {
             Some((pair(adapter), adapter.get("within").map(pair)))
         }
 
-        /// Randomized check of the invariant over real Splunk-shaped rules
-        /// and real saves: an accepted save never changes which adapter (by
+        /// Randomized check of the invariant over the Splunk starter's rules
+        /// (and edits of them) and real saves: an accepted save never changes which adapter (by
         /// type and ID template) records a page Brauser already recorded,
         /// except that once a contained adapter no longer matches one of its
         /// pages, the page may fall through to the container it declares
@@ -4896,12 +4916,21 @@ mod tests {
                     .any(|a| a["origin"] == ACME && family(a) == family(added))
             };
             const KINDS: [&str; 6] = ["add", "remove", "move", "edit", "unrelated", "whole list"];
-            let mut accepted = [0usize; KINDS.len()];
-            let mut accepted_edits = [0usize; 2]; // [narrow, widen]
-            let mut refused_widening = 0usize;
-            let mut refused = 0usize;
-            let mut rng = Rng(SPLUNK_SEED);
-            for sequence in 0..SPLUNK_SEQUENCES {
+            /// What one sequence saw: accepted saves by kind, accepted
+            /// [narrowing, widening] edits, refused saves, refused widening.
+            #[derive(Default)]
+            struct Tally {
+                accepted: [usize; KINDS.len()],
+                edits: [usize; 2],
+                refused: usize,
+                refused_widening: usize,
+            }
+            // Each sequence has its own generator, so a failure replays from
+            // its sequence number alone, whichever thread ran it.
+            let run = |sequence: usize| -> Tally {
+                let mut tally = Tally::default();
+                let mut rng =
+                    Rng(SPLUNK_SEED ^ (sequence as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
                 let (_folder, mut store) = legacy_store(starts[sequence % starts.len()].clone());
                 let mut list = store.snapshot().adapters.artifacts.clone();
                 // Every page recorded so far in this sequence, with the
@@ -4984,9 +5013,9 @@ mod tests {
                         continue;
                     }
                     if save_adapters(&mut store, next.clone()).is_err() {
-                        refused += 1;
+                        tally.refused += 1;
                         if edit == Some(1) {
-                            refused_widening += 1;
+                            tally.refused_widening += 1;
                         }
                         assert_eq!(store.snapshot().adapters.artifacts, list);
                         continue;
@@ -5001,7 +5030,8 @@ mod tests {
                             continue;
                         };
                         // The container may take a page only once its
-                        // recorder no longer matches it (removed or narrowed).
+                        // recorder no longer matches it (removed or narrowed,
+                        // DESIGN §8.3).
                         let still_matched = next.iter().any(|a| {
                             a["origin"] == ACME
                                 && (a["type"].as_str(), a["id"].as_str())
@@ -5015,14 +5045,69 @@ mod tests {
                             KINDS[kind],
                             after.0,
                         );
+                        // Once the container has taken the page, the page
+                        // is the container's: re-adding the contained
+                        // adapter below it must not take it back either.
+                        if after.0 != *recorder {
+                            recorded.insert(url.clone(), after);
+                        }
                     }
-                    accepted[kind] += 1;
+                    tally.accepted[kind] += 1;
                     if let Some(direction) = edit {
-                        accepted_edits[direction] += 1;
+                        tally.edits[direction] += 1;
                     }
                     list = next;
                 }
+                tally
+            };
+            // Sequences are independent (each has its own store), so they
+            // run on every core; the first failure stops the other workers.
+            let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+            let failed = std::sync::atomic::AtomicBool::new(false);
+            struct StopOthers<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for StopOthers<'_> {
+                fn drop(&mut self) {
+                    if std::thread::panicking() {
+                        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
             }
+            let tallies: Vec<Tally> = std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..threads)
+                    .map(|worker| {
+                        let (run, failed) = (&run, &failed);
+                        scope.spawn(move || {
+                            let _stop = StopOthers(failed);
+                            (worker..SPLUNK_SEQUENCES)
+                                .step_by(threads)
+                                .take_while(|_| !failed.load(std::sync::atomic::Ordering::Relaxed))
+                                .map(run)
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .flat_map(|worker| worker.join().unwrap())
+                    .collect()
+            });
+            let mut total = Tally::default();
+            for tally in tallies {
+                for (sum, count) in total.accepted.iter_mut().zip(tally.accepted) {
+                    *sum += count;
+                }
+                for (sum, count) in total.edits.iter_mut().zip(tally.edits) {
+                    *sum += count;
+                }
+                total.refused += tally.refused;
+                total.refused_widening += tally.refused_widening;
+            }
+            let Tally {
+                accepted,
+                edits: accepted_edits,
+                refused,
+                refused_widening,
+            } = total;
             for (kind, count) in KINDS.iter().zip(accepted) {
                 assert!(count > 0, "no accepted {kind} save");
             }
