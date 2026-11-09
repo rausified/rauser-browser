@@ -144,6 +144,7 @@ type AdapterEdit =
   // linkContainers: the GitHub repositories starter, whose save also links
   // existing pull request and issue rules to it (`withContainerLinks`).
   | { kind: "new"; linkContainers?: boolean }
+  | { kind: "site_bundle"; origin: string }
   | { kind: "existing"; identity: string; snapshot: string; starterUpdate?: boolean }
   // Capture Site's drafted adapters, handed off from the side panel. The
   // editor holds them as one JSON array.
@@ -503,6 +504,28 @@ function setStarterButtonState(button: HTMLButtonElement, origin: string, key: s
   button.disabled = !session.connected || busy || repairing || button.dataset.available !== "true";
 }
 
+function missingSiteOffers(origin: string): StarterOffer[] {
+  return starterOffers(origin, scopeValues(origin)).filter((offer) => !offerConfigured(offer));
+}
+
+/** The first site-level trial covers products whose starter kinds are parts
+ * of one product experience. Jira and Confluence stay separate choices even
+ * when they share an Atlassian Cloud origin. */
+function siteBundleFamily(origin: string): boolean {
+  const family = starterFamily(origin)?.family;
+  return family === "github" || family === "box" || family === "google-workspace";
+}
+
+function setSiteBundleButtonState(button: HTMLButtonElement, origin: string): void {
+  const missing = missingSiteOffers(origin);
+  button.dataset.available = String(missing.length > 0 && missing.every((offer) => offer.adapter !== null));
+  button.textContent = missing.length
+    ? `Review whole site (${missing.length} ${missing.length === 1 ? "kind" : "kinds"})…`
+    : "All starter kinds configured";
+  const repairing = session.configIssue !== null || session.adapterIssue !== null;
+  button.disabled = !session.connected || busy || repairing || button.dataset.available !== "true";
+}
+
 /** A scoped family's input/guidance block, from the scope-kind registry, on
  * `origin`'s first card. Mutating the field only updates this origin's own
  * buttons: another scoped origin's card in the same gallery keeps its own
@@ -528,7 +551,8 @@ function renderScopeField(card: HTMLElement, origin: string, input: ScopeInput):
     guidance.className = valid ? "" : "warning";
     for (const scoped of starterGallery.querySelectorAll<HTMLButtonElement>("button")) {
       if (scoped.dataset.siteOrigin === origin) {
-        setStarterButtonState(scoped, origin, scoped.dataset.starterKey ?? "");
+        if (scoped.dataset.siteBundle === "true") setSiteBundleButtonState(scoped, origin);
+        else setStarterButtonState(scoped, origin, scoped.dataset.starterKey ?? "");
       }
     }
   });
@@ -581,6 +605,33 @@ function renderStarterGallery(): void {
       if (!selected?.adapter || offerConfigured(selected)) return;
       const [draft] = linkedToPresentContainers([selected.adapter], session.config?.adapters.artifacts ?? []);
       beginAdapterDraft(draft!, selected.label, isContainerType(selected.artifact_type));
+    });
+    card.append(review);
+    starterGallery.append(card);
+  }
+  for (const origin of origins) {
+    const family = starterFamily(origin);
+    if (!family || !siteBundleFamily(origin)) continue;
+    const card = document.createElement("article");
+    card.className = "starter-card";
+    addText(card, "h3", `${family.display_name} site`);
+    addText(card, "p", "Review all remaining supported kinds together. Only pages matching their rules are captured.");
+    const notice = unscopedNotice(family);
+    if (notice) addText(card, "small", notice);
+    const review = document.createElement("button");
+    review.type = "button";
+    review.dataset.siteOrigin = origin;
+    review.dataset.siteBundle = "true";
+    setSiteBundleButtonState(review, origin);
+    review.addEventListener("click", () => {
+      const additions = missingSiteOffers(origin);
+      if (!additions.length || additions.some((offer) => !offer.adapter)) return;
+      const adapters = linkedToPresentContainers(additions.map((offer) => offer.adapter!), session.config?.adapters.artifacts ?? []);
+      openAdapterEditor({ kind: "site_bundle", origin }, adapters, `Review ${family.display_name} site`, {
+        line: "This site will capture these supported kinds:",
+        items: additions.map((offer) => offer.label),
+        example: adapters[0]!,
+      });
     });
     card.append(review);
     starterGallery.append(card);
@@ -679,14 +730,16 @@ const MAX_DRAFT_ADAPTERS = 8;
 
 /** The drafted adapters as edited: a JSON array of 1–8 valid adapters, all
  * on the handed-off origin. */
-function parseDraftAdapters(text: string, origin: string): { ok: true; adapters: AdapterObject[] } | { ok: false; message: string } {
-  const shape = `The drafted rules must be a JSON array of 1–${MAX_DRAFT_ADAPTERS} adapter objects.`;
+function parseDraftAdapters(
+  text: string, origin: string, label = "Drafted rules",
+): { ok: true; adapters: AdapterObject[] } | { ok: false; message: string } {
+  const shape = `${label} must be a JSON array of 1–${MAX_DRAFT_ADAPTERS} adapter objects.`;
   if (text.length > MAX_DRAFT_ADAPTERS * 65_536) return { ok: false, message: shape };
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch (error) {
-    return { ok: false, message: `The drafted rules are not valid JSON: ${error instanceof Error ? error.message : "invalid JSON"}` };
+    return { ok: false, message: `${label} are not valid JSON: ${error instanceof Error ? error.message : "invalid JSON"}` };
   }
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_DRAFT_ADAPTERS) return { ok: false, message: shape };
   const adapters: AdapterObject[] = [];
@@ -694,7 +747,7 @@ function parseDraftAdapters(text: string, origin: string): { ok: true; adapters:
     const parsed = parseAdapterJson(JSON.stringify(item) ?? "");
     if (!parsed.ok) return { ok: false, message: `Adapter ${index + 1}: ${parsed.message}` };
     if (adapterOrigin(parsed.adapter) !== origin) {
-      return { ok: false, message: `Adapter ${index + 1}: drafted rules stay on ${origin}.` };
+      return { ok: false, message: `Adapter ${index + 1}: ${label.toLowerCase()} stay on ${origin}.` };
     }
     adapters.push(parsed.adapter);
   }
@@ -769,6 +822,19 @@ function readAdapterCandidate(): CandidateResult {
     const problem = validateAdapterDocument(document);
     return problem ? { ok: false, message: problem }
       : { ok: true, adapter: drafted.adapters[0]!, added: drafted.adapters, document };
+  }
+  if (adapterEdit.kind === "site_bundle") {
+    const bundled = parseDraftAdapters(adapterJson.value, adapterEdit.origin, "Site rules");
+    if (!bundled.ok) return bundled;
+    const existing = new Set(artifacts.map((adapter) => `${adapter.origin} ${adapter.type}`));
+    if (bundled.adapters.some((adapter) => existing.has(`${adapter.origin} ${adapter.type}`))) {
+      return { ok: false, message: "This site already has one of these kinds. Review the remaining kinds again." };
+    }
+    const added = linkedToPresentContainers(bundled.adapters, artifacts);
+    const document = { format: 1, artifacts: orderContainedFirst([...artifacts, ...added]) };
+    const problem = validateAdapterDocument(document);
+    return problem ? { ok: false, message: problem }
+      : { ok: true, adapter: added[0]!, added, document };
   }
   const parsed = parseAdapterJson(adapterJson.value);
   if (!parsed.ok) return parsed;
@@ -1109,7 +1175,10 @@ async function saveAdapter(): Promise<void> {
   }
   const action = adapterEdit?.kind === "new" ? "added" : "updated";
   const starterUpdate = adapterEdit?.kind === "existing" && adapterEdit.starterUpdate === true;
-  await saveAdapterDocument(candidate.document, `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`, undefined,
+  const success = adapterEdit?.kind === "site_bundle"
+    ? `${candidate.added.length} site starter kinds added.`
+    : `${adapterLabel(candidate.adapter, 0)} adapter ${action}.`;
+  await saveAdapterDocument(candidate.document, success, undefined,
     starterUpdate ? explainStarterUpdateFailure : undefined);
 }
 

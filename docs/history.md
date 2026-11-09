@@ -257,6 +257,14 @@ are still prompt-level. Settings and README explain examples, limits and edits.
 
 ## §7.2 Artifact adapters — history
 
+**Site-level setup trial (2026-11-09).** Settings can review the missing GitHub,
+Box, or Google Workspace starter kinds together and save them in one config
+revision. The first trial keeps the existing typed adapter document and its
+first-match behavior. It leaves Jira and Confluence as separate product
+choices even when they share an Atlassian Cloud origin. The trial's JSON-array
+editor and single example preview expose a review gap for multi-kind sites;
+these are not yet replaced by a readable per-kind review.
+
 **Starter rule updates (2026-10-28).** The rule this record introduced is now stated in DESIGN.md §7.2, “Starter rule updates”.
 
 *Saving an adapter:* Before v6, enabling or widening an adapter requested the origin's optional Chrome grant and a native confirmation.

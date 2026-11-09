@@ -1165,6 +1165,7 @@ test("an Atlassian site offers Jira issues and Confluence pages, each once", asy
   await openSettings();
   const gallery = env.elements.get("starter-gallery");
   const cards = gallery.querySelectorAll("button");
+  assert.equal(cards.some((button) => button.dataset.siteBundle === "true"), false);
   assert.match(nodeText(gallery), /Jira issues/);
   assert.match(nodeText(gallery), /Confluence pages/);
   const [jiraButton, confluenceButton] = cards;
@@ -1185,6 +1186,61 @@ test("an Atlassian site offers Jira issues and Confluence pages, each once", asy
   assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.type), ["jira.issue", "confluence.page"]);
   const after = env.elements.get("starter-gallery").querySelectorAll("button");
   assert.deepEqual(after.map((button) => button.textContent), ["Already configured", "Already configured"]);
+});
+
+test("a Google Workspace bundle reviews and saves its file kinds in one update", async () => {
+  const state = install();
+  await openSettings();
+  typeSite("https://docs.google.com");
+  const gallery = env.elements.get("starter-gallery");
+  const siteButton = gallery.querySelectorAll("button").find((button) => button.dataset.siteBundle === "true");
+  assert.equal(siteButton.textContent, "Review whole site (5 kinds)…");
+  siteButton.click();
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.deepEqual(draft.map((adapter) => adapter.type),
+    ["google.doc", "google.sheet", "google.slides", "google.form", "google.formresponse"]);
+  assert.match(nodeText(env.elements.get("adapter-editor-review")), /Google Docs documents/);
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 5 && idle(), "the site bundle save");
+  assert.deepEqual(state.config.adapters.artifacts.map((adapter) => adapter.id),
+    ["google.doc:{host}/{id}", "google.sheet:{host}/{id}", "google.slides:{host}/{id}",
+      "google.form:{host}/{id}", "google.formresponse:{host}/{id}"]);
+  assert.equal(gallery.querySelectorAll("button").find((button) => button.dataset.siteBundle === "true").disabled, true);
+});
+
+test("a Box bundle adds only missing kinds to a partly configured site", async () => {
+  const [file] = starterOffers("https://app.box.com", []);
+  const state = install({ adapters: [file.adapter] });
+  await openSettings();
+  const siteButton = env.elements.get("starter-gallery").querySelectorAll("button")
+    .find((button) => button.dataset.siteBundle === "true");
+  assert.equal(siteButton.textContent, "Review whole site (2 kinds)…");
+  siteButton.click();
+  assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value).map((adapter) => adapter.type),
+    ["box.folder", "box.share"]);
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the missing kinds save");
+  assert.deepEqual(state.config.adapters.artifacts[0], file.adapter);
+});
+
+test("a scoped site bundle requires an organization and applies it to every kind", async () => {
+  const state = install();
+  await openSettings();
+  typeSite("https://github.com");
+  const gallery = env.elements.get("starter-gallery");
+  const siteButton = gallery.querySelectorAll("button").find((button) => button.dataset.siteBundle === "true");
+  assert.equal(siteButton.disabled, true);
+  const [scope] = gallery.querySelectorAll("input");
+  scope.value = "Acme-Corp";
+  scope.dispatch("input");
+  assert.equal(siteButton.disabled, false);
+  siteButton.click();
+  const draft = JSON.parse(env.elements.get("adapter-json").value);
+  assert.equal(draft.length, 3);
+  assert.ok(draft.every((adapter) => adapter.scope.owner[0] === "acme-corp"));
+  env.elements.get("save-adapter").click();
+  await until(() => state.config.adapters.artifacts.length === 3 && idle(), "the GitHub site save");
+  assert.ok(state.config.adapters.artifacts.every((adapter) => adapter.scope.owner[0] === "acme-corp"));
 });
 
 test("GitHub starters stay disabled until an explicit valid organization scope", async () => {
