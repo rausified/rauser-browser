@@ -568,6 +568,11 @@ class Cdp {
     if (!this.outgoing || !this.incoming) throw new Error("Chrome DevTools pipe is unavailable");
     this.nextId = 1;
     this.pending = new Map();
+    // Tabs the runner opens on an extension page's URL only to reach a
+    // Chrome API (the preflight, a temporary side-panel opener). A close that
+    // Chrome has not finished leaves one listed under the side panel's URL;
+    // lookups by URL skip them so it is never driven as the panel.
+    this.scratch = new Set();
     this.buffer = Buffer.alloc(0);
     this.incoming.on("data", (chunk) => this.receive(chunk));
     const fail = (error) => {
@@ -617,8 +622,13 @@ class Cdp {
   }
 
   async targetFor(url) {
-    return (await this.targets()).find((target) => target.url === url ||
-      target.url.startsWith(`${url}?`) || target.url.startsWith(`${url}#`)) ?? null;
+    return (await this.targetsFor(url))[0] ?? null;
+  }
+
+  /** Every target showing `url`, except the runner's scratch tabs. */
+  async targetsFor(url) {
+    return (await this.targets()).filter((target) => !this.scratch.has(target.targetId) && (target.url === url ||
+      target.url.startsWith(`${url}?`) || target.url.startsWith(`${url}#`)));
   }
 
   /** Attach to a target for one operation, then detach. */
@@ -708,6 +718,7 @@ async function nativeHostPreflight(cdp, extensionId) {
   const target = await cdp.send("Target.createTarget", {
     url: `chrome-extension://${extensionId}/panel.html`, background: true,
   });
+  cdp.scratch.add(target.targetId);
   try {
     const expression = `new Promise(resolve => {
       const port = chrome.runtime.connectNative("${NATIVE_HOST_NAME}");
@@ -1144,10 +1155,14 @@ async function run() {
     }, { timeout: 60 * 60_000, interval: 500, signal: abort.signal });
   }
 
+  // Two documents on one page's URL would let a read land in one and a
+  // click in the other, so an ambiguous lookup is refused, not resolved.
   async function onPage(url, name, action) {
-    const target = await cdp.targetFor(url);
-    requireCondition(target, `${name} is not open`);
-    return cdp.withTarget(target.targetId, action);
+    const targets = await cdp.targetsFor(url);
+    requireCondition(targets.length > 0, `${name} is not open`);
+    requireCondition(targets.length === 1,
+      `${name} is open in ${targets.length} targets: ${JSON.stringify(targets.map(({ targetId, type }) => [targetId, type]))}`);
+    return cdp.withTarget(targets[0].targetId, action);
   }
 
   const onPanel = (action) => onPage(panelUrl(), "The side panel", action);
@@ -1180,6 +1195,7 @@ async function run() {
     let temporary = null;
     if (!source) {
       temporary = await cdp.send("Target.createTarget", { url: panelUrl(), background: true });
+      cdp.scratch.add(temporary.targetId);
       source = { targetId: temporary.targetId };
     }
     const stage = async (name, action) => {
@@ -2277,23 +2293,37 @@ async function run() {
       // moved in between (the page lookup's answer adds a line above it).
       // A click that missed leaves the review closed with nothing to say
       // why, so click again until it opens: once open, the button is hidden
-      // and another click cannot start a second review.
-      await waitUntil("the Capture Site review to open", async () => {
+      // and another click cannot start a second review. Only a review seen
+      // after this call's click counts: one already open came from somewhere
+      // else (another panel document), and its draft is not this click's.
+      let clicked = false;
+      const opened = await waitUntil("the Capture Site review to open", async () => {
         const state = await onPanel(async (page) => ({
+          clicked,
           url: await page.text("#page-url"),
           area: await page.hidden("#capture-site-area"),
           start: await page.hidden("#capture-site"),
           enabled: await page.enabled("#capture-site"),
           review: await page.hidden("#capture-site-review"),
           status: await page.text("#status"),
+          born: await page.evaluate("performance.timeOrigin"),
         }));
         if (state.url === kbUrl && state.review && state.area === false && state.start === false && state.enabled) {
           await onPanel((page) => page.click("#capture-site"));
+          clicked = true;
         }
         return state;
-      }, (state) => state.url === kbUrl && state.review === false, { timeout: 20_000, interval: 1_000, signal: abort.signal });
+      }, (state) => state.clicked && state.url === kbUrl && state.review === false,
+      { timeout: 20_000, interval: 1_000, signal: abort.signal });
       await waitUntil("the basic Capture Site review", () => reviewState(),
-        (state) => !state.hidden && state.types.length > 0, { timeout: 30_000, signal: abort.signal });
+        (state) => !state.hidden && state.types.length > 0, { timeout: 30_000, signal: abort.signal,
+          // Whether the panel that opened the review is still the one read.
+          diagnose: async () => ({
+            panelLoadedAtOpen: opened.born,
+            panelLoadedNow: await onPanel((page) => page.evaluate("performance.timeOrigin")),
+            panelTargets: (await cdp.targets()).filter((entry) => entry.url.startsWith(panelUrl()))
+              .map(({ targetId, type }) => [targetId, type, cdp.scratch.has(targetId) ? "scratch" : "panel"]),
+          }) });
       return targetId;
     }
     async function closeTab(targetId) {
