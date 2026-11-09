@@ -629,14 +629,16 @@ export function isContainerFirstPair(container: AdapterObject, contained: Adapte
     && shippedRules(container) && shippedRules(contained);
 }
 
-/** Whether `container` and `contained` are a starter family's declared
- * `"container_first"` pair by type and origin, edited or not. Whichever comes
+/** Whether `container` and `contained`, on one origin, have the types of
+ * any starter family's declared `"container_first"` pair, edited or not and
+ * on any origin: the host's check is on type names
+ * (`refuse_new_container_first_problem`), so this is too. Whichever comes
  * first records the pages both match, so `orderContainedFirst` never moves
- * one past the other, settings holds a move that
- * would put `contained` first, and the host refuses a save that does
- * (`refuse_new_container_first_problem`). */
+ * one past the other, settings holds a move that would swap them, and the
+ * host refuses a save that puts `contained` first or flips a live pair. */
 export function isDeclaredPair(container: AdapterObject, contained: AdapterObject): boolean {
-  return container.origin === contained.origin && containerFirst(container.origin, container.type, contained.type) !== null;
+  return container.origin === contained.origin && families.some((family) => family.overlaps?.some((entry) =>
+    entry.expect === "container_first" && entry.a === container.type && entry.b === contained.type));
 }
 
 /** A stable reorder so that, on each origin, every adapter declaring

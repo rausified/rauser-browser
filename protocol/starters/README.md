@@ -174,7 +174,8 @@ unaffected):
   pages both match, so a re-sort on any save (an edit, a revert, or an
   unrelated change to a config already saved dashboards-first) would move
   recorded pages from one to the other. Settings holds a move that would
-  put `b` above `a`. An edit that makes `b`'s rule unreachable (widening an
+  swap them, either way. Like the host's check, this is by type name on any
+  origin (the overlap warning stays the family's own). An edit that makes `b`'s rule unreachable (widening an
   `a` rule to a catch-all) shows as an overlap to review.
 - Settings leaves the host's warning for a declared pair out of the overlap
   list, but only while both adapters are exactly as the starter ships them

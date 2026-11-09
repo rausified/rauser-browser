@@ -1193,7 +1193,7 @@ async function removeAdapter(index: number): Promise<void> {
 }
 
 const CONTAINED_MOVE_HELD = "A pull request or issue rule must stay ahead of its repository rule.";
-const CONTAINER_FIRST_MOVE_HELD = "This starter's container rule must stay ahead of the rules inside it, so its own pages are not recorded as them.";
+const CONTAINER_FIRST_MOVE_HELD = "These two rules keep their order: whichever comes first records the pages both match, so swapping them would move pages already recorded.";
 
 /** Why swapping `index` and `target` is held: a declared container-first
  * starter pair (Splunk apps ahead of dashboards) or, otherwise, a contained
@@ -1219,14 +1219,11 @@ function moveHeldByContainer(adapters: AdapterDocument["artifacts"], index: numb
   [swapped[index], swapped[target]] = [swapped[target]!, swapped[index]!];
   // A document that is already out of order is reordered by any save, so
   // only a move that newly breaks the order is held.
-  return (misordered(swapped) && !misordered(adapters))
-    || (declaredPairBroken(swapped) && !declaredPairBroken(adapters));
-}
-
-/** Whether a declared container_first pair (`isDeclaredPair`) has its
- * contained adapter above its container, which the host refuses to save. */
-function declaredPairBroken(adapters: AdapterDocument["artifacts"]): boolean {
-  return adapters.some((contained, at) => adapters.slice(at + 1).some((container) => isDeclaredPair(container, contained)));
+  // A container_first pair keeps its order either way: swapping it would
+  // move pages one of them already recorded (the host refuses it).
+  const [moved, other] = [adapters[index]!, adapters[target]!];
+  if (isDeclaredPair(moved, other) || isDeclaredPair(other, moved)) return true;
+  return misordered(swapped) && !misordered(adapters);
 }
 
 function misordered(adapters: AdapterDocument["artifacts"]): boolean {

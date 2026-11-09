@@ -131,11 +131,11 @@ test("orderContainedFirst never reorders a declared container_first pair", (t) =
   assert.deepEqual(orderContainedFirst(inOrder), inOrder);
   const { within: _within, ...unlinked } = board;
   assert.deepEqual(orderContainedFirst([unlinked, space]), [unlinked, space]);
-  // The declaration is the family's: on an origin it does not claim, the same
-  // types fall back to the ordinary contained-first order.
+  // The host checks type names on every origin, so the order is kept there
+  // too (the overlap warning stays the family's own, below).
   const elsewhereSpace = { ...space, origin: "https://elsewhere.example.test" };
   const elsewhereBoard = { ...board, origin: "https://elsewhere.example.test" };
-  assert.deepEqual(orderContainedFirst([elsewhereSpace, elsewhereBoard]), [elsewhereBoard, elsewhereSpace]);
+  assert.deepEqual(orderContainedFirst([elsewhereSpace, elsewhereBoard]), [elsewhereSpace, elsewhereBoard]);
   // Once either adapter differs from what the starter ships in any rule or
   // in path_case, the pair keeps whatever order it already has: whichever
   // comes first records the pages both match, so reordering on an edit (or
@@ -181,7 +181,7 @@ test("a multi-origin (kind any) family's container_first declaration holds on ea
   }
   const off = "https://elsewhere.example.test";
   const [space, board] = [{ ...spaceType.adapter, origin: off }, { ...boardType.adapter, origin: off }];
-  assert.deepEqual(orderContainedFirst([space, board]), [board, space]);
+  assert.deepEqual(orderContainedFirst([space, board]), [space, board]);
 });
 
 test("reviewableOverlaps hides only a declared container_first rule pair, unedited and container first", (t) => {
