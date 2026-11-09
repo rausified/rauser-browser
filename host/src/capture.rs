@@ -2154,7 +2154,8 @@ fn publish_batch_intent(path: &Path, intent: &BatchIntent) -> Result<()> {
             .context("writing capture batch intent")?;
         file.sync_all().context("syncing capture batch intent")?;
         drop(file);
-        fs::rename(&temporary, path).context("publishing capture batch intent")?;
+        crate::fsutil::rename_or_copy(&temporary, path)
+            .context("publishing capture batch intent")?;
         sync_state_directory(parent).context("syncing capture batch intent directory")
     })();
     if let Err(error) = fs::remove_file(&temporary)

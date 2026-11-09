@@ -25,6 +25,7 @@ pub mod consent;
 pub mod diag;
 pub mod dialog;
 pub mod frame;
+mod fsutil;
 pub mod harness;
 pub mod index;
 // Tests that need Unix sockets skip under a sandbox that denies them, unless

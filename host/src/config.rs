@@ -1982,7 +1982,8 @@ fn publish_config(parent: &Path, path: &Path, serialized: &str) -> Result<String
     // refuse to remove a still-open temporary file.
     drop(file);
     write_result?;
-    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
+    crate::fsutil::rename_or_copy(&temporary, path)
+        .with_context(|| format!("replacing {}", path.display()))?;
     if let Err(error) = sync_parent(parent) {
         tracing::warn!(
             error = format!("{error:#}"),
@@ -3180,7 +3181,8 @@ fn record_adopted_contracts(
     })();
     drop(file);
     write_result?;
-    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
+    crate::fsutil::rename_or_copy(&temporary, path)
+        .with_context(|| format!("replacing {}", path.display()))?;
     if let Err(error) = sync_parent(parent) {
         tracing::warn!(
             error = format!("{error:#}"),

@@ -741,7 +741,7 @@ impl RunStore {
             let _ = fs::remove_file(&temporary);
             return Err(error);
         }
-        if let Err(error) = fs::rename(&temporary, dir.join(name)) {
+        if let Err(error) = crate::fsutil::rename_or_copy(&temporary, &dir.join(name)) {
             let _ = fs::remove_file(&temporary);
             return Err(error);
         }
