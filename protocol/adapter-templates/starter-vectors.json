@@ -886,18 +886,26 @@
               }
             },
             {
-              "path": "/(sp|esc|kb)",
+              "path": "/{_}",
               "query": {
                 "id": "kb_article",
                 "sysparm_article": "{number:token(3,40)|upper}"
-              }
+              },
+              "absent": [
+                "sys_id",
+                "sys_kb_id"
+              ]
             },
             {
-              "path": "/(sp|esc|kb)",
+              "path": "/{_}",
               "query": {
                 "id": "kb_article_view",
                 "sysparm_article": "{number:token(3,40)|upper}"
-              }
+              },
+              "absent": [
+                "sys_id",
+                "sys_kb_id"
+              ]
             }
           ],
           "id": "servicenow.kb:{host}/{number}"
@@ -7697,6 +7705,23 @@
       "url": "https://acme.aha.io/features/board"
     },
     {
+      "id": "eval.aha.neg.features_new",
+      "kind": "evaluate",
+      "why": "the new-feature form: \"new\" is a route word, not a reference number (jira_key needs a dash and digits)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.aha.io/features/new"
+    },
+    {
       "id": "eval.aha.neg.feature_subpath",
       "kind": "evaluate",
       "why": "no rest segment",
@@ -9760,6 +9785,23 @@
       "url": "https://acme.service-now.com/now/sow/record/problem/0123456789abcdef0123456789abcdef"
     },
     {
+      "id": "eval.servicenow.incident.neg.renamed_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "incident ticket page on a customer-renamed portal: NOT RECORDED; a /{_} ticket rule cannot be proven disjoint from the other types' classic .do rules, whose absent lists are full (docs/adapters/servicenow.incident.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
       "id": "eval.servicenow.ritm.classic_form_direct",
       "kind": "evaluate",
       "why": "classic form, direct",
@@ -10216,6 +10258,23 @@
       "url": "https://acme.service-now.com/sp?id=ticket&table=sc_req_item"
     },
     {
+      "id": "eval.servicenow.ritm.neg.renamed_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "sc_req_item ticket page on a customer-renamed portal: NOT RECORDED; a /{_} ticket rule cannot be proven disjoint from the other types' classic .do rules, whose absent lists are full (docs/adapters/servicenow.ritm.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
       "id": "eval.servicenow.change.classic_form_direct",
       "kind": "evaluate",
       "why": "classic form, direct",
@@ -10648,6 +10707,23 @@
       "url": "https://acme.service-now.com/sp?id=ticket&table=change_request"
     },
     {
+      "id": "eval.servicenow.change.neg.renamed_portal_ticket_page",
+      "kind": "evaluate",
+      "why": "change_request ticket page on a customer-renamed portal: NOT RECORDED; a /{_} ticket rule cannot be proven disjoint from the other types' classic .do rules, whose absent lists are full (docs/adapters/servicenow.change.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
       "id": "eval.servicenow.kb.platform_article_view",
       "kind": "evaluate",
       "why": "platform article view",
@@ -10864,6 +10940,54 @@
       "url": "https://acme.service-now.com/sp?sysparm_article=HRKB0001001&id=kb_article_view"
     },
     {
+      "id": "eval.servicenow.kb.renamed_portal_view",
+      "kind": "evaluate",
+      "why": "KB article on a customer-renamed portal: the literal id plus the article-number capture anchor the rule (adapter-templates.md §4.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0012345"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0012345",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_article_view&sysparm_article=KB0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.renamed_portal_article",
+      "kind": "evaluate",
+      "why": "KB article on a customer-renamed portal (kb_article); lowercase number folded to upper",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0012345"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0012345",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/policyhub?id=kb_article&sysparm_article=kb0012345"
+    },
+    {
       "id": "eval.servicenow.kb.neg.kb_version_sys_id_form_deliberately",
       "kind": "evaluate",
       "why": "KB version sys_id form: deliberately not recorded",
@@ -11034,41 +11158,7 @@
       "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB%2F0001"
     },
     {
-      "id": "eval.servicenow.kb.renamed_portal_view",
-      "kind": "evaluate",
-      "why": "KB article on a customer-renamed portal: NOT RECORDED, a renamed portal path cannot anchor a rule (adapter-templates.md §4.1)",
-      "impls": [
-        "rust",
-        "ts"
-      ],
-      "doc": {
-        "$fixture": "starter:servicenow"
-      },
-      "expect": {
-        "match": false,
-        "reason": "no_rule"
-      },
-      "url": "https://acme.service-now.com/helpzone?id=kb_article_view&sysparm_article=KB0012345"
-    },
-    {
-      "id": "eval.servicenow.kb.renamed_portal_article",
-      "kind": "evaluate",
-      "why": "KB article on a customer-renamed portal (kb_article): NOT RECORDED, same anchor limit",
-      "impls": [
-        "rust",
-        "ts"
-      ],
-      "doc": {
-        "$fixture": "starter:servicenow"
-      },
-      "expect": {
-        "match": false,
-        "reason": "no_rule"
-      },
-      "url": "https://acme.service-now.com/policyhub?id=kb_article&sysparm_article=kb0012345"
-    },
-    {
-      "id": "eval.servicenow.kb.renamed_portal_search",
+      "id": "eval.servicenow.kb.neg.renamed_portal_search",
       "kind": "evaluate",
       "why": "knowledge search on a renamed portal",
       "impls": [
@@ -11085,7 +11175,7 @@
       "url": "https://acme.service-now.com/helpzone?id=kb_search&query=vpn"
     },
     {
-      "id": "eval.servicenow.kb.version_link",
+      "id": "eval.servicenow.kb.neg.renamed_portal_version_link",
       "kind": "evaluate",
       "why": "version sys_id link on a renamed portal: names a version, not the article",
       "impls": [
@@ -11100,6 +11190,74 @@
         "reason": "no_rule"
       },
       "url": "https://acme.service-now.com/helpzone?id=kb_article&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.number_with_version_sys_id",
+      "kind": "evaluate",
+      "why": "portal article link naming a version by sys_id as well as the number: not recorded, like every version link (docs/adapters/servicenow.kb.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.number_with_version_sys_kb_id",
+      "kind": "evaluate",
+      "why": "portal article view naming a version by sys_kb_id as well as the number: not recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/esc?id=kb_article_view&sysparm_article=KB0010035&sys_kb_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.renamed_portal_home",
+      "kind": "evaluate",
+      "why": "knowledge home on a renamed portal",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone?id=kb_home"
+    },
+    {
+      "id": "eval.servicenow.kb.neg.two_segment_portal_path",
+      "kind": "evaluate",
+      "why": "{_} is one segment: a two-segment path with the article query is not a portal article page",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://acme.service-now.com/helpzone/extra?id=kb_article&sysparm_article=KB0012345"
     }
   ]
 }
