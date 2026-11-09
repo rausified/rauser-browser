@@ -3160,6 +3160,17 @@ fn list_artifacts(
     value: brauser_protocol::ListArtifactsRequest,
     config: &mut ConfigStore,
 ) -> Response {
+    if value
+        .page
+        .as_ref()
+        .is_some_and(|page| !crate::index::valid_recent_page_request(page))
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "Recent page needs a valid snapshot for continuation",
+        );
+    }
     let _lock = match config.lock_current() {
         Ok(lock) => lock,
         Err(lock_error) => {
@@ -3178,6 +3189,37 @@ fn list_artifacts(
     // Thirty-two maximal rows still fit comfortably below Chrome's native
     // messaging cap after JSON escaping.
     let limit = usize::try_from(value.limit.clamp(1, 32)).unwrap_or(32);
+    if let Some(page) = &value.page {
+        return match index.recent_page(
+            crate::index::RecentFilters {
+                artifact_type: value.artifact_type.as_deref(),
+                title_query: value.title_query.as_deref(),
+                reading: value.summary_reading,
+                limit,
+            },
+            config.revision(),
+            page,
+        ) {
+            Ok(result) => Response::ArtifactListResult(ArtifactListResult {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id,
+                truncated: result.page.next_offset.is_some(),
+                items: result.items,
+                artifact_types: result.artifact_types,
+                page: Some(result.page),
+            }),
+            Err(cause) if cause.is::<crate::index::StaleRecentPage>() => error(
+                &value.request_id,
+                ErrorCode::Conflict,
+                "Recent changed or this page is unavailable; reload results",
+            ),
+            Err(_) => error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "artifact history is unavailable; log catch-up could not complete",
+            ),
+        };
+    }
     let result = match value.summary_reading {
         Some(reading) => index.recent_with_reading(
             value.artifact_type.as_deref(),
@@ -3199,6 +3241,7 @@ fn list_artifacts(
                 items,
                 artifact_types,
                 truncated,
+                page: None,
             })
         }
         Err(_) => error(
@@ -7349,6 +7392,7 @@ id = "work:{host}/{id}"
                 artifact_type: None,
                 title_query: None,
                 summary_reading: None,
+                page: None,
                 limit: 32,
             },
             config,
@@ -7392,6 +7436,85 @@ id = "work:{host}/{id}"
     }
 
     #[test]
+    fn recent_pages_keep_the_native_cap_and_reject_bad_or_stale_continuations() {
+        use brauser_protocol::{ListArtifactsRequest, RecentPageRequest};
+        let folder = tempfile::tempdir().unwrap();
+        let notes = folder.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut config = configured_store(&notes);
+        for i in 0..35 {
+            let url = format!("https://example.com/spec/{i}");
+            record_page_summary(
+                &config,
+                &url,
+                crate::vault::url_record_key(&url).unwrap(),
+                crate::summary::WEB_PAGE_TYPE,
+            );
+        }
+        let request = ListArtifactsRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "recent-page".into(),
+            artifact_type: None,
+            title_query: None,
+            summary_reading: None,
+            limit: 200,
+            page: Some(RecentPageRequest {
+                offset: 0,
+                snapshot: None,
+            }),
+        };
+        let Response::ArtifactListResult(first) = list_artifacts(request.clone(), &mut config)
+        else {
+            panic!("expected page")
+        };
+        assert_eq!(first.items.len(), 32);
+        assert!(first.truncated);
+        let snapshot = first.page.unwrap().snapshot;
+        let mut next = request.clone();
+        next.page = Some(RecentPageRequest {
+            offset: 32,
+            snapshot: Some(snapshot.clone()),
+        });
+        let Response::ArtifactListResult(last) = list_artifacts(next.clone(), &mut config) else {
+            panic!("expected final page")
+        };
+        assert_eq!(last.items.len(), 3);
+        assert!(!last.truncated);
+        assert_eq!(last.page.unwrap().next_offset, None);
+        assert!(
+            first
+                .items
+                .iter()
+                .all(|a| last.items.iter().all(|b| a.artifact_id != b.artifact_id))
+        );
+        let mut malformed = next.clone();
+        malformed.page.as_mut().unwrap().snapshot = None;
+        assert!(matches!(
+            list_artifacts(malformed, &mut config),
+            Response::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest,
+                ..
+            })
+        ));
+        next.title_query = Some("other filter".into());
+        assert!(matches!(
+            list_artifacts(next, &mut config),
+            Response::Error(ErrorResponse {
+                code: ErrorCode::Conflict,
+                ..
+            })
+        ));
+        let mut legacy = request;
+        legacy.page = None;
+        let Response::ArtifactListResult(legacy) = list_artifacts(legacy, &mut config) else {
+            panic!("expected legacy page")
+        };
+        assert!(legacy.page.is_none());
+        assert_eq!(legacy.items.len(), 32);
+        assert!(serde_json::to_value(legacy).unwrap().get("page").is_none());
+    }
+
+    #[test]
     fn recent_reading_filter_reaches_the_host_index_and_keeps_unknown_distinct() {
         use brauser_protocol::SummaryReadingFilter::{Limited, Unknown, Whole};
         let folder = tempfile::tempdir().unwrap();
@@ -7413,6 +7536,7 @@ id = "work:{host}/{id}"
                     artifact_type: None,
                     title_query: None,
                     summary_reading: Some(reading),
+                    page: None,
                     limit: 1,
                 },
                 &mut config,
@@ -8894,6 +9018,7 @@ id = "work:{host}/{id}"
                     artifact_type: None,
                     title_query: None,
                     summary_reading: None,
+                    page: None,
                     limit: 32,
                 },
                 &mut config,
@@ -8926,6 +9051,7 @@ id = "work:{host}/{id}"
                     artifact_type: None,
                     title_query: None,
                     summary_reading: None,
+                    page: None,
                     limit: 32,
                 },
                 &mut config,
@@ -9060,6 +9186,7 @@ id = "work:{host}/{id}"
                         artifact_type: None,
                         title_query: None,
                         summary_reading: None,
+                        page: None,
                         limit: 32,
                     },
                     &mut config,
@@ -9188,6 +9315,7 @@ id = "work:{host}/{id}"
                         artifact_type: None,
                         title_query: None,
                         summary_reading: None,
+                        page: None,
                         limit: 32,
                     },
                     &mut config,
@@ -9242,6 +9370,7 @@ id = "work:{host}/{id}"
                     artifact_type: None,
                     title_query: None,
                     summary_reading: None,
+                    page: None,
                     limit: 32,
                 },
                 &mut config,
@@ -9380,6 +9509,7 @@ id = "work:{host}/{id}"
                     artifact_type: None,
                     title_query: None,
                     summary_reading: None,
+                    page: None,
                     limit: 32,
                 },
                 &mut config,
@@ -9477,6 +9607,7 @@ id = "work:{host}/{id}"
                     artifact_type: None,
                     title_query: None,
                     summary_reading: None,
+                    page: None,
                     limit: 32,
                 },
                 &mut config,

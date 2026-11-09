@@ -369,7 +369,26 @@ pub struct GetArtifactRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RecentPageRequest {
+    pub offset: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecentPageInfo {
+    pub snapshot: String,
+    pub offset: u32,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub next_offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListArtifactsRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<RecentPageRequest>,
     pub protocol_version: u32,
     pub request_id: String,
     #[serde(deserialize_with = "deserialize_required_nullable")]
@@ -729,6 +748,8 @@ pub struct ArtifactResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactListResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<RecentPageInfo>,
     pub protocol_version: u32,
     pub request_id: String,
     pub items: Vec<ArtifactListItem>,

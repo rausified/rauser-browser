@@ -99,7 +99,18 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       case "get_site_restore": return { type: "site_restore_loaded", origin: request.origin, revision: fixture.revision, adapters: { format: 1, artifacts: [] } };
       case "check_capture_site": return { type: "capture_site_checked", revision: fixture.revision };
       case "get_agent_env": return { type: "agent_env_listed", names: [], problem: null };
-      case "list_artifacts": return { type: "artifact_list_result", items: [], artifact_types: [], truncated: false };
+      case "list_artifacts": {
+        const offset = request.page?.offset ?? 0;
+        if (offset && fixture.recentPageConflict) return { type: "error", code: "conflict", message: "Recent changed" };
+        return {
+          type: "artifact_list_result", artifact_types: [], truncated: Boolean(fixture.recentPages && offset === 0),
+          items: fixture.recentPages ? [{ artifact_id: `doc:${offset}`, artifact_type: "doc.page",
+            title: offset ? "Later report" : "Earlier report", url: `https://work.example/${offset}`,
+            local_date: "2026-11-09", focused_seconds: 1, background_seconds: 0, opens: 1, why: null, summary: null }] : [],
+          ...(request.page ? { page: { snapshot: "a".repeat(64), offset,
+            next_offset: fixture.recentPages && offset === 0 ? 1 : null } } : {}),
+        };
+      }
       case "worklog_choices": return {
         type: "worklog_choices_result", start_date: request.start_date, end_date: request.end_date,
         choices: (request.page?.offset ? ["Later work"] : ["Release update", "Private research"]).map((title, n) => ({

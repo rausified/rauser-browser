@@ -149,3 +149,27 @@ fn worklog_choices_paging_is_opt_in_and_has_bounded_snapshot_metadata() {
     response["page"]["next_offset"] = json!(0);
     assert!(!schema_subset::valid("WorklogChoicesResult", &response));
 }
+
+#[test]
+fn recent_paging_is_optional_bounded_and_round_trips() {
+    let mut request = json!({"type":"list_artifacts", "protocol_version":8, "request_id":"page",
+        "artifact_type":null, "title_query":null, "limit":32, "page":{"offset":0}});
+    common::assert_request_round_trips("ListArtifactsRequest", &request);
+    request["page"] = json!({"offset":32,"snapshot":"a".repeat(64)});
+    common::assert_request_round_trips("ListArtifactsRequest", &request);
+    let mut response = json!({"type":"artifact_list_result", "protocol_version":8, "request_id":"page",
+        "items":[], "artifact_types":[], "truncated":false});
+    common::assert_response_round_trips("ArtifactListResult", &response);
+    response["page"] = json!({"offset":32,"snapshot":"a".repeat(64),"next_offset":null});
+    common::assert_response_round_trips("ArtifactListResult", &response);
+    for page in [
+        json!({"offset":-1}),
+        json!({"offset":0,"snapshot":"short"}),
+        json!({"offset":0,"unexpected":true}),
+    ] {
+        request["page"] = page;
+        assert!(!schema_subset::valid("ListArtifactsRequest", &request));
+    }
+    response["page"]["next_offset"] = json!(0);
+    assert!(!schema_subset::valid("ArtifactListResult", &response));
+}
