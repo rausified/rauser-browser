@@ -89,6 +89,10 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: Run Rust tests
         run: cargo test --locked --workspace
+        env:
+          # The full randomized host guard check (a shorter default keeps
+          # local runs quick; see host/src/config.rs).
+          BRAUSER_GUARD_PROPERTY_SEQUENCES: "2000"
       - name: Check Rust lints
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # The scripted-dialogs builds keep their own target dir on purpose:

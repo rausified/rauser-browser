@@ -178,8 +178,10 @@ unaffected):
   unrelated change to a config already saved dashboards-first) would move
   recorded pages from one to the other. Settings holds a move that would
   swap them, either way. Like the host's check, this is by type name on any
-  origin (the overlap warning stays the family's own). An edit that makes `b`'s rule unreachable (widening an
-  `a` rule to a catch-all) shows as an overlap to review.
+  origin (the overlap warning stays the family's own). An edit that widens an
+  `a` rule over pages `b` matches (up to a catch-all) shows as an overlap to
+  review, and the host refuses to save it while `b` records those pages
+  (see the history guard below).
 - Settings leaves the host's warning for a declared pair out of the overlap
   list, but only while both adapters are exactly as the starter ships them
   (every `match` rule and `path_case`) and `a` comes first. `isContainerFirstPair`
@@ -227,8 +229,14 @@ unaffected):
      `b` adapter (the shipped order): "Splunk apps must come above Splunk
      dashboards on <origin> when added together: ..."
 
-  Everything else is allowed: other adapters, edits that keep their place,
-  and removals, which the history guard checks. A site saved dashboards
+  Everything else passes this order check: other adapters, edits that keep
+  their place, and removals. It does not look at what an edit matches. The
+  history guard (`validate_adapter_transition` in `host/src/config.rs`)
+  checks that separately, for every adapter: it refuses an edit that widens
+  an adapter over pages a later adapter records (an `a` rule grown over
+  dashboard pages, say), an edit that narrows one so its pages fall to
+  another identity, and a removal that hands pages to another identity,
+  except to the container the removed adapter declares `within`. A site saved dashboards
   first, or with dashboards alone, keeps working; apps can be added there
   only below the dashboards, which then keep the pages they record. The
   check is on type names, so it applies on any origin: starter type names
@@ -245,12 +253,23 @@ unaffected):
   Why one invariant: whichever of the two comes first records the pages
   both match, so a page keeps its recorder exactly when no adapter of the
   other type moves above the one recording it. Rules 1 to 3 say that, and
-  rule 4 fixes the order for a fresh pair. A randomized host test
-  (`container_first_violation_never_moves_a_recorded_page`, fixed seed,
-  2,000 sequences of add, remove, move, edit, unrelated and whole-list
-  saves) checks that every accepted save leaves each recorded page's type
-  unchanged unless its adapter was removed. It also checks that every kind
-  of save is accepted sometimes. A family without a `"container_first"`
+  rule 4 fixes the order for a fresh pair. Rules 1 to 3 hold only while
+  each adapter matches what it did; edits that change that are the history
+  guard's. Two randomized host tests check both guards together, with
+  fixed seeds over add, remove, move, edit, unrelated and whole-list saves,
+  where an edit widens or narrows what an adapter matches.
+  `container_order_and_history_guards_preserve_recorded_winners` (2,000
+  sequences, exact-path adapters) checks each accepted save against the
+  one before it. `recorded_splunk_pages_keep_their_recorder_across_coverage_edits`
+  (2,000 sequences in CI, 600 locally unless
+  `BRAUSER_GUARD_PROPERTY_SEQUENCES` is set; the Splunk starter's own rules from `splunk.json` and
+  edits of them on the real engine, every save through
+  `ConfigStore::update`) checks that a page keeps the adapter that first
+  recorded it for the whole sequence, even after that adapter is removed
+  or narrowed, except that it may fall through to its declared container
+  once that adapter no longer matches it.
+  Both also check that every kind of save, safe widening and safe
+  narrowing are accepted sometimes and that unsafe widening is refused. A family without a `"container_first"`
   entry is unaffected.
 
 Why a declaration in the family file, not in the format: the overlap is a

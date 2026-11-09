@@ -95,7 +95,10 @@
         { "$ref": "#/$defs/CheckCaptureSiteRequest" },
         { "$ref": "#/$defs/GetSiteRestoreRequest" },
         { "$ref": "#/$defs/ForgetAdoptedContractsRequest" },
-        { "$ref": "#/$defs/ServiceHelloRequest" }
+        { "$ref": "#/$defs/ServiceHelloRequest" },
+        { "$ref": "#/$defs/ListTaskFoldersRequest" },
+        { "$ref": "#/$defs/AddTaskFolderRequest" },
+        { "$ref": "#/$defs/RemoveTaskFolderRequest" }
       ]
     },
     "Response": {
@@ -171,7 +174,8 @@
         { "$ref": "#/$defs/ServiceReady" },
         {
           "$ref": "#/$defs/ErrorResponse"
-        }
+        },
+        { "$ref": "#/$defs/TaskFoldersListed" }
       ]
     },
     "HelloRequest": {
@@ -959,7 +963,8 @@
       "description": "Which setting a folder selection token may authorize.",
       "enum": [
         "notes_folder",
-        "knowledge_base"
+        "knowledge_base",
+        "task_folder"
       ]
     },
     "RecordVisitRequest": {
@@ -1343,6 +1348,7 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "sessions_page": { "$ref": "#/$defs/WorklogChoicesPageRequest" },
         "focus_session_id": {
           "oneOf": [
             {
@@ -1418,6 +1424,7 @@
             "$ref": "#/$defs/FocusSession"
           }
         },
+        "sessions_page": { "$ref": "#/$defs/WorklogChoicesPageInfo" },
         "sessions_truncated": {
           "type": "boolean"
         },
@@ -2557,7 +2564,8 @@
         "kind": { "description": "Optional; missing means summary (an older service's record).", "$ref": "#/$defs/RunKind" },
         "site_draft": { "description": "Optional; a site-draft run's validated tables once it has them, else null or missing.", "oneOf": [{ "$ref": "#/$defs/SiteDraftAnswerView" }, { "type": "null" }] },
         "instruction": { "description": "Optional; a task's instruction (cut to 280 characters plus … in list_runs). Left out for other kinds.", "type": "string", "maxLength": 4096 },
-        "task_report": { "description": "Optional; a succeeded task's report; missing or null before then, always missing in list_runs, and missing for other kinds.", "oneOf": [{ "type": "string", "maxLength": 16384 }, { "type": "null" }] }
+        "task_report": { "description": "Optional; a succeeded task's report; missing or null before then, always missing in list_runs, and missing for other kinds.", "oneOf": [{ "type": "string", "maxLength": 16384 }, { "type": "null" }] },
+        "task_folder_id": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
     "StartRunRequest": {
@@ -2579,7 +2587,8 @@
         "record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
         "requested_at": { "description": "The user's local click time with its UTC offset: RFC 3339 in whole seconds, ending in Z or +HH:MM/-HH:MM, as occurred_at is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" },
         "kind": { "description": "Optional, host to service only; missing means summary. The extension never sends it: the host sets site_draft when it forwards a start_site_draft and task when it forwards a start_task, and refuses a start_run from the extension that carries it.", "$ref": "#/$defs/RunKind" },
-        "instruction": { "description": "Optional, host to service only; present exactly when kind is task. The extension sends start_task instead, and the host refuses a start_run from the extension that carries it.", "type": "string", "minLength": 1, "maxLength": 4096 }
+        "instruction": { "description": "Optional, host to service only; present exactly when kind is task. The extension sends start_task instead, and the host refuses a start_run from the extension that carries it.", "type": "string", "minLength": 1, "maxLength": 4096 },
+        "task_folder_id": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
     "RunStarted": {
@@ -3072,7 +3081,8 @@
         "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
         "instruction": { "description": "The user's typed instruction, in characters. The host also refuses one that is blank after trimming or holds a control character other than newline and tab.", "type": "string", "minLength": 1, "maxLength": 4096 },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
-        "requested_at": { "description": "The user's local click time with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
+        "requested_at": { "description": "The user's local click time with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" },
+        "task_folder_id": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
     "SiteDrafter": {
@@ -3366,6 +3376,156 @@
         "rules": { "type": "array", "maxItems": 8, "items": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/RuleVerdictView" } } },
         "scope": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/ScopeVerdictView" } },
         "preview": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/PreviewRowView" } }
+      }
+    },
+    "ListTaskFoldersRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "list_task_folders"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "AddTaskFolderRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "picker_token"
+      ],
+      "properties": {
+        "type": {
+          "const": "add_task_folder"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "picker_token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "RemoveTaskFolderRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "folder_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "remove_task_folder"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "folder_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "TaskFolderChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      }
+    },
+    "TaskFoldersListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "revision",
+        "folders"
+      ],
+      "properties": {
+        "type": {
+          "const": "task_folders_listed"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "folders": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/TaskFolderChoice"
+          }
+        }
       }
     }
   }

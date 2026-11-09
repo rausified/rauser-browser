@@ -421,3 +421,41 @@ fn task_command_settings_are_revision_bound_and_carry_only_the_registry() {
         }),
     );
 }
+
+#[test]
+fn task_folders_use_ids_and_picker_tokens_never_client_paths() {
+    let id = "00000000-0000-4000-8000-000000000001";
+    let mut task = start_task();
+    task["task_folder_id"] = json!(id);
+    assert_request_round_trips("StartTaskRequest", &task);
+    task["cwd"] = json!("/arbitrary");
+    assert!(serde_json::from_value::<Request>(task.clone()).is_err());
+    assert!(!schema_subset::valid("StartTaskRequest", &task));
+    for (name, value) in [
+        (
+            "ListTaskFoldersRequest",
+            json!({"type":"list_task_folders","protocol_version":8,"request_id":"r"}),
+        ),
+        (
+            "AddTaskFolderRequest",
+            json!({"type":"add_task_folder","protocol_version":8,"request_id":"r","expected_revision":"rev","picker_token":"picked"}),
+        ),
+        (
+            "RemoveTaskFolderRequest",
+            json!({"type":"remove_task_folder","protocol_version":8,"request_id":"r","expected_revision":"rev","folder_id":id}),
+        ),
+    ] {
+        assert_request_round_trips(name, &value);
+        let mut forged = value;
+        forged["path"] = json!("/arbitrary");
+        assert!(serde_json::from_value::<Request>(forged.clone()).is_err());
+        assert!(!schema_subset::valid(name, &forged));
+    }
+    assert_response_round_trips(
+        "TaskFoldersListed",
+        &json!({"type":"task_folders_listed","protocol_version":8,"request_id":"r","revision":"rev","folders":[{"id":id,"path":"/project"}]}),
+    );
+    let mut view = task_view();
+    view["task_folder_id"] = json!(id);
+    assert_response_round_trips("RunFetched", &run_fetched(view));
+}

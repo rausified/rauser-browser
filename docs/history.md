@@ -257,6 +257,31 @@ are still prompt-level. Settings and README explain examples, limits and edits.
 
 ## §7.2 Artifact adapters — history
 
+**Configured-site scope versus format (2026-11-09).** A configured GitHub
+repository outside the selected owner list is an `out_of_scope` match of the
+existing repository rule. The panel no longer treats that verdict, on the
+current page or on a sampled URL shape, as evidence of a new page format for
+the recurring-pages drafter. A genuinely unmatched route can still offer a
+new draft after three visits. The existing capture explanation directs scope
+changes to Settings.
+
+**Site-level setup trial (2026-11-09).** Settings can review the missing GitHub,
+Box, or Google Workspace starter kinds together and save them in one config
+revision. The first trial keeps the existing typed adapter document and its
+first-match behavior. It leaves Jira and Confluence as separate product
+choices even when they share an Atlassian Cloud origin. The trial's JSON-array
+editor and single example preview expose a review gap for multi-kind sites;
+these are not yet replaced by a readable per-kind review.
+
+**Site-level review built (2026-11-09).** The Settings gallery now shows one
+card per GitHub, Box, or Google Workspace site, with individual starter choices
+inside a disclosure. The site review has a checkbox and an example match
+preview for every missing kind, with a plain warning when a selected catch-all
+claims an unchecked kind's example. The editor's JSON and one-example preview
+are hidden in this flow. The host still validates the same typed adapters in
+one revision-checked save, and adding GitHub repositories links compatible
+existing pull request and issue adapters to the repository container.
+
 **Starter rule updates (2026-10-28).** The rule this record introduced is now stated in DESIGN.md §7.2, “Starter rule updates”.
 
 *Saving an adapter:* Before v6, enabling or widening an adapter requested the origin's optional Chrome grant and a native confirmation.
@@ -1830,3 +1855,62 @@ ignored (94 IPC sandbox-skip messages); all 50 extension test files and the
 formatting, protocol generation, typecheck, lint, script tests, Markdown safety
 and queue consistency pass. Development tools pass 254 tests with 94 skips;
 accessibility passes two tests with 55 Chromium sandbox skips.
+
+## 2026-11-03 — Per-task project folders
+
+`brwr-zla` adds native-picked, host-owned task destinations, a per-task selector,
+and recorded working-folder context in history/Reuse. A queued task carries the
+immutable entry ID so removing and re-adding the same path never revives its
+prior authorization. The service checks the folder's recorded identity and the
+unchanged protected paths before launch. The default knowledge-base behavior
+and non-resumable task recovery remain in force; summaries are unchanged.
+
+## 2026-11-03 — Keep task-folder config errors repairable
+
+`brwr-pf8o` routes typed but invalid task-folder entries through the existing
+invalid-config repair state. They previously escaped as read errors, losing
+the actual revision and preventing picker-confirmed repair. Invalid entries
+now expose no task destinations, retain a revision of the original bytes and
+require the normal explicit repair, which backs those bytes up before saving.
+The service-only task-folder resolver is compiled on Unix and in tests.
+
+The regression covers invalid UUIDs, relative paths and empty identities,
+including exact backup contents. Workspace Rust tests report 1,563 passes
+(94 explicit sandbox IPC skips included) and two ignored tests. Frontend
+validation remains pending: the sandbox could not reinstall the locked npm
+dependencies after an offline cache miss. The external driver must reinstall,
+rebuild and run its complete gate before this repair is marked shipped.
+
+## 2026-11-09 — Page through recorded focus sessions (brwr-t4gf)
+
+The One focus session sharing catalog now offers explicit More sessions instead
+of hiding every session after the first 64. Additive protocol-v8 sessions_page
+metadata reuses the worklog paging shapes; legacy requests still receive the
+original bounded catalog without metadata. One index read streams the complete
+activity snapshot, retains at most 64 session records plus deduplication IDs,
+and binds the continuation to its home identity, adapter policy and date range.
+Tied timestamps follow the existing durable event order. Paging requests no
+selected work and never broadens a selected session's direct activity.
+
+The panel preserves the selected ID, checked work and preview while extending
+the catalog. It retains loaded pages on a matching refresh, drops them when the
+snapshot changes, discards replies after context changes and explicitly reloads
+a stale catalog. The final paging action returns keyboard focus to the select.
+Original note identity, Re-learn gates and browser-local recovery are unchanged.
+
+## 2026-11-09 — Review: retain session paging focus after refresh
+
+The independent review found that delivery refresh and Reload sessions hid the
+focused paging button but never restored focus. `loadWorklog` now returns focus
+to More sessions, or the session selector when the catalog is exhausted, unless
+the user moved elsewhere while waiting. Reload restores focus even when it has
+cleared the previous session selection. Offline regressions reproduce the lost
+focus and cover moved focus; the browser keyboard journey covers refresh and
+reload with the real DOM.
+The same review found that crossing midnight made More sessions silently
+ignore an expired Today catalog. The action now starts a fresh catalog for
+the current dates; a simulated-clock regression covers the rollover.
+
+## 2026-11-09 — Keep run activity in a compact bottom dock
+
+The side panel now scrolls its page content independently of a bottom activity area. General notices, summary runs, task runs, and Capture Site AI draft progress or notices appear there as collapsed rows with a title and current state. Runs hidden after a page switch leave no empty row. Expanding a row reveals its existing details and actions. The dock and streamed text have bounded heights, and the capture strip remains below it with its own scrolling when expanded in a short panel. Setup and permission banners remain visible in the page content when action is required.

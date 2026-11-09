@@ -109,7 +109,7 @@ test("the task bar sits between the page area and the tabs", async () => {
   assert.ok(PANEL_HTML.indexOf("</section>", pageArea) < bar, "the bar follows the page area");
   assert.ok(bar < tabs, "the bar comes before the tabs");
   const section = PANEL_HTML.slice(bar, tabs);
-  for (const id of ["task-form", "task-input", "task-run", "task-open", "task-context", "task-hint", "task-announce", "task-run-area"]) {
+  for (const id of ["task-form", "task-input", "task-run", "task-open", "task-context", "task-hint", "task-announce"]) {
     assert.match(section, new RegExp(`id="${id}"`), id);
   }
   assert.match(section, /<textarea id="task-input"[^>]*maxlength="4000"/);
@@ -130,7 +130,19 @@ test("only task-announce is a live region for tasks", () => {
   assert.equal(live.length, 1, live.join("\n"));
   assert.match(live[0], /id="task-announce"/);
   assert.match(live[0], /aria-live="polite"/);
-  assert.doesNotMatch(section.match(/<div id="task-run-area"[^>]*>/)[0], /aria-live/);
+  assert.doesNotMatch(PANEL_HTML.match(/<div id="task-run-area"[^>]*>/)[0], /aria-live/);
+});
+
+test("run activity stays in a collapsed bottom dock outside the scrolling page", () => {
+  const scrollEnd = PANEL_HTML.indexOf('<section id="activity-dock"');
+  const captureBar = PANEL_HTML.indexOf('<div class="capture-bar"');
+  assert.ok(PANEL_HTML.indexOf('class="panel-scroll"') < scrollEnd);
+  assert.ok(scrollEnd < captureBar);
+  for (const id of ["status", "run-area", "task-run-area", "capture-site-agent-run"]) {
+    const position = PANEL_HTML.indexOf(`id="${id}"`);
+    assert.ok(scrollEnd < position && position < captureBar, id);
+  }
+  assert.equal((PANEL_HTML.slice(scrollEnd, captureBar).match(/<details class="activity-item">/g) ?? []).length, 4);
 });
 
 test("panel tabs link their panels and keyboard selection keeps one tab stop", async () => {
@@ -151,6 +163,78 @@ test("panel tabs link their panels and keyboard selection keeps one tab stop", a
     assert.equal(page.el(`${next}-view`).hidden, false);
     current = next;
   }
+});
+
+for (const recovery of ["reload", "reconnect"]) {
+  test(`a failed task-folder list retries after ${recovery} at the same config revision`, async () => {
+    let fail = true;
+    const start = startsTask();
+    const page = await taskPanel({ intercept: (request) => {
+      if (request.type === "list_task_folders") {
+        if (fail) return { type: "error", code: "internal", message: "temporary read failure" };
+        return { type: "task_folders_listed", revision: "1", folders: [{ id: "project-id", path: "/work/project" }] };
+      }
+      return start(request);
+    } });
+    await until(() => page.sent("list_task_folders").length >= 1, "failed folder list");
+    await settle();
+    assert.equal(page.el("task-folder").children.length, 1);
+    fail = false;
+    if (recovery === "reload") page.policyChanged();
+    else {
+      page.hostExits();
+      page.followLink(OTHER_URL, "Other page");
+    }
+    await until(() => page.el("task-folder").children.length === 2, "folder choices after recovery");
+    assert.equal(page.el("task-folder").children[1].value, "project-id");
+  });
+}
+
+test("the working folder selector sends only the selected opaque ID and keeps the default absent", async () => {
+  const start = startsTask();
+  const page = await taskPanel({ intercept: (request) => request.type === "list_task_folders"
+    ? { type: "task_folders_listed", revision: "1", folders: [{ id: "project-id", path: "/work/<project>" }] }
+    : start(request) });
+  await until(() => page.el("task-folder").children.length === 2, "task folder choices");
+  assert.equal(page.el("task-folder").children[1].textContent, "/work/<project>");
+  assert.equal(page.sent("start_task").length, 0);
+  page.el("task-folder").value = "project-id";
+  page.el("task-folder").dispatch("change");
+  page.el("task-use-page").checked = false;
+  page.el("task-use-page").dispatch("change");
+  assert.equal(page.el("task-context").textContent, "No page · Runs in /work/<project>");
+  type(page, "Inspect the project");
+  enter(page);
+  await until(() => page.sent("start_task").length === 1, "project task");
+  assert.equal(page.sent("start_task")[0].task_folder_id, "project-id");
+  assert.equal(Object.hasOwn(page.sent("start_task")[0], "cwd"), false);
+  await until(() => !page.el("task-run").disabled, "task start to settle");
+  page.el("task-folder").value = "";
+  page.el("task-folder").dispatch("change");
+  type(page, "Use the knowledge base");
+  enter(page);
+  await until(() => page.sent("start_task").length === 2, "default task");
+  assert.equal(Object.hasOwn(page.sent("start_task")[1], "task_folder_id"), false);
+});
+
+test("Reuse with a removed folder keeps the instruction and refuses to run until a folder is chosen", async () => {
+  const page = await install({ tab: { id: 1, url: ARTICLE_URL, title: "Tab title" },
+    agentStatus: READY, config: SET_UP, executeScript: pageReader(),
+    local: new Map([[WARNING_SEEN_KEY, true]]), session: new Map([[REUSE_KEY, {
+    instruction: "Inspect the previous project", no_page: true, task_folder_id: "removed-folder",
+    window_id: null, at: Date.now(),
+  }]]) });
+  await until(() => page.el("task-input").value === "Inspect the previous project", "reused instruction");
+  await until(() => /folder.*unavailable/i.test(page.el("task-hint-text").textContent), "removed folder warning after startup");
+  assert.equal(page.el("task-folder").value, "removed-folder");
+  assert.equal(page.el("task-run").disabled, true);
+  assert.match(page.el("task-hint-text").textContent, /folder.*unavailable/i);
+  enter(page);
+  await settle();
+  assert.equal(page.sent("start_task").length, 0);
+  page.el("task-folder").value = "";
+  page.el("task-folder").dispatch("change");
+  assert.equal(page.el("task-run").disabled, false);
 });
 
 test("a task from a non-web tab runs without extracting or attaching that tab", async () => {

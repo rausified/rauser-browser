@@ -569,8 +569,9 @@ export function fillShape(origin: string, shape: string): string | null {
 
 /**
  * Whether the panel offers to draft rules for recurring pages on a
- * configured origin: the current page is not recognized, and the worker's
- * sample holds a shape that is not recognized either, was visited at least
+ * configured origin: the current page has no matching route (a matching
+ * route outside its configured account scope is already a known format),
+ * and the worker's sample holds a shape with no matching route, visited at least
  * three times, and has a path route word. It is computed here by filling each
  * shape and evaluating it with the lease's compiled document, and sends
  * nothing anywhere.
@@ -579,13 +580,17 @@ export function recurringHint(lease: PolicyLease | null, samples: readonly Sampl
   const origin = httpOrigin(url);
   if (!lease || !origin || !lease.adapters.artifacts.some((adapter) => adapter.origin === origin)) return false;
   const compiled = compileDocument(lease.adapters);
-  if (!compiled.ok || evaluate(compiled.doc, url).match) return false;
+  if (!compiled.ok) return false;
+  const current = evaluate(compiled.doc, url);
+  if (current.match || current.reason === "out_of_scope") return false;
   return samples.slice(0, MAX_SITE_SHAPES).some((row) => {
     const entry = shapeCount(row?.shape, row?.count, MAX_SHAPE_COUNT);
     if (!entry || entry.count < RECURRING_VISITS) return false;
     const words = entry.shape.split("?")[0]!.split("/").filter((part) => part !== "" && !isPlaceholder(part));
     if (!words.length || words.some(isBlockedRouteWord)) return false;
     const example = fillShape(origin, entry.shape);
-    return example !== null && !evaluate(compiled.doc, example).match;
+    if (example === null) return false;
+    const result = evaluate(compiled.doc, example);
+    return !result.match && result.reason !== "out_of_scope";
   });
 }

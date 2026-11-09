@@ -289,8 +289,8 @@ body.panel-page {
 
 /* Author display rules must never reveal an element the panel hid. */
 .panel-page [hidden] { display: none !important; }
-.panel-page main { max-width: 560px; padding: 0 0 4px; display: flex; flex-direction: column; min-height: 100vh; }
-.panel-page main > :not(header):not(.capture-bar):not(footer) { margin-left: 12px; margin-right: 12px; }
+.panel-page main { max-width: 560px; padding: 0 0 4px; display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+.panel-page .panel-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
 .panel-page p { margin: 0; }
 .panel-page h2 { font-size: 13px; }
 .panel-page a { color: var(--accent-text); text-decoration: none; }
@@ -517,6 +517,26 @@ body.panel-page {
 .panel-page .run-card-actions button { margin: 0; }
 .panel-page .run-notice { margin: 0; }
 
+/* The activity dock keeps run progress and notices out of the scrolling page. */
+.panel-page .activity-dock {
+  flex: none; min-height: 0; max-height: 38vh; overflow-y: auto;
+  padding: 5px 12px; border-top: 1px solid var(--line); background: var(--surface);
+}
+.panel-page .activity-empty { margin: 0; color: var(--muted); font-size: 11.5px; }
+.panel-page .activity-dock:has(.run-area > :not([hidden]), #status:not(:empty)) .activity-empty { display: none; }
+.panel-page .activity-item { border: 0; padding: 0; margin: 0; }
+.panel-page .activity-item:has(.run-area):not(:has(.run-area > :not([hidden]))),
+.panel-page .activity-item:has(#status:empty) { display: none; }
+.panel-page .activity-item summary {
+  cursor: pointer; padding: 4px 0; color: var(--muted); font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.panel-page .activity-item:has(#status.warning, .run-card[data-state="failed"]) summary { color: var(--red); }
+.panel-page .activity-item[open] summary { color: var(--text); }
+.panel-page .activity-item .run-area { padding: 2px 0 6px; }
+.panel-page .activity-item #status { margin: 2px 0 6px; }
+.panel-page .activity-item .run-card-stream { max-height: 22vh; }
+
 /* Tabs */
 .panel-page .panel-tabs {
   display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px; margin: 0 12px 14px;
@@ -638,7 +658,7 @@ body.panel-page {
 .panel-page .capture-bar {
   margin-top: auto; display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px;
   border-top: 1px solid var(--line); background: var(--sunken); font-size: 11.5px; color: var(--muted);
-  position: sticky; bottom: 0; z-index: 2;
+  flex: none; min-height: 0; max-height: 40vh; overflow-y: auto;
 }
 .panel-page .capture-strip { flex: 1; min-width: 0; border: 0; margin: 0; }
 .panel-page .capture-strip summary { padding: 3px 0; font: 11.5px/1.4 var(--mono); color: var(--muted); }

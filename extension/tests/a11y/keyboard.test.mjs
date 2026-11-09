@@ -194,6 +194,60 @@ test("sharing drafts survive reload and support explicit keyboard copy, comparis
   assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task" || r.type === "save_note")), false);
 });
 
+test("More sessions preserves checked work and returns keyboard focus to the catalog when exhausted", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => { fixture.focusPages = true; });
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  await page.locator('#worklog-choices input[type="checkbox"]').first().waitFor();
+  await page.locator("#worklog-share-scope").focus();
+  await selectByKeyboard(page, "#worklog-share-scope", "last");
+  await page.locator("#worklog-focus-session:enabled").waitFor();
+  await page.locator("#worklog-focus-session").focus();
+  await selectByKeyboard(page, "#worklog-focus-session", "last");
+  const choice = page.locator('#worklog-choices input[type="checkbox"]').first();
+  await choice.waitFor();
+  await activate(page, choice, "Space");
+  const preview = await page.locator("#worklog-text").textContent();
+  await activate(page, "#worklog-focus-more", null);
+  const before = await page.evaluate(() => fixture.requests.filter((r) => r.type === "worklog_focus_choices").length);
+  await page.evaluate(() => { fixture.workerStatus.delivered_batches++; });
+  await page.waitForFunction((count) => fixture.requests.filter((r) => r.type === "worklog_focus_choices").length > count, before, { timeout: 40_000 });
+  await page.locator("#worklog-focus-more:visible").waitFor();
+  await focused(page, "#worklog-focus-more");
+  await activate(page, "#worklog-focus-more", "Enter");
+  await page.waitForFunction(() => document.querySelectorAll('#worklog-focus-session option').length === 3);
+  await focused(page, "#worklog-focus-session");
+  assert.equal(await choice.isChecked(), true);
+  assert.equal(await page.locator("#worklog-text").textContent(), preview);
+  assert.equal(await page.locator("#worklog-focus-session").inputValue(), "10000000-0000-4000-8000-000000000001");
+  await audit(t, page, "panel/share-session-pages");
+});
+
+test("Reload sessions keeps keyboard focus after clearing an invalidated session selection", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => { fixture.focusPages = true; fixture.focusPageConflict = true; });
+  await enterPanelTab(page, "tab-recent");
+  await activate(page, "#worklog-curate", "Space");
+  await page.locator('#worklog-choices input[type="checkbox"]').first().waitFor();
+  await page.locator("#worklog-share-scope").focus();
+  await selectByKeyboard(page, "#worklog-share-scope", "last");
+  await page.locator("#worklog-focus-session:enabled").waitFor();
+  await page.locator("#worklog-focus-session").focus();
+  await selectByKeyboard(page, "#worklog-focus-session", "last");
+  await page.locator('#worklog-choices input[type="checkbox"]').first().waitFor();
+  await activate(page, "#worklog-focus-more");
+  await page.locator("#worklog-focus-more").filter({ hasText: "Reload sessions" }).waitFor();
+  await focused(page, "#worklog-focus-more");
+  await page.evaluate(() => { fixture.focusPageConflict = false; });
+  await activate(page, "#worklog-focus-more");
+  await page.locator("#worklog-focus-more").filter({ hasText: "More sessions" }).waitFor();
+  await focused(page, "#worklog-focus-more");
+  assert.equal(await page.locator("#worklog-focus-session").inputValue(), "");
+});
+
 test("sharing a recorded focus session is named, keyboard operable and copies the exact preview", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;
@@ -309,6 +363,8 @@ test("a summarized page's re-summarize icon sits in the Summary card, named and 
     assert.ok((await page.locator("#summarize .summarize-icon").boundingBox())?.width > 1, "the icon shows");
     await activate(page, "#summarize");
     await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_run"));
+    await page.locator("#summary-activity-label").waitFor();
+    await activate(page, "#summary-activity-label", "Enter");
     await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
     await audit(t, page, `panel/summary-card-${colorScheme}`);
   }
@@ -361,16 +417,99 @@ test("task Run, Tasks and Summarize activate without a mouse and expose failure 
   await activate(page, "#task-run");
   await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_task"));
   await page.locator("#task-run:enabled").waitFor();
-  await page.locator("#task-run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
+  await page.locator("#task-activity-label").waitFor();
   await focused(page, "#task-input");
+  await activate(page, "#task-activity-label", "Enter");
+  await page.locator("#task-run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
   await activate(page, "#task-open");
   await page.waitForFunction(() => fixture.actions.some((action) => action.includes("/tasks.html")));
   await activate(page, "#summarize");
   await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_run"));
   await page.locator("#summarize:enabled").waitFor();
-  await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
+  await page.locator("#summary-activity-label").waitFor();
   await focused(page, "#summarize");
+  await activate(page, "#summary-activity-label", "Enter");
+  await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
   await audit(t, page, "panel/agent-start-error");
+});
+
+test("activity dock stays at the bottom and caps expanded output", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => {
+    const hidden = document.createElement("div");
+    hidden.className = "run-card";
+    hidden.hidden = true;
+    const staleTitle = document.createElement("p");
+    staleTitle.className = "run-card-title";
+    staleTitle.textContent = "Previous page";
+    hidden.append(staleTitle);
+    document.querySelector("#run-area").append(hidden);
+    const card = document.createElement("div");
+    card.className = "run-card";
+    const title = document.createElement("p");
+    title.className = "run-card-title";
+    title.textContent = "Astryx";
+    const state = document.createElement("p");
+    state.className = "run-card-state";
+    state.textContent = "Running";
+    const stream = document.createElement("pre");
+    stream.className = "run-card-stream";
+    stream.textContent = "Long agent output\n".repeat(300);
+    card.append(title, state, stream);
+    document.querySelector("#run-area").append(card);
+  });
+  await page.locator("#summary-activity-label").filter({ hasText: "Astryx · Running" }).waitFor();
+  assert.equal(await page.locator("#run-area").isVisible(), false);
+  await page.locator("#summary-activity-label").focus();
+  const before = await page.locator("#page-area").boundingBox();
+  await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#run-area").isVisible(), true);
+  const layout = await page.evaluate(() => {
+    const dock = document.querySelector("#activity-dock").getBoundingClientRect();
+    const strip = document.querySelector(".capture-bar").getBoundingClientRect();
+    const main = document.querySelector("main").getBoundingClientRect();
+    return { dockHeight: dock.height, stripTop: strip.top, dockBottom: dock.bottom,
+      mainBottom: main.bottom, viewport: window.innerHeight };
+  });
+  assert.ok(layout.dockHeight <= layout.viewport * .38 + 2, JSON.stringify(layout));
+  assert.ok(layout.dockBottom <= layout.stripTop + 1, JSON.stringify(layout));
+  assert.ok(layout.stripTop < layout.mainBottom, JSON.stringify(layout));
+  const after = await page.locator("#page-area").boundingBox();
+  assert.ok(before && after && Math.abs(before.y - after.y) <= 1, "page content does not jump");
+  await page.evaluate(() => { document.querySelector("#run-area .run-card:not([hidden])").hidden = true; });
+  await page.locator("#summary-activity-label").waitFor({ state: "hidden" });
+  await page.locator(".activity-empty:visible").waitFor();
+  await page.setViewportSize({ width: 400, height: 320 });
+  await activate(page, "#capture-strip-summary", "Enter");
+  const strip = await page.evaluate(() => {
+    const bar = document.querySelector(".capture-bar");
+    bar.scrollTop = bar.scrollHeight;
+    const last = document.querySelector("#discard-pending").getBoundingClientRect();
+    return { scrollHeight: bar.scrollHeight, clientHeight: bar.clientHeight,
+      lastBottom: last.bottom, barBottom: bar.getBoundingClientRect().bottom };
+  });
+  assert.ok(strip.scrollHeight > strip.clientHeight, JSON.stringify(strip));
+  assert.ok(strip.lastBottom <= strip.barBottom + 1, JSON.stringify(strip));
+});
+
+test("task working folder can be selected by keyboard without starting a task", async (t) => {
+  const page = await browserFixture(t, "panel", "configured", {
+    taskFolders: [{ id: "project-id", path: "/work/project" }],
+  });
+  if (!page) return;
+  await page.locator("#task-folder option[value='project-id']").waitFor({ state: "attached" });
+  await activate(page, "#task-input", null);
+  await page.keyboard.type("Inspect this project");
+  await activate(page, "#task-folder", null);
+  await selectByKeyboard(page, "#task-folder", 1);
+  assert.equal(await page.locator("#task-folder").inputValue(), "project-id");
+  assert.equal(await page.locator("#task-input").inputValue(), "Inspect this project");
+  assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
+  await audit(t, page, "panel/task-project-folder");
+  await activate(page, "#task-run");
+  await page.waitForFunction(() => fixture.requests.some((r) => r.type === "start_task"));
+  assert.equal(await page.evaluate(() => fixture.requests.find((r) => r.type === "start_task").task_folder_id), "project-id");
 });
 
 test("task page scope can be changed by keyboard without submitting or losing a draft", async (t) => {
@@ -459,6 +598,25 @@ test("settings primary actions and adapter editor work from the keyboard", async
   await page.waitForFunction((before) => fixture.requests.filter((request) => request.type === "update_config").length > before, saved);
   await activate(page, "#copy-diagnostics");
   await page.waitForFunction(() => fixture.actions.includes("copy"));
+});
+
+test("site review selects Google kinds without JSON and saves by keyboard", async (t) => {
+  const page = await browserFixture(t, "options");
+  if (!page) return;
+  await page.locator("#site-origin").fill("https://docs.google.com");
+  const review = page.locator('[data-site-bundle="true"]');
+  await review.waitFor();
+  await activate(page, review);
+  await focused(page, "#adapter-editor-heading");
+  assert.equal(await page.locator("#adapter-technical-review").isVisible(), false);
+  assert.equal(await page.locator("#site-bundle-review input[type=checkbox]").count(), 5);
+  await audit(t, page, "options/site-review");
+  await page.locator('[data-site-kind="google.formresponse"]').focus();
+  await page.keyboard.press("Space");
+  await activate(page, "#save-adapter");
+  await page.waitForFunction(() => fixture.config.adapters.artifacts.length === 4);
+  assert.deepEqual(await page.evaluate(() => fixture.config.adapters.artifacts.map((adapter) => adapter.type)),
+    ["google.doc", "google.sheet", "google.slides", "google.form"]);
 });
 
 test("task list selection follows arrows/Home/End and detail actions survive refresh and dismissal", async (t) => {

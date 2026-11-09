@@ -238,6 +238,7 @@ pub struct ChooseFolderRequest {
 pub enum FolderPurpose {
     NotesFolder,
     KnowledgeBase,
+    TaskFolder,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,6 +417,8 @@ pub struct WorklogFocusChoicesRequest {
     pub start_date: String,
     pub end_date: String,
     pub expected_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions_page: Option<WorklogChoicesPageRequest>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub focus_session_id: Option<String>,
 }
@@ -430,6 +433,8 @@ pub struct WorklogFocusChoicesResult {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub focus_session_id: Option<String>,
     pub sessions: Vec<FocusSession>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions_page: Option<WorklogChoicesPageInfo>,
     pub sessions_truncated: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub selected_session: Option<FocusSession>,
@@ -1074,6 +1079,8 @@ pub struct RunView {
     pub instruction: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_report: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_folder_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1099,6 +1106,8 @@ pub struct StartRunRequest {
     pub kind: Option<RunKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instruction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_folder_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1410,6 +1419,8 @@ pub struct StartTaskRequest {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub harness: Option<HarnessId>,
     pub requested_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_folder_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1665,6 +1676,47 @@ pub struct SiteDraftChecked {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListTaskFoldersRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddTaskFolderRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub picker_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveTaskFolderRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub folder_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskFolderChoice {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskFoldersListed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub revision: String,
+    pub folders: Vec<TaskFolderChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
@@ -1714,6 +1766,9 @@ pub enum Request {
     GetSiteRestore(GetSiteRestoreRequest),
     ForgetAdoptedContracts(ForgetAdoptedContractsRequest),
     ServiceHello(ServiceHelloRequest),
+    ListTaskFolders(ListTaskFoldersRequest),
+    AddTaskFolder(AddTaskFolderRequest),
+    RemoveTaskFolder(RemoveTaskFolderRequest),
 }
 
 impl Request {
@@ -1765,6 +1820,9 @@ impl Request {
             Self::GetSiteRestore(value) => value.protocol_version,
             Self::ForgetAdoptedContracts(value) => value.protocol_version,
             Self::ServiceHello(value) => value.protocol_version,
+            Self::ListTaskFolders(value) => value.protocol_version,
+            Self::AddTaskFolder(value) => value.protocol_version,
+            Self::RemoveTaskFolder(value) => value.protocol_version,
         }
     }
 
@@ -1816,6 +1874,9 @@ impl Request {
             Self::GetSiteRestore(value) => &value.request_id,
             Self::ForgetAdoptedContracts(value) => &value.request_id,
             Self::ServiceHello(value) => &value.request_id,
+            Self::ListTaskFolders(value) => &value.request_id,
+            Self::AddTaskFolder(value) => &value.request_id,
+            Self::RemoveTaskFolder(value) => &value.request_id,
         }
     }
 }
@@ -1862,6 +1923,7 @@ pub enum Response {
     SiteRestoreLoaded(SiteRestoreLoaded),
     ServiceReady(ServiceReady),
     Error(ErrorResponse),
+    TaskFoldersListed(TaskFoldersListed),
 }
 
 impl Response {
@@ -1905,6 +1967,7 @@ impl Response {
             Self::SiteRestoreLoaded(value) => value.protocol_version,
             Self::ServiceReady(value) => value.protocol_version,
             Self::Error(value) => value.protocol_version,
+            Self::TaskFoldersListed(value) => value.protocol_version,
         }
     }
 
@@ -1948,6 +2011,7 @@ impl Response {
             Self::SiteRestoreLoaded(value) => &value.request_id,
             Self::ServiceReady(value) => &value.request_id,
             Self::Error(value) => &value.request_id,
+            Self::TaskFoldersListed(value) => &value.request_id,
         }
     }
 }

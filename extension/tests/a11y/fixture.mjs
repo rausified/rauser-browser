@@ -25,7 +25,7 @@ export function task(n, state = "succeeded") {
 }
 
 // Serialized into the browser before any product module executes.
-export function installChrome({ state, runs, pageUrl, pageName, summary = null }) {
+export function installChrome({ state, runs, pageUrl, pageName, summary = null, taskFolders = [] }) {
   const event = () => {
     const listeners = [];
     return { addListener: (listener) => listeners.push(listener), fire: (...args) => listeners.forEach((listener) => listener(...args)) };
@@ -75,6 +75,7 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
   function reply(request) {
     switch (request.type) {
       case "hello": return { type: "hello_result", host_version: "fixture", configured, config_issue: null };
+      case "list_task_folders": return { type: "task_folders_listed", revision: "1", folders: taskFolders };
       case "get_config": return {
         type: "config_result", revision: fixture.revision, config: fixture.config, config_issue: null,
         agent_status: { state: configured ? "ready" : "not_set_up", harness_version: configured ? "1.0" : null, message: null },
@@ -122,10 +123,15 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null }
       };
       case "worklog_focus_choices": {
         const session = { id: "10000000-0000-4000-8000-000000000001", name: "Release", revision: 1 };
-        const selected = request.focus_session_id === session.id ? session : null;
+        const sessions = fixture.focusPages ? [session, { ...session, id: "10000000-0000-4000-8000-000000000002" }] : [session];
+        const offset = request.sessions_page?.offset ?? 0;
+        if (offset && fixture.focusPageConflict) return { type: "error", code: "conflict", message: "Recorded sessions changed" };
+        const next = fixture.focusPages && offset === 0 ? 1 : null;
+        const selected = sessions.find((s) => s.id === request.focus_session_id) ?? null;
         return {
           type: "worklog_focus_choices_result", start_date: request.start_date, end_date: request.end_date,
-          focus_session_id: request.focus_session_id, sessions: [session], sessions_truncated: false,
+          focus_session_id: request.focus_session_id, sessions: sessions.slice(offset, offset + 1), sessions_truncated: next !== null,
+          ...(request.sessions_page ? { sessions_page: { snapshot: "a".repeat(64), offset, next_offset: next, omitted: false } } : {}),
           selected_session: selected, name_changed: false,
           choices: selected ? [{ artifact_id: "doc:0", local_date: request.start_date,
             text: "Release update — focused 2 min · opened 1×", url: "https://work.example/0" }] : [],
@@ -268,9 +274,13 @@ export async function browserFixture(t, pageName, state = "configured", options 
   page.setDefaultTimeout(10_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL, summary: options.summary ?? null });
+  await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL, summary: options.summary ?? null, taskFolders: options.taskFolders ?? [] });
   await page.goto(`${ORIGIN}/${pageName}.html`);
   const status = page.locator(pageName === "tasks" ? "#tasks-status" : "#status");
+  if (pageName === "panel" && (state === "disconnected" || state === "error")) {
+    await page.locator("#notice-activity-label").filter({ hasText: state === "disconnected" ? /unavailable/ : /settings|repair/ }).waitFor();
+    await page.locator("#notice-activity-label").click();
+  }
   if (state === "disconnected") await status.filter({ hasText: /unavailable|Could not list tasks/ }).waitFor();
   else if (state === "error") await status.filter({ hasText: /settings|repair|Fixture task listing failed/ }).waitFor();
   else if (pageName === "tasks") {
