@@ -31,8 +31,8 @@ type   = "servicenow.kb"
 origin = "https://acme.service-now.com"
 match  = [
   { path = "/kb_view.do", query = { sysparm_article = "{number:token(3,40)|upper}" } },
-  { path = "/{_}", query = { id = "kb_article", sysparm_article = "{number:token(3,40)|upper}" }, absent = ["sys_id", "sys_kb_id"] },
-  { path = "/{_}", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" }, absent = ["sys_id", "sys_kb_id"] },
+  { path = "/{_}", query = { id = "kb_article", sysparm_article = "{number:token(3,40)|upper}" }, absent = ["sys_id"] },
+  { path = "/{_}", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" }, absent = ["sys_id"] },
 ]
 id     = "servicenow.kb:{host}/{number}"
 generic_titles = ["Knowledge Base", "Login"]
@@ -60,15 +60,23 @@ for a new one).
    `?id=kb_article_view&sysparm_article=<number>`. Search-ranking noise
    (`sysparm_rank`, `sysparm_tsqueryId`) and the fragment are ignored.
 
-Both portal rules require `sys_id` and `sys_kb_id` to be absent. A portal
-link that carries one of them as well as the number, such as
-`/sp?id=kb_article&sysparm_article=KB0010035&sys_id=<sys_id>`, names a
-version as well as the article, and the research leaves every version link
-unrecorded (below): which of the two the page shows is not documented. The
-`absent` keys also prove the portal rules disjoint from the incident,
-requested item and change classic forms (`/incident.do?sys_id=…`), whose
-one-segment paths `{_}` covers; without them the family's overlap report
-would list six pairs.
+Both portal rules require `sys_id` to be absent. That `absent` key proves
+the portal rules disjoint from the incident, requested item and change
+classic forms (`/incident.do?sys_id=…`), whose one-segment paths `{_}`
+covers; without it the family's overlap report would list six pairs. So a
+portal link that carries a `sys_id` as well as the number, such as
+`/sp?id=kb_article&sysparm_article=KB0010035&sys_id=<sys_id>`, is not
+recorded.
+
+A portal link that carries the number and a `sys_kb_id`, such as
+`/esc?id=kb_article_view&sysparm_article=KB0010035&sys_kb_id=<sys_kb_id>`,
+is recorded as the article its number names, the same way rule 1 records
+`kb_view.do?sysparm_article=…&sys_kb_id=…`. The ID is the number, which
+covers every version of the article, so recording such a link never splits
+one article across two IDs, whichever version the page shows. No classic
+form requires `sys_kb_id`, so the overlap proof does not need it. (An
+earlier draft also required `sys_kb_id` to be absent; that left these
+links unrecorded on the portals, which the classic form records.)
 
 The number capture is `token(3,40)|upper`. KB prefixes are configurable per
 instance (`HRKB0001001` is recorded too), and `|upper` folds `kb0010035`
@@ -107,8 +115,8 @@ pages.
   `/now/sow/kb_view/kb_knowledge/<sys_id>` and `kb_knowledge.do?sys_id=…`.
   Each names one version, and one adapter cannot build the number-based ID
   from it, so recording them would split one article across two IDs. A
-  portal link with both the number and a `sys_id` or `sys_kb_id` is not
-  recorded either (above);
+  portal link with both the number and a `sys_id` is not recorded either
+  (above);
 - knowledge home and search, on any portal: `?id=kb_home`, `?id=kb_search`,
   `kb_find.do`;
 - a portal path of more than one segment (`/helpzone/extra?id=kb_article&…`);
@@ -143,7 +151,8 @@ with real Chrome and a real ServiceNow account:
 2. Note the portal path the instance uses, and confirm an article opened
    there is recorded whether or not the path is `/sp`, `/esc` or `/kb`.
    Check whether an article link ever carries a `sys_id` or `sys_kb_id`
-   beside `sysparm_article`; if it does, note which version the page shows.
+   beside `sysparm_article`; if it does, note which version the page shows
+   (a `sys_kb_id` one records as the article's number).
 3. Open a lowercase `sysparm_article` link; confirm the instance opens the
    same article (the `|upper` assumption).
 4. Publish or find a second version of one article; confirm both visits

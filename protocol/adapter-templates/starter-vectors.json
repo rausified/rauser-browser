@@ -1047,8 +1047,7 @@
                 "sysparm_article": "{number:token(3,40)|upper}"
               },
               "absent": [
-                "sys_id",
-                "sys_kb_id"
+                "sys_id"
               ]
             },
             {
@@ -1058,8 +1057,7 @@
                 "sysparm_article": "{number:token(3,40)|upper}"
               },
               "absent": [
-                "sys_id",
-                "sys_kb_id"
+                "sys_id"
               ]
             }
           ],
@@ -1150,6 +1148,28 @@
           "title": [
             "{title} | Splunk {~}",
             "{title} | Splunk"
+          ]
+        }
+      ]
+    },
+    "starter:google-drive": {
+      "format": 1,
+      "artifacts": [
+        {
+          "type": "google.drivefolder",
+          "origin": "https://drive.google.com",
+          "match": [
+            {
+              "path": "/drive/folders/{id:token(20,128)}"
+            },
+            {
+              "path": "/drive/u/{_}/folders/{id:token(20,128)}"
+            }
+          ],
+          "id": "google.drivefolder:{host}/{id}",
+          "title": [
+            "{title} - Google Drive",
+            "{title} – Google Drive"
           ]
         }
       ]
@@ -12152,9 +12172,9 @@
       "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035&sys_id=0123456789abcdef0123456789abcdef"
     },
     {
-      "id": "eval.servicenow.kb.neg.number_with_version_sys_kb_id",
+      "id": "eval.servicenow.kb.number_with_sys_kb_id_view",
       "kind": "evaluate",
-      "why": "portal article view naming a version by sys_kb_id as well as the number: not recorded",
+      "why": "portal article view with the number and a sys_kb_id: recorded by the number, as kb_view.do is",
       "impls": [
         "rust",
         "ts"
@@ -12163,10 +12183,41 @@
         "$fixture": "starter:servicenow"
       },
       "expect": {
-        "match": false,
-        "reason": "no_rule"
+        "match": true,
+        "adapter": 3,
+        "rule": 2,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
       },
       "url": "https://acme.service-now.com/esc?id=kb_article_view&sysparm_article=KB0010035&sys_kb_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.kb.number_with_sys_kb_id_article",
+      "kind": "evaluate",
+      "why": "portal article page with the number and a sys_kb_id: recorded by the number",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 1,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null
+      },
+      "url": "https://acme.service-now.com/sp?id=kb_article&sysparm_article=KB0010035&sys_kb_id=0123456789abcdef0123456789abcdef"
     },
     {
       "id": "eval.servicenow.kb.neg.renamed_portal_home",
@@ -14063,6 +14114,303 @@
       },
       "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
       "title": "Dashboard | Splunk 9.4.2"
+    },
+    {
+      "id": "validate.starter.google-drive",
+      "kind": "validate",
+      "why": "generated: the synthesized starter:google-drive fixture (protocol/starters/google-drive.json) is a valid format-1 document",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "overlap_report.starter.google-drive",
+      "kind": "overlap_report",
+      "why": "generated: google-drive's declared overlaps (protocol/starters/google-drive.json) are the whole set of rule pairs that may overlap",
+      "impls": [
+        "rust"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "pairs": []
+      }
+    },
+    {
+      "id": "eval.google.drivefolder.folder",
+      "kind": "evaluate",
+      "why": "folder by ID, hyphen title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "mode": null,
+        "title": "Team Templates",
+        "title_entry": 0,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      "title": "Team Templates - Google Drive"
+    },
+    {
+      "id": "eval.google.drivefolder.folder_endash",
+      "kind": "evaluate",
+      "why": "en dash title form",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "mode": null,
+        "title": "Team Templates",
+        "title_entry": 1,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      "title": "Team Templates – Google Drive"
+    },
+    {
+      "id": "eval.google.drivefolder.share_params",
+      "kind": "evaluate",
+      "why": "share-link params ignored",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "mode": null
+      },
+      "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345?usp=sharing_eip&ts=0a1b2c3d"
+    },
+    {
+      "id": "eval.google.drivefolder.slash",
+      "kind": "evaluate",
+      "why": "trailing slash",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "mode": null
+      },
+      "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/"
+    },
+    {
+      "id": "eval.google.drivefolder.account",
+      "kind": "evaluate",
+      "why": "second signed-in account: same ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "mode": null
+      },
+      "url": "https://drive.google.com/drive/u/1/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+    },
+    {
+      "id": "eval.google.drivefolder.legacy_id",
+      "kind": "evaluate",
+      "why": "older shorter folder ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "0BxAcmeExampleFolderId_-9z"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/0BxAcmeExampleFolderId_-9z",
+        "mode": null
+      },
+      "url": "https://drive.google.com/drive/folders/0BxAcmeExampleFolderId_-9z"
+    },
+    {
+      "id": "eval.google.drivefolder.generic_title",
+      "kind": "evaluate",
+      "why": "access-denied page: whole tab title recorded",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "mode": null,
+        "title": "Access denied",
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      "title": "Access denied"
+    },
+    {
+      "id": "eval.google.drivefolder.home",
+      "kind": "evaluate",
+      "why": "My Drive home is not a folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://drive.google.com/drive/u/1/home"
+    },
+    {
+      "id": "eval.google.drivefolder.root",
+      "kind": "evaluate",
+      "why": "Drive root is not a folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://drive.google.com/drive/my-drive"
+    },
+    {
+      "id": "eval.google.drivefolder.short_id",
+      "kind": "evaluate",
+      "why": "ID shorter than 20 is not a folder ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://drive.google.com/drive/folders/abc123"
+    },
+    {
+      "id": "eval.google.drivefolder.file",
+      "kind": "evaluate",
+      "why": "a Drive file view is not a folder",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view"
+    },
+    {
+      "id": "eval.google.drivefolder.nested",
+      "kind": "evaluate",
+      "why": "extra segment after the folder ID",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/extra"
     }
   ]
 }

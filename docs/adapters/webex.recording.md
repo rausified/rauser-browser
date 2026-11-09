@@ -141,7 +141,11 @@ vectors.
   different value from the recording ID (one API example shows three
   different values for one recording), and the page forwards to the
   recordingservice player, which rules 1/2 already record; matching `RCID`
-  would split one recording across two IDs;
+  would split one recording across two IDs. Real browsing (2026-11-09, 12
+  loader URLs) agrees: no `RCID` equalled any recording ID seen, and every
+  loader visit carried only the generic password or replay page title,
+  never the recording's name, so a loader artifact would have no useful
+  title either;
 - `/recording/download/<id>` (download page), `/recording/error/<id>`,
   `/recording/home` (list), and the webinar-recording registration pages;
 - `/convergedRecording/<id>/playback` (Webex Calling recordings): its ID
