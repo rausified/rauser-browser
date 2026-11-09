@@ -253,6 +253,26 @@ test("the worklog period segments are one tab stop that arrows move, with a visi
   await audit(t, page, "panel/worklog-period");
 });
 
+for (const outcome of ["append", "conflict"]) {
+  test(`Recent Load more preserves keyboard focus after ${outcome}`, async (t) => {
+    const page = await browserFixture(t, "panel");
+    if (!page) return;
+    await page.evaluate((conflict) => { fixture.recentPages = true; fixture.recentPageConflict = conflict; }, outcome === "conflict");
+    await enterPanelTab(page, "tab-recent");
+    await activate(page, "#recent-more", "Enter");
+    if (outcome === "append") {
+      await page.getByRole("link", { name: /Later report/ }).waitFor();
+      await focused(page, '.recent-link[href="https://work.example/1"]');
+      assert.equal(await page.locator("#recent-list h3").count(), 1);
+    } else {
+      await page.getByRole("button", { name: "Reload results", exact: true }).waitFor();
+      await focused(page, "#recent-reload");
+    }
+    assert.equal(await page.locator("#recent-more").isVisible(), false);
+    await audit(t, page, `panel/recent-pages-${outcome}`);
+  });
+}
+
 test("Recent's saved-summary reading filter is named and keyboard operable", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

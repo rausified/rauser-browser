@@ -1263,11 +1263,32 @@
         "title": { "oneOf": [{ "type": "string", "maxLength": 2048 }, { "type": "null" }] }
       }
     },
+    "RecentPageRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opt-in Recent paging. Continuations require the previous full-result snapshot. Offset equal to the total returns an empty exhausted page.",
+      "required": ["offset"],
+      "properties": {
+        "offset": { "type": "integer", "minimum": 0 },
+        "snapshot": { "type": "string", "minLength": 64, "maxLength": 64 }
+      }
+    },
+    "RecentPageInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "offset", "next_offset"],
+      "properties": {
+        "snapshot": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "offset": { "type": "integer", "minimum": 0 },
+        "next_offset": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] }
+      }
+    },
     "ListArtifactsRequest": {
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "protocol_version", "request_id", "artifact_type", "title_query", "limit"],
       "properties": {
+        "page": { "$ref": "#/$defs/RecentPageRequest" },
         "type": { "const": "list_artifacts" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -2079,6 +2100,7 @@
       "additionalProperties": false,
       "required": ["type", "protocol_version", "request_id", "items", "artifact_types", "truncated"],
       "properties": {
+        "page": { "$ref": "#/$defs/RecentPageInfo" },
         "type": { "const": "artifact_list_result" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },

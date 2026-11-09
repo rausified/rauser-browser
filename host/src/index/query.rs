@@ -307,6 +307,33 @@ pub(super) fn recent(
     reading: Option<brauser_protocol::SummaryReadingFilter>,
     limit: usize,
 ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
+    let mut items = Vec::new();
+    let types = scan_recent(
+        tx,
+        artifact_type,
+        title_query,
+        reading,
+        Some(limit),
+        |item| {
+            items.push(item);
+            Ok(items.len() <= limit)
+        },
+    )?;
+    let truncated = items.len() > limit;
+    items.truncate(limit);
+    Ok((items, types, truncated))
+}
+
+/// Visit matching rows in the same stable order for legacy and paged reads.
+/// A missing scan limit streams the full logical result for its snapshot.
+pub(super) fn scan_recent(
+    tx: &Transaction<'_>,
+    artifact_type: Option<&str>,
+    title_query: Option<&str>,
+    reading: Option<brauser_protocol::SummaryReadingFilter>,
+    limit: Option<usize>,
+    mut visit: impl FnMut(ArtifactListItem) -> Result<bool>,
+) -> Result<Vec<String>> {
     let types = tx
         .prepare_cached("SELECT DISTINCT artifact_type FROM artifacts ORDER BY 1 LIMIT ?1")?
         .query_map([MAX_TYPES as i64], |row| row.get::<_, String>(0))?
@@ -329,10 +356,10 @@ pub(super) fn recent(
         rusqlite::params![
             artifact_type,
             query,
-            if reading.is_some() {
-                -1
-            } else {
-                sql_count(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+            match limit.filter(|_| reading.is_none()) {
+                None => -1,
+                Some(limit) =>
+                    sql_count(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1)),
             },
             i64::from(reading.is_some())
         ],
@@ -354,12 +381,8 @@ pub(super) fn recent(
             ))
         },
     )?;
-    let mut items = Vec::new();
     for row in rows {
         let (mut item, summarized) = row?;
-        if reading.is_none() && items.len() == limit {
-            return Ok((items, types, true));
-        }
         // The day's latest summary that renders.
         if summarized {
             item.summary =
@@ -368,14 +391,11 @@ pub(super) fn recent(
         if reading.is_some_and(|filter| !matches_reading(item.summary.as_ref(), filter)) {
             continue;
         }
-        // The extra matching row establishes truncation. Never limit the
-        // candidate rows first: an older matching summary must stay reachable.
-        if items.len() == limit {
-            return Ok((items, types, true));
+        if !visit(item)? {
+            break;
         }
-        items.push(item);
     }
-    Ok((items, types, false))
+    Ok(types)
 }
 
 fn matches_reading(

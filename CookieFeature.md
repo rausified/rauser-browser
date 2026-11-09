@@ -1806,3 +1806,9 @@ pass with all 149 configuration tests. The seeded save model now changes real UR
 coverage and checks both order and history guards, catching the widening scenario
 that its earlier presentation-only edits could not exercise. Re-learn apply still
 awaits its documented recovery and downgrade decisions.
+
+## 2026-11-09 — Continue through every matching Recent summary
+
+Recent now offers Load more to reach artifact-days beyond the first 32, including title, type and saved-summary reading filters. Each page keeps the existing measured order and each day's latest displayed summary. The host checks a snapshot of the complete matching result and its home/configuration before returning another bounded page; changed history offers an explicit Reload results action. The panel rejects late replies after filter edits, home changes or actual host exits, and keeps keyboard focus on the first newly appended result or the reload action. Review corrected Chrome's disabled-button focus behavior and an answered-host exit race. Tests exercise 80 matching artifact-days, tied names and dates, identical data in different homes, changed old summaries, exhausted pages and malformed metadata. Paging keeps one response window in host memory but scans matching history per request. No agent runs or content changes. Re-learn apply remains blocked on its documented coordinator decisions.
+
+The driver quarantined the first attempt because an older disconnect test still expected Recent rows to remain visible. Recovery keeps the new stale-result invalidation and updates that regression to check that rows disappear, the page summary disables while offline, and explicit reload restores enabled Recent summary buttons from offset zero. The follow-up for retaining the reading position is now brwr-0401 after the quarantine removed its original bead.

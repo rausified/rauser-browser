@@ -1778,3 +1778,38 @@ workspace build, formatting and Clippy pass. Type checking, lint, all 50 extensi
 test files, Markdown neutralization and 13 script test files pass. Development
 tools report 254 tests with 94 sandbox skips; accessibility reports two passed
 and 53 explicit browser skips. The external driver retains browser acceptance.
+
+## 2026-11-09 — Continue through matching Recent artifact-days
+
+`brwr-a30j` adds explicit Recent **Load more** and **Reload results** controls.
+The existing order and latest displayed summary determine every filtered row.
+Optional protocol-v8 `page` objects leave legacy caller shapes unchanged; paged
+responses retain the native 32-row cap. A streaming full-result digest binds
+all rendered matching rows and type choices, normalized query, effective cap,
+config revision, storage, physical root identity and adapter fingerprint in one
+SQLite transaction. Positive offsets require that snapshot; changed scope or
+history refuses, and an offset at the total is an empty exhausted page.
+
+The panel invalidates immediately on title edits before debounce, filter or
+home/config changes, and actual host-port exits. An answered idle exit can
+leave `connected` true, so that lifecycle event is checked directly. Continuation
+keeps old DOM rows and avoids duplicate day headings. Guarded `aria-disabled`
+preserves Chrome keyboard focus during loading; ownership is captured before
+hiding an exhausted or failed control. Reload starts an explicit fresh result.
+
+Validation: 233 index tests passed (two pre-existing ignored), 10 Recent-focused
+Rust tests and six artifact wire tests passed; 115 extension tests passed across
+Recent/worklog, host refresh and agent/shape checks. Three selected Chromium
+keyboard cases explicitly skip because the sandbox cannot launch Chromium;
+the driver/CI runs them outside it. Host Clippy and fast static checks pass.
+Independent design challenge and final diff review found and resolved the
+focus and host-exit issues; final review has no P1/P2 findings. Query work still
+scans matching history and summary lookups per page while retaining only a
+bounded window in host memory. `brwr-0401` tracks preserving the reading position
+when returning to Recent. The separate Re-learn apply decisions remain open.
+
+### Quarantine recovery and disconnect regression
+
+Cycle 4 was quarantined after its external extension gate found the existing page-summary disconnect test dereferencing a removed Recent button. The recovered change preserves host-exit invalidation and updates the regression to assert stale-row removal, page-summary disabling, and an explicit offset-zero reload restoring enabled summary buttons. TESTING.md records the coupled behaviors. The rolled-back reading-position follow-up was recreated as `brwr-0401`; all recovered citations now name the live bead.
+
+Recovery validation: protocol generation, the complete workspace build, formatting, both Clippy configurations, npm install, typecheck, lint and extension build pass. The full extension command passes all 50 test files; the explicit non-isolated page-summary/Recent run passes all 86 cases. Workspace Rust tests report 1,677 passed and two ignored, with 94 documented IPC sandbox-skip messages. Accessibility reports two passed and 55 Chromium sandbox skips. Unsandboxed browser and IPC acceptance remains with the driver. Fresh diff review found no additional corrections.

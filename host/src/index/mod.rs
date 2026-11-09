@@ -59,6 +59,7 @@ mod ord;
 mod project;
 mod query;
 mod rebuild;
+mod recent_page;
 mod regen;
 mod render;
 mod scan;
@@ -70,6 +71,9 @@ pub(crate) use db::BUSY_MESSAGE;
 /// Busy accounting for host-level tests (7vf).
 #[cfg(test)]
 pub(crate) use db::{BUSY_SURFACED, BusyTimeout};
+pub(crate) use recent_page::{
+    Filters as RecentFilters, StaleRecentPage, valid_recent_page_request,
+};
 
 use fold::*;
 pub(crate) use fold::{unvisited_container, unvisited_within};
@@ -1011,6 +1015,22 @@ impl ArtifactIndex {
         limit: usize,
     ) -> Result<(Vec<ArtifactListItem>, Vec<String>, bool)> {
         self.read(|tx| query::recent(tx, artifact_type, title_query, Some(reading), limit))
+    }
+
+    /// Stateless pages bound to storage, filters and the complete rendered result.
+    pub(crate) fn recent_page(
+        &self,
+        filters: RecentFilters<'_>,
+        revision: &str,
+        page: &brauser_protocol::RecentPageRequest,
+    ) -> Result<recent_page::RecentPage> {
+        let scope = serde_json::to_vec(&(
+            &self.storage,
+            &self.root_identity,
+            self.adapters_fingerprint(),
+            revision,
+        ))?;
+        self.read(|tx| recent_page::query(tx, &scope, filters, page))
     }
 
     /// Render a measured, agent-free summary for an inclusive range of local

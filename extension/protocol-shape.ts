@@ -521,7 +521,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return typeof value.recognized === "boolean" &&
         (value.artifact === null || isArtifact(value.artifact)) && hasSummary(value);
     case "artifact_list_result":
-      return Array.isArray(value.items) && value.items.length <= 32 &&
+      return (!Object.hasOwn(value, "page") || isRecentPage(value.page)) &&
+        Array.isArray(value.items) && value.items.length <= 32 &&
         value.items.every(isArtifactListItem) && Array.isArray(value.artifact_types) &&
         value.artifact_types.length <= 64 && isStringArray(value.artifact_types) &&
         typeof value.truncated === "boolean";
@@ -619,6 +620,15 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     default:
       return false;
   }
+}
+
+function isRecentPage(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const page = value as Record<string, unknown>;
+  const offset = (n: unknown): boolean => isUnsignedInteger(n) && (n as number) <= 0xffffffff;
+  return hasExactKeys(page, ["snapshot", "offset", "next_offset"]) &&
+    typeof page.snapshot === "string" && /^[a-f0-9]{64}$/.test(page.snapshot) && offset(page.offset) &&
+    (page.next_offset === null || (offset(page.next_offset) && (page.next_offset as number) > 0));
 }
 
 function isWorklogChoicesPage(value: unknown): boolean {

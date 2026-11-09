@@ -263,8 +263,10 @@
               <option value="unknown">Unknown reading</option>
             </select>
           </div>
-          <p id="recent-status" class="page-url"></p>
+          <p id="recent-status" class="page-url" role="status" aria-live="polite"></p>
           <div id="recent-list" class="recent-list"></div>
+          <button id="recent-more" type="button" class="secondary" aria-controls="recent-list" hidden>Load more</button>
+          <button id="recent-reload" type="button" class="secondary" aria-controls="recent-list" hidden>Reload results</button>
         </section>
         <section class="card worklog-card" aria-labelledby="worklog-heading">
           <div class="card-head">
