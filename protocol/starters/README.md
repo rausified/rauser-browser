@@ -197,22 +197,28 @@ unaffected):
 - The host never lets `b` be live without `a` on its origin. `gen:starters`
   writes every declared pair, with both types' labels, into the
   `container_first` line of `protocol/capture-site/catalog.json`. That line
-  is generated only, and a host that finds it malformed refuses to start.
+  is generated only. A host that finds it malformed fails closed: the first save that needs it panics instead of saving unchecked, and the host's tests compare it with the families, so a damaged line never ships.
   Every save (settings, Capture Site and its preflight, and saving restored
   rules) is refused when it would leave a `b` adapter with no `a` adapter
   on the same origin: `b` alone, or `a` removed under `b`. The refusal reads
   "Splunk dashboards need Splunk apps saved with them on <origin>; add
-  Splunk apps, or remove Splunk dashboards too." A save that puts `b` above
-  `a` is refused too, whether the rules are shipped or edited, in a first
-  save of both or by a move: "Splunk apps must stay above Splunk dashboards
-  on <origin>. ... Move Splunk apps back above Splunk dashboards; to change
-  it, remove Splunk dashboards first." So the order a pair becomes live in,
-  container first, is the order it keeps. A config that already has either
-  problem on an origin is not blocked from other saves there, edits of
-  those adapters included, but a live pair already saved dashboards-first
-  keeps that order too: flipping it to apps-first would move pages the
-  dashboards recorded, so the host refuses it and asks to remove one of
-  them first. The host's tests check the catalog line against
+  Splunk apps, or remove Splunk dashboards too." The other rules:
+
+  - A pair goes live container first. A first save of both with `b` above
+    `a` is refused: "Splunk apps must come above Splunk dashboards on
+    <origin>: whichever comes first records the pages both match."
+  - A live pair never changes order, in either direction, shipped or edited:
+    "Splunk apps and Splunk dashboards can't change order on <origin> once
+    saved. To change it, remove Splunk dashboards, save, then add them
+    again." A site already saved dashboards first (by hand, or an edited
+    pair before this rule) stays that way, and other saves and edits there
+    are allowed.
+  - Apps are not added where dashboards are already live alone, above or
+    below them: "To add Splunk apps here, remove Splunk dashboards on
+    <origin>, save, then add both."
+
+  Removing dashboards and saving is always allowed, and the history guard
+  checks the retired contract when they come back. The host's tests check the catalog line against
   the families' own `overlaps`. The check is on type names, so it applies on
   any origin: starter type names are reserved for drafts, and a hand-written
   adapter that reuses one is held to it too.

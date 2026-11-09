@@ -2210,143 +2210,101 @@ pub(crate) fn validate_update(current: &ConfigSnapshot, next: &ConfigSnapshot) -
 }
 
 /// How a catalog `container_first` pair stands on one origin of a config
-/// (`container_first_problems`).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ContainerFirstProblem {
-    /// A contained adapter with no container adapter on its origin.
-    Missing,
-    /// A contained adapter sits above a container adapter.
-    Behind,
+/// (`container_first_state`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PairState {
+    /// No contained adapter on the origin.
+    Absent,
+    /// Contained adapters, no container adapter.
+    Alone,
+    /// Every container adapter above every contained adapter.
+    ContainerFirst,
+    /// A contained adapter above a container adapter.
+    ContainedFirst,
 }
 
-/// Each `(origin, pair, problem)` in `config`: an origin with a contained
-/// adapter of a catalog `container_first` pair
-/// (`crate::capture_site::container_first_pairs`) whose container is
-/// missing there or not ahead of it.
-fn container_first_problems(
-    config: &ConfigSnapshot,
-) -> Vec<(
-    String,
-    &'static crate::capture_site::ContainerFirstPair,
-    ContainerFirstProblem,
-)> {
-    let adapters = &config.adapters.artifacts;
-    let field = |adapter: &serde_json::Value, key: &str| {
-        adapter
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-    };
-    let first = |artifact_type: &str, origin: &str| {
-        adapters.iter().position(|adapter| {
-            field(adapter, "type").as_deref() == Some(artifact_type)
-                && field(adapter, "origin").as_deref() == Some(origin)
-        })
-    };
-    let mut problems = Vec::new();
-    for pair in crate::capture_site::container_first_pairs() {
-        let origins: std::collections::BTreeSet<String> = adapters
-            .iter()
-            .filter(|adapter| field(adapter, "type").as_deref() == Some(pair.contained.as_str()))
-            .filter_map(|adapter| field(adapter, "origin"))
-            .collect();
-        for origin in origins {
-            let contained = first(&pair.contained, &origin);
-            // Every container adapter must sit above every contained one:
-            // the last container before the first contained adapter.
-            let last_container = adapters.iter().rposition(|adapter| {
-                field(adapter, "type").as_deref() == Some(pair.container.as_str())
-                    && field(adapter, "origin").as_deref() == Some(origin.as_str())
-            });
-            let problem = match last_container {
-                None => Some(ContainerFirstProblem::Missing),
-                Some(container) if contained.is_some_and(|at| at < container) => {
-                    Some(ContainerFirstProblem::Behind)
-                }
-                Some(_) => None,
-            };
-            if let Some(problem) = problem {
-                problems.push((origin, pair, problem));
-            }
-        }
-    }
-    problems
-}
-
-/// Whether `config` has both of `pair`'s types on `origin`.
-fn container_first_both_live(
+fn container_first_state(
     config: &ConfigSnapshot,
     pair: &crate::capture_site::ContainerFirstPair,
     origin: &str,
-) -> bool {
-    let has = |artifact_type: &str| {
-        config.adapters.artifacts.iter().any(|adapter| {
-            adapter.get("type").and_then(serde_json::Value::as_str) == Some(artifact_type)
-                && adapter.get("origin").and_then(serde_json::Value::as_str) == Some(origin)
-        })
+) -> PairState {
+    let is = |adapter: &serde_json::Value, artifact_type: &str| {
+        adapter.get("type").and_then(serde_json::Value::as_str) == Some(artifact_type)
+            && adapter.get("origin").and_then(serde_json::Value::as_str) == Some(origin)
     };
-    has(&pair.container) && has(&pair.contained)
+    let adapters = &config.adapters.artifacts;
+    let Some(first_contained) = adapters
+        .iter()
+        .position(|adapter| is(adapter, &pair.contained))
+    else {
+        return PairState::Absent;
+    };
+    match adapters
+        .iter()
+        .rposition(|adapter| is(adapter, &pair.container))
+    {
+        None => PairState::Alone,
+        Some(last_container) if last_container > first_contained => PairState::ContainedFirst,
+        Some(_) => PairState::ContainerFirst,
+    }
 }
 
-/// Refuse a save that leaves a catalog `container_first` pair (Splunk apps
-/// and dashboards) wrong on an origin where `current` had it right: the
-/// contained adapter without its container (dashboards alone, or apps
-/// removed under them), or ahead of it (dashboards above apps, in a first
-/// save of both or by moving one). Every save reaches this through
-/// `validate_update` (settings, Capture Site and its preflight, saving
-/// restored rules, adapter repair).
+/// Refuse a save that changes how a catalog `container_first` pair (Splunk
+/// apps and dashboards) stands on an origin in a way that would move
+/// recorded pages. Whichever comes first records the pages both rules match
+/// (the app's built-in views), so:
 ///
-/// Why: whichever comes first wins the pages both rules match (the app's
-/// built-in views). With dashboards first, or alone, those pages are
-/// recorded as dashboards, and putting apps first later would move them to
-/// the app without a migration. Keeping the container present and ahead
-/// whenever the contained type is live means the contained contract never
-/// holds those pages, so the container may also take a retired contained
-/// contract's routes (`declares_container`). Rule edits do not change the
-/// order: the extension keeps an edited pair where it is.
+/// - the contained type may not be live without its container (dashboards
+///   alone, or apps removed under them), unless it already was;
+/// - a pair goes live container first (a first save of both, or dashboards
+///   added under live apps);
+/// - a live pair never changes order, in either direction: a site saved
+///   dashboards first (by hand, or an edited pair before this rule) stays
+///   that way until dashboards are removed;
+/// - apps may not be added to a site where dashboards are already live
+///   alone, above or below them: either way the apps would take, or
+///   lose, pages already recorded.
 ///
-/// A config that already had the problem on an origin (written by hand, or
-/// saved before this rule) is not blocked from other saves, including edits
-/// of those adapters; only a save that introduces one is refused. A live
-/// pair keeps the order it has either way: flipping an existing
-/// dashboards-first pair to apps-first is refused too, as it would move
-/// pages the dashboards already recorded.
+/// Changing any of these means removing dashboards and saving first, which
+/// the history guard (`refuse_rekeyed_routes`) then checks. Every save
+/// reaches this through `validate_update` (settings, Capture Site and its
+/// preflight, saving restored rules, adapter repair). The extension never
+/// re-sorts a live pair, so it does not produce these itself.
 fn refuse_new_container_first_problem(
     current: &ConfigSnapshot,
     next: &ConfigSnapshot,
 ) -> Result<()> {
-    let existing = container_first_problems(current);
-    // The reverse flip: an origin where `current` had dashboards above apps
-    // (an existing `Behind`) and `next` still has both, apps now first.
-    let fixed = container_first_problems(next);
-    for (origin, pair, problem) in &existing {
-        if *problem != ContainerFirstProblem::Behind
-            || fixed
-                .iter()
-                .any(|(o, p, _)| o == origin && std::ptr::eq(*p, *pair))
-            || !container_first_both_live(next, pair, origin)
-        {
-            continue;
-        }
-        let (contained, container) = (&pair.contained_label, &pair.container_label);
-        bail!(
-            "{contained} must stay above {container} on {origin}, as they were saved. Whichever comes first records the pages both match, so putting {container} first now would move pages already recorded under {contained}. Keep the order, or remove one of them first."
-        );
-    }
-    for (origin, pair, problem) in fixed {
-        if existing.iter().any(|(had_origin, had_pair, had)| {
-            *had_origin == origin && std::ptr::eq(*had_pair, pair) && *had == problem
-        }) {
-            continue;
-        }
-        let (contained, container) = (&pair.contained_label, &pair.container_label);
-        match problem {
-            ContainerFirstProblem::Missing => bail!(
-                "{contained} need {container} saved with them on {origin}; add {container}, or remove {contained} too."
-            ),
-            ContainerFirstProblem::Behind => bail!(
-                "{container} must stay above {contained} on {origin}. Whichever comes first records the pages both match, so changing the order would move pages already recorded under one to the other. Move {container} back above {contained}; to change it, remove {contained} first."
-            ),
+    let origins = |config: &ConfigSnapshot| -> std::collections::BTreeSet<String> {
+        config
+            .adapters
+            .artifacts
+            .iter()
+            .filter_map(|adapter| adapter.get("origin").and_then(serde_json::Value::as_str))
+            .map(str::to_owned)
+            .collect()
+    };
+    for pair in crate::capture_site::container_first_pairs() {
+        for origin in origins(next) {
+            let before = container_first_state(current, pair, &origin);
+            let after = container_first_state(next, pair, &origin);
+            let (contained, container) = (&pair.contained_label, &pair.container_label);
+            match (before, after) {
+                (_, PairState::Absent) => {}
+                (before, after) if before == after => {}
+                (PairState::Alone, _) => bail!(
+                    "To add {container} here, remove {contained} on {origin}, save, then add both: {contained} already recorded pages that {container} would take."
+                ),
+                (_, PairState::Alone) => bail!(
+                    "{contained} need {container} saved with them on {origin}; add {container}, or remove {contained} too."
+                ),
+                (PairState::Absent, PairState::ContainerFirst) => {}
+                (PairState::ContainerFirst | PairState::ContainedFirst, _) => bail!(
+                    "{container} and {contained} can't change order on {origin} once saved. To change it, remove {contained}, save, then add them again."
+                ),
+                (PairState::Absent, _) => bail!(
+                    "{container} must come above {contained} on {origin}: whichever comes first records the pages both match."
+                ),
+            }
         }
     }
     Ok(())
@@ -4138,10 +4096,41 @@ mod tests {
             edited
         }
 
-        fn order_refusal(error: &anyhow::Error) -> bool {
-            let message = format!("{error:#}");
-            message.contains("Splunk apps must stay above Splunk dashboards")
-                && message.contains("Move Splunk apps back above Splunk dashboards")
+        fn first_save_refusal(error: &anyhow::Error) -> bool {
+            format!("{error:#}").contains(
+                "Splunk apps must come above Splunk dashboards on https://acme.splunkcloud.com",
+            )
+        }
+
+        fn flip_refusal(error: &anyhow::Error) -> bool {
+            format!("{error:#}").contains(
+                "Splunk apps and Splunk dashboards can't change order on https://acme.splunkcloud.com once saved. To change it, remove Splunk dashboards, save, then add them again.",
+            )
+        }
+
+        fn add_apps_refusal(error: &anyhow::Error) -> bool {
+            format!("{error:#}").contains("To add Splunk apps here, remove Splunk dashboards on https://acme.splunkcloud.com, save, then add both")
+        }
+
+        /// A store whose config.toml was written with `adapters` as they are
+        /// (by hand, or by a build before this rule), adopted under the lock.
+        fn legacy_store(adapters: Vec<serde_json::Value>) -> (tempfile::TempDir, ConfigStore) {
+            let folder = tempfile::tempdir().unwrap();
+            let root = folder.path().join("notes");
+            fs::create_dir_all(&root).unwrap();
+            let path = folder.path().join("config.toml");
+            // As config.toml keeps them: an [adapters] header, then the
+            // adapter document's own tables.
+            let tables = format!(
+                "[adapters]\nformat = 1\n\n{}",
+                toml::to_string_pretty(&json!({"artifacts": adapters})).unwrap()
+            );
+            fixtures::write(&path, &root, "", "", &tables);
+            let mut store = ConfigStore::for_test(path);
+            let lock = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            drop(lock);
+            (folder, store)
         }
 
         /// Whichever of a container_first pair comes first records the pages
@@ -4157,10 +4146,10 @@ mod tests {
             // A first save of both, dashboards first.
             let error =
                 save_adapters(&mut store, vec![dashboard.clone(), app.clone()]).unwrap_err();
-            assert!(order_refusal(&error), "{error:#}");
+            assert!(first_save_refusal(&error), "{error:#}");
             let mut proposal = store.snapshot().adapters.clone();
             proposal.artifacts = vec![dashboard.clone(), app.clone()];
-            assert!(order_refusal(
+            assert!(first_save_refusal(
                 &store.check_capture_site(&proposal).unwrap_err()
             ));
             // Shipped order; edit, then revert; revert, then edit: all keep apps first.
@@ -4174,7 +4163,7 @@ mod tests {
                 vec![dashboard.clone(), app.clone()],
             ] {
                 let error = save_adapters(&mut store, flipped).unwrap_err();
-                assert!(order_refusal(&error), "{error:#}");
+                assert!(flip_refusal(&error), "{error:#}");
             }
             // Dashboards added under live apps, in the right place, save.
             let folder = tempfile::tempdir().unwrap();
@@ -4187,10 +4176,10 @@ mod tests {
             second["match"] = json!([{"path": "/{_}/app/{app:name}/(home)"}]);
             let error = save_adapters(&mut store, vec![app.clone(), dashboard.clone(), second])
                 .unwrap_err();
-            assert!(order_refusal(&error), "{error:#}");
+            assert!(flip_refusal(&error), "{error:#}");
             // Removing dashboards and adding them back above apps is refused too.
             save_adapters(&mut store, vec![app.clone()]).unwrap();
-            assert!(order_refusal(
+            assert!(first_save_refusal(
                 &save_adapters(&mut store, vec![dashboard, app]).unwrap_err()
             ));
         }
@@ -4214,13 +4203,9 @@ mod tests {
             // recorded the app's pages, so putting apps first would move them.
             let mut flipped = current.clone();
             flipped.adapters.artifacts = vec![app, dashboard];
-            let error = validate_update(&current, &flipped).unwrap_err();
-            let message = format!("{error:#}");
-            assert!(
-                message.contains("Splunk dashboards must stay above Splunk apps")
-                    && message.contains("remove one of them first"),
-                "{message}"
-            );
+            assert!(flip_refusal(
+                &validate_update(&current, &flipped).unwrap_err()
+            ));
         }
 
         /// A config that already has dashboards without apps (written by
@@ -4234,14 +4219,75 @@ mod tests {
             let mut next = current.clone();
             next.strip_params.push("ref".into());
             validate_update(&current, &next).unwrap();
-            let mut fixed = current.clone();
-            fixed.adapters.artifacts = vec![app, dashboard.clone()];
-            validate_update(&current, &fixed).unwrap();
+            // Adding apps where dashboards are already live alone would hand
+            // the apps pages recorded as dashboards, above them or below.
+            for added in [
+                vec![app.clone(), dashboard.clone()],
+                vec![dashboard.clone(), app.clone()],
+            ] {
+                let mut next = current.clone();
+                next.adapters.artifacts = added;
+                assert!(add_apps_refusal(
+                    &validate_update(&current, &next).unwrap_err()
+                ));
+            }
             let mut twice = current.clone();
             let mut other = dashboard;
             other["origin"] = json!("https://other.splunkcloud.com");
             twice.adapters.artifacts.push(other);
             assert!(validate_update(&current, &twice).is_err());
+        }
+
+        /// A site already saved dashboards first keeps that order: other
+        /// saves and edits there are allowed, a flip is refused, and the way
+        /// to change it is to remove dashboards, save, and add them back,
+        /// apps first, with the history guard checking the retired contract.
+        #[test]
+        fn a_dashboards_first_site_keeps_its_order_until_dashboards_are_removed() {
+            let [app, dashboard] = splunk();
+            let (_folder, mut store) = legacy_store(vec![dashboard.clone(), app.clone()]);
+            assert_eq!(store.snapshot().adapters.artifacts.len(), 2);
+            save_adapters(&mut store, vec![dashboard.clone(), edited(&app)]).unwrap();
+            assert!(flip_refusal(
+                &save_adapters(&mut store, vec![edited(&app), dashboard.clone()]).unwrap_err()
+            ));
+            assert!(flip_refusal(
+                &save_adapters(&mut store, vec![app.clone(), dashboard.clone()]).unwrap_err()
+            ));
+            // Removing dashboards (on a site whose app was not edited, so the
+            // only retired contract is the dashboard's), then adding both back.
+            let (_folder, mut store) = legacy_store(vec![dashboard.clone(), app.clone()]);
+            save_adapters(&mut store, vec![app.clone()]).unwrap();
+            // The history guard still applies: a dashboard under another ID
+            // over the retired dashboard's routes is refused.
+            let mut rekeyed = dashboard.clone();
+            rekeyed["id"] = json!("splunk.dashboard:{host}/views/{app}/{view}");
+            rekeyed["within"]["id"] = json!("splunk.app:{host}/app/{app}");
+            let error = save_adapters(&mut store, vec![app.clone(), rekeyed]).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("cannot change until artifact migrations"),
+                "{error:#}"
+            );
+            save_adapters(&mut store, vec![app, dashboard]).unwrap();
+        }
+
+        /// Dashboards already live alone: adding apps, above or below them,
+        /// is refused with the way to do it.
+        #[test]
+        fn apps_are_not_added_where_dashboards_are_live_alone() {
+            let [app, mut dashboard] = splunk();
+            dashboard.as_object_mut().unwrap().remove("within");
+            let (_folder, mut store) = legacy_store(vec![dashboard.clone()]);
+            for added in [
+                vec![app.clone(), dashboard.clone()],
+                vec![dashboard.clone(), app.clone()],
+            ] {
+                assert!(add_apps_refusal(
+                    &save_adapters(&mut store, added).unwrap_err()
+                ));
+            }
+            save_adapters(&mut store, Vec::new()).unwrap();
+            save_adapters(&mut store, vec![app, dashboard]).unwrap();
         }
 
         /// So a recorded dashboard never holds the app's pages, and the app

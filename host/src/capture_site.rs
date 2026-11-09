@@ -200,10 +200,11 @@ fn parse_container_first(source: &str) -> Result<Vec<ContainerFirstPair>, String
     Ok(file.container_first)
 }
 
-/// The compiled-in catalog's `container_first` entries. A damaged entry
-/// fails closed: the host refuses to start (as for the rest of the catalog,
-/// `catalog`), and the tests below parse the shipped file, so one never
-/// ships.
+/// The compiled-in catalog's `container_first` entries, read on the first
+/// save that needs them. A damaged entry fails closed: that save panics
+/// rather than saving unchecked (as `catalog` does for the rest of the
+/// file), and the tests below parse the shipped file and compare it with the
+/// starter families, so a damaged one never ships.
 pub(crate) fn container_first_pairs() -> &'static [ContainerFirstPair] {
     static PAIRS: OnceLock<Vec<ContainerFirstPair>> = OnceLock::new();
     PAIRS.get_or_init(|| match parse_container_first(CATALOG) {

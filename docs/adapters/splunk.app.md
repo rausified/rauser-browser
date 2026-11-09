@@ -113,6 +113,9 @@ capture, so the structural drafter cannot learn this shape.
   dashboards stay. Without the app rule, Search and the other built-in
   pages would be recorded as dashboards named `search`, `reports`, and so
   on, and adding apps later would move those records without a migration.
+  Once saved, the two keep their order. To add apps on a stack that has
+  dashboards alone, or to change the order, remove dashboards, save, then
+  add both.
 - **Prefixed search heads are not offered.** `labels: 1` claims
   `<stack>.splunkcloud.com` and one-label hosts such as
   `es-<stack>.splunkcloud.com`, but not `<prefix>.<stack>.splunkcloud.com`.

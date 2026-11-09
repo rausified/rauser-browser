@@ -153,6 +153,9 @@ test("orderContainedFirst never reorders a declared container_first pair", (t) =
   const editedBoard = { ...board, match: [{ path: "/s/{space:name}/{board:name}/{*}" }] };
   assert.deepEqual(orderContainedFirst([space, editedBoard]), [space, editedBoard]);
   // Reverting an edit (shipped again) never flips a container-first pair.
+  // A site saved dashboards first, its app edited, then reverted: the next
+  // save keeps dashboards first, so the host has no flip to refuse.
+  assert.deepEqual(orderContainedFirst([board, widened]), [board, widened]);
   assert.deepEqual(orderContainedFirst([board, space]), [board, space]);
   assert.deepEqual(orderContainedFirst([space, board]), [space, board]);
   // The evaluated document agrees: the space's built-in page is the space.
