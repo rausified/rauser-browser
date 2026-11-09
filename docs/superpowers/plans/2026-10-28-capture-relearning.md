@@ -71,7 +71,9 @@ Apply decisions, resolved by John on 2026-11-09 (`brwr-dbp`):
   start, rolling forward or back from the prepared, byte-bound journal entry.
   There is no mode that refuses ordinary access until an explicit recovery.
 - Unalias: not in the first version. Durable apply supports alias and re-key
-  only; the read-only replay keeps its existing unalias handling.
+  only; the read-only replay keeps its existing unalias handling and tests.
+  The user-facing **Not the same** correction (DESIGN.md §5.1, §12.2 step
+  7.2) is the later aliases step, not part of this apply.
 - Authoritative history: an append-only file inside the home folder's existing
   fixed layout, so deleting the cache rebuilds the projection from it.
 - Downgrade: no contract at this stage; older builds are out of scope.
@@ -100,8 +102,10 @@ host-built replay. Neither the worker nor a journal receipt supplies aliases.
    ownership-checked file operations, preserve conflicting notes and summaries,
    and keep browser-local note recovery separate from host migrations. Teach
    index rebuild, record-key resolution, refs, dirty artifacts and old-path
-   stubs the same replay rules. Verify crash/retry, move-back and unalias
+   stubs the same replay rules. Verify crash/retry and move-back
    behavior with notes on both sides; retain all frozen capture recovery.
+   Durable unalias is deferred (2026-11-09 decision); the read-only replay
+   keeps its existing unalias tests.
 4. **Panel review and commit.** Add Re-learn to Capture Site using the existing
    plain-language review and drafter checks. Show migration impact, refuse a
    stale plan and save pending note edits before identity changes. Only this
