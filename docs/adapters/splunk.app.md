@@ -114,8 +114,23 @@ capture, so the structural drafter cannot learn this shape.
 - **US Government stacks** (believed to be `*.splunkcloudgc.com`) and
   on-premises Splunk Enterprise are other origins. Enterprise with a
   `root_endpoint` adds a leading path segment these rules do not expect.
-- **Restoring recorded rules refuses overlapping rules**, this declared pair
-  included, as it does for any overlap.
+- **Removed, then added again.** After Splunk rules are removed, Capture
+  Site cannot restore the recorded pair as it was, because the two rules
+  overlap on purpose. It says so and offers the starter instead. The host
+  checks the starter against the recorded identities, so existing notes keep
+  theirs.
+- **Dashboards chosen before apps are not linked later.** A dashboard rule
+  saved without apps has no `within`, and adding apps afterwards does not
+  add it. Dashboard time then does not count toward its app until both are
+  removed and chosen together.
+- **Non-web hosts on the suffix are claimed.** The starter is also offered
+  on `https://<stack>.splunkcloud.com:8089` (the REST port) and other
+  same-suffix hosts. None of them serve `/app/` pages, so nothing is
+  recorded there.
+- **A built-in view's `/edit` is a dashboard.** `/<locale>/app/<app>/search/edit`
+  and other built-in views followed by `/edit` are recorded as a dashboard
+  named after the view, in edit mode, because this rule has no mode slot.
+  Splunk Web does not link to these paths.
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).
 
 ## Live check still needed

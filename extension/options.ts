@@ -209,6 +209,7 @@ function showConfigState(): void {
   const policyIssue = session.configIssue ?? session.adapterIssue;
   const problem = setupProblem(config, policyIssue);
   const stripCount = config ? stripParamConflicts(config.strip_params, config.adapters).length : 0;
+  const overlapCount = shownOverlaps(config).length;
   if (policyIssue) show(problem!, true);
   else if (problem) show(`${problem} Choose a folder, then add an adapter for each site you want logged.`);
   else if (!config) return;
@@ -221,8 +222,8 @@ function showConfigState(): void {
       true,
     );
   }
-  else if (shownOverlaps(config).length) {
-    const count = shownOverlaps(config).length;
+  else if (overlapCount) {
+    const count = overlapCount;
     show(
       `${captureStateText(config)} ${count} adapter rule overlap${count === 1 ? " needs" : "s need"} review. The earlier configured rule wins.`,
       true,

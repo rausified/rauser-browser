@@ -588,6 +588,12 @@ function containerFirst(origin: unknown, container: unknown, contained: unknown)
     entry.expect === "container_first" && entry.a === container && entry.b === contained) ?? null;
 }
 
+/** Whether the starter family claiming `origin` declares any
+ * `"container_first"` overlap. */
+export function declaresContainerFirst(origin: string): boolean {
+  return starterFamily(origin)?.overlaps?.some((entry) => entry.expect === "container_first") ?? false;
+}
+
 /** Whether `container` ahead of `contained` is a starter family's declared
  * `"container_first"` pair as the family ships it: same origin, the
  * family's own types, and both adapters' rules exactly as shipped, every

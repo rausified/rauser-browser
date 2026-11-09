@@ -154,13 +154,27 @@ unaffected):
   shipped: once the user edits one (widening it to a catch-all, say), the
   ordinary contained-first order applies, so `b`'s own pages stay `b`'s.
 - Settings leaves the host's warning for a declared pair out of the overlap
-  list, but only while both rules are exactly as the starter ships them
-  (rule text and `path_case`) and `a` comes first. An edited rule, a pair
-  not in `pairs`, or the pair on another origin is warned about as before.
+  list, but only while both adapters are exactly as the starter ships them
+  (every `match` rule and `path_case`) and `a` comes first. One predicate,
+  `isContainerFirstPair`, decides both this and the order above. An edited
+  rule on either adapter, a pair not in `pairs`, or the pair on another
+  origin is warned about and ordered as before.
+- Restoring recorded rules (`site_restore`) still refuses any overlap, a
+  declared pair included, because recorded contracts carry no family. On a
+  family that declares `"container_first"`, Capture Site treats that one
+  refusal as "offer the starter instead": it says why, and offers the
+  shipped starter. The host checks the starter against every recorded
+  contract before saving and again on save, so a recorded identity the
+  starter would change is still refused. Any other restore refusal still
+  blocks the starter. Re-adding a removed container and its contained type
+  in one save is allowed, because the host treats a recorded contract that
+  the save puts back exactly as live again, not retired.
 - Nothing else changes: user-written adapters keep the ordinary §10.3
-  warning, agent drafts still drop an overlapping rule, and restoring
-  recorded rules (`site_restore`) still refuses any overlap, a declared pair
-  included, because recorded contracts carry no family.
+  warning, and agent drafts still drop an overlapping rule.
+- A contained adapter saved before its container has no `within`, and
+  adding the container later does not link it: existing-rule linking is
+  GitHub's only. Its time does not roll up into the container until it is
+  removed and chosen again with the container.
 
 Why a declaration in the family file, not in the format: the overlap is a
 property of how one vendor lays out its URLs, reviewed when the family is

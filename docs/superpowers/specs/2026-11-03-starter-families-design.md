@@ -53,7 +53,8 @@ The design agent's open decisions, settled:
    the declared pairs while both rules are unedited. Why in the family file and not the format: it records how one vendor lays out its
    URLs, reviewed with the family; a format-level precedence key would let any saved or drafted
    adapter declare a winner, which the overlap warning exists to stop. User-written adapters,
-   agent drafts and recorded-rule restore keep today's overlap handling
+   agent drafts and recorded-rule restore keep today's overlap handling; on such a family Capture Site
+   offers the starter after the restore overlap refusal, re-checked by the host
    (`protocol/starters/README.md` "Test vectors and overlaps").
 
 ## Research method (from the blind test)

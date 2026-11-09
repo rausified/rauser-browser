@@ -11698,6 +11698,36 @@
       "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/edit"
     },
     {
+      "id": "eval.splunk.dashboard.built_in_view_edit_is_a_dashboard",
+      "kind": "evaluate",
+      "why": "known limit: a built-in view followed by /edit is a dashboard named after the view, in edit mode (docs/adapters/splunk.app.md)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "search",
+          "mode": "edit"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/search",
+        "mode": "edit",
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        }
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/search/edit"
+    },
+    {
       "id": "eval.splunk.dashboard.dashboard_edit_mode_with_trailing_slash_and_query",
       "kind": "evaluate",
       "why": "dashboard edit mode with trailing slash and query",
@@ -12248,6 +12278,32 @@
         "mode": "edit"
       },
       "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview/edit"
+    },
+    {
+      "id": "eval.splunk.dashboard.built_in_view_edit_is_a_dashboard.alone",
+      "kind": "evaluate",
+      "why": "generated: known limit: a built-in view followed by /edit is a dashboard named after the view, in edit mode (docs/adapters/splunk.app.md), with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "search",
+          "mode": "edit"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/search",
+        "mode": "edit"
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/search/edit"
     },
     {
       "id": "eval.splunk.dashboard.dashboard_edit_mode_with_trailing_slash_and_query.alone",
