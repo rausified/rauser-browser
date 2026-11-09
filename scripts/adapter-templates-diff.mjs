@@ -230,6 +230,17 @@ function genAdapter(r, index, origin) {
     const aliasable = titled.filter((c) => titles.some((t) => t.names.includes(c.name)));
     if (aliasable.length > 0 && r.chance(0.4)) adapter.alias = { from: "tab_title", capture: r.pick(aliasable).name };
   }
+  // §9.4: generic titles, drawn from words the title generator also writes
+  // so they really match, with ASCII and non-ASCII case variants, and a
+  // small share of invalid lists so validation is compared too.
+  let generic = null;
+  if (r.chance(0.35)) {
+    generic = Array.from({ length: r.range(1, 4) }, () => r.pick(GENERIC_POOL));
+    if (r.chance(0.08)) generic.push(r.pick(GENERIC_INVALID));
+    if (r.chance(0.03)) generic = Array.from({ length: 17 }, (_, i) => `G${i}`);
+    if (r.chance(0.02)) generic = r.pick([[], "Plan", [3]]);
+    adapter.generic_titles = generic;
+  }
   if (r.chance(0.3)) {
     adapter.refs = Array.from({ length: r.chance(0.8) ? r.range(1, 2) : r.range(3, 8) }, () => ({
       type: r.pick(["jira.issue", adapter.type]), find: r.pick(["jira_key", "int", "hex", "uuid"]),
@@ -244,25 +255,38 @@ function genAdapter(r, index, origin) {
     if (r.chance(0.2)) parts.unshift("x-y");
     adapter.within = { type: `c${index}.group`, id: [`${scheme}.c:{host}`, ...parts].join("/") };
   }
-  return { json: adapter, rules, captures, scoped, titles, insensitive, modeAlts };
+  return { json: adapter, rules, captures, scoped, titles, insensitive, modeAlts, generic: Array.isArray(generic) ? generic.filter((g) => typeof g === "string") : [] };
 }
 
-/** A rule binding every ID capture once, in the path or the query. */
+/** A rule binding every ID capture once, in the path or the query. A share
+ * of rules has no literal path segment and is anchored, or meant to be, by
+ * the query alone (§4.1, amended 2026-11-09): a literal condition plus the
+ * ID captures in the query, under a `{_}` path. Whether such a rule really
+ * anchors depends on the capture types drawn, so both outcomes, and the
+ * `no_literal_segment` refusal, are compared. */
 function genRule(r, captures, scoped, modeAlts) {
   const bound = scoped ? [...captures, scoped] : [...captures];
-  const inQuery = bound.filter(() => r.chance(0.2));
+  const queryAnchored = r.chance(0.15);
+  const inQuery = queryAnchored
+    ? bound.filter((c) => c !== scoped || r.chance(0.5))
+    : bound.filter(() => r.chance(0.2));
   const inPath = bound.filter((c) => !inQuery.includes(c));
   const segments = [];
   const literal = () => r.chance(0.2)
     ? { kind: "alt", alts: [...new Set([r.pick(PATH_WORDS), r.pick(PATH_WORDS)])] }
     : { kind: "lit", text: r.pick(PATH_WORDS) };
-  segments.push(literal());
+  if (queryAnchored) {
+    segments.push({ kind: "anon" });
+    if (r.chance(0.3)) segments.push({ kind: "anon" });
+  } else {
+    segments.push(literal());
+  }
   for (const c of inPath) {
-    if (r.chance(0.5)) segments.push(literal());
+    if (!queryAnchored && r.chance(0.5)) segments.push(literal());
     if (r.chance(0.2)) segments.push({ kind: "anon" });
     segments.push({ kind: "cap", name: c.name, ctype: c.ctype });
   }
-  const shuffled = r.chance(0.3) ? r.shuffle(segments) : segments;
+  const shuffled = !queryAnchored && r.chance(0.3) ? r.shuffle(segments) : segments;
   const optional = [];
   if (modeAlts && r.chance(0.8)) {
     const ctype = { alts: modeAlts, text: `(${modeAlts.join("|")})` };
@@ -282,8 +306,13 @@ function genRule(r, captures, scoped, modeAlts) {
   const query = [];
   const keys = r.shuffle(QUERY_KEYS);
   for (const c of inQuery) query.push({ key: keys.pop(), kind: "cap", capture: c });
-  if (r.chance(0.2)) query.push({ key: keys.pop(), kind: "lit", text: r.pick(QUERY_LITERALS) });
-  if (r.chance(0.15)) query.push({ key: keys.pop(), kind: "present" });
+  // A query-anchored rule usually has its literal condition; sometimes only
+  // a presence condition, or neither, which must not anchor it.
+  const anchor = queryAnchored ? r.pick(["lit", "lit", "lit", "lit", "present", "none"]) : null;
+  if (anchor === "lit" || (!queryAnchored && r.chance(0.2))) {
+    query.push({ key: keys.pop(), kind: "lit", text: r.pick(QUERY_LITERALS) });
+  }
+  if (anchor === "present" || r.chance(0.15)) query.push({ key: keys.pop(), kind: "present" });
   if (query.length > 0) {
     json.query = Object.fromEntries(query.map((q) => [q.key, q.kind === "cap" ? `{${q.capture.name}:${q.capture.ctype.text}}` : q.kind === "lit" ? q.text : "{_}"]));
   }
@@ -292,6 +321,9 @@ function genRule(r, captures, scoped, modeAlts) {
   if (r.chance(0.15)) json.mode = r.pick(["view", "edit", "review"]);
   return { json, required: shuffled, optional, rest, query, absent };
 }
+
+const GENERIC_POOL = ["Plan", "PLAN", "plan", "A - B", "é", "É", "Loading…", "Sign in", "PROJ-12", "fix #42", "x", "·"];
+const GENERIC_INVALID = ["", " Plan", "Plan\t", "{x}", "a}", "a\u0007b", "a\u007fb", "é".repeat(129)];
 
 const PREFIX_DELIMS = ["] ", " - ", " · ", ": ", " | ", "#", " (", ") ", " — ", "😀 "];
 const TITLE_LITERALS = [" - Jira", " - Google Docs", " · GitHub", "[", "(", " - Mail", "Tracker", " — ", "é"];
@@ -366,7 +398,7 @@ function mutateDocument(r, doc) {
     const adapter = r.pick(doc.artifacts);
     const choice = r.int(7);
     if (choice === 0) delete adapter[r.pick(Object.keys(adapter))];
-    else if (choice === 1) adapter[r.pick(["extra", "title", "scope", "unscoped", "alias", "modes"])] = r.pick([1, "x", [], {}, ["{title}"], { a: ["b"] }]);
+    else if (choice === 1) adapter[r.pick(["extra", "title", "generic_titles", "scope", "unscoped", "alias", "modes"])] = r.pick([1, "x", [], {}, ["{title}"], { a: ["b"] }]);
     else if (choice === 2) adapter.match.push({ ...r.pick(adapter.match) });
     else if (choice === 3) adapter.match[0].query = { ...(adapter.match[0].query ?? {}), [r.pick(QUERY_KEYS)]: r.pick(["{_}", "{q:int}", "x", "{q?:int}", ""]) };
     else if (choice === 4) doc.format = r.pick([0, 2, "1", 1.5, null]);
@@ -512,14 +544,14 @@ const TITLE_WORDS = ["Plan", "A - B", "PROJ-12", "UTF-8", "fix #42", "  spaced  
 ];
 
 /** Fills a title template with the bound values, the title text, and skips. */
-function titleFor(r, template, values, captures) {
+function titleFor(r, template, values, captures, fill = null) {
   const byName = new Map(captures.map((c) => [c.name, c]));
   let out = "";
   let i = 0;
   const text = template.text;
   while (i < text.length) {
     if (text.startsWith("{title}", i)) {
-      out += Array.from({ length: r.range(1, 4) }, () => r.pick(TITLE_WORDS)).join(r.pick([" ", " - ", ""]));
+      out += fill ?? Array.from({ length: r.range(1, 4) }, () => r.pick(TITLE_WORDS)).join(r.pick([" ", " - ", ""]));
       i += 7;
     } else if (text.startsWith("{~}", i)) {
       out += r.pick(["3", "Team Space", "a - b", "", "Mail"]);
@@ -538,6 +570,29 @@ function titleFor(r, template, values, captures) {
     }
   }
   return out;
+}
+
+/** A title near the §9.4 generic rules: a listed entry, case-flipped and
+ * padded, alone or inside a title template; or the browser's host
+ * placeholder and its near misses (another port, a longer label, a word
+ * after the host). */
+function genericTitleFor(r, adapter) {
+  const host = new URL(adapter.json.origin).host;
+  const pad = (text) => (r.chance(0.3) ? `${r.pick([" ", "\t", "\u3000"])}${text}${r.pick(["", " ", "\u2003"])}` : text);
+  const entry = adapter.generic.length > 0 && r.chance(0.6) ? r.pick(adapter.generic) : r.pick(GENERIC_POOL);
+  switch (r.int(4)) {
+    case 0: return pad(r.chance(0.5) ? flipCase(r, entry) : entry);
+    case 1:
+      return adapter.titles
+        ? titleFor(r, r.pick(adapter.titles), new Map(), adapter.captures, pad(entry))
+        : `${entry}${r.pick(["", " - x", " again"])}`;
+    case 2: {
+      const scheme = r.pick(["", "", "https://", "HTTP://", "http://"]);
+      const after = r.pick(["", "", "/", "/a/b", "?q=1", "#x", " notes", "x", ":1", "/".repeat(2)]);
+      return pad(`${scheme}${r.chance(0.3) ? flipCase(r, host) : host}${after}`);
+    }
+    default: return r.pick(["", " ", "\t\n", host.replace(/:\d+$/, ""), `${host}.evil`]);
+  }
 }
 
 function titleNearMiss(r, title) {
@@ -579,7 +634,8 @@ export function genCase(seed, index) {
   if (r.chance(0.05)) request.url = r.pick(["not a url", "about:blank", "data:text/plain,a", "https://acme.example.com:99999/"]);
   if (r.chance(0.7)) {
     let title;
-    if (adapter.titles && r.chance(0.85)) title = titleFor(r, r.pick(adapter.titles), url.values, adapter.captures);
+    if (r.chance(0.2)) title = genericTitleFor(r, adapter);
+    else if (adapter.titles && r.chance(0.85)) title = titleFor(r, r.pick(adapter.titles), url.values, adapter.captures);
     else title = Array.from({ length: r.range(0, 5) }, () => r.pick(TITLE_WORDS)).join(" ");
     if (r.chance(0.3)) {
       const missed = titleNearMiss(r, title);
