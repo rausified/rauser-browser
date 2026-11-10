@@ -132,9 +132,13 @@ test("the starter source line follows each starter's certification status", asyn
   const atlassian = await captureReview(JIRA_URL);
   assert.equal(atlassian.el("capture-site-source").textContent,
     "Certified starter rules, except Confluence pages: not yet checked on a real account.");
-  // Miro's only starter is a development draft.
+  // Miro's only starter is certified from real browsing history, which
+  // reads the same as a live check.
   const miro = await captureReview("https://miro.com/app/board/uXjVM0uuBLo=/");
-  assert.equal(miro.el("capture-site-source").textContent,
+  assert.equal(miro.el("capture-site-source").textContent, "Certified starter rules · checked on real pages.");
+  // Vidcast's starters are all development drafts.
+  const vidcast = await captureReview("https://app.vidcast.io/share/00000000-0000-4000-8000-000000000000");
+  assert.equal(vidcast.el("capture-site-source").textContent,
     "Development starter draft · not yet checked on a real account.");
 });
 

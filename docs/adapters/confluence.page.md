@@ -7,6 +7,15 @@ Both adapter-template engines verify the samples below. A live check in the
 Capture Site review and the settings gallery is still needed before this draft
 is release-certified (bead `brwr-cf2`).
 
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 63 real URLs (96 visits) matched, 3/4
+rules confirmed, and the title right on 51/63, counting a sign-in, loading
+or error title that records no title as right. 9 real URLs of a redirect
+chain ending on this type matched no rule, as expected. Not every rule was
+matched by a real visit and not every recorded title was the item's own
+name, so this type stays a development draft.
+
 Brauser offers this draft when an enabled exact HTTPS origin is an Atlassian
 Cloud site, such as `https://acme.atlassian.net`, the same origin family as the
 Jira issue starter. That origin offers two starters, **Jira issues** and
