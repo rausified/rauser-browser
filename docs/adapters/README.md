@@ -37,5 +37,5 @@
 | [servicenow.kb](servicenow.kb.md) | servicenow | development | — | — | — |
 | [aha.portalidea](aha.portalidea.md) | aha-ideas | development | — | — | — |
 | [splunk.app](splunk.app.md) | splunk | development | — | — | — |
-| [splunk.dashboard](splunk.dashboard.md) | splunk | certified | history | 2026-11-09 | claude session da8a245c lane E: 6 real URLs, 11 visits, 1/1 rules, 6/6 titles |
+| [splunk.dashboard](splunk.dashboard.md) | splunk | development | — | — | — |
 | [google.drivefolder](google.drivefolder.md) | google-drive | development | — | — | — |

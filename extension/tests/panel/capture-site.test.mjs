@@ -136,10 +136,6 @@ test("the starter source line follows each starter's certification status", asyn
   // reads the same as a live check.
   const miro = await captureReview("https://miro.com/app/board/uXjVM0uuBLo=/");
   assert.equal(miro.el("capture-site-source").textContent, "Certified starter rules · checked on real pages.");
-  // Splunk dashboards are history-certified; Splunk apps are still a draft.
-  const splunk = await captureReview("https://acme.splunkcloud.com/en-US/app/search/example_dashboard");
-  assert.equal(splunk.el("capture-site-source").textContent,
-    "Certified starter rules, except Splunk apps: not yet checked on a real account.");
   // Vidcast's starters are all development drafts.
   const vidcast = await captureReview("https://app.vidcast.io/share/00000000-0000-4000-8000-000000000000");
   assert.equal(vidcast.el("capture-site-source").textContent,

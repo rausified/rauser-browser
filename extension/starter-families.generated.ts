@@ -1727,10 +1727,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
         },
         "history": [],
         "status": {
-          "state": "certified",
-          "method": "history",
-          "checked_on": "2026-11-09",
-          "checked_by": "claude session da8a245c lane E: 6 real URLs, 11 visits, 1/1 rules, 6/6 titles"
+          "state": "development",
+          "method": null,
+          "checked_on": null,
+          "checked_by": null
         },
         "docs": "docs/adapters/splunk.dashboard.md"
       }
