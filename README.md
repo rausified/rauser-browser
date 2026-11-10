@@ -26,6 +26,7 @@ cargo build --locked --workspace --all-targets
 cargo test --locked --workspace
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
 npm ci --ignore-scripts
 npm run typecheck
 npm run lint
