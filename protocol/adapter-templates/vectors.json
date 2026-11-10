@@ -15783,7 +15783,7 @@
       "value": "a!b",
       "expect": {"canonical": null}
     },
-    {"id": "capture.token.base64_pad_one", "kind": "capture", "why": "§7.1: token admits up to two trailing = (base64 padding), as on Miro boards", "impls": ["rust", "ts"], "ctype": "token", "value": "uXjVM0uuBLo=", "expect": {"canonical": "uXjVM0uuBLo="}},
+    {"id": "capture.token.base64_pad_one", "kind": "capture", "why": "§7.1: token admits up to two trailing = (base64 padding), as on Miro boards", "impls": ["rust", "ts"], "ctype": "token", "value": "qK3nR8vDpZx=", "expect": {"canonical": "qK3nR8vDpZx="}},
     {"id": "capture.token.base64_pad_two", "kind": "capture", "why": "§7.1: two trailing = are padding", "impls": ["rust", "ts"], "ctype": "token", "value": "Ab-_9w==", "expect": {"canonical": "Ab-_9w=="}},
     {"id": "capture.token.pad_three", "kind": "capture", "why": "§7.1: three = are not padding", "impls": ["rust", "ts"], "ctype": "token", "value": "AbC===", "expect": {"canonical": null}},
     {"id": "capture.token.pad_only", "kind": "capture", "why": "§7.1: padding needs at least one token character before it", "impls": ["rust", "ts"], "ctype": "token", "value": "==", "expect": {"canonical": null}},
@@ -18190,17 +18190,17 @@
       "doc": {"$fixture": "starters"},
       "url": "https://acme.atlassian.net./browse/OPS-1"
     },
-    {"id": "eval.miro.board", "kind": "evaluate", "why": "§11: a Miro board, trailing slash dropped (§5.1), padded token ID (§7.1); docs/adapters/miro.board.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/"},
-    {"id": "eval.miro.board_share_link", "kind": "evaluate", "why": "§11: a board opened from a share link; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990"},
-    {"id": "eval.miro.board_move_to_widget", "kind": "evaluate", "why": "§11: a board opened at a widget; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764680052296737&cot=14"},
+    {"id": "eval.miro.board", "kind": "evaluate", "why": "§11: a Miro board, trailing slash dropped (§5.1), padded token ID (§7.1); docs/adapters/miro.board.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/"},
+    {"id": "eval.miro.board_share_link", "kind": "evaluate", "why": "§11: a board opened from a share link; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=687498250990"},
+    {"id": "eval.miro.board_move_to_widget", "kind": "evaluate", "why": "§11: a board opened at a widget; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/?moveToWidget=3458764680052296737&cot=14"},
     {"id": "eval.miro.board_legacy_id", "kind": "evaluate", "why": "§11: older o9J_ board IDs are the same 12-character shape", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "o9J_kpXb3Lw="}, "artifact_id": "miro.board:miro.com/o9J_kpXb3Lw=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/o9J_kpXb3Lw=/"},
-    {"id": "eval.miro.title", "kind": "evaluate", "why": "§9.1: the Miro title template drops the ' - Miro' suffix", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "SSE ZTA SWOT", "title_entry": 0, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/", "title": "SSE ZTA SWOT - Miro"},
+    {"id": "eval.miro.title", "kind": "evaluate", "why": "§9.1: the Miro title template drops the ' - Miro' suffix", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null, "title": "SSE ZTA SWOT", "title_entry": 0, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/", "title": "SSE ZTA SWOT - Miro"},
     {"id": "eval.miro.dashboard", "kind": "evaluate", "why": "§11: the board list is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/dashboard/"},
     {"id": "eval.miro.team_dashboard", "kind": "evaluate", "why": "§11: a team's board list is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/dashboard/org/3074457346309553774/team/3074457345728012873/"},
     {"id": "eval.miro.app_root", "kind": "evaluate", "why": "§11: the app root is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/"},
     {"id": "eval.miro.login", "kind": "evaluate", "why": "§11: sign-in is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/login/?reason=sessionExpired&service=app"},
-    {"id": "eval.miro.board_wrong_length", "kind": "evaluate", "why": "§11: board IDs are 12 characters", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBL=/"},
-    {"id": "eval.miro.board_subpath", "kind": "evaluate", "why": "§11: no rest segment; a path below the board is not the board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/export"},
+    {"id": "eval.miro.board_wrong_length", "kind": "evaluate", "why": "§11: board IDs are 12 characters", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZ=/"},
+    {"id": "eval.miro.board_subpath", "kind": "evaluate", "why": "§11: no rest segment; a path below the board is not the board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/export"},
     {
       "id": "eval.jira.title",
       "kind": "evaluate",
@@ -23405,9 +23405,9 @@
       "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
       "impls": ["rust", "ts"],
       "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}"}]},
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
-      "title": "[uXjVM0uuBLo=] Roadmap",
-      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+      "url": "https://miro.com/app/board/qK3nR8vDpZx=/",
+      "title": "[qK3nR8vDpZx=] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
     },
     {
       "id": "eval.token.title_prefix_pad_two",
@@ -23525,9 +23525,9 @@
       "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
       "impls": ["rust", "ts"],
       "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]"}]},
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
-      "title": "Roadmap [uXjVM0uuBLo=]",
-      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+      "url": "https://miro.com/app/board/qK3nR8vDpZx=/",
+      "title": "Roadmap [qK3nR8vDpZx=]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
     },
     {
       "id": "eval.token.title_suffix_pad_two",
@@ -23639,9 +23639,9 @@
       "title": "Roadmap [==AbC]",
       "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap [==AbC]", "title_entry": null, "alias_id": null, "refs": []}
     },
-    {"id": "eval.token.miro_board_padded", "kind": "evaluate", "why": "§7.1: a Miro board ID ends in base64 padding; the trailing slash is dropped (§5.1)", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/"},
-    {"id": "eval.token.miro_board_padded_query", "kind": "evaluate", "why": "§7.1: an unconditioned query does not affect the match", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764600000000000"},
-    {"id": "eval.token.miro_board_encoded_padding", "kind": "evaluate", "why": "§5.1: %3D decodes to = before the type check", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/uXjVM0uuBLo%3D/"},
+    {"id": "eval.token.miro_board_padded", "kind": "evaluate", "why": "§7.1: a Miro board ID ends in base64 padding; the trailing slash is dropped (§5.1)", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/"},
+    {"id": "eval.token.miro_board_padded_query", "kind": "evaluate", "why": "§7.1: an unconditioned query does not affect the match", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/?moveToWidget=3458764600000000000"},
+    {"id": "eval.token.miro_board_encoded_padding", "kind": "evaluate", "why": "§5.1: %3D decodes to = before the type check", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/qK3nR8vDpZx%3D/"},
     {
       "id": "eval.bounds.longest_token",
       "kind": "evaluate",
@@ -28270,9 +28270,9 @@
       "kind": "evaluate",
       "why": "§9.4: Miro's app-shell title extracts to a generic one; docs/adapters/miro.board.md",
       "impls": ["rust", "ts"],
-      "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
       "doc": {"$fixture": "starters"},
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
+      "url": "https://miro.com/app/board/qK3nR8vDpZx=/",
       "title": "Miro - Miro"
     },
     {

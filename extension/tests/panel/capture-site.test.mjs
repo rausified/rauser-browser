@@ -133,13 +133,13 @@ test("the starter source line follows each starter's certification status", asyn
   assert.equal(atlassian.el("capture-site-source").textContent,
     "Certified starter rules, except Confluence pages: not yet checked on a real account.");
   // Miro's only starter is a development draft.
-  const miro = await captureReview("https://miro.com/app/board/uXjVM0uuBLo=/");
+  const miro = await captureReview("https://miro.com/app/board/qK3nR8vDpZx=/");
   assert.equal(miro.el("capture-site-source").textContent,
     "Development starter draft · not yet checked on a real account.");
 });
 
 test("Capture Site offers Miro boards as a starter, keyed by the padded board ID", async () => {
-  const url = "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990";
+  const url = "https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=687498250990";
   const page = await captureReview(url);
   assert.equal(starterGroup(page), null);
   const preview = page.el("capture-site-preview").textContent;
