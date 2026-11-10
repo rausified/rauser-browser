@@ -1997,3 +1997,26 @@ checks pass. A fresh manual diff review and the required design reviewer checked
 the ownership/import boundary. The driver owns the complete external gate and
 publication. Suggested follow-up `brwr-pkrk`: show when the editor uses a note
 retained from an earlier capture identity and offer read-only alternatives.
+## 2026-11-03 — Keep saved mentions attached during Re-learn preview
+
+Re-learning can change which part of an address identifies an artifact. A
+saved mention must continue to follow the artifact it originally named. The
+preview previously interpreted mention values with the proposed rules first,
+which could link a mention of B-2 to a different artifact that was acquiring
+that ID. It could also turn a saved self-reference into a false cross-link.
+
+The shared index fold now takes the pre-change recorded reference rules
+separately from the proposed container rules. It resolves a mention's original
+identity before applying the reviewed aliases. Duplicate mentions still count
+once, self-links disappear after identity resolution, and unknown targets
+remain outside linked-artifact counts. The library regression and a real CLI
+fixture exercise the A-1/B-2 and B-2/C-3 address collision, with config and home
+content unchanged. Container coverage also proves that old reference rules do
+not replace proposed membership. This repairs the read-only developer preview;
+durable apply and the panel Re-learn flow remain incomplete.
+
+Validation for this fix: the complete required and README gates pass, with
+1,555 Rust-reported outcomes (+2 regressions; 94 explicit sandbox IPC guards),
+44 extension test files, both Clippy configurations, two accessibility fixture
+passes and 42 sandbox browser skips. Independent review/publication belongs
+to the overnight driver.

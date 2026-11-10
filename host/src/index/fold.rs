@@ -30,7 +30,7 @@ pub(super) fn event_time(event: &CachedEvent) -> OffsetDateTime {
 /// `seeded` with that group's stored rows, which is the same computation
 /// as replaying the whole history.
 pub(super) struct Fold<'a> {
-    adapters: Option<&'a Document>,
+    ref_adapters: Option<&'a Document>,
     artifacts: BTreeMap<String, ArtifactRow>,
     visits: Vec<VisitRow>,
     edges: BTreeMap<(String, String, String), EdgeRow>,
@@ -46,7 +46,7 @@ pub(super) struct Fold<'a> {
 impl<'a> Fold<'a> {
     pub(super) fn new(adapters: Option<&'a Document>) -> Self {
         Self {
-            adapters,
+            ref_adapters: adapters,
             artifacts: BTreeMap::new(),
             visits: Vec::new(),
             edges: BTreeMap::new(),
@@ -58,8 +58,15 @@ impl<'a> Fold<'a> {
 
     /// A fold that projects every artifact ID through `resolution`, as
     /// the re-learn preview does. A URL-keyed summary keeps its own ID.
-    pub(super) fn resolved(adapters: Option<&'a Document>, resolution: &'a Resolution) -> Self {
-        let mut fold = Self::new(adapters);
+    pub(super) fn resolved(
+        adapters: Option<&'a Document>,
+        recorded_refs: Option<&'a Document>,
+        resolution: &'a Resolution,
+    ) -> Self {
+        // Ref values name identities under the recording policy. Container
+        // membership, in contrast, is projected under the proposed policy.
+        let mut fold = Self::new(recorded_refs);
+        fold.containers = Containers::new(adapters);
         fold.resolution = Some(resolution);
         fold.containers.resolution = Some(resolution);
         fold
@@ -112,7 +119,7 @@ impl<'a> Fold<'a> {
 
     /// Fold in one event. Events must arrive in `order_key` order.
     pub(super) fn apply(&mut self, event: &CachedEvent) {
-        let adapters = self.adapters;
+        let adapters = self.ref_adapters;
         let resolution = self.resolution;
         let canonical = |id: &'_ str| -> String {
             resolution

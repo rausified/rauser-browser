@@ -504,3 +504,9 @@
 
 
 - **Brauser — ordinary notes consume authoritative re-key history (2026-11-10, brwr-8qgs).** Loads, saves, task-report appends and explicit older URL-note imports now preserve original physical ownership while using current logical identities and history-bound edit revisions. Pending or invalid home history refuses ordinary note access; independent preserved-note viewing remains available. 326 focused tests pass, including 13 new regressions. This is one assigned brwr-dbp prerequisite; production apply/recovery, ordinary index/run replay and panel presentation remain incomplete. Optional morning briefing only; all Brauser source and design artifacts remain in its repository.
+- 2026-11-03 — Brauser Re-learn preview keeps saved mentions attached to their
+  original artifact when the proposed rules choose a different URL ID capture.
+  Recorded reference lookup happens before alias projection, while container
+  membership uses the proposal. Library and real CLI regressions cover wrong
+  targets, duplicate/self mentions, unknown targets and unchanged source files.
+  This is read-only preview work; durable apply and panel Re-learn remain open.

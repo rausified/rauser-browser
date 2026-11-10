@@ -126,7 +126,11 @@ fn preview_with(
     let projection =
         ArtifactIndex::open_in(storage, current.root_identity(), &current.cache_dir()?)?
             .with_adapters(Some(&document))
-            .relearn_projection(&resolution, &log_revision)?;
+            .relearn_projection(
+                &resolution,
+                &log_revision,
+                Some(current.adapter_document()?),
+            )?;
     after_projection()?;
     // External editors do not take Brauser's locks. Refuse an observation
     // made across changed config, owned files, contracts or log evidence.
