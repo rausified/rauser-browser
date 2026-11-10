@@ -4,12 +4,12 @@ A real Miro board ID from John's browsing history leaked into 19 tracked
 files (docs, DESIGN.md, adapter-templates.md, Rust and TS test
 vectors/fixtures) via commits on 2026-11-01. Two things worth automating:
 
-1. Before picking a synthetic replacement value, grep the private evidence
-   file (`/Users/jrauser/ENDURANCE/state/brauser-history/families.jsonl`,
-   never read into committed content) for it. Several other real board IDs
-   in that file shared a common prefix with the leaked one, so a naively
-   "random-looking" replacement could still have collided with a *different*
-   real ID also present there.
+1. Before picking a synthetic replacement value, grep whatever private,
+   real-browsing-history evidence file motivated the fix for it (never read
+   into committed content, and never committed itself). Several other real
+   board IDs in that evidence happened to share a common prefix with the
+   leaked one, so a naively "random-looking" replacement could still have
+   collided with a *different* real ID also present there.
 2. A plain string replace of the full ID missed a one-character-short
    *derived* occurrence (a wrong-length boundary test case in
    `host/tests/fixtures/miro-board-urls.json` and
