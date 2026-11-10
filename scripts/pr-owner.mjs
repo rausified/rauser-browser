@@ -8,8 +8,10 @@
 // .mergify.yml) are exempt too: they carry a queued PR whose own body already
 // passed, and `PR owner` is required on the draft before the PR merges.
 //
-// Run by .github/workflows/pr-owner.yml, which reads the pull_request event
+// Run by .github/workflows/pr-hygiene.yml, which reads the pull_request event
 // payload from GITHUB_EVENT_PATH; `checkPrOwner` is the pure part the tests pin.
+// Locally, `node scripts/pr-owner.mjs --body-file <file>` checks a body before
+// the PR is opened, so a missing Owner line never costs a CI round.
 
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -52,7 +54,23 @@ export function checkPrOwner(pr) {
   };
 }
 
+/** `--body-file <path>`: check a PR body before `gh pr create --body-file`. */
+function checkBodyFile(path) {
+  const result = checkPrOwner({ body: readFileSync(path, "utf8") });
+  if (result.ok) console.log(`Owner: ${result.owner}`);
+  else {
+    console.error(result.reason);
+    process.exitCode = 1;
+  }
+}
+
 function main() {
+  const at = process.argv.indexOf("--body-file");
+  if (at !== -1) {
+    const file = process.argv[at + 1];
+    if (!file) throw new Error("--body-file needs a path");
+    return checkBodyFile(file);
+  }
   const path = process.env.GITHUB_EVENT_PATH;
   if (!path) throw new Error("GITHUB_EVENT_PATH is required");
   const event = JSON.parse(readFileSync(path, "utf8"));
