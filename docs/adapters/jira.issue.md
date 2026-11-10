@@ -15,7 +15,7 @@ issue page and a board modal:
 Both forms produce the frozen ID `jira:acme.atlassian.net/PROJ-42`. The title
 is a two-entry list (`adapter-templates.md` §9.1): `[PROJ-42] Repair export -
 Jira` matches the first entry and extracts `Repair export`. A tenant that has
-renamed the product (Cisco's own Jira reads `… - SBG Jira`, for example) never
+renamed the product (one reading `… - Acme Corp Jira`, for example) never
 matches that exact literal, so the second entry, `[{key:jira_key}] {title} -
 {~} Jira`, is tried next: it skips back from the end to the nearest ` - `
 before `Jira` and drops the company name, extracting `Repair export` the same
