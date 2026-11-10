@@ -14,7 +14,7 @@
           ],
           "id": "jira:{host}/{key}",
           "generic_titles": ["Jira", "Log in with Atlassian account", "Log in to continue - Log in with Atlassian account", "Choose an account to continue - Log in with Atlassian account"],
-          "title": "[{key:jira_key}] {title} - Jira",
+          "title": ["[{key:jira_key}] {title} - Jira", "[{key:jira_key}] {title} - {~} Jira"],
           "alias": {"from": "tab_title", "capture": "key"},
           "refs": [{"type": "jira.issue", "find": "jira_key"}]
         },
