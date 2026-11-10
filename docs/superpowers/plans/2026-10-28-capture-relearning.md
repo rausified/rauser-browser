@@ -422,7 +422,7 @@ still produce `key_changed`; changed selection/history produces `stale`.
 Browser-local recovered copies remain copy-out only.
 
 This slice publishes no applied history and adds no native message or CLI.
-Ordinary native calls pass empty replay and retain existing behavior. Tests
+At this stage ordinary native calls passed empty replay. Tests
 exercise the same native request handlers with host-built replay. Durable apply
 must load and bind authoritative replay under the locks before using this
 parameter; a historical approval cannot supply it. Remaining `brwr-dbp` work:
@@ -597,3 +597,83 @@ replay to ordinary readers and the config recovery boundary, preserving inert
 error reporting and config-before-capture ordering. The lower-level recovery
 and journal inspection helpers still rely on documented caller locks.
 `brwr-dbp` remains incomplete; no apply/recovery activation is claimed.
+
+
+## Authoritative history in ordinary note requests — 2026-11-10 (`brwr-8qgs`)
+
+### Open decisions
+
+No new policy decisions. John's automatic recovery, alias/re-key-only v1,
+home-history and no-downgrade-contract decisions remain in force. Production
+apply and recovery remain unreachable while ordinary SQL index and run identity
+readers are incomplete. This slice implements note consumption of history.
+
+### Design challenge
+
+Required reviewer `/root/history_integration_challenge` distinguished reader
+preparation from activation: consumers may be integrated incrementally while
+there is no production writer. Adopt ordinary notes first, using the existing
+physical-owner resolver and transaction history parser. Merely attaching a
+Resolution to `open_index` would leave SQL ingestion, grouping, append and
+rebuild inconsistent; do not add a second projection or claim index integration.
+Load history after config refresh under the existing live config lock, refuse
+pending/corrupt history without repairing it, and preserve independent read-only
+preserved-note access. Do not change `resolve_record_key`: its run creation and
+finishing callers need the separately tracked in-flight handoff integration.
+
+### Implementation and remaining work
+
+Ordinary note context now loads bounded, checksum-chained, home-identity-bound
+history rather than passing empty replay. Load/save and explicit task-report
+appends use physical note selection and history-bound revisions. Older URL-note
+discovery checks every alias member's recorded evidence against canonical
+identity and existing stripped-parameter provenance rules. Notes never move to
+new filenames as a consequence of a load or save. Event and endpoint parsing
+refuse unknown fields rather than silently discarding historical semantics.
+
+Native message fixtures publish history through the private transaction and
+exercise original-file edits, canonical-note preference, separate URL notes,
+foreign owners, pending publication before and after config publication, torn,
+corrupt and foreign histories, and independent preserved-note listing. A
+manually authored two-entry replay fixture verifies move-back stale revisions;
+it does not claim multi-apply review/commit acceptance. Fixture approvals must
+be renewed after ordinary note loads record adopted contracts or evidence
+changes; production's fresh-review checks correctly refused stale fixtures.
+
+Remaining parent work: integrate authoritative replay throughout ordinary SQL
+index grouping/ingestion/rebuild/regeneration, summary and run identity and
+in-flight handoff (`brwr-9w4t`), then universal recovery before activating apply.
+Preserved alias-note presentation, old-path artifact stubs, Windows durability
+(`brwr-4qt4`), and genuine multi-apply/cache-deletion/crash acceptance remain.
+`brwr-dbp` is incomplete. No further dormant lock wrapper stage is needed.
+
+
+The follow-up design review kept existing no-overwrite import semantics through
+`NoteLocation::use_older_note`: an existing selected alias or canonical owner
+refuses import; only a genuinely empty group delegates to the existing URL-note
+move and wraps its returned key/revision. Source authorization and raw source
+revision checks remain unchanged. The panel can immediately edit an imported
+note using its history-bound revision. Older-note discovery extracts a verified
+owner once per candidate and checks a precomputed member set, avoiding a full
+alias-map scan and repeated parsing for every member/file combination.
+
+
+Validation: 76 Re-learn, 189 native-host, 51 note and 10 CLI boundary tests pass (326 focused,
+13 new regressions). Two new physical-location import tests and the task-note
+history-refusal test are platform-neutral; private-transaction dispatch fixtures
+run on Unix because durable transaction preparation still refuses Windows.
+Host all-target Clippy and protocol/format/TypeScript/ESLint/current-state checks
+pass. Full manual source/test diff review found no remaining blocking issue;
+the required reviewer approved the import ownership rule and identified the
+candidate-parse multiplication fixed above. Full gate/publication belong to the
+driver. Follow-up `brwr-pkrk` tracks the note ownership indication in the panel.
+
+### Independent review challenge — 2026-11-10
+
+Reviewer `/root/fix_challenge` confirmed that retired contracts must be compared
+after canonical replay to preserve the existing removed-site note contract.
+Use a mapped variant of the existing contract lookup, retaining unavailable-state
+precedence, raw URL evaluation and provenance checks. Apply it only in ordinary
+note context and older-note authorization; leave run identity integration to its
+assigned work. A third, unaliased retired identity must remain ambiguous. This
+avoids duplicating the contract evaluator or broadening run behavior.

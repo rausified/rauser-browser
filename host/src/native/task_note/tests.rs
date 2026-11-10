@@ -107,6 +107,26 @@ fn assert_error(response: Response, expected: ErrorCode) {
 }
 
 #[test]
+fn unreadable_rekey_history_refuses_report_append_without_changing_the_note() {
+    let (_folder, mut config, root) = world();
+    let saved = write(&mut config, "Keep my existing note.");
+    let path = root.join(saved.relative_path);
+    let original = std::fs::read(&path).unwrap();
+    std::fs::create_dir(root.join("logs")).unwrap();
+    let history = root.join("logs/rekey-history.jsonl");
+    std::fs::write(&history, b"{corrupt history}\n").unwrap();
+    match append(&mut config, run()) {
+        Response::Error(err) => {
+            assert_eq!(err.code, ErrorCode::Internal);
+            assert!(err.message.contains("re-key history"));
+        }
+        response => panic!("expected history refusal: {response:?}"),
+    }
+    assert_eq!(std::fs::read(path).unwrap(), original);
+    assert_eq!(std::fs::read(history).unwrap(), b"{corrupt history}\n");
+}
+
+#[test]
 fn an_explicit_append_creates_the_host_resolved_note_and_no_other_content() {
     let (folder, mut config, root) = world();
     let before_config = std::fs::read(folder.path().join("config.toml")).unwrap();
