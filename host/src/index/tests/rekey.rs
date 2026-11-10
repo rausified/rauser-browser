@@ -46,7 +46,12 @@ fn logged(index: &ArtifactIndex, events: &[ActivityEvent], summaries: &[SummaryE
 }
 fn project(index: &ArtifactIndex, resolution: &Resolution) -> serde_json::Value {
     let (revision, _) = index.relearn_evidence().unwrap();
-    serde_json::to_value(index.relearn_projection(resolution, &revision).unwrap()).unwrap()
+    serde_json::to_value(
+        index
+            .relearn_projection(resolution, &revision, index.adapters.as_deref())
+            .unwrap(),
+    )
+    .unwrap()
 }
 fn document(raw: serde_json::Value) -> Document {
     Document::from_value(&serde_json::from_value(raw).unwrap()).unwrap()
@@ -106,7 +111,7 @@ fn rekey_projection_joins_totals_and_keeps_original_summary_ownership_paths() {
         serde_json::to_vec(&index.relearn_state().unwrap().events).unwrap(),
         raw
     );
-    let derived = derive_resolved(&index.relearn_state().unwrap(), None, &resolution);
+    let derived = derive_resolved(&index.relearn_state().unwrap(), None, None, &resolution);
     assert_eq!(derived.artifacts[&b.artifact_id].summaries[0], first);
     let rendered = render_artifact("artifacts", &derived.artifacts[&b.artifact_id]);
     assert!(rendered.contains("original-B.summary.md"));
@@ -206,6 +211,121 @@ fn rekey_projection_resolves_historical_refs_and_incoming_trails_without_self_ed
 }
 
 #[test]
+fn rekey_projection_resolves_refs_with_recorded_captures_before_aliasing() {
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let recorded = document(serde_json::json!({"format":1,"artifacts":[{
+        "type":"work.item","origin":"https://example.com",
+        "match":[{"path":"/items/{id:jira_key}/{_}"}],"id":"old:{host}/{id}"}]}));
+    let proposed = document(serde_json::json!({"format":1,"artifacts":[{
+        "type":"work.item","origin":"https://example.com",
+        "match":[{"path":"/items/{_}/{id:jira_key}"}],"id":"new:{host}/{id}"}]}));
+    let index = index(&root, &cache).with_adapters(Some(&proposed));
+    let events: Vec<_> = [("A-1", "B-2"), ("B-2", "C-3"), ("X-4", "Y-5")]
+        .into_iter()
+        .enumerate()
+        .map(|(n, (first, second))| {
+            let mut event = activity(
+                &Uuid::from_u128(n as u128 + 1).to_string(),
+                first,
+                first,
+                "2026-11-02T10:00:00Z",
+            );
+            event.artifact_id = format!("old:example.com/{first}");
+            event.url = format!("https://example.com/items/{first}/{second}");
+            event.modes.clear();
+            event.refs = [first, "B-2", "B-2", "UNKNOWN-9"]
+                .into_iter()
+                .map(|value| ActivityRef {
+                    artifact_type: "work.item".into(),
+                    value: value.into(),
+                })
+                .collect();
+            event
+        })
+        .collect();
+    logged(&index, &events, &[]);
+    let resolution = mappings(&[
+        ("work.item", "old:example.com/A-1", "new:example.com/B-2"),
+        ("work.item", "old:example.com/B-2", "new:example.com/C-3"),
+        ("work.item", "old:example.com/X-4", "new:example.com/Y-5"),
+    ]);
+    let (revision, _) = index.relearn_evidence().unwrap();
+    let result = serde_json::to_value(
+        index
+            .relearn_projection(&resolution, &revision, Some(&recorded))
+            .unwrap(),
+    )
+    .unwrap();
+    let edges = result["edges"].as_array().unwrap();
+    let linked: Vec<_> = edges
+        .iter()
+        .filter(|edge| edge["target"] == "new:example.com/C-3")
+        .collect();
+    assert_eq!(linked.len(), 2, "{edges:?}");
+    assert!(
+        linked
+            .iter()
+            .all(|edge| edge["kind"] == "mentions" && edge["weight"] == 1)
+    );
+    assert!(edges.iter().all(|edge| edge["target"] != "new:example.com/B-2" && edge["source"] != edge["target"]));
+    assert_eq!(
+        edges.len(),
+        5,
+        "two linked targets and three unknown targets"
+    );
+    assert_eq!(
+        edges
+            .iter()
+            .filter(|edge| edge["target"] == "old:example.com/UNKNOWN-9")
+            .count(),
+        3
+    );
+    assert_eq!(fs::read_dir(cache.path()).unwrap().count(), 0);
+    assert!(!root.path().join("artifacts").exists());
+}
+
+#[test]
+fn rekey_projection_classifies_titles_under_the_proposed_policy() {
+    // Recorded rules resolve mention values; title rules must still come
+    // from the proposal, or the preview keeps a title the rebuilt index drops.
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let recorded = document(serde_json::json!({"format":1,"artifacts":[{
+        "type":"work.item","origin":"https://example.com",
+        "match":[{"path":"/items/{id:jira_key}"}],"id":"work:{host}/{id}",
+        "title":"{title} - Acme"}]}));
+    let proposed = document(serde_json::json!({"format":1,"artifacts":[{
+        "type":"work.item","origin":"https://example.com",
+        "match":[{"path":"/items/{id:jira_key}"}],"id":"work:{host}/{id}",
+        "title":"{title} - Acme","generic_titles":["Loading"]}]}));
+    let index = index(&root, &cache).with_adapters(Some(&proposed));
+    let mut event = activity(
+        &Uuid::from_u128(1).to_string(),
+        "A-1",
+        "Loading",
+        "2026-11-02T10:00:00Z",
+    );
+    event.artifact_id = "work:example.com/A-1".into();
+    event.url = "https://example.com/items/A-1".into();
+    logged(&index, &[event], &[]);
+    let (revision, _) = index.relearn_evidence().unwrap();
+    let result = serde_json::to_value(
+        index
+            .relearn_projection(&Resolution::default(), &revision, Some(&recorded))
+            .unwrap(),
+    )
+    .unwrap();
+    let row = result["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["artifact_id"] == "work:example.com/A-1")
+        .unwrap();
+    assert_eq!(row["title"], "Untitled", "{row}");
+}
+
+#[test]
 fn rekey_projection_preserves_container_rollups_and_counts_visits_once() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
@@ -251,6 +371,18 @@ fn rekey_projection_preserves_container_rollups_and_counts_visits_once() {
             .as_str()
             .unwrap()
             .contains("Opened 1 artifact")
+    );
+    // Historical reference rules must not replace proposed membership.
+    let recorded = github_document(false);
+    let (revision, _) = index.relearn_evidence().unwrap();
+    assert_eq!(
+        serde_json::to_value(
+            index
+                .relearn_projection(&resolution, &revision, Some(&recorded))
+                .unwrap()
+        )
+        .unwrap(),
+        result
     );
     // A recorded contract can still emit the old implicit container. Both
     // child recognition and the container endpoint must use the resolver.
@@ -327,7 +459,7 @@ fn rekey_projection_refuses_a_different_log_snapshot_from_the_review() {
     logged(&index, &[changed], &[]);
     assert!(
         index
-            .relearn_projection(&Resolution::default(), &revision)
+            .relearn_projection(&Resolution::default(), &revision, None)
             .is_err()
     );
     assert_eq!(fs::read_dir(cache.path()).unwrap().count(), 0);
@@ -364,7 +496,7 @@ fn rekey_projection_revision_binds_append_order_and_capture_gaps() {
     assert_eq!(after["artifacts"][0]["title"], "First");
     assert!(
         index
-            .relearn_projection(&Resolution::default(), &revision)
+            .relearn_projection(&Resolution::default(), &revision, None)
             .is_err(),
         "identical event payloads in a different append order must invalidate the projection"
     );
@@ -389,7 +521,7 @@ fn rekey_projection_revision_binds_append_order_and_capture_gaps() {
     );
     assert!(
         index
-            .relearn_projection(&Resolution::default(), &revision)
+            .relearn_projection(&Resolution::default(), &revision, None)
             .is_err(),
         "capture-gap-only changes must invalidate the projection"
     );

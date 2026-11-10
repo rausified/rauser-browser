@@ -78,8 +78,12 @@ fn focus_groups_use_resolved_keys_in_sqlite_and_relearn_projection() {
     .unwrap();
     let index = index(&root, &cache);
     let (revision, _) = index.relearn_evidence().unwrap();
-    let projected =
-        serde_json::to_value(index.relearn_projection(&resolution, &revision).unwrap()).unwrap();
+    let projected = serde_json::to_value(
+        index
+            .relearn_projection(&resolution, &revision, index.adapters.as_deref())
+            .unwrap(),
+    )
+    .unwrap();
     let text = projected["worklog"]["text"].as_str().unwrap();
     let groups = text.split_once("Focus sessions").unwrap().1;
     assert!(groups.contains("work:example.com/B:"));
@@ -87,7 +91,7 @@ fn focus_groups_use_resolved_keys_in_sqlite_and_relearn_projection() {
     // Projection and ordinary reads share the same group renderer.
     let plain = serde_json::to_value(
         index
-            .relearn_projection(&Resolution::default(), &revision)
+            .relearn_projection(&Resolution::default(), &revision, index.adapters.as_deref())
             .unwrap(),
     )
     .unwrap();

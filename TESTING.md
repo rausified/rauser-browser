@@ -1783,6 +1783,10 @@ index projection against owned log fixtures: joined measures/days, original
 summary ownership and both-side paths, chains, move-back, pairwise unalias,
 old refs, incoming trails and collapsed self-links, repository roll-ups with
 one-count worklog totals, separate URL summaries and cache deletion/corruption.
+Changed-ID-capture fixtures resolve recorded mention values before aliasing:
+`/items/A-1/B-2` and `/items/B-2/C-3` must keep a saved B-2 mention attached
+to the second artifact's new C-3 key. Duplicate/self mentions and unknown
+targets are checked, with proposed container rules independent of ref rules.
 The tests compare raw event bytes before/after and assert no generated file or
 cache publication. `cargo test --locked -p brauser --lib relearn` also verifies
 simultaneous mapping refusal, cross-type key conflicts and an external note
@@ -1793,6 +1797,7 @@ preserving append-order changes and gap-only edits.
 against an isolated config with owned note/summary/log fixtures. It checks
 deterministic corrected totals and unchanged file bytes, plus refusal of stale
 revisions, supplied aliases, foreign proposals, apply flags and damaged logs.
+The real binary also exercises the changed-ID-capture mention fixture.
 This proves read-only preview only: durable apply, note storage selection,
 artifact stubs, replay from applied home history and panel review remain
 separate acceptance work on brwr-dbp/brwr-6x2.

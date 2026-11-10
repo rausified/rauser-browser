@@ -377,8 +377,14 @@ with an empty resolution and this preview with the reviewed resolution.
 Historical capture/summary payloads, summary ownership keys and paths, event
 positions and names-only provenance stay raw. Container recognition compares
 resolved identities and counts each visit once in worklog totals. Ref targets
-and trail sources resolve through the same table; collapsed self-links are
-omitted. Existing `aliases-preview` uses the same extracted replay semantics,
+resolve under the current recorded adapter document first, then through the
+reviewed alias table. Proposed rules still supply container membership. For
+example, changing the ID capture from the first to second segment in
+`/items/A-1/B-2` and `/items/B-2/C-3` makes a saved `B-2` mention follow the
+second artifact to its new `C-3` key. It must not point at the first artifact's
+new `B-2` key. Trail sources already carry recorded IDs and use the same alias
+table directly; collapsed self-links are omitted. Existing `aliases-preview`
+uses the same extracted replay semantics,
 including chains, latest-target move-back and pairwise unalias. A raw key
 cannot name two artifact types. A simultaneous plan refuses split, merge,
 key reuse, foreign occupancy and unresolved URL-copy choices before replay;
@@ -677,3 +683,14 @@ precedence, raw URL evaluation and provenance checks. Apply it only in ordinary
 note context and older-note authorization; leave run identity integration to its
 assigned work. A third, unaliased retired identity must remain ambiguous. This
 avoids duplicating the contract evaluator or broadening run behavior.
+
+## Recorded-reference correction (2026-11-03, `brwr-d586`; salvaged to main 2026-11-10)
+
+Separate the pre-change reference document from the proposal's container
+document in the shared fold. The changed-capture library/real-CLI regressions
+prove B-2 follows its original artifact to new C-3, with duplicate/self
+mentions, unknown targets and proposed membership preserved. Cookie's original
+run on its own base passed the full required and README gates: 1,555 Rust-reported outcomes (+2; 94 IPC sandbox guards),
+44 extension files, both Clippy configurations, two accessibility fixture
+passes and 42 browser skips. Apply and panel acceptance remain incomplete;
+John's 2026-11-09 apply decisions above are unchanged.

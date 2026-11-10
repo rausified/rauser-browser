@@ -596,7 +596,11 @@ browser-local note recovery remain unchanged.
 `adapters relearn-preview` projects a fresh, unambiguous impact plan through
 the index's shared derivation. It shows corrected artifact totals, Recent and
 worklog rows, refs, incoming-navigation edges and container roll-ups, with
-summaries still referencing their original files. The rehearsal and index projection use
+summaries still referencing their original files. Stored ref values resolve
+under the current recorded policy before the reviewed aliases are applied;
+the proposed policy supplies container membership. Changing which URL segment
+provides an ID must not reinterpret an old mention as a different artifact.
+The rehearsal and index projection use
 one pairwise alias resolver; simultaneous mapping conflicts refuse before
 replay. A final evidence check refuses an observation spanning changed files
 or history. The command reads authoritative logs directly and publishes no

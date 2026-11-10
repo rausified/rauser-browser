@@ -2064,3 +2064,18 @@ after replay. Run identity callers keep their existing raw resolution, and
 unavailable contracts and genuinely different canonical IDs retain their refusal
 or ambiguity behavior. Native regressions cover removal, subsequent editing,
 older URL-note viewing, and an unrelated third contract that must stay ambiguous.
+
+## 2026-11-03 — Recorded mention identities in Re-learn preview (brwr-d586)
+
+The shared fold in host/src/index/fold.rs now receives a separate recorded
+reference document for resolved projection. relearn::preview binds that input
+to the reopened pre-change config and retains the proposed document for
+container membership. Mention values resolve to old IDs before Resolution
+projects them; raw events and summary/file ownership remain unchanged.
+
+The real CLI reproduction previously linked old B-2 to the artifact whose new
+key was B-2 instead of following its original artifact to new C-3. It also
+created a false link from a recorded self-reference. Added library and CLI
+regressions exercise changed captures, duplicate/self mentions, unknown
+targets, unchanged config/home bytes and separation of container rules. This
+changes no wire contract, durable history, ordinary note routing or ID freeze.

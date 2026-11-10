@@ -231,9 +231,10 @@ impl LogScan {
 pub(super) fn derive_resolved(
     scan: &LogScan,
     adapters: Option<&Document>,
+    recorded_refs: Option<&Document>,
     resolution: &Resolution,
 ) -> Derived {
-    let mut fold = Fold::resolved(adapters, resolution);
+    let mut fold = Fold::resolved(adapters, recorded_refs, resolution);
     for event in scan.ordered() {
         fold.apply(event);
     }

@@ -971,17 +971,20 @@ impl ArtifactIndex {
     /// Strict, cache-independent preview of the app's derivation under
     /// `resolution`, from a fresh log scan whose revision must still be
     /// the reviewed `expected_log_revision`. It never reads `index.db`.
+    /// `recorded_refs` interprets stored mention values before aliasing;
+    /// this handle's adapters describe the proposed container membership.
     pub(crate) fn relearn_projection(
         &self,
         resolution: &Resolution,
         expected_log_revision: &str,
+        recorded_refs: Option<&Document>,
     ) -> Result<RekeyProjection> {
         let scan = self.relearn_state()?;
         anyhow::ensure!(
             scan.revision()? == expected_log_revision,
             "log evidence changed during projection; review a fresh plan"
         );
-        let derived = derive_resolved(&scan, self.adapters.as_deref(), resolution);
+        let derived = derive_resolved(&scan, self.adapters.as_deref(), recorded_refs, resolution);
         project::projection(&scan, derived)
     }
 

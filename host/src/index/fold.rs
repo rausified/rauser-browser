@@ -30,7 +30,10 @@ pub(super) fn event_time(event: &CachedEvent) -> OffsetDateTime {
 /// `seeded` with that group's stored rows, which is the same computation
 /// as replaying the whole history.
 pub(super) struct Fold<'a> {
-    adapters: Option<&'a Document>,
+    ref_adapters: Option<&'a Document>,
+    /// Rules that decide whether a recorded title is generic: the proposed
+    /// policy in a re-learn preview, so it matches the rebuilt index.
+    title_adapters: Option<&'a Document>,
     artifacts: BTreeMap<String, ArtifactRow>,
     visits: Vec<VisitRow>,
     edges: BTreeMap<(String, String, String), EdgeRow>,
@@ -46,7 +49,8 @@ pub(super) struct Fold<'a> {
 impl<'a> Fold<'a> {
     pub(super) fn new(adapters: Option<&'a Document>) -> Self {
         Self {
-            adapters,
+            ref_adapters: adapters,
+            title_adapters: adapters,
             artifacts: BTreeMap::new(),
             visits: Vec::new(),
             edges: BTreeMap::new(),
@@ -58,8 +62,16 @@ impl<'a> Fold<'a> {
 
     /// A fold that projects every artifact ID through `resolution`, as
     /// the re-learn preview does. A URL-keyed summary keeps its own ID.
-    pub(super) fn resolved(adapters: Option<&'a Document>, resolution: &'a Resolution) -> Self {
-        let mut fold = Self::new(adapters);
+    pub(super) fn resolved(
+        adapters: Option<&'a Document>,
+        recorded_refs: Option<&'a Document>,
+        resolution: &'a Resolution,
+    ) -> Self {
+        // Ref values name identities under the recording policy. Container
+        // membership and title rules, in contrast, follow the proposed policy.
+        let mut fold = Self::new(recorded_refs);
+        fold.title_adapters = adapters;
+        fold.containers = Containers::new(adapters);
         fold.resolution = Some(resolution);
         fold.containers.resolution = Some(resolution);
         fold
@@ -112,7 +124,8 @@ impl<'a> Fold<'a> {
 
     /// Fold in one event. Events must arrive in `order_key` order.
     pub(super) fn apply(&mut self, event: &CachedEvent) {
-        let adapters = self.adapters;
+        let adapters = self.ref_adapters;
+        let title_adapters = self.title_adapters;
         let resolution = self.resolution;
         let canonical = |id: &'_ str| -> String {
             resolution
@@ -144,7 +157,7 @@ impl<'a> Fold<'a> {
                     .unwrap_or_default();
                 // A title the adapter finds generic (adapter-templates.md
                 // §9.4) is no title, whichever extension sent it.
-                let recorded = recorded_title(adapters, &event.url, event.title.as_ref());
+                let recorded = recorded_title(title_adapters, &event.url, event.title.as_ref());
                 let title = recorded.clone().unwrap_or_else(|| "Untitled".into());
                 let row = artifacts
                     .entry(artifact_id.clone())

@@ -133,6 +133,119 @@ fn inventory(path: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     files.sort();
     files
 }
+
+fn shifted_capture_fixture() -> Fixture {
+    let mut f = Fixture::new();
+    // This fixture records only activities under the two-capture rule.
+    fs::remove_dir_all(f.home.join("notes")).unwrap();
+    fs::remove_dir_all(f.home.join("summaries")).unwrap();
+    let mut raw: Value = toml::from_str(&fs::read_to_string(&f.config).unwrap()).unwrap();
+    raw["artifacts"][0]["match"] = json!([{"path":"/items/{id:jira_key}/{_}"}]);
+    raw["artifacts"][0]["id"] = json!("old:{host}/{id}");
+    let bytes = toml::to_string(&raw).unwrap();
+    fs::write(&f.config, &bytes).unwrap();
+    f.request["expected_revision"] = json!(format!("sha256:{}", hash(bytes.as_bytes())));
+    f.request["proposed"]["artifacts"] = raw["artifacts"].clone();
+    f.request["proposed"]["artifacts"][0]["match"] = json!([{"path":"/items/{_}/{id:jira_key}"}]);
+    f.request["proposed"]["artifacts"][0]["id"] = json!("new:{host}/{id}");
+
+    let mut log = String::from("<!-- brauser:daily-log v1 -->\n");
+    for (n, (first, second, refs)) in [
+        ("A-1", "B-2", vec![]),
+        ("B-2", "C-3", vec!["B-2"]), // A recorded self-reference.
+        ("X-4", "Y-5", vec!["B-2", "B-2", "X-4", "UNKNOWN-9"]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let event = ActivityEvent {
+            focus_session: None,
+            event_id: format!("00000000-0000-4000-8000-{:012}", n + 1),
+            artifact_id: format!("old:work.example/{first}"),
+            artifact_type: "work.item".into(),
+            url: format!("https://work.example/items/{first}/{second}"),
+            title: Some(first.into()),
+            occurred_at: "2026-11-02T10:00:00Z".into(),
+            incognito: false,
+            opens: 1,
+            focused_seconds: 10,
+            background_seconds: 0,
+            modes: vec![],
+            trails: vec![],
+            refs: refs
+                .into_iter()
+                .map(|value| brauser_protocol::ActivityRef {
+                    artifact_type: "work.item".into(),
+                    value: value.into(),
+                })
+                .collect(),
+        };
+        log.push_str(&format!(
+            "<!-- brauser:visit id={} url={} at={} kind=activity data={} -->\n",
+            hash(event.event_id.as_bytes()),
+            hash(event.url.as_bytes()),
+            event.occurred_at,
+            hex::encode(serde_json::to_vec(&event).unwrap())
+        ));
+    }
+    fs::write(f.home.join("logs/day.md"), log).unwrap();
+    f
+}
+
+fn assert_shifted_mentions(report: &Value) {
+    let projection = &report["projection"];
+    let edges = projection["edges"].as_array().unwrap();
+    assert!(
+        edges
+            .iter()
+            .any(|edge| edge["source"] == "new:work.example/Y-5"
+                && edge["target"] == "new:work.example/C-3"
+                && edge["kind"] == "mentions"
+                && edge["weight"] == 1),
+        "{edges:?}"
+    );
+    assert!(
+        edges.iter().all(
+            |edge| edge["target"] != "new:work.example/B-2" && edge["source"] != edge["target"]
+        ),
+        "{edges:?}"
+    );
+    assert_eq!(edges.len(), 2, "duplicate and self mentions add no edges");
+    assert!(
+        edges
+            .iter()
+            .any(|edge| edge["source"] == "new:work.example/Y-5"
+                && edge["target"] == "old:work.example/UNKNOWN-9"
+                && edge["weight"] == 1)
+    );
+    // Unknown targets stay unlinked; they must not borrow an existing row.
+    for (id, count) in [("B-2", 0), ("C-3", 1), ("Y-5", 1)] {
+        let artifact = projection["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["artifact_id"] == format!("new:work.example/{id}"))
+            .unwrap();
+        assert_eq!(artifact["linked_count"], count, "{artifact}");
+    }
+}
+
+#[test]
+fn real_cli_preview_resolves_refs_before_shifting_id_captures() {
+    let f = shifted_capture_fixture();
+    let before = inventory(&f.home);
+    let config = fs::read(&f.config).unwrap();
+    let output = f.run(&[], &f.request);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_shifted_mentions(&serde_json::from_slice(&output.stdout).unwrap());
+    assert_eq!(inventory(&f.home), before);
+    assert_eq!(fs::read(&f.config).unwrap(), config);
+}
+
 #[test]
 fn real_cli_projects_existing_history_without_changing_any_config_or_content() {
     let f = Fixture::new();
