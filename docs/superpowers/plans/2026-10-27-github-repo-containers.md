@@ -34,7 +34,7 @@ The host index already derives everything from the append-only logs and has the 
 2. **John's existing PR and issue adapters have no `within`.** Nothing rolls up until settings adds it. Expected: settings offers repos with the orgs pre-filled and adds `within` to the existing PR/issue adapters in the same save, without tripping the route-history guard. Pinned in Tasks 3 and 9.
 3. **A container whose repo page has never been opened directly.** Expected: its card and Recent row show title `owner/repo` and URL `https://github.com/owner/repo`, never "Untitled" or an empty link. Pinned in Task 4.
 4. **Retroactive roll-up of logged events whose adapter has since changed or been removed.** Expected: an event rolls up only when re-evaluating its logged URL yields the same `artifact_id`. Otherwise it is left alone, with no crash and no misattribution. Pinned in Task 4.
-5. **Owner pre-fill on non-repo GitHub pages.** This covers `/settings`, `/notifications`, `/orgs/<org>/…`, mixed-case owners, and personal accounts. Expected: reserved routes give no pre-fill, `/orgs/Cisco-SBG/x` gives `cisco-sbg`, and any other owner is lowercased and shown for confirmation. Pinned in Task 8.
+5. **Owner pre-fill on non-repo GitHub pages.** This covers `/settings`, `/notifications`, `/orgs/<org>/…`, mixed-case owners, and personal accounts. Expected: reserved routes give no pre-fill, `/orgs/Acme-Corp/x` gives `acme-corp`, and any other owner is lowercased and shown for confirmation. Pinned in Task 8.
 
 ---
 
@@ -136,7 +136,7 @@ The host index already derives everything from the append-only logs and has the 
 - Consumes: `Document::evaluate(url, None) -> Result<Match, NoMatch>`, `Match.within` (Task 2).
 - Produces:
   - `fn container_for(adapters: Option<&Document>, url: &str, artifact_id: &str) -> Option<(String /*type*/, String /*id*/, String /*origin*/)>`. It returns `Some` only when `evaluate` yields `artifact_id == artifact_id` and `within` is present.
-  - `fn container_title(id: &str) -> String`: the native part after `<scheme>:<host>/`, e.g. `cisco-sbg/cloudsec-skills-marketplace`.
+  - `fn container_title(id: &str) -> String`: the native part after `<scheme>:<host>/`, e.g. `acme-corp/example-repo`.
   - `fn container_url(origin: &str, id: &str) -> String`: `origin + "/" + native part`.
   - Container rows always use `container_title`, even after direct visits. Their direct-visit title never overrides it. This is goal 4, done host-side with no language change.
   - VisitRow gains `contained: bool`.
@@ -260,7 +260,7 @@ The host index already derives everything from the append-only logs and has the 
 - Produces: `githubOwnerFromUrl`.
 
 - [ ] **Step 1: Failing tests:**
-  - `githubOwnerFromUrl`: `https://github.com/Cisco-SBG/x/blob/main/a.md` → `cisco-sbg`; `https://github.com/orgs/cisco-sbg/repositories` → `cisco-sbg`; `https://github.com/settings/profile` → `null`; `https://github.com/` → `null`; `https://example.com/cisco-sbg` → `null`; `https://github.com/rausified/dotfiles` → `rausified`;
+  - `githubOwnerFromUrl`: `https://github.com/Acme-Corp/x/blob/main/a.md` → `acme-corp`; `https://github.com/orgs/acme-corp/repositories` → `acme-corp`; `https://github.com/settings/profile` → `null`; `https://github.com/` → `null`; `https://example.com/acme-corp` → `null`; `https://github.com/rausified/dotfiles` → `rausified`;
   - `one organization field scopes every checked GitHub type`;
   - panel `Capture Site pre-fills the organization from the current GitHub page`;
   - panel `unchecking repositories omits the repo adapter`.
@@ -317,4 +317,4 @@ The host index already derives everything from the append-only logs and has the 
   - verify that the manifest points at the protocol-7 build.
 
   Then ask John to reload Brauser in `chrome://extensions`, open settings, and add GitHub repositories.
-- [ ] **Step 5:** After John reloads: on `github.com/cisco-sbg/cloudsec-skills-marketplace`, the panel shows "● Artifact recognized" with `cisco-sbg/cloudsec-skills-marketplace`. On a PR in that repo, the card shows "In cisco-sbg/cloudsec-skills-marketplace".
+- [ ] **Step 5:** After John reloads: on `github.com/acme-corp/example-repo`, the panel shows "● Artifact recognized" with `acme-corp/example-repo`. On a PR in that repo, the card shows "In acme-corp/example-repo".

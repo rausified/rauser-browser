@@ -426,7 +426,7 @@ Ordinary native calls pass empty replay and retain existing behavior. Tests
 exercise the same native request handlers with host-built replay. Durable apply
 must load and bind authoritative replay under the locks before using this
 parameter; a historical approval cannot supply it. Remaining `brwr-dbp` work:
-resolve the prepare-recovery/downgrade contract, publish exact config plus
+integrate the authorized prepare-recovery contract, publish exact config plus
 authoritative home history, integrate replay into all readers and summary/run
 identity, expose preserved alias-note viewing, generate old-path artifact
 stubs and prove crash/reindex recovery. Panel review follows separately.
@@ -440,3 +440,160 @@ README gates pass with 1,421 Rust-reported outcomes (94 explicit IPC skips),
 Accessibility passes two fixtures and explicitly skips 42 sandbox-blocked
 browser cases. This completes brwr-c1bq only; driver/platform validation,
 durable application and panel acceptance remain separate.
+
+
+## Restore the dormant transaction prerequisite — 2026-11-09
+
+The `brwr-gpnm` handoff described locally completed source in archived commit
+`f61e71c7d`; current main `20a81a304` did not contain it. This cycle restores
+that direct prerequisite for assigned `brwr-dbp`, with the corrections below.
+The prerequisite and parent stay in progress until their changes reach main
+and the relevant gates pass. This is no additional preview stage.
+
+### Open decisions
+
+John's 2026-11-09 recovery/history/unalias/downgrade decisions above remain the
+apply contract. Cookie resolves the prerequisite's platform handling by
+refusing private Windows transaction publication and recovery with pending
+bytes until directory durability is implemented (`brwr-4qt4`). No-pending
+recovery remains harmless. All other Windows code and ordinary saves retain
+their current behavior. No new user-facing apply action is exposed.
+
+### Design challenge
+
+Before restoration, `/root/transaction_challenge` reviewed the archived source
+and argued for keeping its byte-bound prepare/exact-suffix mechanism instead
+of introducing a second store. Adopted: explicit Windows refusal because the
+existing directory-sync helpers are no-ops there; an after-config/corrupt-history
+refusal fixture; and honest same-process interruption terminology. Activation
+still requires universal recovery and replay-aware readers. Stable unexpected
+external edits refuse, but editors ignoring Brauser's locks can still race the
+later writes; these checks are not a general concurrent-editor guarantee.
+
+### Private transaction contract
+
+`host/src/config/relearn.rs` renders only the reviewed origin's replacement
+adapters, preserving host-only tables, picker identities, task folders, other
+origins and retired contracts. Ordinary updates keep their frozen-ID guard.
+`host/src/relearn/transaction.rs` is compiled privately with no CLI/native
+entry point. A request must exactly match a recorded approval, and its impact
+plan is recomputed under config then capture locks before preparation and
+again after rendering. No worker-supplied alias input exists.
+
+The private `rekey/apply-pending.json` binds exact before/after config bytes
+and path, original request, history-prefix length/hash and exact append.
+Authoritative history is the selected home's `logs/rekey-history.jsonl`.
+Each chained version-1 entry binds sequence, prior checksum, operation UUID,
+decision checksum, request/plan revisions, home path/identity, before/after
+hashes and host-derived confirm events. Event IDs are operation-scoped so a
+later move back does not reuse an earlier event ID. Unalias is not supported.
+
+Publication orders synced prepare, history append/sync, atomic config
+publication/sync and prepare removal/sync. Recovery verifies every participant
+before repairing even a torn suffix: exact original approval, unchanged home
+identity, current config equal to prepared before or after, and exact history
+prefix plus a prefix of the prepared append. It rolls forward without
+truncating unrelated bytes. Original decisions and physical files stay intact.
+
+Limits are 64 KiB per config, 8 MiB prepare, 4 MiB append, 64 MiB history,
+4,096 operations and 32,768 alias events. Symlink participants refuse; regular
+files are bounded before reads. Prepare publication reuses the decision
+journal's private create-new hard-link primitive under a separate filename.
+Exact committed retries return the original entry without a second append.
+
+Remaining `brwr-dbp` work: universal recovery before startup/long-lived/nested
+access with audited lock order; authoritative-history replay in ordinary
+index, note, summary and run paths; preserved alias-note viewing and old-path
+artifact stubs; real multiple applies and cache-deletion rebuild acceptance.
+`brwr-9w4t` tracks in-flight summary/task handoff. The private recovery is not
+called by ordinary startup; no apply activation is claimed by this restoration.
+
+Historical validation of the archived restoration: 60 Re-learn tests (15 transaction),
+156 config tests and 10 CLI tests pass. Workspace Clippy, Rust formatting,
+protocol generation check, TypeScript, ESLint and current-state/whitespace
+checks pass. Full fresh self-review and the final Codex reviewer found no
+remaining findings. Windows conditional compilation was reviewed by inspection;
+Windows compilation and its refusal fixture still need CI evidence. The driver
+owns the full post-change gate, independent approval and publication.
+
+### Continuation on main `7b0ce56e6` — 2026-11-09
+
+The driver's green `eb0572103` source was absent from this checkout as well.
+Restored that exact prerequisite, including its prepare-directory recovery
+barrier, before extending it. Production apply and recovery remain dormant.
+Added substitutable directory-sync calls for history, config parent and
+cleanup, using the existing real helpers in production. Three new fixtures
+exercise operation errors instead of only post-operation interruption hooks;
+they check exact-once recovery and unchanged physical notes and decisions.
+They do not certify power-loss durability or inject file-write/rename errors.
+
+Design challenge `/root/recovery_challenge` adopts this small callback seam
+instead of a filesystem abstraction and confirms the ordering. Its review
+caught a fixture creating a reappearing prepare with public permissions;
+the fixture now reuses private prepare publication. Its gate audit recommends
+one config-lock recovery gate, with explicit reads under an existing lock for
+nested planning/journal calls. Putting recovery blindly into `load_from` or
+`refresh` can deadlock nested `reopen`, while taking `lock_current` for ordinary
+reads also changes when adopted contracts are recorded. Preserve their existing
+read-only semantics with a low-level guard distinct from recording ownership.
+Recovery errors must make a store inert with a specific pending-recovery issue,
+because Hello/GetConfig ignore refresh errors and expose `config_issue`.
+No-pending access must work without an available home or Windows transaction
+support. After cleanup sync errors, prove absent-prepare removal durable before
+allowing later writes; unrelated edits followed by prepare reappearance must
+fail closed. Gate and replay-reader activation must ship together: recovering
+new config with old-identity readers would expose inconsistent notes/indexes.
+These are implementation constraints under John's existing decisions; no new
+user-facing policy decision is open.
+
+Continuation validation: 64 Re-learn unit tests (19 transaction fixtures),
+156 config tests and 10 CLI boundary tests pass (230 total). Host all-target
+Clippy, protocol generation check, Rust formatting, TypeScript, ESLint and
+current-state/whitespace checks pass. Fresh full source/test/document review
+is complete. The driver owns the full unsandboxed gate and publication;
+Windows execution and real power-loss certification are not claimed.
+
+
+## Explicit nested config reads — 2026-11-09 (`brwr-l2ok`)
+
+### Open decisions
+
+No new policy decisions. John's recovery/history decisions above remain in
+force. This slice prepares the config-lock boundary; ordinary loading and
+refresh do not run transaction recovery, and no apply entry point is added.
+
+### Design challenge
+
+Before implementation, reviewer `/root/gate_challenge` recommended separating
+coordination-only locks from adopted-contract recording and requiring a live,
+matching config-lock token for nested reads. Adopt this simpler prerequisite
+instead of adding a dormant general recovery framework. Locked review, journal
+and transaction code must never reopen through the ordinary loader, since a
+future recovery gate there would reacquire its own config lock. Preserve
+config-before-capture ordering and ordinary write-lock adoption. Activation
+remains coupled to replay-aware index, note, summary and run readers.
+
+### Plan
+
+Split coordination lock acquisition from the recording flag. Add an explicit
+read-under-lock operation with a matching-path guard, thread it through nested
+planning, preview, decision recording and private transaction preparation, and
+prove foreign-lock refusal, read-only adopted-contract behavior and dormant
+pending-state preservation. Ordinary loader and refresh behavior stays intact.
+
+
+### Result and remaining work
+
+Explicit nested reads are implemented. Four new regressions plus existing
+coverage pass: 71 Re-learn, 158 config and 10 real CLI boundary tests (239
+focused cases). Host all-target Clippy, protocol generation, Rust formatting,
+TypeScript, ESLint and current-state/whitespace checks pass. Full fresh diff
+review and `/root/gate_challenge` source review found no blocking findings.
+The full unsandboxed gate and publication belong to the driver.
+
+This completes the nested-read implementation only. Do not add another dormant
+lock wrapper stage: the next integration must connect authoritative home-history
+replay to ordinary readers and the config recovery boundary, preserving inert
+error reporting and config-before-capture ordering. The lower-level recovery
+and journal inspection helpers still rely on documented caller locks.
+`brwr-dbp` remains incomplete; no apply/recovery activation is claimed.

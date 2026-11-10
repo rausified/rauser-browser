@@ -140,7 +140,7 @@ fn record_with(
     checkpoint: &dyn Fn(&str) -> Result<()>,
 ) -> Result<Receipt> {
     validate_request(request)?;
-    let _config_lock = config.lock_current()?;
+    let config_lock = config.lock_for_read()?;
     let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
     let revision = request_revision(request)?;
     // Inspect an existing journal before revalidation, without creating one
@@ -158,13 +158,13 @@ fn record_with(
             return Ok(entry.receipt());
         }
     }
-    let plan = plan_locked(config, &request.review)?;
+    let plan = plan_locked(config, &request.review, &config_lock)?;
     ensure!(
         plan.plan_revision == request.expected_plan_revision,
         "review evidence changed; review a fresh plan before recording"
     );
     validate_decision(request.decision, &plan)?;
-    let current = config.reopen();
+    let current = config.reopen_locked(&config_lock)?;
     ensure!(
         current.revision() == plan.config_revision,
         "configuration changed during review"
@@ -225,20 +225,24 @@ fn record_with(
 /// Inspection also completes an exact prepared append after a crash. It does
 /// not require the old home folder to be mounted and never opens its contents.
 pub fn inspect(config: &ConfigStore) -> Result<Vec<Entry>> {
-    let _config_lock = config.lock_current()?;
+    let _config_lock = config.lock_for_read()?;
     let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
+    inspect_locked(config)
+}
+
+pub(super) fn inspect_locked(config: &ConfigStore) -> Result<Vec<Entry>> {
     match Store::open(config.dir()?, false)? {
         Some(store) => store.recover(),
         None => Ok(Vec::new()),
     }
 }
 
-struct Store {
-    dir: Dir,
+pub(super) struct Store {
+    pub(super) dir: Dir,
 }
 
 impl Store {
-    fn open(parent: &Path, create: bool) -> Result<Option<Self>> {
+    pub(super) fn open(parent: &Path, create: bool) -> Result<Option<Self>> {
         let root = Dir::open_ambient_dir(parent, cap_std::ambient_authority())?;
         match root.symlink_metadata("rekey") {
             Ok(meta) => {
@@ -272,7 +276,7 @@ impl Store {
         }))
     }
 
-    fn read(&self, name: &str, limit: usize) -> Result<Option<Vec<u8>>> {
+    pub(super) fn read(&self, name: &str, limit: usize) -> Result<Option<Vec<u8>>> {
         let meta = match self.dir.symlink_metadata(name) {
             Ok(meta) => meta,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -296,16 +300,20 @@ impl Store {
     }
 
     fn prepare(&self, pending: &Pending) -> Result<()> {
+        self.publish_prepare(PENDING, &serde_json::to_vec(pending)?)
+    }
+
+    pub(super) fn publish_prepare(&self, destination: &str, bytes: &[u8]) -> Result<()> {
         let name = format!(".prepare-{}.tmp", Uuid::new_v4());
         let mut file = self
             .dir
             .open_with(&name, private_options().write(true).create_new(true))?;
         let cleanup = crate::vault::TempFileCleanup::new(&self.dir, &name);
-        file.write_all(&serde_json::to_vec(pending)?)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
         self.dir
-            .hard_link(&name, &self.dir, PENDING)
+            .hard_link(&name, &self.dir, destination)
             .context("publishing re-learning prepare record")?;
         sync_directory(&self.dir)?;
         drop(cleanup);

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Task runs and Summarize & log runs on an Office for the web document should read the document, not just the page. Today page extraction gets little or no text from SharePoint/OneDrive PowerPoint, Word and Excel pages (for example `https://cisco-my.sharepoint.com/:p:/r/personal/.../_layouts/15/Doc.aspx?sourcedoc=...&file=X.pptx`), because PowerPoint renders slides without readable DOM text. On John's first live task the agent succeeded only because it chose on its own to fetch the deck through its SharePoint connector. This plan makes that the designed behaviour:
+**Goal:** Task runs and Summarize & log runs on an Office for the web document should read the document, not just the page. Today page extraction gets little or no text from SharePoint/OneDrive PowerPoint, Word and Excel pages (for example `https://contoso-my.sharepoint.com/:p:/r/personal/.../_layouts/15/Doc.aspx?sourcedoc=...&file=X.pptx`), because PowerPoint renders slides without readable DOM text. On John's first live task the agent succeeded only because it chose on its own to fetch the deck through its SharePoint connector. This plan makes that the designed behaviour:
 - The service recognises an Office document from the page URL.
 - It writes the document's identity into `page.md`, built by the host but still untrusted page data.
 - Fixed host prompt text tells the agent: if `page.md` does not hold the document's content, retrieve that one document with its own tools, then say whether it read the document or only the page.
@@ -72,7 +72,7 @@ All were resolved autonomously on 2026-11-01 by the planning agent. John approve
    - **SharePoint document ID.** The first `sourcedoc` value, decoded and canonicalised with `adapter_templates::CType::parse("uuid")` and `.canonical(v)` (braces stripped, lowercased, as the starter does). An invalid value means no ID.
    - **Document address.**
      - A `Doc.aspx`/`WopiFrame.aspx` URL becomes `https://{host}{path}` plus a query holding only `sourcedoc` and `file`, in that order, re-encoded by `Url::query_pairs_mut`. This drops `action`, `mobileredirect`, `wdOrigin` and the rest. A parameter that is absent stays absent: `Doc.aspx?file=Plan.docx` keeps only `file`, and `Doc.aspx?sourcedoc=…` only `sourcedoc`.
-     - Critic amendment 5: a leading `/:w:/r`, `/:x:/r`, `/:p:/r` (or `/g`) prefix is stripped from a `Doc.aspx`/`WopiFrame.aspx` path, because what follows it is the document's real path. The goal's sample `https://cisco-my.sharepoint.com/:p:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B…%7D&file=X.pptx&action=edit` becomes `https://cisco-my.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B…%7D&file=X.pptx`, pinned by a shared vector. A sharing link without `Doc.aspx` keeps its prefix (the rule below).
+     - Critic amendment 5: a leading `/:w:/r`, `/:x:/r`, `/:p:/r` (or `/g`) prefix is stripped from a `Doc.aspx`/`WopiFrame.aspx` path, because what follows it is the document's real path. The goal's sample `https://contoso-my.sharepoint.com/:p:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B…%7D&file=X.pptx&action=edit` becomes `https://contoso-my.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B…%7D&file=X.pptx`, pinned by a shared vector. A sharing link without `Doc.aspx` keeps its prefix (the rule below).
      - Critic amendment 6: `sourcedoc` goes into the address as the page gave it (decoded, then re-encoded), even when it is not a valid ID; only the ID line drops an invalid value. The invalid-sourcedoc vector pins its `document_url`.
      - An officeapps URL uses the `src` value, re-serialised by `Url`.
      - Anything else, such as a sharing link whose `e=` parameter belongs to the share, uses the page URL with its fragment removed.
@@ -93,7 +93,7 @@ All were resolved autonomously on 2026-11-01 by the planning agent. John approve
 
    - Kind: PowerPoint presentation
    - File name: X.pptx
-   - Document address: https://cisco-my.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B...%7D&file=X.pptx
+   - Document address: https://contoso-my.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B...%7D&file=X.pptx
    - SharePoint document ID: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
    - Text read from the page: none | N characters
 
@@ -287,7 +287,7 @@ The vectors cover:
   - that Brauser makes no new request and gains no new permission.
 - [ ] TESTING.md:
   - Under "Agent tasks, task bar", list the new tests by layer.
-  - Under "Real-UI acceptance", add **[human] Office documents read by the agent**: (1) re-run John's PowerPoint task on the same `cisco-my.sharepoint.com/:p:/…` deck with the dev build; (2) confirm the run's `page.md` has the `## Office document` section with the right file name; (3) confirm the agent fetched the deck with its SharePoint connector, the report says it read the document, and its answer reflects slide content; (4) Summarize & log the same deck and confirm the summary's description says the document was read; (5) repeat once for a Word document and an Excel workbook.
+  - Under "Real-UI acceptance", add **[human] Office documents read by the agent**: (1) re-run John's PowerPoint task on the same `contoso-my.sharepoint.com/:p:/…` deck with the dev build; (2) confirm the run's `page.md` has the `## Office document` section with the right file name; (3) confirm the agent fetched the deck with its SharePoint connector, the report says it read the document, and its answer reflects slide content; (4) Summarize & log the same deck and confirm the summary's description says the document was read; (5) repeat once for a Word document and an Excel workbook.
 - [ ] AGENTS.md:
   - In the `host/src/service/` module list, add `office.rs` (the Office URL detector).
   - Under "Security rules", add one bullet: the Office document identity in `page.md` is untrusted page data, and only the fixed host paragraph authorises fetching that one document.

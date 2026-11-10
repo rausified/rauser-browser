@@ -144,12 +144,8 @@ jobs:
       - name: Run headless macOS smoke test
         if: runner.os == 'macOS'
         run: npm run smoke:macos:headless
-      # The fuzz targets are their own workspace; running them needs nightly
-      # and cargo-fuzz, so CI only keeps them compiling.
-      # Keep this Unix/libFuzzer check on macOS; Windows runs the shared
-      # vectors and differential tests above against its native host.
-      - name: Check adapter-template fuzz targets compile
-        if: runner.os == 'macOS'
-        run: cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
+      # The fuzz crate's own compile check (brwr-nu0m) moved to ci.yml's
+      # "Fuzz targets compile" job, which runs on ubuntu for every code
+      # change instead of only here, where most PRs skip macOS entirely.
       - name: Audit npm lockfile
         run: npm audit --audit-level=high

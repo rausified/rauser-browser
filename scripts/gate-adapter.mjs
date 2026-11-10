@@ -183,6 +183,17 @@ export const STEPS = [
     cmd: ["cargo", "clippy", "--locked", "-p", "adapter-templates", "--all-targets", "--", "-D", "warnings"],
     when: (files) => files.some((file) => file.startsWith("adapter-templates/") && RUST.test(file)),
   },
+  // The fuzz crate is its own workspace (adapter-templates/fuzz/Cargo.toml)
+  // depending only on adapter-templates, so a cheap `cargo check` here
+  // catches an engine/fuzz-target mismatch locally instead of waiting on
+  // CI's ubuntu "Fuzz targets compile" job (brwr-nu0m: #379 changed
+  // TitleMatch's title field and only that job, which most PRs used to
+  // skip because it ran on macOS only, caught match_title.rs going stale).
+  {
+    name: "adapter-templates fuzz targets compile",
+    cmd: ["cargo", "check", "--locked", "--manifest-path", "adapter-templates/fuzz/Cargo.toml", "--bins"],
+    when: ENGINE_TEST_INPUTS,
+  },
   // The host include_str!s the catalog (capture_site, and the site-draft
   // prompt in service::prompt) and the structural fixture (capture_site),
   // and the site-draft answers (capture_site and the service's site_draft

@@ -141,11 +141,11 @@ mod tests {
         00zrhnpsrwe00h, ffh, 4h, 5h, 6h, 7h, eh, hlh, kh, sih, tlh, trh, fmh, pgh, apzr, czr, szr, \
         ozr, azr, gqh, y3h, y4";
 
-    const PROSE: &str = "I read the underlying Word document through SharePoint. It maps Cisco \
-        Secure Connect ZTA requirements across onboarding, client enrollment, private resources, \
-        traffic steering, policy, posture, and reporting. Specific requirements include Umbrella \
-        and Meraki organization linking, API integration, HTTP/2 and HTTP/3 SNI proxy integration, \
-        and distinct browser-based and client-based access constraints.";
+    const PROSE: &str = "I read the underlying Word document through SharePoint. It maps Acme \
+        Gateway rollout requirements across onboarding, device enrollment, internal resources, \
+        traffic routing, policy, health checks, and reporting. Specific requirements include billing \
+        and directory account linking, API integration, HTTP/2 and HTTP/3 TLS proxy integration, \
+        and distinct browser-based and agent-based access constraints.";
 
     const CODE: &str = "fn main() {\n    let mut cfg = Config::default();\n    cfg.set_dir(\"src\");\n    \
         std::fs::write(\"out.txt\", b\"ok\").unwrap();\n    println!(\"{}\", cfg.len());\n}\n\
