@@ -22,6 +22,7 @@ trap 'rm -rf "$stage"' EXIT
 ditto "$app" "$stage/$BRAUSER_APP_NAME.app"
 ln -s /Applications "$stage/Applications"
 
+mkdir -p "$(dirname "$dmg")"
 rm -f "$dmg"
 note "Creating $dmg"
 # UDZO: a read-only, zlib-compressed image, which every supported macOS opens.

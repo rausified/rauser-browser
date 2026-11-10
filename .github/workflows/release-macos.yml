@@ -261,7 +261,12 @@ jobs:
       - name: Add the provenance bundle to the release files
         env:
           BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/brauser-$VERSION.intoto.sigstore.json"
+        working-directory: dist
+        run: |
+          cp "$BUNDLE" "brauser-$VERSION.intoto.sigstore.json"
+          # SHA256SUMS covers every release file, the bundle included.
+          sha256sum "brauser-$VERSION.intoto.sigstore.json" >> SHA256SUMS
+          sha256sum -c SHA256SUMS
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
