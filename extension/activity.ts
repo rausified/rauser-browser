@@ -48,6 +48,9 @@ export interface NavigationContext {
   window_id: number;
   url: string;
   title: string | null;
+  /** The tab's title was generic (adapter-templates.md §9.4), so `title` is
+   * null and the artifact keeps the title it already has. */
+  generic_title?: boolean;
   transition: string;
   qualifiers: string[];
   reload: boolean;
@@ -159,7 +162,10 @@ export function recordNavigation(
     delete state.pending_sources[key];
     return;
   }
-  const title = match.title ?? context.title;
+  // A generic title (§9.4) is no title: the same artifact keeps the title,
+  // and the refs found in it, already recorded for it.
+  const generic = context.generic_title === true;
+  const title = generic && previous?.artifact_id === match.artifact_id ? previous.title : match.title ?? context.title;
   const tab: ActivityTab = {
     artifact_id: match.artifact_id, artifact_type: match.type, url: context.url,
     title: title ?? null, mode: match.mode, window_id: context.window_id,
@@ -175,11 +181,13 @@ export function recordNavigation(
   if (!total && contributes) total = totalFor(state, tab, now, uuid);
   if (total) {
     total.url = context.url;
-    total.title = title ?? null;
     if (match.mode) {
       addDistinct(total.modes, { mode: match.mode, url: context.url },
         (a, b) => a.mode === b.mode, 3);
     }
+  }
+  if (total && !(generic && total.title !== null)) {
+    total.title = title ?? null;
     // Refs are evidence from the latest title carried by this event. Keeping
     // refs from an older title would make the host correctly reject the
     // aggregate when it re-evaluates only the event's latest URL and title.

@@ -67,7 +67,11 @@ fuzz_target!(|data: &[u8]| {
     let url = "https://fuzz.example.com/o/acme/7";
     if let Ok(found) = doc.evaluate(url, Some(title)) {
         let matched = found.title.expect("a title was given");
-        assert!(matched.title.chars().count() <= 512);
+        // A generic title (§9.4) yields no title; any title that is
+        // produced must respect the §9.1 cap.
+        if let Some(title) = &matched.title {
+            assert!(title.chars().count() <= 512);
+        }
         assert!(matched.refs.len() <= MAX_REFS);
     }
 });

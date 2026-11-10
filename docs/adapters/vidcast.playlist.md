@@ -4,10 +4,11 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/vidcast/`, researched blind: public sources only, no
 browsing history, cookies or a Vidcast account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): no visits of
-this type in the sample, so 0/3 rules confirmed. Not every rule and
-title was confirmed, so this type stays a development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: no real visit of this type, so 0/3
+rules confirmed. Not every rule was matched by a real visit, so this type
+stays a development draft.
 
 Brauser offers this draft on the exact origin `https://app.vidcast.io`,
 alongside Vidcast videos and Vidcast pages (the `vidcast` family). Any
@@ -30,7 +31,14 @@ match  = [
 ]
 id     = "vidcast.playlist:{host}/{playlist}"
 title  = "Vidcast - Playlist - {title}"
+generic_titles = ["Vidcast", "Vidcast - Sign In"]
 ```
+
+`generic_titles` lists the titles shown by Vidcast's app shell, sign-in page
+and editor instead of the item's own name (`adapter-templates.md` §9.4). A
+visit whose title is one of them, ASCII case aside, or is empty or the bare
+host, records no title, so the artifact keeps the title it already has
+("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -60,7 +68,8 @@ prefix for a playlist page. Only this exact entry is listed, so a title that
 is not a playlist name — bare `Vidcast` (the embed page or the legacy
 redirect before it resolves), `Vidcast - Request Access`, or `Vidcast - Not
 Found` — matches no entry and is recorded whole rather than mistaken for a
-playlist's name.
+playlist's name, except that bare `Vidcast` and `Vidcast - Sign In` are
+generic titles and record no title.
 
 ## Recorded samples
 
@@ -95,9 +104,10 @@ per-type, since none of those 11 real visits happened to be a playlist.
 ## Known limits
 
 - **Access and error states are recorded as artifacts.** `Vidcast - Request
-  Access`, `Vidcast - Not Found`, and the bare `Vidcast` embed title are all
-  recorded whole, under this playlist's ID, because the URL is still a valid
-  playlist share URL even when its title says otherwise.
+  Access` and `Vidcast - Not Found` are recorded whole, under this playlist's
+  ID, because the URL is still a valid playlist share URL even when its title
+  says otherwise. The bare `Vidcast` embed title is generic and records no
+  title.
 - **Real old `/collections/share/<id>` links are unconfirmed.** The research
   is confident the redirect exists in the bundle, but not confident real
   links of that legacy form still circulate.

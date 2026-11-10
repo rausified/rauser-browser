@@ -105,6 +105,7 @@
           }
         ],
         "id": "servicenow.incident:{host}/{id}",
+        "generic_titles": ["Login"],
         "title": "{title} | Incident | {~}"
       },
       "history": [],
@@ -699,6 +700,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.service-now.com/helpzone?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.servicenow.incident.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 0, "type": "servicenow.incident", "captures": {"id": "0123456789abcdef0123456789abcdef"}, "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef",
+          "title": "Login"
         }
       ]
     },
@@ -761,6 +771,7 @@
           }
         ],
         "id": "servicenow.ritm:{host}/{id}",
+        "generic_titles": ["Login"],
         "title": "{title} | Requested Item | {~}"
       },
       "history": [],
@@ -1187,6 +1198,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.service-now.com/helpzone?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.servicenow.ritm.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 1, "rule": 0, "type": "servicenow.ritm", "captures": {"id": "0123456789abcdef0123456789abcdef"}, "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef",
+          "title": "Login"
         }
       ]
     },
@@ -1241,6 +1261,7 @@
           }
         ],
         "id": "servicenow.change:{host}/{id}",
+        "generic_titles": ["Login"],
         "title": "{title} | Change Request | {~}"
       },
       "history": [],
@@ -1646,6 +1667,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.service-now.com/helpzone?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef"
+        },
+        {
+          "id": "eval.servicenow.change.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 2, "rule": 0, "type": "servicenow.change", "captures": {"id": "0123456789abcdef0123456789abcdef"}, "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef",
+          "title": "Login"
         }
       ]
     },
@@ -1687,7 +1717,8 @@
             ]
           }
         ],
-        "id": "servicenow.kb:{host}/{number}"
+        "id": "servicenow.kb:{host}/{number}",
+        "generic_titles": ["Knowledge Base", "Login"]
       },
       "history": [],
       "status": {
@@ -2189,6 +2220,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.service-now.com/helpzone/extra?id=kb_article&sysparm_article=KB0012345"
+        },
+        {
+          "id": "eval.servicenow.kb.generic_title_portal_default",
+          "kind": "evaluate",
+          "why": "the portal's default title is generic (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 3, "rule": 0, "type": "servicenow.kb", "captures": {"number": "KB0010035"}, "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB0010035",
+          "title": "Knowledge Base"
         }
       ]
     }

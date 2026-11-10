@@ -14,7 +14,10 @@ use crate::document::{Adapter, Alias, Document, IdPart, Mode, QueryCond, Rule};
 use crate::path::prepare_segments;
 use crate::title::prepare_title;
 
-pub const MAX_URL_CHARS: usize = 2048;
+/// §5.1: the URL cap, in scalar values. It equals the capture store's URL cap
+/// (8192 bytes, `host/src/capture.rs`), so no URL Brauser could store is
+/// refused for length; evaluation stays linear in it (§10.2).
+pub const MAX_URL_CHARS: usize = 8192;
 pub const MAX_ID_BYTES: usize = 512;
 pub const MAX_REFS: usize = 20;
 const UUID_LEN: usize = 36;
@@ -69,9 +72,10 @@ pub struct ResolvedRef {
 /// The title-derived part of a match (§9, §10.1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TitleMatch {
-    /// The extracted title, or the whole prepared title for the fallback.
-    pub title: String,
-    /// The matching entry, or `None` for the fallback.
+    /// The extracted title, or the whole prepared title for the fallback;
+    /// `None` when that title is generic (§9.4), which is no title at all.
+    pub title: Option<String>,
+    /// The matching entry, or `None` for the fallback or a generic title.
     pub entry: Option<usize>,
     /// The suggested tab-title alias ID.
     pub alias_id: Option<String>,
@@ -386,6 +390,15 @@ fn match_title(
         break;
     }
     let (title, entry, alias_id) = found.unwrap_or_else(|| (prepared.iter().collect(), None, None));
+    // A generic title names no artifact, so it yields no alias or refs.
+    if is_generic_title(adapter, &title) {
+        return TitleMatch {
+            title: None,
+            entry: None,
+            alias_id: None,
+            refs: Vec::new(),
+        };
+    }
     // Specs that share a `find` share one scan of the title.
     let mut scans: Vec<(BaseType, Vec<String>)> = Vec::new();
     let mut refs: Vec<Ref> = Vec::new();
@@ -411,11 +424,33 @@ fn match_title(
         }
     }
     TitleMatch {
-        title,
+        title: Some(title),
         entry,
         alias_id,
         refs,
     }
+}
+
+/// §9.4: whether a title, extracted or fallback, is generic. Trimmed of white
+/// space and with ASCII case folded, it is empty, one of the adapter's
+/// `generic_titles`, or the browser's placeholder for a page with no title:
+/// the URL's host (with any port), optionally after `http://` or `https://`,
+/// alone or followed by `/`, `?` or `#`.
+fn is_generic_title(adapter: &Adapter, title: &str) -> bool {
+    let trimmed = title.trim_matches(char::is_whitespace);
+    if trimmed.is_empty() {
+        return true;
+    }
+    let folded = trimmed.to_ascii_lowercase();
+    if adapter.generic_titles.contains(&folded) {
+        return true;
+    }
+    let rest = folded
+        .strip_prefix("https://")
+        .or_else(|| folded.strip_prefix("http://"))
+        .unwrap_or(&folded);
+    rest.strip_prefix(adapter.host.as_str())
+        .is_some_and(|after| after.is_empty() || after.starts_with(['/', '?', '#']))
 }
 
 /// A ref boundary: anything but ASCII `[A-Za-z0-9_]`.

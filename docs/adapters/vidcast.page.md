@@ -4,10 +4,11 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/vidcast/`, researched blind: public sources only, no
 browsing history, cookies or a Vidcast account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): no visits of
-this type in the sample, so 0/3 rules confirmed. Not every rule and
-title was confirmed, so this type stays a development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: no real visit of this type, so 0/3
+rules confirmed. Not every rule was matched by a real visit, so this type
+stays a development draft.
 
 Brauser offers this draft on the exact origin `https://app.vidcast.io`,
 alongside Vidcast videos and Vidcast playlists (the `vidcast` family). Any
@@ -36,7 +37,14 @@ match  = [
 ]
 id     = "vidcast.page:{host}/{page}"
 title  = "Vidcast - {title}"
+generic_titles = ["Vidcast", "Sign In", "Page Edit"]
 ```
+
+`generic_titles` lists the titles shown by Vidcast's app shell, sign-in page
+and editor instead of the item's own name (`adapter-templates.md` §9.4). A
+visit whose title is one of them, ASCII case aside, or is empty or the bare
+host, records no title, so the artifact keeps the title it already has
+("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -55,8 +63,8 @@ matches nothing either.
 One entry: `Vidcast - {title}` strips the app's title-component prefix, the
 same template `vidcast.video` uses, from the bundle's page-title component
 (not observed live — medium confidence). The editor shows the fixed title
-`Vidcast - Page Edit`, recorded as the useless title `Page Edit` (Known
-limits, below).
+`Vidcast - Page Edit`; `Page Edit` is a generic title, so an edit visit
+records no title (Known limits, below).
 
 ## Recorded samples
 
@@ -92,8 +100,8 @@ a real URL; the family-wide 11/11 result and stable-ID finding cover
   IDs are not UUIDs, every rule above fails closed — nothing is recorded,
   and nothing is mis-recorded as a page.
 - **The editor title is fixed.** Every edit visit's tab title is `Vidcast -
-  Page Edit`, recorded as `Page Edit` (Review Focus item 5, which names the
-  video editor's identical limit).
+  Page Edit`. `Page Edit` is listed in `generic_titles`, so an edit visit
+  records no title and the page keeps its own name.
 - **Titles are not observed live.** The `Vidcast - <page name>` template
   comes from the app's bundle, not a rendered page.
 - Every Vidcast account signed in to the Chrome profile is recorded: no URL

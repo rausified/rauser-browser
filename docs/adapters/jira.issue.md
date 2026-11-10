@@ -18,6 +18,14 @@ export`, and can find uppercase Jira keys mentioned in other adapter titles.
 The title key is retained as suggested-alias evidence for the later alias
 workflow; it does not silently merge records today.
 
+`generic_titles = ["Jira", "Log in with Atlassian account", "Log in to
+continue - Log in with Atlassian account", "Choose an account to continue -
+Log in with Atlassian account"]` lists the titles shown by Atlassian's sign-in
+and account pages and the app shell instead of the item's own name
+(`adapter-templates.md` §9.4). A visit whose title is one of them, ASCII case
+aside, or is empty or the bare host, records no title, so the artifact keeps
+the title it already has ("Untitled" for a new one).
+
 Known limits: the board-modal rule accepts `selectedIssue` on any `/jira/`
 route, and installations with customized title formats fall back to the whole
 tab title. Jira Server and Data Center origins are not auto-suggested, though a

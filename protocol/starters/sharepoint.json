@@ -24,7 +24,8 @@
           { "path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
           { "path": "/personal/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } }
         ],
-        "id": "sharepoint:{host}/{doc}"
+        "id": "sharepoint:{host}/{doc}",
+        "generic_titles": ["Working...", "Working…", "Login", "Redirecting", "Error", "Sign in is not complete"]
       },
       "history": [
         {

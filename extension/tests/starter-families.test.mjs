@@ -258,7 +258,9 @@ test("every titled sample's recorded title agrees with its own URL's captures (a
         assert.ok(compiled.ok, `${type.type}: ${sample.note}'s adapter compiles: ${JSON.stringify(compiled.error)}`);
         const result = evaluate(compiled.doc, sample.url, sample.title);
         assert.equal(result.match, true, `${sample.note}: ${sample.url} must match its own type's adapter`);
-        if ("title" in type.adapter) {
+        // A sample may record a generic title (adapter-templates.md §9.4),
+        // such as Vidcast's editor, which is deliberately no title at all.
+        if ("title" in type.adapter && result.title !== null) {
           assert.notEqual(
             result.title_entry,
             null,
