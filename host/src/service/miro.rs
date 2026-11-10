@@ -11,7 +11,7 @@ use url::Url;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MiroBoard {
     /// The board ID, as matched: 12 token characters ending in base64
-    /// padding, such as `uXjVQ7rTn2c=` (docs/adapters/miro.board.md).
+    /// padding, such as `qK3nR8vDpZx=` (docs/adapters/miro.board.md).
     pub board_id: String,
     /// The board's canonical address, `https://miro.com/app/board/<id>/`.
     pub url: String,

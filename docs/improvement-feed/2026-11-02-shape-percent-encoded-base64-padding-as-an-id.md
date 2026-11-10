@@ -2,7 +2,7 @@
 
 The page-pattern shaper now reads a trailing `=` or `==` as an `{id}`
 (rausified/rauser-browser#215), but it never percent-decodes path segments,
-so a link that encodes the padding as `%3D` (`/app/board/uXjVQ7rTn2c%3D/`)
+so a link that encodes the padding as `%3D` (`/app/board/qK3nR8vDpZx%3D/`)
 still becomes `{slug}`, and the structural drafter proposes nothing for it.
 Matching already decodes `%3D` (`eval.token.miro_board_encoded_padding`).
 Change: in `extension/site-patterns.ts`, treat a trailing `%3D` or `%3D%3D`

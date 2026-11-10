@@ -699,7 +699,7 @@ test("an Office tab that moved is still page_changed, and one with no top frame 
 test("a Miro board tab with no text still starts a run with empty content", async () => {
   // Miro draws the board on a canvas; the host names the board in page.md
   // and the agent reads it with its own Miro tools (DESIGN.md §4.5).
-  const board = { id: 7, url: "https://miro.com/app/board/uXjVQ7rTn2c=/", title: "Launch Plan - Miro" };
+  const board = { id: 7, url: "https://miro.com/app/board/qK3nR8vDpZx=/", title: "Launch Plan - Miro" };
   const frames = [{ frameId: 0, result: framePage({ title: "", content: " ", href: board.url }) }];
   const summarized = framesDeps(frames);
   await summarizeTab(board, summarized.deps);

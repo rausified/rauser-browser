@@ -351,11 +351,11 @@ test("Miro draft keys boards by their padded board ID and ignores dashboards", (
   assert.equal(offer.needs_scope, false);
   assert.match(offer.description, /every Miro account/);
   const doc = compiled([offer]);
-  const board = evaluate(doc, "https://miro.com/app/board/uXjVQ7rTn2c=/", "Team Retro Board - Miro");
+  const board = evaluate(doc, "https://miro.com/app/board/qK3nR8vDpZx=/", "Team Retro Board - Miro");
   assert.equal(board.match, true);
-  assert.equal(board.artifact_id, "miro.board:miro.com/uXjVQ7rTn2c=");
+  assert.equal(board.artifact_id, "miro.board:miro.com/qK3nR8vDpZx=");
   assert.equal(board.title, "Team Retro Board");
-  const shared = evaluate(doc, "https://miro.com/app/board/uXjVQ7rTn2c=/?share_link_id=510293847561");
+  const shared = evaluate(doc, "https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=510293847561");
   assert.equal(shared.artifact_id, board.artifact_id);
   assert.equal(evaluate(doc, "https://miro.com/app/dashboard/").match, false);
   assert.equal(evaluate(doc, "https://miro.com/login/").match, false);

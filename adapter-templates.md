@@ -214,7 +214,7 @@ All types are fixed by the host. Every type's alphabet is ASCII, and no type adm
 |---|---|---|---|
 | `int` | ASCII digits, without a leading zero unless the value is `0` | 1–19 | as matched |
 | `hex` | `0-9`, `a-f`, `A-F` | 1–64 | lowercase |
-| `token` | `A-Z`, `a-z`, `0-9`, `_`, `-`, then at most two trailing `=` (base64 padding, as in Miro's `/app/board/uXjVQ7rTn2c=/`); at least one character before any `=`, and `=` nowhere else | 1–128, padding included | as matched |
+| `token` | `A-Z`, `a-z`, `0-9`, `_`, `-`, then at most two trailing `=` (base64 padding, as in Miro's `/app/board/qK3nR8vDpZx=/`); at least one character before any `=`, and `=` nowhere else | 1–128, padding included | as matched |
 | `name` | `A-Z`, `a-z`, `0-9`, `.`, `_`, `-`, but not `.` or `..` | 1–100 | as matched |
 | `jira_key` | a letter, then letters, digits, or `_`; then `-`; then an `int`. Letters match in either case | project part 1–255 | uppercase |
 | `uuid` | 8-4-4-4-12 hex digits, optionally wrapped in `{ }` | fixed | lowercase, braces removed |
