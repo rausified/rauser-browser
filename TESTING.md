@@ -347,8 +347,23 @@ Run config tests with `cargo test --locked -p brauser --lib config::`, and CLI
 boundary tests with `cargo test --locked -p brauser --test relearn_journal
 --test relearn_preview --test relearn_plan --test aliases_preview`. No test uses
 a network or real harness. There is no production apply entry point or ordinary
-startup recovery yet. Universal recovery, ordinary index/note/summary/run replay,
+startup recovery yet. Universal recovery, ordinary index/summary/run replay,
 in-flight handoff and cache-deletion rebuild remain parent acceptance work.
+
+Ordinary note replay is covered separately by
+`host/src/relearn/transaction/tests/note_history.rs`, included in the Re-learn
+command above. These Unix fixtures publish history through private apply and
+send real framed native note messages. They check original-file edits,
+canonical preference, URL-note separation, safe imports followed by edits,
+pending/corrupt/torn/foreign-history refusal and independent preserved-note
+listing. The move-back fixture authors a valid second history entry directly;
+it does not prove a second real apply. An ordinary note load can record adopted
+contracts, so obtain a fresh plan and approval after such loads or evidence edits
+before applying in a fixture; do not weaken stale-review checks to avoid this.
+Run `cargo test --locked -p brauser --lib note::` for platform-neutral physical
+ownership/import tests and `cargo test --locked -p brauser --lib native::` for
+ordinary note, task-append and provenance coverage. Production apply/recovery,
+ordinary index/summary/run replay and their activation acceptance remain open.
 
 ## External policy changes and note identity
 

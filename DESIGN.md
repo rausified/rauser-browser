@@ -630,8 +630,18 @@ canonical note refuse selection. Affected revisions bind both identities,
 content and replay history, including unalias, so changed selection or a move
 away/back cannot silently accept an old edit. URL notes stay separate.
 Unaffected keys retain existing revisions and browser-local recovery behavior.
-Ordinary calls still pass empty replay; authoritative apply/recovery and
-preserved alias-note presentation remain unbuilt under `brwr-dbp`.
+Ordinary note loads, saves and explicit task-report appends read the bounded,
+checksum-chained `logs/rekey-history.jsonl` under the config lock after refresh,
+binding replay to the selected home and its physical identity. Missing history
+retains direct revisions. Pending publication or unreadable/torn history refuses
+these note paths without repairing history; independent preserved-note viewing
+remains available. Older URL-note discovery compares canonical identities while
+retaining stripped-parameter provenance checks. Explicit older URL-note imports
+refuse if any selected physical owner exists; an empty group imports at its
+canonical key and returns a history-bound revision ready for editing.
+Authoritative apply/recovery, the ordinary index/run readers and preserved
+alias-note presentation remain unbuilt under `brwr-dbp`; production apply stays
+disabled until those agree.
 
 **Containers.** An adapter can declare that its artifacts sit *within* a container artifact, such as a GitHub pull request within its repository (adapter-templates.md §3, §8.3). A visit recognized as artifact A within container C counts toward A exactly as it always has, and also rolls up into C: C gains the visit's focused and background seconds and its open, and C's `days_opened` is the union of its own days and its contents' days, never a sum. Because a visit is recognized by exactly one adapter (first match wins, §3), each second counts once toward A and once toward C, never twice toward C. The index records the relationship as a `within` edge from the contained artifact to its container, alongside `mentions` and the derived `co-focused` edges. While some adapter declares `within` C's type, C's title and URL come from its ID, never from whichever sub-page's title happened to be seen last, so a container with rolled-up activity but no direct visit yet still shows a usable title (for GitHub, `owner/repo`) and a link built from its captures (`https://github.com/<owner>/<repo>`). Recent and the worklog show C as one row with its rolled-up totals and A as its own row; a day's or period's total counts each visit once, skipping the contained copy of a roll-up. Existing history rolls up too: because the index is rebuilt from the append-only logs, a logged visit rolls up whenever re-evaluating its original URL under the current adapters still yields the same `artifact_id` and the matching adapter declares `within`; an event whose adapter has since changed or been removed is left alone rather than misattributed. Container files follow the adapters as well: when an adapter change takes a container's roll-up away, or the last declaration of its type, its file is rewritten with only its direct visits and its own title, and a container whose only activity was that roll-up no longer has a record, so its generated file is removed (only while it is still Brauser's file for that ID; a replaced or edited-away file is left alone). A container file whose record includes rolled-up activity carries `brauser.rollup: true` in its frontmatter. The index cache remembers where it wrote each container's file, and `brauser reindex` or a rebuild of a lost cache recovers that list from the previous cache if there is one and otherwise from the owned files on disk that carry the marker, so a container that no longer derives a record still has its file removed after a rebuild. The artifact card names an artifact's container, and a container's card lists what was worked on inside it (§5.7); nesting more than one level deep, and an artifact with more than one container, are not supported.
 

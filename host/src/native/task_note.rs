@@ -79,15 +79,14 @@ fn save_with(
             "Settings changed. Reload Tasks before saving the report to a note.",
         );
     }
-    let context = match note_context(config, &run.url, false) {
+    let context = match note_context(config, &run.url, false, &_config_lock) {
         Ok(context) => context,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
-    let location =
-        match current_note_location(&context, &crate::relearn::aliases::Resolution::default()) {
-            Ok(location) => location,
-            Err(err) => return note_error(&value.request_id, err),
-        };
+    let location = match current_note_location(&context, &context.resolution) {
+        Ok(location) => location,
+        Err(err) => return note_error(&value.request_id, err),
+    };
     let loaded = match location.load(&context.vault, &context.canonical, &context.older_urls) {
         Ok(loaded) => loaded,
         Err(err) => return note_error(&value.request_id, err),
