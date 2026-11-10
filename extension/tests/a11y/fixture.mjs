@@ -277,6 +277,10 @@ export async function browserFixture(t, pageName, state = "configured", options 
   await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL, summary: options.summary ?? null, taskFolders: options.taskFolders ?? [] });
   await page.goto(`${ORIGIN}/${pageName}.html`);
   const status = page.locator(pageName === "tasks" ? "#tasks-status" : "#status");
+  if (pageName === "panel" && (state === "disconnected" || state === "error")) {
+    await page.locator("#notice-activity-label").filter({ hasText: state === "disconnected" ? /unavailable/ : /settings|repair/ }).waitFor();
+    await page.locator("#notice-activity-label").click();
+  }
   if (state === "disconnected") await status.filter({ hasText: /unavailable|Could not list tasks/ }).waitFor();
   else if (state === "error") await status.filter({ hasText: /settings|repair|Fixture task listing failed/ }).waitFor();
   else if (pageName === "tasks") {

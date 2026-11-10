@@ -2296,6 +2296,7 @@ struct NoteContext {
     vault: Vault,
     key: RecordKey,
     older_urls: Vec<String>,
+    resolution: crate::relearn::aliases::Resolution,
 }
 
 /// A request refusal: its code and the message shown to the user.
@@ -2419,13 +2420,33 @@ fn note_context(
     config: &mut ConfigStore,
     url: &str,
     include_older_notes: bool,
+    guard: &crate::config::ConfigLock,
 ) -> Result<NoteContext, Refusal> {
     let KeyParts {
         canonical,
         stripped_params,
         vault,
-        key,
+        mut key,
     } = resolve_key_parts(config, url)?;
+    let resolution = crate::relearn::note_resolution(config, guard).map_err(|err| {
+        warn_cause(&err, "note re-key history is unavailable");
+        (
+            ErrorCode::Internal,
+            "note identity is unavailable; re-key history needs recovery or repair".into(),
+        )
+    })?;
+    if key.kind == RecordKeyKind::Artifact {
+        key.value = resolution.canonical(&key.value).into();
+    } else if let NoteKeyRule::Artifact(artifact_id) =
+        config.note_key_rule_mapped(url, |id| resolution.canonical(id).into())
+    {
+        // A removed site's old and new contracts can disagree on raw IDs
+        // while authoritative history proves they name the same artifact.
+        key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: artifact_id,
+        };
+    }
     // `older_urls` is both the older-note list and the only authorization
     // for viewing or migrating one, so every candidate must name this
     // artifact itself. Recorded URLs are stripped canonical forms: the
@@ -2440,10 +2461,10 @@ fn note_context(
     // names differently.
     let names_artifact = |candidate: &str| {
         if let Ok(found) = config.adapter_match(candidate, None) {
-            return found.artifact_id == key.value;
+            return resolution.canonical(&found.artifact_id) == key.value;
         }
-        match config.note_key_rule(candidate) {
-            NoteKeyRule::Artifact(artifact_id) => artifact_id == key.value,
+        match config.note_key_rule_mapped(candidate, |id| resolution.canonical(id).into()) {
+            NoteKeyRule::Artifact(artifact_id) => resolution.canonical(&artifact_id) == key.value,
             NoteKeyRule::Ambiguous
             | NoteKeyRule::Unrecognized
             | NoteKeyRule::Unavailable
@@ -2466,24 +2487,32 @@ fn note_context(
                 "choose a notes folder first".into(),
             ));
         };
+        let members: std::collections::BTreeSet<_> =
+            resolution.members(&key.value).into_iter().collect();
         if let Ok(cache_dir) = config.cache_dir()
             && let Ok(index) = open_index(config, storage, &cache_dir)
-            && let Ok(urls) = index.artifact_url_evidence(&key.value)
         {
-            older_urls.extend(
-                urls.into_iter()
-                    .filter(|stored| {
-                        config.note_url_evidence_is_safe(stored) && names_artifact(&stored.url)
-                    })
-                    .map(|stored| stored.url),
-            );
+            for member in &members {
+                if let Ok(urls) = index.artifact_url_evidence(member) {
+                    older_urls.extend(
+                        urls.into_iter()
+                            .filter(|stored| {
+                                config.note_url_evidence_is_safe(stored)
+                                    && names_artifact(&stored.url)
+                            })
+                            .map(|stored| stored.url),
+                    );
+                }
+            }
         }
         if let Ok(candidates) = vault.note_candidates() {
             for contents in candidates {
-                let candidates = [
-                    note::artifact_keyed_note_evidence(&contents, &key),
-                    note::url_keyed_note_evidence(&contents),
-                ];
+                // Inspect each candidate's verified owner once; alias count
+                // must not multiply full frontmatter parsing for every file.
+                let artifact = note::preserved_identity(&contents)
+                    .filter(|(owner, _)| members.contains(owner.value.as_str()))
+                    .and_then(|(owner, _)| note::artifact_keyed_note_evidence(&contents, &owner));
+                let candidates = [artifact, note::url_keyed_note_evidence(&contents)];
                 older_urls.extend(
                     candidates
                         .into_iter()
@@ -2517,6 +2546,7 @@ fn note_context(
         vault,
         key,
         older_urls,
+        resolution,
     })
 }
 
@@ -2543,9 +2573,7 @@ fn current_note_location(
     context: &NoteContext,
     resolution: &crate::relearn::aliases::Resolution,
 ) -> Result<note::NoteLocation, note::NoteRequestError> {
-    // Applied alias history is not published yet. Keep one ownership-aware
-    // path for ordinary reads, saves and key-change conflicts; durable apply
-    // must supply its checked replay here rather than change note filenames.
+    // Logical identity never becomes a physical ownership marker or filename.
     note::NoteLocation::resolve(&context.vault, &context.canonical, &context.key, resolution)
 }
 
@@ -2607,17 +2635,13 @@ fn save_evidence(
 }
 
 fn load_note(value: brauser_protocol::LoadNoteRequest, config: &mut ConfigStore) -> Response {
-    load_note_resolved(
-        value,
-        config,
-        &crate::relearn::aliases::Resolution::default(),
-    )
+    load_note_resolved(value, config, None)
 }
 
 fn load_note_resolved(
     value: brauser_protocol::LoadNoteRequest,
     config: &mut ConfigStore,
-    resolution: &crate::relearn::aliases::Resolution,
+    resolution: Option<&crate::relearn::aliases::Resolution>,
 ) -> Response {
     // Note identity lookup can catch up and publish the history cache.
     let _config_lock = match config.lock_current() {
@@ -2631,11 +2655,12 @@ fn load_note_resolved(
             );
         }
     };
-    let context = match note_context(config, &value.url, true) {
+    let context = match note_context(config, &value.url, true, &_config_lock) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
-    let location = match current_note_location(&context, resolution) {
+    let location = match current_note_location(&context, resolution.unwrap_or(&context.resolution))
+    {
         Ok(location) => location,
         Err(err) => return note_error(&value.request_id, err),
     };
@@ -2655,17 +2680,13 @@ fn load_note_resolved(
 }
 
 fn save_note(value: brauser_protocol::SaveNoteRequest, config: &mut ConfigStore) -> Response {
-    save_note_resolved(
-        value,
-        config,
-        &crate::relearn::aliases::Resolution::default(),
-    )
+    save_note_resolved(value, config, None)
 }
 
 fn save_note_resolved(
     value: brauser_protocol::SaveNoteRequest,
     config: &mut ConfigStore,
-    resolution: &crate::relearn::aliases::Resolution,
+    resolution: Option<&crate::relearn::aliases::Resolution>,
 ) -> Response {
     // Serialize with config updates and other note saves so the version check
     // below and the write it guards happen without a concurrent writer.
@@ -2683,11 +2704,12 @@ fn save_note_resolved(
     // An ordinary autosave needs only the current key. Discovering every
     // legacy URL note scans the bounded pages directory and is reserved for
     // loads and explicit migrations, not repeated after each keystroke.
-    let context = match note_context(config, &value.url, false) {
+    let context = match note_context(config, &value.url, false, &_config_lock) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
-    let location = match current_note_location(&context, resolution) {
+    let location = match current_note_location(&context, resolution.unwrap_or(&context.resolution))
+    {
         Ok(location) => location,
         Err(err) => return note_error(&value.request_id, err),
     };
@@ -2762,7 +2784,7 @@ fn use_artifact_note(
             );
         }
     };
-    let context = match note_context(config, &value.url, true) {
+    let context = match note_context(config, &value.url, true, &_config_lock) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
@@ -2794,10 +2816,13 @@ fn use_artifact_note(
             "that older note is not part of this artifact's recorded history",
         );
     }
-    match note::use_as_artifact_note(
+    let location = match current_note_location(&context, &context.resolution) {
+        Ok(location) => location,
+        Err(err) => return note_error(&value.request_id, err),
+    };
+    match location.use_older_note(
         &context.vault,
         &context.canonical,
-        &context.key,
         &value.source_url,
         &value.expected_revision,
     ) {
@@ -2835,7 +2860,7 @@ fn view_older_note(
             );
         }
     };
-    let context = match note_context(config, &value.url, true) {
+    let context = match note_context(config, &value.url, true, &_config_lock) {
         Ok(resolved) => resolved,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
@@ -3062,11 +3087,13 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             let within =
                 document.and_then(|document| crate::index::unvisited_within(document, &matched));
             let (title, url) = container.unwrap_or_else(|| {
-                let title = matched
-                    .title
-                    .map(|title| title.title)
-                    .or(value.title)
-                    .unwrap_or_else(|| "Untitled".into());
+                // A title the adapter found generic (§9.4) is no title, so the
+                // card does not fall back to the raw tab title either.
+                let title = match matched.title {
+                    Some(found) => found.title,
+                    None => value.title,
+                }
+                .unwrap_or_else(|| "Untitled".into());
                 (title, canonical)
             });
             (
@@ -4775,7 +4802,7 @@ id = "old:{host}/{id}"
             request_id: "load".into(),
             url: url.into(),
         };
-        let current = match load_note_resolved(load(), &mut config, &resolution) {
+        let current = match load_note_resolved(load(), &mut config, Some(&resolution)) {
             Response::NoteLoaded(note) => note,
             other => panic!("expected note_loaded, got {other:?}"),
         };
@@ -4795,7 +4822,7 @@ id = "old:{host}/{id}"
         match save_note_resolved(
             save(original.key.clone(), &original.revision),
             &mut config,
-            &resolution,
+            Some(&resolution),
         ) {
             Response::NoteConflict(conflict) => {
                 assert_eq!(conflict.reason, "key_changed");
@@ -4807,7 +4834,7 @@ id = "old:{host}/{id}"
         let saved = match save_note_resolved(
             save(current.key.clone(), &current.revision),
             &mut config,
-            &resolution,
+            Some(&resolution),
         ) {
             Response::NoteSaved(note) => note,
             other => panic!("expected saved, got {other:?}"),
@@ -4837,7 +4864,7 @@ id = "old:{host}/{id}"
         match save_note_resolved(
             save(current.key.clone(), &saved.revision),
             &mut config,
-            &resolution,
+            Some(&resolution),
         ) {
             Response::NoteConflict(conflict) => {
                 assert_eq!(conflict.reason, "stale");
@@ -4859,7 +4886,7 @@ id = "old:{host}/{id}"
         match save_note_resolved(
             save(current.key.clone(), &saved.revision),
             &mut config,
-            &back,
+            Some(&back),
         ) {
             Response::NoteConflict(conflict) => {
                 assert_eq!(conflict.reason, "key_changed");
@@ -9969,6 +9996,52 @@ id = "work:{host}/{id}"
             panic!("expected capture result")
         };
         reply.outcome
+    }
+
+    /// A generic tab title (adapter-templates.md §9.4) is no title: the card
+    /// of an unvisited artifact says "Untitled" rather than the sign-in or
+    /// loading page's title.
+    #[test]
+    fn an_unvisited_artifact_never_takes_a_generic_tab_title() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://acme.example.com\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "acme.item"
+origin = "https://acme.example.com"
+match = [{ path = "/items/{id:int}" }]
+id = "acme.item:{host}/{id}"
+title = "{title} - Acme"
+generic_titles = ["Sign in"]
+"#,
+        );
+        let mut config = loaded(&path);
+        let mut title_for = |title: &str| {
+            let Response::ArtifactResult(reply) = get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "artifact".into(),
+                    url: "https://acme.example.com/items/7".into(),
+                    title: Some(title.into()),
+                },
+                &mut config,
+            ) else {
+                panic!("expected artifact result")
+            };
+            reply.artifact.unwrap().title
+        };
+        assert_eq!(title_for("Plan - Acme"), "Plan");
+        assert_eq!(title_for("Sign in - Acme"), "Untitled");
+        assert_eq!(title_for("acme.example.com"), "Untitled");
     }
 
     #[test]

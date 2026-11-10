@@ -4,11 +4,13 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/aha/`, researched blind: public sources only, no
 browsing history, cookies or an Aha! account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 2 real URLs (4
-visits) matched, 1/2 rules confirmed, the recorded title right on 1/2.
-Not every rule and title was confirmed, so this type stays a development
-draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 5 real URLs (8 visits) matched, 1/2
+rules confirmed, and the title right on 5/5, counting a sign-in, loading
+or error title that records no title as right. 2 real URLs of a redirect
+chain ending on this type matched no rule, as expected. Not every rule was
+matched by a real visit, so this type stays a development draft.
 
 Brauser offers this draft on an Aha! account's tenant subdomain,
 `<account>.aha.io` (the `aha` family's strict subdomain origin,
@@ -33,8 +35,14 @@ match  = [
 ]
 id     = "aha.feature:{host}/{ref}"
 title  = ["{ref:jira_key} {title} | Aha!{~}", "{title} | Aha!{~}"]
+generic_titles = ["Log in to your workspace", "Login"]
 refs   = [{ type = "aha.feature", find = "jira_key" }]
 ```
+
+`generic_titles` lists the titles shown by Aha!'s sign-in page instead of the
+item's own name (`adapter-templates.md` §9.4). A visit whose title is one of
+them, ASCII case aside, or is empty or the bare host, records no title, so the
+artifact keeps the title it already has ("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -84,7 +92,7 @@ research's cases. This type has 27 vectors: 24 carried over as written (11
 `aha.feature` cases and the family's 13 shared negatives, `eval.aha.neg.*`,
 which are filed with this type), one research negative rewritten onto this
 family's sample origin (`eval.aha.feature.host_in_id`), and two new ones:
-`eval.aha.feature.login_title`, pinning the login-title limit, and
+`eval.aha.feature.login_title`, pinning the generic login title, and
 `eval.aha.neg.features_new`, the `/features/new` form. All are correctly
 classified by the research's own draft where it had them, and re-verified
 against this family's own fixture through both adapter-template engines.
@@ -108,11 +116,13 @@ in those 2 visits were Aha!'s login page, not a record page.
 
 ## Known limits
 
-- **A login tab's title is recorded as the feature's title.** If Aha!'s
+- **A login tab's title is generic, not the feature's title.** If Aha!'s
   session has expired, the tab title on a feature URL reads
   `Log in to your workspace | Aha!`. Entry 2 (`{title} | Aha!{~}`) matches
-  it, strips `| Aha!`, and records `Log in to your workspace` as the
-  feature's title. A vector (`eval.aha.feature.login_title`) pins this.
+  it and extracts `Log in to your workspace`, which `generic_titles` lists,
+  so the visit records no title and the feature keeps its own
+  (`eval.aha.feature.login_title`). A login page with a different wording
+  would still be recorded until it is added to the list.
 - **Every app title template is low confidence.** No public source shows an
   in-app record page's tab title; both entries are a guess from the login
   page's own `| Aha!` suffix. A wrong guess only costs title cleanliness,

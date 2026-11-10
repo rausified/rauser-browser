@@ -20,16 +20,17 @@
         "type": "miro.board",
         "match": [{ "path": "/app/board/{board:token(12)}" }],
         "id": "miro.board:{host}/{board}",
+        "generic_titles": ["Miro", "Sign in | Miro | The Visual Workspace for Innovation"],
         "title": "{title} - Miro"
       },
       "history": [],
-      "status": { "state": "development", "method": null, "checked_on": null, "checked_by": null },
+      "status": { "state": "certified", "method": "history", "checked_on": "2026-11-09", "checked_by": "claude session da8a245c lane E: 12 real URLs, 25 visits, 1/1 rules, 12/12 titles" },
       "docs": "docs/adapters/miro.board.md",
       "samples": [
         {
           "note": "Miro board",
-          "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
-          "title": "SSE ZTA SWOT - Miro",
+          "url": "https://miro.com/app/board/qK3nR8vDpZx=/",
+          "title": "Team Retro Board - Miro",
           "shape": "/app/board/{id}/"
         }
       ],

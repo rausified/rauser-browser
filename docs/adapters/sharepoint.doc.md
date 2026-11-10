@@ -50,6 +50,13 @@ It also does not recognize the short guest-link form that has no
 `https://acme-my.sharepoint.com/:x:/g/personal/jdoe_acme_com/EbCdEfGh`; that
 link only resolves to a document after a redirect Brauser does not follow.
 
+`generic_titles = ["Working...", "Working…", "Login", "Redirecting", "Error",
+"Sign in is not complete"]` lists the titles shown by SharePoint's loading,
+redirect, sign-in and error pages instead of the item's own name
+(`adapter-templates.md` §9.4). A visit whose title is one of them, ASCII case
+aside, or is empty or the bare host, records no title, so the artifact keeps
+the title it already has ("Untitled" for a new one).
+
 Known limits: sharing links for other kinds of file are not recognized, even
 in the `_layouts/15/Doc.aspx` form, because only Word, Excel and PowerPoint
 are recorded: `/:b:/` (PDF), `/:o:/` (OneNote), `/:v:/` (video), and `/:u:/`

@@ -23,7 +23,7 @@ An **adapter document** is the JSON form of the `[adapters]` TOML table:
 {"format": 1, "artifacts": [{"type": "...", "origin": "...", "match": [{"path": "...", "query": {}, "absent": [], "mode": "..."}], "id": "...", ...}]}
 ```
 
-Adapter keys are `type`, `origin`, `match`, `id`, `title`, `alias`, `refs`, `modes`, `scope`, `unscoped`, `path_case`, `fields`, and `within`. Rule keys are `path`, `query`, `absent`, and `mode`. Some validate vectors deliberately break this shape. A harness must pass `doc` to the engine unchanged and must not repair it first.
+Adapter keys are `type`, `origin`, `match`, `id`, `title`, `generic_titles`, `alias`, `refs`, `modes`, `scope`, `unscoped`, `path_case`, `fields`, and `within`. Rule keys are `path`, `query`, `absent`, and `mode`. Some validate vectors deliberately break this shape. A harness must pass `doc` to the engine unchanged and must not repair it first.
 
 A case's `doc` field (called `existing` for `draft` and `draft_rules` cases) is either an inline adapter document or `{"$fixture": "<name>"}`, which refers to an entry in `fixtures`. `$fixture` is never a real document key.
 
@@ -76,7 +76,7 @@ The `error` fields are:
 
 - `adapter`: the index into `artifacts`, or `null` for document-level errors.
 - `rule`: the index into `match`, or `null`.
-- `entry`: the index into a title list or into `refs`, or `null`.
+- `entry`: the index into a title list, `generic_titles`, or `refs`, or `null`.
 
 §10.3 also asks for a character position. Vectors do not pin positions, so engines may report one and harnesses ignore it. The Rust host reports a `field` (the path, a query value, an absent entry, the ID, a title entry, or the alias) and a character offset into it; the TS engine reports neither. Each document carries exactly one defect unless a case says otherwise. When a document has several defects, the first error in the check order below is the one reported.
 
@@ -90,7 +90,7 @@ The TS engine validates only what the worker needs (§12). The TS harness must s
   - `captures` maps every bound capture to its canonical value. That includes `mode` and scoped captures. An unbound optional capture is omitted.
   - `mode` is `"view"`, `"edit"`, `"review"`, or `null`.
 - **Additional fields when `title` is present** (and the URL matched):
-  - `title`: the extracted title, or the whole prepared title for the fallback.
+  - `title`: the extracted title, or the whole prepared title for the fallback; `null` when that title is generic (§9.4), and then `title_entry` and `alias_id` are `null` and `refs` is empty.
   - `title_entry`: the index of the matching entry, or `null` for the fallback.
   - `alias_id`: the suggested tab-title alias ID, or `null`.
   - `refs`: `[{"type", "value"}]`, in scan order.
@@ -100,7 +100,7 @@ Reasons, in the order they are decided:
 
 | Reason | When |
 |---|---|
-| `url_too_long` | More than 2048 scalar values, checked before parsing (§5.1 step 1) |
+| `url_too_long` | More than 8192 scalar values, checked before parsing (§5.1 step 1) |
 | `url_invalid` | WHATWG parse failure |
 | `no_adapter` | The URL is not `http(s)`, or no adapter's `origin` equals the URL's origin. Opaque origins (`about:`, `data:`, `chrome:`) never match, and neither does a `blob:` URL, whose origin is its creator's (SQ-V24). |
 | `path_rejected` | §5.1 steps 3–6 failed. This is decided once per URL, before any rule. |
@@ -254,6 +254,7 @@ These are the complete format-1 enum. Every code appears in at least one vector.
 | ID | `id_syntax`, `id_reserved_scheme`, `id_unknown_capture`, `id_optional_capture` |
 | Scope | `shared_origin_unscoped`, `scope_and_unscoped`, `unscoped_not_shared`, `bad_unscoped`, `scope_empty_list`, `too_many_scope_values`, `scope_capture_not_bound`, `scope_bad_value` |
 | Title | `title_too_long`, `title_syntax`, `title_unbounded_capture`, `title_capture_swallows`, `title_unknown_capture`, `title_type_mismatch`, `too_many_titles`, `empty_title_list` |
+| Generic titles | `empty_generic_titles`, `too_many_generic_titles`, `bad_generic_title` |
 | Alias | `bad_alias`, `alias_capture_not_id`, `alias_capture_not_in_title`, `alias_type_mismatch` |
 | Refs | `too_many_refs`, `bad_ref`, `bad_ref_find` |
 | Within | `within_bad_type`, `within_self`, `within_id_syntax`, `within_id_reserved_scheme`, `within_unknown_capture` |
@@ -340,6 +341,7 @@ The first failing check is reported.
         6. `title_type_mismatch`: the type name must match. Title bounds are optional, but if present they must equal the path capture's effective bounds (SQ26). A `uuid` title capture takes no bounds at all. A capture named `mode` refers to an alternation, which no title type matches (SQ-V23).
         7. `title_capture_swallows`
       - Title captures take no modifiers, alternations, or `@tail`. Any of those gives `title_syntax`.
+      - Then **`generic_titles`** (§9.4): a value that is not a list gives `wrong_type`, then `empty_generic_titles` and `too_many_generic_titles` (more than 16, before any entry is checked). For each entry, which sets `entry`: `wrong_type`, then `bad_generic_title` for an entry that is empty, longer than 128 scalar values, has white space at either end, or contains `{`, `}`, or a control character (U+0000–U+001F, U+007F–U+009F).
    9. **`alias`:**
       1. `wrong_type`
       2. `bad_alias`: the shape is exactly `{from="tab_title", capture}` or `{from="meta", name (non-empty), value}`, and `value` is a single non-optional capture with nothing around it.
@@ -404,13 +406,13 @@ Tags in `sq` mean that a case depends on the reading given here. If the specific
 | SQ14 | §3 | A non-positive-integer `format` gives `invalid_format`. A different positive integer gives `unsupported_format`, before any other check. |
 | SQ15 | §3, §5.1 | `origin` must be `http(s)` and must equal its own WHATWG serialization. Uppercase letters, a default port, a path, credentials, or Unicode hosts are errors. The host must also be an IP address or a hostname of only `a-z`, `0-9`, `-`, `.`, and `_`: WHATWG accepts hosts such as `*.example.com`, which look like wildcards but would match only that literal host, so they are rejected rather than accepted as an adapter that matches nothing. |
 | SQ16 | §3 | Unknown keys at every level fail closed. |
-| SQ17 | §5.1 | The 2048 cap counts scalar values of the raw input, before parsing. |
+| SQ17 | §5.1 | The 8192 cap (2048 before 2026-11-09) counts scalar values of the raw input, before parsing. |
 | SQ18 | §5.4 | `modes` keys that no rule uses are ignored. |
 | SQ21 | §10.1 | Only `jira_key`, `int`, `hex`, and `uuid` can be ref types. The fallback title is scanned too, prefix included. Self-mentions are reported by the scan and dropped at resolution. The 20-value cap applies to distinct values. |
 | SQ22 | §8.1 | An ID may repeat a capture, or have no parts after `{host}`. |
 | SQ23 | §8.1 | Only the exact scheme `web` and the exact type `web.page` are reserved. |
 | SQ24 | §9.1 | "Whitespace" means Unicode White_Space. U+FEFF is not trimmed. |
-| SQ25 | §9.1 | The fallback records the whole prepared title (well-formed and capped), untrimmed. |
+| SQ25 | §9.1 | The fallback records the whole prepared title (well-formed and capped), untrimmed, unless it is generic (§9.4), which is compared trimmed. |
 | SQ26 | §9.1 | Title bounds are optional. When present, they must equal the path capture's effective bounds. |
 | SQ27 | §9.3 | `alias` is one table. A tab-title alias capture must appear in some title entry. A meta capture must have the ID capture's type. |
 | SQ28 | §10.4 | Neither `{_}` nor a plain alternation is a capture. A plain alternation does not satisfy "a literal segment before its first capture". |
@@ -465,12 +467,12 @@ The file is generated by an author-side script. The expected values were written
 - An independent throwaway checker re-derived every non-pending `capture`, `segments`, `refs`, and `evaluate` result (545 cases), and all agreed.
 - Every evaluate URL was parsed by both Node's `URL` and the Rust `url` 2.5.8 crate, and they agreed on origin, host, path, and query pairs.
 
-The eight `eval.bounds` cases added later (`longest_uuid`, `4_title_entries_*`, `title_512_*`, and `url_2048_*`) and the budgets on `eval.long_jira.exactly_512` and `eval.long_jira.514` were derived by hand, then checked against both engines.
+The eight `eval.bounds` cases added later (`longest_uuid`, `4_title_entries_*`, `title_512_*`, and `url_2048_*`, since renamed `url_8192_*` and `url_8193_*` when the cap rose to 8192) and the budgets on `eval.long_jira.exactly_512` and `eval.long_jira.514` were derived by hand, then checked against both engines.
 
 The limit, folding, trimming, refs-cap, and `long_once` cases added with SQ-V25 were derived by hand, then checked against both engines. Each was also run against a mutated engine (20-ref cap off by one, Unicode case folding, U+0085 dropped from the trim set, ID cap at 513 bytes) to confirm it catches that mutation. The `bounds_ci_alts` budgets fail when an insensitive comparison lowercases the whole segment per literal.
 
 The `github.repo` starter changed `starters`: the `eval.github.repo_*` cases and `draft.github_inside_repo_overlaps` were added, and five GitHub URLs the PR and issue rules miss (`repo_root`, `pulls_list`, `issue_new`, `pr_bad_number`, `pr_leading_zero`) now fall through to the repository. Their expectations, the `within` on every PR and issue match, and the `overlap_report.starters` and `overlap_report.container_*` results were derived by hand, then checked against both engines. `draft.github_scope_copied` and `draft.github_first_capture` moved to `github_without_repo`, because the catch-all overlaps every GitHub draft path with two or more segments, `/orgs/{owner}/projects/{number}` included (overlap ignores scope).
 
-`npm run test:adapter-diff` (`scripts/adapter-templates-diff.mjs`) complements these vectors. It generates seeded random documents, URLs, and titles, including near misses, and runs them through `brauser adapters eval` and the TypeScript engine. It fails on any difference. Reproduce a failure with `--seed S --only N`.
+`npm run test:adapter-diff` (`scripts/adapter-templates-diff.mjs`) complements these vectors. It generates seeded random documents, URLs, and titles, including near misses, and runs them through `brauser adapters eval` and the TypeScript engine. It fails on any difference. Reproduce a failure with `--seed S --only N`. About one rule in seven has no literal path segment, only `{_}`, with its ID captures in the query and a literal condition, a presence condition only, or neither, so the §4.1 query anchor and its refusals are compared. About a third of adapters carry `generic_titles` (some invalid), and a fifth of titles are generic candidates: a listed entry case-flipped or padded, alone or inside a title template, and the host placeholder and its near misses (§9.4). Breaking either rule in one engine alone, for example letting a presence condition anchor or skipping the ASCII case fold, is reported within the first 100 cases of seed 7.
 
 Edit cases by hand. Keep ids stable, keep one defect per validate case, and cite the spec section in `why`.

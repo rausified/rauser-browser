@@ -1,6 +1,6 @@
 # Adapter Templates — Specification
 
-> Status: Accepted (2026-09-28) · Replaced the regular-expression patterns in DESIGN.md §7.2 (DESIGN.md updated 2026-09-28; §14 below is applied) · Amended 2026-09-28: fixed-shape captures anchor a template (§4.1), and drafts come from the Create adapter flow as well as the agent (§10.4) · Amended 2026-10-27: a required path capture named by a `scope` key anchors a template (§4.1, §6), and an adapter may declare a container with `within` (§3, §8.3) · Amended 2026-10-28: the §11 SharePoint example's sharing-link rule covers Word, Excel and PowerPoint links in both `/r/` and `/g/` forms, from sites and from OneDrive (`/personal/`) · Amended 2026-11-09: a literal query condition plus an identifier capture in the query that the ID uses anchors a rule (§4.1), with no format version change (§13) · Target: M1.5a, built in DESIGN.md §12.2 step 6.2 · Format version 1
+> Status: Accepted (2026-09-28) · Replaced the regular-expression patterns in DESIGN.md §7.2 (DESIGN.md updated 2026-09-28; §14 below is applied) · Amended 2026-09-28: fixed-shape captures anchor a template (§4.1), and drafts come from the Create adapter flow as well as the agent (§10.4) · Amended 2026-10-27: a required path capture named by a `scope` key anchors a template (§4.1, §6), and an adapter may declare a container with `within` (§3, §8.3) · Amended 2026-10-28: the §11 SharePoint example's sharing-link rule covers Word, Excel and PowerPoint links in both `/r/` and `/g/` forms, from sites and from OneDrive (`/personal/`) · Amended 2026-11-09: a literal query condition plus an identifier capture in the query that the ID uses anchors a rule (§4.1), with no format version change (§13) · Amended 2026-11-09: the URL cap is 8192 scalar values, the capture store's own URL cap (§5.1, §13) · Amended 2026-11-09: a generic title, such as a sign-in, password or loading page's, is no title (§9.4), with no format version change (§13) · Target: M1.5a, built in DESIGN.md §12.2 step 6.2 · Format version 1
 
 ## 1. Purpose
 
@@ -52,6 +52,7 @@ match    = [                   # one or more rules, tried in order
 ]
 id       = "jira:{host}/{key}"
 title    = "[{key:jira_key}] {title} - Jira"      # optional; one template or a list (§9.1)
+generic_titles = ["Log in with Atlassian account"] # optional (§9.4)
 alias    = { from = "tab_title", capture = "key" } # optional (§9)
 refs     = [{ type = "jira.issue", find = "jira_key" }] # optional (§8)
 modes    = { }                 # optional (§5.4)
@@ -144,7 +145,7 @@ Every step examines each segment at most once, and no earlier decision is revisi
 
 Both engines prepare the URL identically before any rule is tried:
 
-1. The URL is capped at 2048 characters; a longer URL matches no adapter.
+1. The URL is capped at 8192 scalar values; a longer URL matches no adapter. The cap equals the capture store's URL cap (8192 bytes), so a URL Brauser could record is never refused for length alone.
 2. The URL is parsed with WHATWG URL semantics. Its scheme, host, and port must equal the adapter's `origin` exactly; otherwise the adapter does not apply.
 3. The raw path (before percent-decoding) is split on `/`. The leading empty element is dropped. A single trailing empty element (a trailing slash) is dropped. Any other empty segment (`//`) means the URL matches no rule.
 4. Each segment is percent-decoded once as UTF-8. Invalid percent-encoding or invalid UTF-8 means no match.
@@ -213,7 +214,7 @@ All types are fixed by the host. Every type's alphabet is ASCII, and no type adm
 |---|---|---|---|
 | `int` | ASCII digits, without a leading zero unless the value is `0` | 1–19 | as matched |
 | `hex` | `0-9`, `a-f`, `A-F` | 1–64 | lowercase |
-| `token` | `A-Z`, `a-z`, `0-9`, `_`, `-`, then at most two trailing `=` (base64 padding, as in Miro's `/app/board/uXjVM0uuBLo=/`); at least one character before any `=`, and `=` nowhere else | 1–128, padding included | as matched |
+| `token` | `A-Z`, `a-z`, `0-9`, `_`, `-`, then at most two trailing `=` (base64 padding, as in Miro's `/app/board/qK3nR8vDpZx=/`); at least one character before any `=`, and `=` nowhere else | 1–128, padding included | as matched |
 | `name` | `A-Z`, `a-z`, `0-9`, `.`, `_`, `-`, but not `.` or `..` | 1–100 | as matched |
 | `jira_key` | a letter, then letters, digits, or `_`; then `-`; then an `int`. Letters match in either case | project part 1–255 | uppercase |
 | `uuid` | 8-4-4-4-12 hex digits, optionally wrapped in `{ }` | fixed | lowercase, braces removed |
@@ -292,7 +293,7 @@ Validation requires a literal between any two captures or skips, and between a c
 
 A `token` title capture's alphabet includes `=` in both directions. The whole run must still satisfy §7.1: a nonempty body followed by at most two `=`, with padding included in the length bounds. Malformed padding makes the title entry fail; the matcher never shortens the run to recover a valid prefix or suffix. Because `=` belongs to this alphabet, it cannot bound a token capture (for example, `{board:token}= {title}` and `{title} ={board:token}` are invalid).
 
-`title` is one template or an ordered list of at most 4, each at most 512 scalar values long. Each entry is validated on its own, and the first entry that matches is used. If none matches, Brauser records the whole tab title, as today. A typed capture with the same name as a path or query capture must use the same type, and it is canonicalized with that capture's bounds and case modifier (so a title `{owner:name}` is lowercased when the path has `{owner:name|lower}`). The two values must then agree; if they do not, the template counts as not matching, except when an `alias` rule names that capture (§9.3). Title captures with any other name are validation errors: use `{~}` to skip text you do not need.
+`title` is one template or an ordered list of at most 4, each at most 512 scalar values long. Each entry is validated on its own, and the first entry that matches is used. If none matches, Brauser records the whole tab title, as today, unless that title is generic (§9.4). A typed capture with the same name as a path or query capture must use the same type, and it is canonicalized with that capture's bounds and case modifier (so a title `{owner:name}` is lowercased when the path has `{owner:name|lower}`). The two values must then agree; if they do not, the template counts as not matching, except when an `alias` rule names that capture (§9.3). Title captures with any other name are validation errors: use `{~}` to skip text you do not need.
 
 Title preparation removes nothing from the tab title. A tool that varies its titles, for example by adding an unread-count prefix such as `(3) ` while notifications are pending, is handled by that tool's adapter, which lists the varied form first:
 
@@ -319,6 +320,26 @@ A `tab_title` alias names a title capture. A `meta` alias names one `<meta>` ele
 
 Both signals come from text the page controls. They are recorded as **suggested** aliases, listed on the artifact card but not grouped, and change record keys or group activity only after the user confirms them on the artifact card or a server redirect between the same two IDs corroborates them (DESIGN.md §5.1, §6.2). Server-redirect aliases need no declaration.
 
+### 9.4 Generic titles
+
+```toml
+generic_titles = ["Log in with Atlassian account", "Loading…"]
+```
+
+A tool shows some titles on pages that are not the item itself: a sign-in page, a password gate, an app shell's loading title, an error page, or a portal default. Recorded as an item's name, such a title replaces the real one. A **generic** title is therefore no title: the match carries no title, no alias, and no refs, and Brauser keeps the title it already recorded for that artifact (or "Untitled" for a new one).
+
+The title that is checked is the one §9.1 produces: the extracted `{title}` of the first matching entry, or the whole prepared tab title when no entry matches. Trimmed of white space and with ASCII case folded, it is generic when it:
+
+1. is empty;
+2. equals an entry of the adapter's `generic_titles`; or
+3. is the browser's placeholder for a page with no title: the URL's host, with any non-default port, optionally after `http://` or `https://`, alone or followed by `/`, `?` or `#`.
+
+`generic_titles` is optional: a list of 1 to 16 plain titles, each 1 to 128 scalar values with no surrounding white space, no control character (U+0000–U+001F or U+007F–U+009F), and no `{` or `}`. Braces are reserved, so a later format can add patterns without changing what a valid list means. An entry must equal the whole title: `Sign in` does not make `Sign in help` generic. Only ASCII case is folded, as everywhere in this format, so both engines compare the same way.
+
+Write an entry as the `{title}` part the adapter extracts, not the whole tab title: for a template `{title} - Webex`, the password gate `Recorded Meeting Password - Webex` is listed as `Recorded Meeting Password`. A page that matches no entry is compared whole, so list a bare app-shell title such as `Figma` as it is. Rules 1 and 3 need no list and apply to every adapter.
+
+The design choice is a list per adapter rather than "a title that matches no entry never replaces one that did". That rule would need every recorder to remember how each earlier title was produced, would miss the many generic titles that do match an entry (`Log in to your workspace | Aha!`), and would freeze a title a tool really renamed into a format no entry expects. A list is data in the adapter, evaluated by both engines from the same vectors, and a recorder only has to skip a title the engine reports as none. A list cannot tell an enterprise's loading title (`Acme | Powered by Box`) from a file that happens to share the enterprise's name, so such a title is left to the adapter's documentation (§11.1).
+
 ## 10. Refs, evaluation, and validation
 
 ### 10.1 Refs
@@ -331,13 +352,13 @@ A ref scans the extracted title (the `{title}` part only, so an artifact never r
 
 ### 10.2 Evaluation guarantee
 
-For one URL and title, evaluation is linear in the input size (capped at 2048 and 512 characters) times the number of rules. No step backtracks. Both engines implement §4.3, §5, §7, and §9 directly; neither compiles templates to regular expressions.
+For one URL and title, evaluation is linear in the input size (capped at 8192 and 512 scalar values) times the number of rules. No step backtracks. Both engines implement §4.3, §5, §7, and §9 directly; neither compiles templates to regular expressions.
 
 The host remains authoritative. The worker's copy only prefilters, so a worker bug or disagreement can only drop a visit the host would have recorded, never record one the host would reject (DESIGN.md §3.2).
 
 ### 10.3 Validation and overlap
 
-When config loads, the host checks every rule in §4.1, §5, §6, §7, §8, and §9 and reports the first error with the adapter, rule, and character position. Limits: at most 64 adapters, 16 rules per adapter, 64 values per `scope` list, 4 `title` entries of at most 512 scalar values each, and 8 `refs` entries.
+When config loads, the host checks every rule in §4.1, §5, §6, §7, §8, and §9 and reports the first error with the adapter, rule, and character position. Limits: at most 64 adapters, 16 rules per adapter, 64 values per `scope` list, 4 `title` entries of at most 512 scalar values each, 16 `generic_titles` entries of at most 128 scalar values each, and 8 `refs` entries.
 
 Because the language has no free-form patterns, the host can decide whether two rules could match the same URL. It compares them segment by segment: literals against literals, literals against type membership, types against types by alphabet and length range, with optional segments and rests expressed as length ranges. The comparison is conservative: it treats `@tail`, `jira_key`'s structure, and query conditions by their alphabets and length ranges, so it can report an overlap that no URL actually produces, but it never misses one. A fixed-shape `@tail` capture anchors a template (§4.1), but overlap still compares its whole segment as a range: any segment long enough to end in the capture. Messages therefore say "may overlap". The host uses this to:
 
@@ -349,7 +370,7 @@ Because the language has no free-form patterns, the host can decide whether two 
 
 A drafted adapter is written in this language, whether the host's structural drafter or the configured agent produced it (DESIGN.md §5.1), and the structural rules replace most of the regex-inspection rules in DESIGN.md §5.1:
 
-- A drafter's output may not use `title`, `scope`, `unscoped`, `alias`, `fields`, or `path_case`. Neither drafter sees a title (DESIGN.md §5.1), so a drafted title template would be a guess. On a shared origin, the host supplies scope. It turns the tenant position recorded in the shared-origin list (§6) into a capture with the recorded name, and the ID includes it. When the origin's existing scoped adapters all scope that capture name to the same values, the host copies that scope; otherwise scope is pending. A draft with pending scope cannot be enabled until it has a scope or `unscoped`: the review pre-fills the tenant from the current tab's URL as "Capture for `<tenant>`", already chosen, for the user to confirm with Save or edit (DESIGN.md §5.1; amended 2026-10-27, which replaced "until the user chooses"). That choice, and a title entry the user adds in the review, are part of drafting, not user edits: the rules stay drafts and keep every check in this section.
+- A drafter's output may not use `title`, `generic_titles`, `scope`, `unscoped`, `alias`, `fields`, or `path_case`. Neither drafter sees a title (DESIGN.md §5.1), so a drafted title template would be a guess. On a shared origin, the host supplies scope. It turns the tenant position recorded in the shared-origin list (§6) into a capture with the recorded name, and the ID includes it. When the origin's existing scoped adapters all scope that capture name to the same values, the host copies that scope; otherwise scope is pending. A draft with pending scope cannot be enabled until it has a scope or `unscoped`: the review pre-fills the tenant from the current tab's URL as "Capture for `<tenant>`", already chosen, for the user to confirm with Save or edit (DESIGN.md §5.1; amended 2026-10-27, which replaced "until the user chooses"). That choice, and a title entry the user adds in the review, are part of drafting, not user edits: the rules stay drafts and keep every check in this section.
 - Every rule must have an anchor before its first **identifier capture**, and its ID must use at least one identifier capture. The anchor is a literal segment or, as in §4.1, a required path capture a `scope` key restricts: on a shared origin, the host-supplied tenant once scoped (amended 2026-10-27; before then only a literal counted). Such a rule cannot be saved `unscoped`, which would leave it no anchor. An identifier capture is a capture of type `int`, `hex`, `uuid`, `jira_key`, or `token`. A `name` capture, such as the host-supplied tenant or a namespace like a GitHub repository, is not an identifier, and neither is a capture of an alternation. This is stricter than §4.1: a fixed-shape capture, an alternation, or a query anchor (a literal query condition plus an identifier capture, amended 2026-11-09) anchors a hand-written adapter but not a draft, because a draft's inputs are page-controlled: a page can plant a link with any query value. A scoped tenant is not page-controlled: the user confirms its values. Checks apply per rule: a rule that fails is dropped with a reason, and the draft fails only when no rule is left. A rule the user edits becomes user-written and is held to §4.1 through §9 only.
 - `{*}` may not directly follow the first segment. (A rule of literals, `{*}`, and `absent` conditions alone already fails validation, because every rule must bind the ID's captures, §8.1.)
 - The host drops each rule that matches the origin root or any probe URL, and still shows the match preview before the native confirmation. A rule whose only identifier capture is a `token` starts unchecked in the review (DESIGN.md §5.1).
@@ -501,8 +522,9 @@ Every sample on the page is also a shared test vector (§12). CI fails when a st
 - **Shared test vectors.** `/protocol/adapter-templates/vectors.json` holds templates, inputs, and expected results (match, captures, canonical ID, title, mode, or the specific error). Both implementations run every vector in CI.
 - **Differential property tests.** A generator produces random valid templates and URLs and titles derived from them, including near misses (one character changed, a segment added or removed, encoded characters). A host CLI (`brauser adapters eval`) and a Node harness evaluate each case, and any difference fails CI.
 - **Fuzzing.** `cargo-fuzz` targets the template parser, URL preparation (§5.1), and title matching.
-- **Bounds tests.** Inputs at every cap (2048-character URL, 64 segments, 512-character title, longest type values) complete within a fixed time budget in both engines.
+- **Bounds tests.** Inputs at every cap (8192-scalar URL, 64 segments, 512-character title, longest type values) complete within a fixed time budget in both engines.
 - **Title lists.** The first matching entry wins, a list of more than 4 is a validation error, an invalid entry fails validation even when an earlier entry is valid, and a prefixed and an unprefixed title of one artifact give the same title.
+- **Generic titles.** An extracted or fallback title in `generic_titles`, an empty title, and the browser's host placeholder give no title, alias or refs, with ASCII case folded and white space trimmed; a title that only starts with a listed entry or the host, or a host without its port, is a title; each limit and entry rule of §9.4 has a `validate` vector, checked after `title` and before `alias` (`eval.generic_title.*`, `validate.generic_titles.*`).
 - **Adapter documentation.** Each starter adapter has its page, and every sample on it is a vector (§11.1).
 - **Anchors.** The §11 Notion adapter validates; `/{a:name}/{b:token}`, `/{n:int}`, `/{k:jira_key}`, and `/{h:hex(8,40)}` fail with no anchor; `/{h:hex(16)}`, `/{h:hex(32,40)}`, and `/{a:name}/{t?:(tasks)}` fail because the only candidate anchor is too short, variable, or optional; `/{u:uuid}`, `/{h:hex(32)}`, `/{h:hex(32)@tail}`, and `/{m:(edit|view)}/{n:int}` validate; `/{owner:name|lower}/{repo:name|lower}/{*}` on GitHub validates when `owner` is scoped and fails with no anchor when the adapter is `unscoped` or `owner` is bound only from the query; a draft rule whose only anchor is a fixed-shape capture is dropped while the draft's other rules survive (§10.4); a drafted rule whose only anchor is the scoped tenant passes the draft rules scoped and is refused `unscoped` (`validate.drafted.*`, `draft_rules.*tenant*`); and a draft on a shared origin with pending scope cannot be enabled without a scope or `unscoped`, but the pre-filled, confirmed scope leaves it a draft; `/{_}` with a literal query condition and a `token` query capture the ID uses validates and matches under any one-segment path, while a literal with the ID captured in the path, an ID capture with no literal, a presence condition, a `name` or alternation capture, and a scoped capture bound from the query each fail with no anchor (`validate.anchor.query_*`, `eval.anchor.query_anchored_*`, `overlap.query_anchor.*`).
 - **Drafts.** `/{owner:name|lower}/{repo:name}/pull/{n:int}` passes the draft rules on `github.com`, because `name` captures are not identifiers and `pull` comes before `{n}`. `/(issues|pulls)/{n:int}` and `/{d:token}/{n:int}` are dropped, with no literal before the first identifier. A rule whose ID uses only `name` captures is dropped. A draft that copies an existing scope keys it by the shared-origin list's capture name, and a pending scope blocks enabling without making the rule user-written.
@@ -511,6 +533,8 @@ Every sample on the page is also a shared test vector (§12). CI fails when a st
 ## 13. Open questions
 
 - **Format version for anchor amendments (decided 2026-11-09).** The query anchor (§4.1) only widens what validates; every document valid before keeps the same evaluation. As with the 2026-09-28 fixed-shape and 2026-10-27 scope anchors, the format stays version 1: the host and extension engines ship together and are held equal by the shared vectors and `npm run test:adapter-diff`. A document that uses a query anchor is refused, with `no_literal_segment`, by an engine built before the amendment, so a later widening that cannot assume one release for both engines should bump the version instead.
+- **Format version for generic titles (decided 2026-11-09).** `generic_titles` (§9.4) is a new optional key, and rules 1 and 3 of §9.4 change the title of a match for documents that were already valid: an empty or host-placeholder title, which was recorded before, is now no title. Neither changes which URLs match or which artifact ID they get, and a title is display data, not identity (§8.2). As with the anchor amendments, the format stays version 1 because the host and extension engines ship together and are held equal by the shared vectors and `npm run test:adapter-diff`. An engine built before the amendment refuses a document that uses `generic_titles`, with `unknown_key`.
+- **URL cap (decided 2026-11-09).** The cap was 2048 scalar values, which refused real search URLs: a Splunk search carries the whole query in `q`, and real ones run past 3000 characters, so `splunk.app` never saw them. The cap exists to bound per-event work, not to protect identity: rules see at most 64 segments, query conditions read only named keys, and every step is linear. Measuring the URL after removing the query (or per component) for rules that do not read it was considered and rejected: it would give the two engines a second, rule-dependent length to agree on, and a long query would still reach the query parser. Raising the single cap to 8192, the capture store's URL cap, keeps one check at one place and only widens what matches, so the format stays version 1 for the reasons in the first bullet.
 - **Hash-routed apps.** Fragments are ignored. Supporting `/#/…` routes would mean matching the fragment as a second path, which is easy to add in a later format if a real tool needs it.
 - **Notion without a workspace segment.** Should a scoped Notion adapter fall back to Tier 1 (reading the workspace from the page), or should those pages simply go unrecorded?
 - **Shared-origin list.** Which further origins belong on it at release (for example Atlassian's `id.atlassian.com`, or `gitlab.com`)?

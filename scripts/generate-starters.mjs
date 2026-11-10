@@ -198,7 +198,9 @@ const TYPE_KEYS = [
   "type", "key", "label", "label_variants", "description", "record_label", "example_path",
   "adapter", "history", "status", "docs", "samples", "samples_shape", "vectors",
 ];
-const ADAPTER_KEYS = ["type", "path_case", "match", "scope", "modes", "id", "title", "alias", "refs", "within", "unscoped"];
+const ADAPTER_KEYS = [
+  "type", "path_case", "match", "scope", "modes", "id", "title", "generic_titles", "alias", "refs", "within", "unscoped",
+];
 const ADAPTER_REQUIRED = ["type", "match", "id"];
 const LABEL_VARIANT_KEYS = ["host_suffix", "label"];
 const HISTORY_ENTRY_KEYS = ["match"];
@@ -609,7 +611,12 @@ function validateType(problems, file, type, where, origin) {
     fail(problems, file, `${where} must be an object`);
     return;
   }
-  const hasSubdomain = originMembers(origin).some((member) => member.kind === "subdomain");
+  // Any family that is not a single exact origin serves more than one
+  // site (a subdomain family's tenants, or an "any" family's members,
+  // exact-only or not), so its offer key must name the origin. Keep this
+  // in lock-step with new-starter.mjs's defaultKey, which uses the same
+  // rule for a brand-new type's default key.
+  const requiresOriginKey = isPlainObject(origin) && origin.kind !== "exact";
   checkKeys(problems, file, type, TYPE_KEYS, where);
   requireKeys(problems, file, type, TYPE_KEYS, where);
   if ("label_variants" in type) validateLabelVariants(problems, file, type.label_variants, at(where, "label_variants"));
@@ -622,7 +629,7 @@ function validateType(problems, file, type, where, origin) {
   if ("docs" in type && typeof type.docs !== "string") fail(problems, file, `${at(where, "docs")} must be a string`);
   if ("key" in type) {
     if (typeof type.key !== "string") fail(problems, file, `${at(where, "key")} must be a string`);
-    else if (hasSubdomain && !type.key.includes("{origin}")) {
+    else if (requiresOriginKey && !type.key.includes("{origin}")) {
       fail(problems, file, `${at(where, "key")} must contain "{origin}"`);
     }
   }

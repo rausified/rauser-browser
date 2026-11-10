@@ -23,7 +23,8 @@
           { "path": "/jira/{*}", "query": { "selectedIssue": "{key:jira_key}" } }
         ],
         "id": "jira:{host}/{key}",
-        "title": "[{key:jira_key}] {title} - Jira",
+        "generic_titles": ["Jira", "Log in with Atlassian account", "Log in to continue - Log in with Atlassian account", "Choose an account to continue - Log in with Atlassian account"],
+        "title": ["[{key:jira_key}] {title} - Jira", "[{key:jira_key}] {title} - {~} Jira"],
         "alias": { "from": "tab_title", "capture": "key" },
         "refs": [{ "type": "jira.issue", "find": "jira_key" }]
       },
@@ -42,10 +43,164 @@
           "url": "https://acme.atlassian.net/jira/software/projects/PROJ/boards/7?selectedIssue=PROJ-42",
           "title": null,
           "shape": "/jira/software/projects/{slug}/boards/{num}?{param}={key}"
+        },
+        {
+          "note": "Jira issue on a renamed-product tenant",
+          "url": "https://acme.atlassian.net/browse/PROJ-77",
+          "title": "[PROJ-77] Fix login redirect loop - Acme Corp Jira",
+          "shape": "/browse/{key}"
         }
       ],
       "samples_shape": true,
-      "vectors": []
+      "vectors": [
+        {
+          "id": "eval.jira.issue.title_renamed_product",
+          "kind": "evaluate",
+          "why": "brwr-njyw: a renamed-product tenant's title ends ' - <Company> Jira', so the first entry's exact ' - Jira' literal fails and the {~} entry skips the company name to extract the issue title",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "jira.issue",
+            "captures": { "key": "PROJ-77" },
+            "artifact_id": "jira:acme.atlassian.net/PROJ-77",
+            "mode": null,
+            "title": "Fix login redirect loop",
+            "title_entry": 1,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://acme.atlassian.net/browse/PROJ-77",
+          "title": "[PROJ-77] Fix login redirect loop - Acme Corp Jira"
+        },
+        {
+          "id": "eval.jira.issue.title_plain_still_matches_first_entry",
+          "kind": "evaluate",
+          "why": "brwr-njyw: a plain '- Jira' title (no renamed product) still matches the first, non-skipping entry, unchanged by the new fallback entry",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "jira.issue",
+            "captures": { "key": "PROJ-78" },
+            "artifact_id": "jira:acme.atlassian.net/PROJ-78",
+            "mode": null,
+            "title": "Simple one-line fix",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://acme.atlassian.net/browse/PROJ-78",
+          "title": "[PROJ-78] Simple one-line fix - Jira"
+        },
+        {
+          "id": "eval.jira.issue.title_internal_dash_renamed_product",
+          "kind": "evaluate",
+          "why": "brwr-njyw: a title with its own ' - ' still extracts whole on a renamed-product tenant, because {~} skips back to the ' - ' nearest the end, not the first one",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "jira.issue",
+            "captures": { "key": "PROJ-79" },
+            "artifact_id": "jira:acme.atlassian.net/PROJ-79",
+            "mode": null,
+            "title": "Design - implementation review",
+            "title_entry": 1,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://acme.atlassian.net/browse/PROJ-79",
+          "title": "[PROJ-79] Design - implementation review - Acme Corp Jira"
+        },
+        {
+          "id": "eval.jira.issue.title_internal_dash_plain",
+          "kind": "evaluate",
+          "why": "brwr-njyw: the same internal-dash title with no renamed product matches the first entry whole and never reaches the {~} entry",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "jira.issue",
+            "captures": { "key": "PROJ-80" },
+            "artifact_id": "jira:acme.atlassian.net/PROJ-80",
+            "mode": null,
+            "title": "Design - implementation review",
+            "title_entry": 0,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://acme.atlassian.net/browse/PROJ-80",
+          "title": "[PROJ-80] Design - implementation review - Jira"
+        },
+        {
+          "id": "eval.jira.issue.title_refs_survive_renamed_product",
+          "kind": "evaluate",
+          "why": "brwr-njyw: a cross-reference to another issue inside the title is preserved once the {~} entry extracts the title, instead of being lost in the whole-title fallback",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "jira.issue",
+            "captures": { "key": "PROJ-81" },
+            "artifact_id": "jira:acme.atlassian.net/PROJ-81",
+            "mode": null,
+            "title": "Follow-up for OPS-5",
+            "title_entry": 1,
+            "alias_id": null,
+            "refs": [{ "type": "jira.issue", "value": "OPS-5" }]
+          },
+          "url": "https://acme.atlassian.net/browse/PROJ-81",
+          "title": "[PROJ-81] Follow-up for OPS-5 - Acme Corp Jira"
+        },
+        {
+          "id": "eval.jira.issue.title_alias_survives_renamed_product",
+          "kind": "evaluate",
+          "why": "brwr-njyw: a moved-issue tab_title alias is still suggested once the {~} entry extracts the title on a renamed-product tenant",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "jira.issue",
+            "captures": { "key": "PROJ-90" },
+            "artifact_id": "jira:acme.atlassian.net/PROJ-90",
+            "mode": null,
+            "title": "Moved issue",
+            "title_entry": 1,
+            "alias_id": "jira:acme.atlassian.net/OLD-9",
+            "refs": []
+          },
+          "url": "https://acme.atlassian.net/browse/PROJ-90",
+          "title": "[OLD-9] Moved issue - Acme Corp Jira"
+        },
+        {
+          "id": "eval.jira.issue.title_generic_interstitial_renamed_tenant",
+          "kind": "evaluate",
+          "why": "brwr-njyw: a generic sign-in interstitial on a renamed-product tenant still records no title, confirming generic_titles is unaffected by the new entry",
+          "impls": ["rust", "ts"],
+          "expect": {
+            "match": true,
+            "adapter": 0,
+            "rule": 0,
+            "type": "jira.issue",
+            "captures": { "key": "PROJ-82" },
+            "artifact_id": "jira:acme.atlassian.net/PROJ-82",
+            "mode": null,
+            "title": null,
+            "title_entry": null,
+            "alias_id": null,
+            "refs": []
+          },
+          "url": "https://acme.atlassian.net/browse/PROJ-82",
+          "title": "Log in with Atlassian account"
+        }
+      ]
     },
     {
       "type": "confluence.page",
@@ -64,6 +219,7 @@
           { "path": "/wiki/pages/viewpage.action", "query": { "pageId": "{id:int}" } }
         ],
         "id": "confluence.page:{host}/{id}",
+        "generic_titles": ["Confluence", "For you - Confluence", "Log in with Atlassian account", "Log in to continue - Log in with Atlassian account", "Choose an account to continue - Log in with Atlassian account"],
         "title": ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"],
         "refs": [{ "type": "jira.issue", "find": "jira_key" }]
       },

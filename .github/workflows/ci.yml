@@ -134,6 +134,29 @@ jobs:
     with:
       os: windows-latest
 
+  # The fuzz crate (adapter-templates/fuzz) is its own workspace depending
+  # only on adapter-templates, so checking it compiles is cheap: no nightly
+  # toolchain or cargo-fuzz needed, just `cargo check`. It used to run only
+  # in build-os.yml's macOS leg, which most PRs skip (scripts/ci-macos.mjs),
+  # so a change to adapter-templates/src that broke it (#379, brwr-nu0m)
+  # passed Windows, Codex and every local gate and was caught only once the
+  # PR reached the queue. Running it here, unconditionally on ubuntu, covers
+  # every code PR regardless of whether it needs the macOS build.
+  fuzz-check:
+    name: Fuzz targets compile
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: fuzz-check
+          workspaces: adapter-templates/fuzz
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check adapter-template fuzz targets compile
+        run: cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
+
   # GitHub's hosted macos-15 pool is sometimes starved: the job is never
   # acquired by a runner and GitHub cancels it with zero steps run. The job
   # shows as cancelled, and `needs.<job>.result` reads 'abandoned' (seen live
@@ -204,7 +227,7 @@ jobs:
   # intended, and docs-checks passed.
   build-gate:
     name: Build and check
-    needs: [changes, docs-checks, a11y, build-macos, build-windows, macos-starvation-check, build-macos-fallback]
+    needs: [changes, docs-checks, a11y, fuzz-check, build-macos, build-windows, macos-starvation-check, build-macos-fallback]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -215,20 +238,22 @@ jobs:
           MACOS_NEEDED: ${{ needs.changes.outputs.macos }}
           DOCS: ${{ needs.docs-checks.result }}
           A11Y: ${{ needs.a11y.result }}
+          FUZZ: ${{ needs.fuzz-check.result }}
           MACOS: ${{ needs.build-macos.result }}
           WINDOWS: ${{ needs.build-windows.result }}
           STARVED: ${{ needs.macos-starvation-check.outputs.starved }}
           FALLBACK: ${{ needs.build-macos-fallback.result }}
         run: |
-          echo "classify: $CHANGES (docs only: ${DOCS_ONLY:-n/a}; macOS needed: ${MACOS_NEEDED:-n/a}); docs checks: $DOCS; accessibility: $A11Y"
+          echo "classify: $CHANGES (docs only: ${DOCS_ONLY:-n/a}; macOS needed: ${MACOS_NEEDED:-n/a}); docs checks: $DOCS; accessibility: $A11Y; fuzz targets: $FUZZ"
           echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-15-intel fallback: $FALLBACK"
           test "$CHANGES" = success
           if [ "$DOCS_ONLY" = true ]; then
-            test "$DOCS" = success && test "$MACOS" = skipped && test "$WINDOWS" = skipped
+            test "$DOCS" = success && test "$MACOS" = skipped && test "$WINDOWS" = skipped && test "$FUZZ" = skipped
             exit 0
           fi
           test "$WINDOWS" = success
           test "$A11Y" = success
+          test "$FUZZ" = success
           if [ "$MACOS_NEEDED" != true ]; then
             test "$MACOS" = skipped
             exit 0

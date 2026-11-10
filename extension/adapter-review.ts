@@ -44,6 +44,9 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   shared_origin_unscoped: "This shared origin needs a tenant scope or an explicit unscoped acknowledgment.",
   scope_capture_not_bound: "Every rule must bind each capture used for scope.",
   title_syntax: "A title template has invalid syntax.",
+  empty_generic_titles: "generic_titles needs at least one title.",
+  too_many_generic_titles: "generic_titles holds at most 16 titles.",
+  bad_generic_title: "Each generic title is 1 to 128 characters, with no surrounding spaces, braces, or control characters.",
   within_bad_type: "The within type must be a valid adapter type other than web.page.",
   within_self: "An adapter cannot sit within its own type or its own ID.",
   within_id_syntax: "The within ID template has invalid syntax.",
@@ -308,11 +311,13 @@ export function newAdapter(origin: string): AdapterObject {
 }
 
 export function matchText(result: { match: false; reason: string } | {
-  match: true; type: string; artifact_id: string; rule: number; title?: string; mode: string | null;
+  match: true; type: string; artifact_id: string; rule: number; title?: string | null; mode: string | null;
 }): string {
   if (!result.match) return `No match (${result.reason})`;
   const details = [`${result.type} rule ${result.rule + 1}`, result.artifact_id];
   if (result.title) details.push(`title “${result.title}”`);
+  // A generic title (§9.4) is never recorded as the artifact's title.
+  else if (result.title === null) details.push("generic title, not recorded");
   if (result.mode) details.push(`mode ${result.mode}`);
   return `Matches ${details.join(" · ")}`;
 }

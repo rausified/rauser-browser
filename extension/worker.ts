@@ -989,10 +989,15 @@ async function captureNavigation(
       title = tab.title?.slice(0, MAX_TITLE_CHARS) ?? null;
     }
   }
+  // A generic title (§9.4), such as a sign-in, password or loading page's,
+  // names no artifact: record no title rather than that one.
+  const genericTitle = title !== null && matchingArtifact(lease, details.url, title)?.title === null;
+  if (genericTitle) title = null;
 
   const activity = await readActivity();
   recordNavigation(activity, {
     tab_id: details.tabId, window_id: tab.windowId ?? -1, url: details.url, title,
+    ...(genericTitle ? { generic_title: true } : {}),
     transition: details.transitionType ?? "unknown",
     qualifiers: details.transitionQualifiers ?? [],
     reload: details.transitionType === "reload",
@@ -1021,7 +1026,9 @@ async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
   const title = rawTitle.slice(0, MAX_TITLE_CHARS);
   const titleMatch = mapped && withoutHash(mapped.url) === current
     ? matchingArtifact(lease, mapped.url, title) : null;
-  if (mapped && titleMatch) {
+  // A generic title (§9.4) never replaces the title already recorded for the
+  // tab, so a sign-in, password or loading page keeps the item's real name.
+  if (mapped && titleMatch && titleMatch.title !== null) {
     mapped.title = title;
     const hour = [...activity.totals].reverse().find((total) =>
       total.artifact_id === mapped.artifact_id);
@@ -1048,7 +1055,7 @@ async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
   // Only the tab's newest visit may take the title, and only before the panel
   // has seen it. A dispatched event may already be partly written by the host.
   if (!latest || latest.dispatched !== false || withoutHash(latest.event.url) !== current ||
-      !matchingArtifact(lease, latest.event.url)) {
+      !matchingArtifact(lease, latest.event.url) || matchingArtifact(lease, latest.event.url, title)?.title === null) {
     return;
   }
   if (latest.event.title === title) return;
@@ -1793,12 +1800,21 @@ export async function rebuildActivityMap(): Promise<void> {
     const url = frame?.url;
     const match = url ? matchingArtifact(lease, url) : null;
     if (!url || !match) continue;
+    // Only keep tab metadata after recognizing the live top-frame URL,
+    // and only if the tab snapshot still names the same page.
+    let title = tab.status === "complete" && tab.url && withoutHash(tab.url) === withoutHash(url)
+      ? tab.title?.slice(0, MAX_TITLE_CHARS) ?? null : null;
+    // A tab restored on a sign-in, password or loading page has a generic
+    // title (adapter-templates.md §9.4): it never seeds an hour. The latest
+    // hour recorded for the artifact names it instead.
+    if (title !== null && matchingArtifact(lease, url, title)?.title === null) {
+      // An hour recorded before the rule can hold a generic title too.
+      title = [...activity.totals].reverse().find((total) =>
+        total.artifact_id === match.artifact_id && total.title !== null &&
+        matchingArtifact(lease, total.url, total.title)?.title !== null)?.title ?? null;
+    }
     activity.tabs[String(tab.id)] = {
-      artifact_id: match.artifact_id, artifact_type: match.type, url,
-      // Only keep tab metadata after recognizing the live top-frame URL,
-      // and only if the tab snapshot still names the same page.
-      title: tab.status === "complete" && tab.url && withoutHash(tab.url) === withoutHash(url)
-        ? tab.title?.slice(0, MAX_TITLE_CHARS) ?? null : null,
+      artifact_id: match.artifact_id, artifact_type: match.type, url, title,
       mode: match.mode, window_id: tab.windowId ?? -1,
     };
     if (tab.active) activity.active_by_window[String(tab.windowId ?? -1)] = tab.id;

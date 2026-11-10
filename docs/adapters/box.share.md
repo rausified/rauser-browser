@@ -4,11 +4,13 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/box/`, researched blind: public sources only, no
 browsing history, cookies or a Box account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 2 real URLs (6
-visits) matched, 1/1 rules confirmed, the recorded title right on 1/2,
-and 2 real URLs of this type matched no rule. Not every rule and title
-was confirmed, so this type stays a development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 2 real URLs (6 visits) matched, 1/1
+rules confirmed, and the title right on 1/2, counting a sign-in, loading
+or error title that records no title as right. 2 real URLs of a redirect
+chain ending on this type matched no rule, as expected. Not every recorded
+title was the item's own name, so this type stays a development draft.
 
 Brauser offers this draft on every Box web-app host: personal
 `https://app.box.com`, `<company>.app.box.com` and `<company>.ent.box.com`
@@ -38,7 +40,18 @@ origin = "https://acme.app.box.com"
 match  = [{ path = "/{kind:(s|v)}/{link:token(1,100)|lower}" }]
 id     = "box.share:{host}/{kind}/{link}"
 title  = "{title} | Powered by Box"
+generic_titles = ["Box | Login"]
 ```
+
+`generic_titles` lists the titles shown by Box's sign-in page instead of the
+item's own name (`adapter-templates.md` §9.4). A visit whose title is one of
+them, ASCII case aside, or is empty or the bare host, records no title, so the
+artifact keeps the title it already has ("Untitled" for a new one).
+
+Known limit: while a page loads, Box can title the tab with the enterprise's
+name, `Acme | Powered by Box`. The template extracts `Acme`, which no list
+can tell apart from an item that shares the enterprise's name, so that
+loading title is still recorded until the real one replaces it.
 
 ## What each rule covers
 

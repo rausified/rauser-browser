@@ -5,11 +5,13 @@ Status: development draft. The URL rules come from
 (ServiceNow Community threads and the public Raycast ServiceNow extension
 source), no browsing history, cookies or a ServiceNow account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 4 real URLs
-(11 visits) matched, 2/3 rules confirmed, the recorded title right on
-2/4. Not every rule and title was confirmed, so this type stays a
-development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 4 real URLs (10 visits) matched, 2/3
+rules confirmed, and the title right on 2/4, counting a sign-in, loading
+or error title that records no title as right. Not every rule was matched
+by a real visit and not every recorded title was the item's own name, so
+this type stays a development draft.
 
 Brauser offers this draft on a customer instance, `<instance>.service-now.com`
 (the `servicenow` family's strict subdomain origin, `exclude: ["www"]`),
@@ -35,7 +37,14 @@ match  = [
   { path = "/{_}", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" }, absent = ["sys_id"] },
 ]
 id     = "servicenow.kb:{host}/{number}"
+generic_titles = ["Knowledge Base", "Login"]
 ```
+
+`generic_titles` lists the titles shown by ServiceNow's sign-in page and
+portal instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 

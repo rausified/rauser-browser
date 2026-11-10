@@ -22,6 +22,7 @@
         "scope": { "owner": { "$scope": true } },
         "modes": { "files": "review", "commits": "view", "checks": "view" },
         "id": "github.pr:{host}/{owner}/{repo}/{number}",
+        "generic_titles": ["Sign in to GitHub · GitHub", "Page not found · GitHub", "Page not found · GitHub · GitHub"],
         "title": "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
         "refs": [{ "type": "jira.issue", "find": "jira_key" }],
         "within": { "type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}" }
@@ -71,6 +72,7 @@
         "match": [{ "path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}" }],
         "scope": { "owner": { "$scope": true } },
         "id": "github.issue:{host}/{owner}/{repo}/{number}",
+        "generic_titles": ["Sign in to GitHub · GitHub", "Page not found · GitHub", "Page not found · GitHub · GitHub"],
         "title": "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
         "refs": [{ "type": "jira.issue", "find": "jira_key" }],
         "within": { "type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}" }

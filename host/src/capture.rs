@@ -2154,7 +2154,8 @@ fn publish_batch_intent(path: &Path, intent: &BatchIntent) -> Result<()> {
             .context("writing capture batch intent")?;
         file.sync_all().context("syncing capture batch intent")?;
         drop(file);
-        fs::rename(&temporary, path).context("publishing capture batch intent")?;
+        crate::fsutil::rename_or_copy(&temporary, path)
+            .context("publishing capture batch intent")?;
         sync_state_directory(parent).context("syncing capture batch intent directory")
     })();
     if let Err(error) = fs::remove_file(&temporary)
@@ -2262,7 +2263,7 @@ pub(crate) fn record_log_relocation(
         file.write_all(&bytes).context("writing log relocations")?;
         file.sync_all().context("syncing log relocations")?;
         drop(file);
-        fs::rename(&temporary, journal_dir.join(LOG_RELOCATIONS))
+        crate::fsutil::rename_or_copy(&temporary, &journal_dir.join(LOG_RELOCATIONS))
             .context("publishing log relocations")?;
         sync_state_directory(&journal_dir).context("syncing visit intent directory")
     })();

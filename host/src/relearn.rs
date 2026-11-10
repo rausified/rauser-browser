@@ -10,13 +10,27 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::{config::ConfigStore, index::ArtifactIndex, url_provenance::StoredUrl, vault::Vault};
+use crate::{
+    config::{ConfigLock, ConfigStore},
+    index::ArtifactIndex,
+    url_provenance::StoredUrl,
+    vault::Vault,
+};
 
 const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_EVIDENCE: usize = 32_768;
 
 pub(crate) mod aliases;
 pub mod journal;
+// Activation requires replay-aware ordinary readers and a universal recovery
+// gate. Keep the transaction compiled on every platform, with no CLI/native
+// entry point until that integration is complete (brwr-dbp).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "dormant durable apply prerequisite for brwr-dbp")
+)]
+mod transaction;
+pub(crate) use transaction::note_resolution;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,7 +41,8 @@ pub struct PlanRequest {
     pub proposed: AdapterDocument,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Identity {
     pub artifact_type: String,
     pub artifact_id: String,
@@ -84,11 +99,11 @@ fn preview_with(
     request: &PlanRequest,
     after_projection: &dyn Fn() -> Result<()>,
 ) -> Result<Preview> {
-    let _config_lock = config.lock_current()?;
+    let config_lock = config.lock_for_read()?;
     let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
-    let (plan, log_revision) = plan_snapshot_locked(config, request)?;
+    let (plan, log_revision) = plan_snapshot_locked(config, request, &config_lock)?;
     let resolution = aliases::Resolution::from_plan(&plan)?;
-    let current = config.reopen();
+    let current = config.reopen_locked(&config_lock)?;
     ensure!(
         current.revision() == plan.config_revision,
         "configuration changed during projection"
@@ -116,7 +131,7 @@ fn preview_with(
     // External editors do not take Brauser's locks. Refuse an observation
     // made across changed config, owned files, contracts or log evidence.
     ensure!(
-        plan_locked(config, request)?.plan_revision == plan.plan_revision,
+        plan_locked(config, request, &config_lock)?.plan_revision == plan.plan_revision,
         "review evidence changed during projection; review a fresh plan"
     );
     Ok(Preview {
@@ -186,17 +201,26 @@ fn summary_provenance(bytes: &[u8]) -> Result<Option<Vec<String>>> {
 /// revisions and recheck owned files. This function never writes config,
 /// adopted contracts, cache, log, notes, summaries or browser recovery.
 pub fn plan(config: &ConfigStore, request: &PlanRequest) -> Result<Plan> {
-    let _config_lock = config.lock_current()?;
+    let config_lock = config.lock_for_read()?;
     let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
-    plan_locked(config, request)
+    plan_locked(config, request, &config_lock)
 }
 
 /// Caller holds the config and capture locks through publication of a decision.
-pub(super) fn plan_locked(config: &ConfigStore, request: &PlanRequest) -> Result<Plan> {
-    plan_snapshot_locked(config, request).map(|(plan, _)| plan)
+pub(super) fn plan_locked(
+    config: &ConfigStore,
+    request: &PlanRequest,
+    config_lock: &ConfigLock,
+) -> Result<Plan> {
+    plan_snapshot_locked(config, request, config_lock).map(|(plan, _)| plan)
 }
 
-fn plan_snapshot_locked(config: &ConfigStore, request: &PlanRequest) -> Result<(Plan, String)> {
+fn plan_snapshot_locked(
+    config: &ConfigStore,
+    request: &PlanRequest,
+    config_lock: &ConfigLock,
+) -> Result<(Plan, String)> {
+    config.require_lock(config_lock)?;
     let origin_url = Url::parse(&request.origin).context("invalid origin")?;
     ensure!(
         stored_origin(&StoredUrl {
@@ -211,7 +235,7 @@ fn plan_snapshot_locked(config: &ConfigStore, request: &PlanRequest) -> Result<(
         "give an exact HTTP(S) origin"
     );
     // A separate read avoids refresh's deliberate adopted-contract writes.
-    let current = config.reopen();
+    let current = config.reopen_locked(config_lock)?;
     ensure!(
         current.configured(),
         "choose or repair the home folder before review"

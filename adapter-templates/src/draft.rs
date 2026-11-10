@@ -20,7 +20,15 @@ use crate::path::{Segment, is_scope_anchor};
 use crate::policy::DraftPolicy;
 use crate::value::Value;
 
-const FORBIDDEN_KEYS: &[&str] = &["title", "scope", "unscoped", "alias", "fields", "path_case"];
+const FORBIDDEN_KEYS: &[&str] = &[
+    "title",
+    "generic_titles",
+    "scope",
+    "unscoped",
+    "alias",
+    "fields",
+    "path_case",
+];
 
 /// The `unscoped` value of the stand-in where scope can only be unscoped.
 const UNSCOPED: &str = "acknowledged";

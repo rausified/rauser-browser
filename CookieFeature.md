@@ -1171,7 +1171,8 @@ additional cases cover older summaries and mixed legacy history.
 ## 2026-11-02 — Recognize padded IDs in tab titles (brwr-tp1)
 
 Custom capture rules can now remove an identifier from a tab title even when
-it ends with base64 padding, such as `[uXjVM0uuBLo=] Roadmap`. The same ID
+it ends with base64 padding, such as `[uXjVQ7rTn2c=] Roadmap`. The same ID
+it ends with base64 padding, such as `[qK3nR8vDpZx=] Roadmap`. The same ID
 already worked in URLs; the title matcher stopped before its `=` and left the
 whole title in place. Both the native host and browser now recognize the
 padded title in either direction, and tab-title alias suggestions retain the
@@ -1909,3 +1910,90 @@ cleared node_modules before reporting a missing cache entry, and the sandbox
 blocks the reinstall. The outer driver must install the exact lockfile,
 rebuild the extension and pass its complete independent gate. No new feature
 was started from that failed health gate.
+
+## 2026-11-09 — Restore the private re-key transaction prerequisite
+
+The shared queue pointed to transaction work that existed only in an archived
+local commit, so this cycle restored that missing prerequisite for the assigned
+Re-learn apply work. It binds a freshly rechecked recorded approval to exact
+before/after configuration bytes and a chained history append inside the
+selected home. Recovery finishes only an exact prepared append, keeps the
+original decision and physical notes intact, and refuses changed config,
+history, ownership or approval evidence. It preserves host-only settings and
+the existing frozen-ID rule for ordinary config saves.
+
+The restoration adds an explicit Windows refusal because the existing Windows
+directory-sync helpers cannot guarantee this multi-file ordering. A new fixture
+checks that corrupt history is preserved even when the replacement config is
+already published. The 15 Unix transaction fixtures are interruption tests,
+not power-loss certification. This remains private groundwork: no CLI/native
+apply endpoint or ordinary startup recovery is enabled. Universal recovery,
+replay-aware readers and actual rebuild acceptance remain assigned work under
+brwr-dbp; brwr-4qt4 tracks Windows durability and brwr-9w4t tracks in-flight runs.
+
+## 2026-11-09 — Exercise failed directory syncs during re-key recovery
+
+This checkout also lacked the driver's green transaction commit, so the
+prerequisite was restored before extending its tests. The recovery fixtures
+now fail the actual directory-sync calls for home history, replacement config
+and prepare cleanup. They show that a history sync error keeps the old config,
+a config sync error retains the exact recovery authority after rename, and
+a prepare that reappears after unsynced cleanup cannot duplicate history.
+Each retry preserves the original notes and approval decisions. These isolated
+fixtures model errors and interruptions; they do not certify a power failure.
+
+The design review also identified how startup recovery must fit the existing
+locks and read-only config reads. That integration remains part of brwr-dbp,
+together with replay-aware readers and index rebuilds. No user-facing apply
+command or automatic startup recovery has been enabled by this work.
+
+
+## 2026-11-09 — Carry config-lock ownership through nested Re-learn reads
+
+Continued assigned Re-learn apply work with the locking prerequisite needed
+before automatic recovery can safely enter ordinary config loading. Planning,
+preview, decision recording and private transaction preparation now pass a live
+config-lock guard into nested reads instead of reopening through the ordinary
+loader. The host rejects a guard for another config path, including another
+config in the same directory. This prevents those nested paths from needing
+to reacquire their own lock when the later recovery gate is introduced.
+
+Coordination-only locks no longer enable adopted-contract recording. Ordinary
+write-lock refreshes still record contracts, while nested read stores remain
+read-only even beneath a recording lock. Four new regressions cover those
+boundaries and prove ordinary and locked reads leave private pending bytes,
+config, decisions and physical notes unchanged. No apply endpoint or automatic
+recovery was enabled. The parent still needs the universal recovery gate,
+authoritative replay in ordinary readers, preserved-note presentation, artifact
+stubs and rebuild acceptance.
+
+
+## 2026-11-10 — Keep ordinary page notes on their original files after re-keying
+
+Brauser's ordinary note requests now read the authoritative home-folder re-key
+history and apply the existing logical-versus-physical note contract. After a
+reviewed identity change, a sole original note stays editable in its original
+file while the browser receives the current artifact key. If a canonical note
+already exists, it takes precedence and every other original remains intact.
+Autosaves bind their revision to the selected owner and complete replay history,
+so an old editor cannot overwrite a newly selected note or regain permission
+when an identity moves away and back. Missing history keeps existing revisions.
+
+The same resolver now protects explicit task-report appends and older URL-note
+imports. Importing into a group with an existing selected owner refuses; a group
+without a note can import through the existing no-clobber move and immediately
+edit using the returned history-bound revision. Older URL-note discovery follows
+alias members while retaining its stripped-parameter provenance checks. Pending,
+torn, corrupt, unknown-field or foreign-home histories refuse ordinary note
+access without repairing history; independent read-only preserved-note access
+remains available.
+
+This completes the note-reader prerequisite `brwr-8qgs` within assigned
+`brwr-dbp`, not durable apply itself. Production apply/recovery remain disabled
+until the ordinary SQL index, summary/run readers, in-flight handoff and universal
+recovery agree. Validation: 326 focused cases pass (76 Re-learn, 189 native,
+51 note and 10 CLI boundary tests), including 13 new regressions; host all-target Clippy and fast static
+checks pass. A fresh manual diff review and the required design reviewer checked
+the ownership/import boundary. The driver owns the complete external gate and
+publication. Suggested follow-up `brwr-pkrk`: show when the editor uses a note
+retained from an earlier capture identity and offer read-only alternatives.

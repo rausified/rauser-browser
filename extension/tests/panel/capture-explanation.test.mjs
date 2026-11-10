@@ -115,7 +115,7 @@ test("custom types, long account lists and mixed scope read as configured", asyn
 });
 
 // Near-miss offers (brwr-0t1): settings opens the review; the panel saves nothing.
-const GUID = "8BAF1543-CDBF-4003-A48F-D4A939774FC0";
+const GUID = "5E2A9C47-1B3D-4F60-9A8E-7C21D4B06F13";
 const SOURCEDOC = { sourcedoc: "{doc:uuid}" };
 const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
 const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };

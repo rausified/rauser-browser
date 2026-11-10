@@ -169,6 +169,71 @@ test("a subdomain family's key without {origin} names the file and field", async
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json: types\[0\]\.key must contain "\{origin\}"/);
 });
 
+// An "any" family whose members are all `kind: "exact"` still serves more
+// than one site, so its key must name the origin the same way a subdomain
+// family's does (#340 review, Minor 1). No shipped family is in this shape
+// (box, the only "any" family, has a subdomain member), so this uses a
+// minimal synthetic fixture rather than mutating a shipped one. Before this
+// fix, `hasSubdomain` only looked for a `kind: "subdomain"` member, so this
+// case passed the generator while `new-starter.mjs`'s `defaultKey` already
+// required `{origin}` for any non-exact origin kind, including this one:
+// the generator and the scaffolder disagreed.
+function exampleAnyExactFamily() {
+  return {
+    family: "example-any-exact",
+    display_name: "Example",
+    review_prompt: "Choose what to remember.",
+    origin: {
+      kind: "any",
+      of: [
+        { kind: "exact", origin: "https://a.example.test" },
+        { kind: "exact", origin: "https://b.example.test" },
+      ],
+    },
+    scope: null,
+    sample_origin: "https://a.example.test",
+    sample_scope: [],
+    overlaps: [],
+    types: [
+      {
+        type: "example.item",
+        key: "example.item",
+        label: "Example items",
+        label_variants: [],
+        description: "An example item.",
+        record_label: null,
+        example_path: null,
+        adapter: {
+          type: "example.item",
+          match: [{ path: "/item/{id:int}" }],
+          id: "example.item:{host}/{id}",
+        },
+        history: [],
+        status: { state: "development", method: null, checked_on: null, checked_by: null },
+        docs: "docs/adapters/example.item.md",
+        samples: [],
+        samples_shape: false,
+        vectors: [],
+      },
+    ],
+  };
+}
+
+test("an 'any' family of only exact origins still requires {origin} in its key", () => {
+  const family = exampleAnyExactFamily();
+  const problems = [];
+  validateFamily(problems, "<fixture>", family);
+  assert.deepEqual(problems, [`<fixture>: types[0].key must contain "{origin}"`]);
+});
+
+test("the same 'any'-of-exact family passes once its key names {origin}, matching new-starter.mjs's defaultKey rule", () => {
+  const family = exampleAnyExactFamily();
+  family.types[0].key = "example.item:{origin}";
+  const problems = [];
+  validateFamily(problems, "<fixture>", family);
+  assert.deepEqual(problems, []);
+});
+
 test("adapter.match must be a non-empty array", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
@@ -529,7 +594,7 @@ const TODAY_STARTER_ROWS = [
   },
   {
     note: "Miro board (docs/adapters/miro.board.md)",
-    url: "https://miro.com/app/board/uXjVM0uuBLo=/",
+    url: "https://miro.com/app/board/qK3nR8vDpZx=/",
     shape: "/app/board/{id}/",
   },
   {

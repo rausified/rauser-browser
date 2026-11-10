@@ -13,7 +13,8 @@
             {"path": "/jira/{*}", "query": {"selectedIssue": "{key:jira_key}"}}
           ],
           "id": "jira:{host}/{key}",
-          "title": "[{key:jira_key}] {title} - Jira",
+          "generic_titles": ["Jira", "Log in with Atlassian account", "Log in to continue - Log in with Atlassian account", "Choose an account to continue - Log in with Atlassian account"],
+          "title": ["[{key:jira_key}] {title} - Jira", "[{key:jira_key}] {title} - {~} Jira"],
           "alias": {"from": "tab_title", "capture": "key"},
           "refs": [{"type": "jira.issue", "find": "jira_key"}]
         },
@@ -27,6 +28,7 @@
             {"path": "/wiki/pages/viewpage.action", "query": {"pageId": "{id:int}"}}
           ],
           "id": "confluence.page:{host}/{id}",
+          "generic_titles": ["Confluence", "For you - Confluence", "Log in with Atlassian account", "Log in to continue - Log in with Atlassian account", "Choose an account to continue - Log in with Atlassian account"],
           "title": ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"],
           "refs": [{"type": "jira.issue", "find": "jira_key"}]
         },
@@ -53,6 +55,7 @@
           "scope": {"owner": ["acme-corp"]},
           "modes": {"files": "review", "commits": "view", "checks": "view"},
           "id": "github.pr:{host}/{owner}/{repo}/{number}",
+          "generic_titles": ["Sign in to GitHub · GitHub", "Page not found · GitHub", "Page not found · GitHub · GitHub"],
           "title": "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
           "refs": [{"type": "jira.issue", "find": "jira_key"}],
           "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}
@@ -63,6 +66,7 @@
           "match": [{"path": "/{owner:name|lower}/{repo:name|lower}/issues/{number:int}"}],
           "scope": {"owner": ["acme-corp"]},
           "id": "github.issue:{host}/{owner}/{repo}/{number}",
+          "generic_titles": ["Sign in to GitHub · GitHub", "Page not found · GitHub", "Page not found · GitHub · GitHub"],
           "title": "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
           "refs": [{"type": "jira.issue", "find": "jira_key"}],
           "within": {"type": "github.repo", "id": "github.repo:{host}/{owner}/{repo}"}
@@ -83,7 +87,8 @@
             {"path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}},
             {"path": "/personal/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}}
           ],
-          "id": "sharepoint:{host}/{doc}"
+          "id": "sharepoint:{host}/{doc}",
+          "generic_titles": ["Working...", "Working…", "Login", "Redirecting", "Error", "Sign in is not complete"]
         },
         {
           "type": "sharepoint.doc",
@@ -94,7 +99,8 @@
             {"path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}},
             {"path": "/personal/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}}
           ],
-          "id": "sharepoint:{host}/{doc}"
+          "id": "sharepoint:{host}/{doc}",
+          "generic_titles": ["Working...", "Working…", "Login", "Redirecting", "Error", "Sign in is not complete"]
         },
         {
           "type": "miro.board",
@@ -103,6 +109,7 @@
             {"path": "/app/board/{board:token(12)}"}
           ],
           "id": "miro.board:{host}/{board}",
+          "generic_titles": ["Miro", "Sign in | Miro | The Visual Workspace for Innovation"],
           "title": "{title} - Miro"
         }
       ]
@@ -15776,7 +15783,7 @@
       "value": "a!b",
       "expect": {"canonical": null}
     },
-    {"id": "capture.token.base64_pad_one", "kind": "capture", "why": "§7.1: token admits up to two trailing = (base64 padding), as on Miro boards", "impls": ["rust", "ts"], "ctype": "token", "value": "uXjVM0uuBLo=", "expect": {"canonical": "uXjVM0uuBLo="}},
+    {"id": "capture.token.base64_pad_one", "kind": "capture", "why": "§7.1: token admits up to two trailing = (base64 padding), as on Miro boards", "impls": ["rust", "ts"], "ctype": "token", "value": "qK3nR8vDpZx=", "expect": {"canonical": "qK3nR8vDpZx="}},
     {"id": "capture.token.base64_pad_two", "kind": "capture", "why": "§7.1: two trailing = are padding", "impls": ["rust", "ts"], "ctype": "token", "value": "Ab-_9w==", "expect": {"canonical": "Ab-_9w=="}},
     {"id": "capture.token.pad_three", "kind": "capture", "why": "§7.1: three = are not padding", "impls": ["rust", "ts"], "ctype": "token", "value": "AbC===", "expect": {"canonical": null}},
     {"id": "capture.token.pad_only", "kind": "capture", "why": "§7.1: padding needs at least one token character before it", "impls": ["rust", "ts"], "ctype": "token", "value": "==", "expect": {"canonical": null}},
@@ -18183,17 +18190,17 @@
       "doc": {"$fixture": "starters"},
       "url": "https://acme.atlassian.net./browse/OPS-1"
     },
-    {"id": "eval.miro.board", "kind": "evaluate", "why": "§11: a Miro board, trailing slash dropped (§5.1), padded token ID (§7.1); docs/adapters/miro.board.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/"},
-    {"id": "eval.miro.board_share_link", "kind": "evaluate", "why": "§11: a board opened from a share link; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990"},
-    {"id": "eval.miro.board_move_to_widget", "kind": "evaluate", "why": "§11: a board opened at a widget; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764680052296737&cot=14"},
+    {"id": "eval.miro.board", "kind": "evaluate", "why": "§11: a Miro board, trailing slash dropped (§5.1), padded token ID (§7.1); docs/adapters/miro.board.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/"},
+    {"id": "eval.miro.board_share_link", "kind": "evaluate", "why": "§11: a board opened from a share link; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=510293847561"},
+    {"id": "eval.miro.board_move_to_widget", "kind": "evaluate", "why": "§11: a board opened at a widget; the query does not change the ID", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/?moveToWidget=3458764512345678901&cot=14"},
     {"id": "eval.miro.board_legacy_id", "kind": "evaluate", "why": "§11: older o9J_ board IDs are the same 12-character shape", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "o9J_kpXb3Lw="}, "artifact_id": "miro.board:miro.com/o9J_kpXb3Lw=", "mode": null}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/o9J_kpXb3Lw=/"},
-    {"id": "eval.miro.title", "kind": "evaluate", "why": "§9.1: the Miro title template drops the ' - Miro' suffix", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "miro.board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "SSE ZTA SWOT", "title_entry": 0, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/", "title": "SSE ZTA SWOT - Miro"},
+    {"id": "eval.miro.title", "kind": "evaluate", "why": "§9.1: the Miro title template drops the ' - Miro' suffix", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null, "title": "Team Retro Board", "title_entry": 0, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/", "title": "Team Retro Board - Miro"},
     {"id": "eval.miro.dashboard", "kind": "evaluate", "why": "§11: the board list is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/dashboard/"},
-    {"id": "eval.miro.team_dashboard", "kind": "evaluate", "why": "§11: a team's board list is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/dashboard/org/3074457346309553774/team/3074457345728012873/"},
+    {"id": "eval.miro.team_dashboard", "kind": "evaluate", "why": "§11: a team's board list is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/dashboard/org/3074457300000000001/team/3074457300000000002/"},
     {"id": "eval.miro.app_root", "kind": "evaluate", "why": "§11: the app root is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/"},
     {"id": "eval.miro.login", "kind": "evaluate", "why": "§11: sign-in is not a board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/login/?reason=sessionExpired&service=app"},
-    {"id": "eval.miro.board_wrong_length", "kind": "evaluate", "why": "§11: board IDs are 12 characters", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBL=/"},
-    {"id": "eval.miro.board_subpath", "kind": "evaluate", "why": "§11: no rest segment; a path below the board is not the board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/export"},
+    {"id": "eval.miro.board_wrong_length", "kind": "evaluate", "why": "§11: board IDs are 12 characters", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZ=/"},
+    {"id": "eval.miro.board_subpath", "kind": "evaluate", "why": "§11: no rest segment; a path below the board is not the board", "impls": ["rust", "ts"], "expect": {"match": false, "reason": "no_rule"}, "doc": {"$fixture": "starters"}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/export"},
     {
       "id": "eval.jira.title",
       "kind": "evaluate",
@@ -18374,7 +18381,7 @@
     {
       "id": "eval.jira.title_fallback",
       "kind": "evaluate",
-      "why": "§9.1: when no entry matches, the whole tab title is used",
+      "why": "§9.1, §9.4: Jira's bare app-shell title matches no entry and is generic: no title",
       "impls": ["rust", "ts"],
       "expect": {
         "match": true,
@@ -18384,7 +18391,7 @@
         "captures": {"key": "PROJ-1"},
         "artifact_id": "jira:acme.atlassian.net/PROJ-1",
         "mode": null,
-        "title": "Jira",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -18886,11 +18893,11 @@
     {"id": "eval.confluence.title_personal_space", "kind": "evaluate", "why": "§9.2: a personal space's name is its owner's name, skipped like any space; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000003"}, "artifact_id": "confluence.page:acme.atlassian.net/1000003", "mode": null, "title": "Some Page", "title_entry": 1, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/~0123456789abcdef0123456789abcdef012345/pages/1000003/Some+Page", "title": "Some Page - Alex Example - Confluence"},
     {"id": "eval.confluence.title_space_name_delimiter", "kind": "evaluate", "why": "§9.2: known limit, a space name containing ' - ' leaves its first part in the title; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000002"}, "artifact_id": "confluence.page:acme.atlassian.net/1000002", "mode": null, "title": "Rollout tracker - Phase 1 - TEAM", "title_entry": 1, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/OPS/pages/1000002/Rollout+Tracker", "title": "Rollout tracker - Phase 1 - TEAM - Platform Commons - Confluence"},
     {"id": "eval.confluence.title_version_history", "kind": "evaluate", "why": "§9.1: the version-history entry strips its prefix on a history page; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 2, "type": "confluence.page", "captures": {"id": "1000004"}, "artifact_id": "confluence.page:acme.atlassian.net/1000004", "mode": "view", "title": "Release plan", "title_entry": 0, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/history/1000004/Release+Plan", "title": "Version history - Release plan - Engineering - Confluence"},
-    {"id": "eval.confluence.title_version_history_bare", "kind": "evaluate", "why": "§9.1: a history tab titled only 'Confluence' matches no entry; the whole title is kept; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 2, "type": "confluence.page", "captures": {"id": "1000004"}, "artifact_id": "confluence.page:acme.atlassian.net/1000004", "mode": "view", "title": "Confluence", "title_entry": null, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/history/1000004/Release+Plan", "title": "Confluence"},
+    {"id": "eval.confluence.title_version_history_bare", "kind": "evaluate", "why": "§9.1, §9.4: a history tab titled only 'Confluence' matches no entry and is generic: no title; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 2, "type": "confluence.page", "captures": {"id": "1000004"}, "artifact_id": "confluence.page:acme.atlassian.net/1000004", "mode": "view", "title": null, "title_entry": null, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/history/1000004/Release+Plan", "title": "Confluence"},
     {"id": "eval.confluence.title_version_history_prefix_tradeoff", "kind": "evaluate", "why": "§9.1: trade-off, a page whose own title starts 'Version history - ' loses that prefix; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000001"}, "artifact_id": "confluence.page:acme.atlassian.net/1000001", "mode": null, "title": "Policy", "title_entry": 0, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Version+history+-+Policy", "title": "Version history - Policy - Engineering - Confluence"},
-    {"id": "eval.confluence.title_for_you", "kind": "evaluate", "why": "§9.1: known limit, an SPA-lag title matches no entry and is kept whole; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000001"}, "artifact_id": "confluence.page:acme.atlassian.net/1000001", "mode": null, "title": "For you - Confluence", "title_entry": null, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan", "title": "For you - Confluence"},
-    {"id": "eval.confluence.title_login", "kind": "evaluate", "why": "§9.1: known limit, a sign-in interstitial title is kept whole; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000001"}, "artifact_id": "confluence.page:acme.atlassian.net/1000001", "mode": null, "title": "Log in with Atlassian account", "title_entry": null, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan", "title": "Log in with Atlassian account"},
-    {"id": "eval.confluence.title_choose_account", "kind": "evaluate", "why": "§9.1: known limit, an account chooser title is kept whole; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000001"}, "artifact_id": "confluence.page:acme.atlassian.net/1000001", "mode": null, "title": "Choose an account to continue - Log in with Atlassian account", "title_entry": null, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan", "title": "Choose an account to continue - Log in with Atlassian account"},
+    {"id": "eval.confluence.title_for_you", "kind": "evaluate", "why": "§9.1, §9.4: an SPA-lag 'For you - Confluence' title matches no entry and is generic: no title; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000001"}, "artifact_id": "confluence.page:acme.atlassian.net/1000001", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan", "title": "For you - Confluence"},
+    {"id": "eval.confluence.title_login", "kind": "evaluate", "why": "§9.1, §9.4: a sign-in interstitial title is generic: no title; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000001"}, "artifact_id": "confluence.page:acme.atlassian.net/1000001", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan", "title": "Log in with Atlassian account"},
+    {"id": "eval.confluence.title_choose_account", "kind": "evaluate", "why": "§9.1, §9.4: an account chooser title is generic: no title; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "1000001"}, "artifact_id": "confluence.page:acme.atlassian.net/1000001", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan", "title": "Choose an account to continue - Log in with Atlassian account"},
     {"id": "eval.confluence.title_jira_ref", "kind": "evaluate", "why": "§10.1: a Jira key in a page title becomes a ref; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 3, "type": "confluence.page", "captures": {"id": "1000001"}, "artifact_id": "confluence.page:acme.atlassian.net/1000001", "mode": null, "title": "OPS-12 rollout plan", "title_entry": 1, "alias_id": null, "refs": [{"type": "jira.issue", "value": "OPS-12"}]}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=1000001", "title": "OPS-12 rollout plan - Engineering - Confluence"},
     {"id": "eval.confluence.title_version_history_jira_ref", "kind": "evaluate", "why": "§10.1: refs scan the title the version-history entry extracts; docs/adapters/confluence.page.md", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 1, "rule": 2, "type": "confluence.page", "captures": {"id": "1000004"}, "artifact_id": "confluence.page:acme.atlassian.net/1000004", "mode": "view", "title": "OPS-12 rollout plan", "title_entry": 0, "alias_id": null, "refs": [{"type": "jira.issue", "value": "OPS-12"}]}, "doc": {"$fixture": "starters"}, "url": "https://acme.atlassian.net/wiki/spaces/ENG/history/1000004", "title": "Version history - OPS-12 rollout plan - Engineering - Confluence"},
     {
@@ -20529,7 +20536,7 @@
     {
       "id": "eval.mail.empty_tab_title",
       "kind": "evaluate",
-      "why": "§9.1: an empty tab title falls back to itself",
+      "why": "§9.1, §9.4: an empty tab title falls back to itself, which is generic: no title",
       "impls": ["rust", "ts"],
       "expect": {
         "match": true,
@@ -20539,7 +20546,7 @@
         "captures": {"id": "1a2b"},
         "artifact_id": "mail:mail.example.com/1a2b",
         "mode": null,
-        "title": "",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -23268,9 +23275,9 @@
       "url": "https://www.notion.so/Release-Plan-0123456789abcdef0123456789abcdef"
     },
     {
-      "id": "eval.bounds.url_2048",
+      "id": "eval.bounds.url_8192",
       "kind": "evaluate",
-      "why": "§5.1/§12: a 2048-character URL is allowed",
+      "why": "§5.1/§12: a 8192-character URL is allowed",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {
@@ -23283,20 +23290,20 @@
         "mode": null
       },
       "doc": {"$fixture": "starters"},
-      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "a", "times": 2003}]}
+      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "a", "times": 8147}]}
     },
     {
-      "id": "eval.bounds.url_2049",
+      "id": "eval.bounds.url_8193",
       "kind": "evaluate",
-      "why": "§5.1: a URL over 2048 characters matches no adapter",
+      "why": "§5.1: a URL over 8192 characters matches no adapter",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {"match": false, "reason": "url_too_long"},
       "doc": {"$fixture": "starters"},
-      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "a", "times": 2004}]}
+      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "a", "times": 8148}]}
     },
     {
-      "id": "eval.bounds.url_2048_astral",
+      "id": "eval.bounds.url_8192_astral",
       "kind": "evaluate",
       "why": "§5.1: the cap counts scalar values, not UTF-16 units",
       "impls": ["rust", "ts"],
@@ -23312,10 +23319,10 @@
         "mode": null
       },
       "doc": {"$fixture": "starters"},
-      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "😀", "times": 2003}]}
+      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "😀", "times": 8147}]}
     },
     {
-      "id": "eval.bounds.url_2049_astral",
+      "id": "eval.bounds.url_8193_astral",
       "kind": "evaluate",
       "why": "§5.1: one scalar over the cap",
       "impls": ["rust", "ts"],
@@ -23323,17 +23330,17 @@
       "budget_ms": 50,
       "expect": {"match": false, "reason": "url_too_long"},
       "doc": {"$fixture": "starters"},
-      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "😀", "times": 2004}]}
+      "url": {"$build": ["https://acme.atlassian.net/browse/PROJ-1?pad=", {"repeat": "😀", "times": 8148}]}
     },
     {
-      "id": "eval.bounds.url_2049_invalid",
+      "id": "eval.bounds.url_8193_invalid",
       "kind": "evaluate",
       "why": "§5.1: the cap is checked before parsing",
       "impls": ["rust", "ts"],
       "sq": ["SQ17"],
       "expect": {"match": false, "reason": "url_too_long"},
       "doc": {"$fixture": "starters"},
-      "url": {"$build": [{"repeat": " ", "times": 2049}]}
+      "url": {"$build": [{"repeat": " ", "times": 8193}]}
     },
     {
       "id": "eval.bounds.64_segments",
@@ -23398,9 +23405,9 @@
       "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
       "impls": ["rust", "ts"],
       "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "[{board:token}] {title}"}]},
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
-      "title": "[uXjVM0uuBLo=] Roadmap",
-      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+      "url": "https://miro.com/app/board/qK3nR8vDpZx=/",
+      "title": "[qK3nR8vDpZx=] Roadmap",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
     },
     {
       "id": "eval.token.title_prefix_pad_two",
@@ -23518,9 +23525,9 @@
       "why": "§7.1/§9.1: title runs include padding, then validate the whole token and its bounds before cleanup or aliasing",
       "impls": ["rust", "ts"],
       "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}", "title": "{title} [{board:token}]"}]},
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
-      "title": "Roadmap [uXjVM0uuBLo=]",
-      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
+      "url": "https://miro.com/app/board/qK3nR8vDpZx=/",
+      "title": "Roadmap [qK3nR8vDpZx=]",
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null, "title": "Roadmap", "title_entry": 0, "alias_id": null, "refs": []}
     },
     {
       "id": "eval.token.title_suffix_pad_two",
@@ -23632,9 +23639,9 @@
       "title": "Roadmap [==AbC]",
       "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "old="}, "artifact_id": "board:miro.com/old=", "mode": null, "title": "Roadmap [==AbC]", "title_entry": null, "alias_id": null, "refs": []}
     },
-    {"id": "eval.token.miro_board_padded", "kind": "evaluate", "why": "§7.1: a Miro board ID ends in base64 padding; the trailing slash is dropped (§5.1)", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/"},
-    {"id": "eval.token.miro_board_padded_query", "kind": "evaluate", "why": "§7.1: an unconditioned query does not affect the match", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764600000000000"},
-    {"id": "eval.token.miro_board_encoded_padding", "kind": "evaluate", "why": "§5.1: %3D decodes to = before the type check", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "uXjVM0uuBLo="}, "artifact_id": "board:miro.com/uXjVM0uuBLo=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/uXjVM0uuBLo%3D/"},
+    {"id": "eval.token.miro_board_padded", "kind": "evaluate", "why": "§7.1: a Miro board ID ends in base64 padding; the trailing slash is dropped (§5.1)", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/"},
+    {"id": "eval.token.miro_board_padded_query", "kind": "evaluate", "why": "§7.1: an unconditioned query does not affect the match", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/qK3nR8vDpZx=/?moveToWidget=3458764600000000000"},
+    {"id": "eval.token.miro_board_encoded_padding", "kind": "evaluate", "why": "§5.1: %3D decodes to = before the type check", "impls": ["rust", "ts"], "expect": {"match": true, "adapter": 0, "rule": 0, "type": "board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "board:miro.com/qK3nR8vDpZx=", "mode": null}, "doc": {"format": 1, "artifacts": [{"type": "board", "origin": "https://miro.com", "match": [{"path": "/app/board/{board:token}"}], "id": "board:{host}/{board}"}]}, "url": "https://miro.com/app/board/qK3nR8vDpZx%3D/"},
     {
       "id": "eval.bounds.longest_token",
       "kind": "evaluate",
@@ -24346,9 +24353,9 @@
       "title": {"$build": [{"repeat": "#1 ", "times": 168}, "abcde #7"]}
     },
     {
-      "id": "eval.bounds.url_2048_query",
+      "id": "eval.bounds.url_8192_query",
       "kind": "evaluate",
-      "why": "§5.3/§12: 8 query conditions, all at the end of a 2048-scalar URL with hundreds of pairs",
+      "why": "§5.3/§12: 8 query conditions, all at the end of a 8192-scalar URL with hundreds of pairs",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {
@@ -24389,15 +24396,15 @@
         "$build": [
           "https://bounds.example.com/q?",
           "z=yyyyy&",
-          {"repeat": "p=1&", "times": 493},
+          {"repeat": "p=1&", "times": 2029},
           "k0=x&k1=x&k2=x&k3=x&k4=x&k5=x&k6=x&id=7"
         ]
       }
     },
     {
-      "id": "eval.bounds.url_2048_absent",
+      "id": "eval.bounds.url_8192_absent",
       "kind": "evaluate",
-      "why": "§5.3/§12: 8 absent keys; the last is the final pair of a 2048-scalar URL",
+      "why": "§5.3/§12: 8 absent keys; the last is the final pair of a 8192-scalar URL",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {"match": false, "reason": "no_rule"},
@@ -24413,13 +24420,13 @@
         ]
       },
       "url": {
-        "$build": ["https://bounds.example.com/q/7?", "z=yyyyyy&", {"repeat": "p=1&", "times": 501}, "k7=1"]
+        "$build": ["https://bounds.example.com/q/7?", "z=yyyyyy&", {"repeat": "p=1&", "times": 2037}, "k7=1"]
       }
     },
     {
-      "id": "eval.bounds.url_2048_absent_miss",
+      "id": "eval.bounds.url_8192_absent_miss",
       "kind": "evaluate",
-      "why": "§5.3/§12: 8 absent keys, none present in a 2048-scalar URL with hundreds of pairs",
+      "why": "§5.3/§12: 8 absent keys, none present in a 8192-scalar URL with hundreds of pairs",
       "impls": ["rust", "ts"],
       "budget_ms": 50,
       "expect": {
@@ -24443,7 +24450,7 @@
         ]
       },
       "url": {
-        "$build": ["https://bounds.example.com/q/7?", "z=yyyyyy&", {"repeat": "p=1&", "times": 501}, "k8=1"]
+        "$build": ["https://bounds.example.com/q/7?", "z=yyyyyy&", {"repeat": "p=1&", "times": 2037}, "k8=1"]
       }
     },
     {
@@ -27802,6 +27809,515 @@
       "expect": {"match": true, "adapter": 0, "rule": 0, "type": "long.once", "captures": {"a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "artifact_id": "long:l.example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mode": null},
       "doc": {"format": 1, "artifacts": [{"type": "long.once", "origin": "https://l.example.com", "match": [{"path": "/i/{a:token}"}], "id": "long:{host}/{a}", "within": {"type": "long.group", "id": "gr:{host}/{a}/{a}/{a}/{a}"}}]},
       "url": "https://l.example.com/i/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "eval.generic_title.extracted",
+      "kind": "evaluate",
+      "why": "§9.4: an extracted title in generic_titles is no title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "Sign in - Acme"
+    },
+    {
+      "id": "eval.generic_title.fallback",
+      "kind": "evaluate",
+      "why": "§9.4: a fallback title in generic_titles is no title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "Loading…"
+    },
+    {
+      "id": "eval.generic_title.ascii_case",
+      "kind": "evaluate",
+      "why": "§9.4: generic_titles compare with ASCII case folded",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "SIGN IN - Acme"
+    },
+    {
+      "id": "eval.generic_title.whole_title_only",
+      "kind": "evaluate",
+      "why": "§9.4: a generic entry must equal the whole title, not a prefix",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": "Sign in again", "title_entry": 0, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "Sign in again - Acme"
+    },
+    {
+      "id": "eval.generic_title.fallback_trimmed",
+      "kind": "evaluate",
+      "why": "§9.4: the fallback is compared trimmed",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "  Loading…  "
+    },
+    {
+      "id": "eval.generic_title.refs_dropped",
+      "kind": "evaluate",
+      "why": "§9.4: a generic title yields no refs",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "Error 404 - Acme"
+    },
+    {
+      "id": "eval.generic_title.refs_kept",
+      "kind": "evaluate",
+      "why": "§9.4: a title outside generic_titles keeps its refs",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": "Error 405", "title_entry": 0, "alias_id": null, "refs": [{"type": "acme.item", "value": "405"}]},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "Error 405 - Acme"
+    },
+    {
+      "id": "eval.generic_title.non_ascii_not_folded",
+      "kind": "evaluate",
+      "why": "§9.4: only ASCII case is folded",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": "Sİgn in", "title_entry": 0, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "Sİgn in - Acme"
+    },
+    {
+      "id": "eval.generic_title.host",
+      "kind": "evaluate",
+      "why": "§9.4: a title that is the URL's host is no title, with no generic_titles",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "acme.example.com"
+    },
+    {
+      "id": "eval.generic_title.host_case",
+      "kind": "evaluate",
+      "why": "§9.4: the host compares with ASCII case folded",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "ACME.Example.com"
+    },
+    {
+      "id": "eval.generic_title.host_path",
+      "kind": "evaluate",
+      "why": "§9.4: the browser's host-and-path placeholder is no title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "acme.example.com/items/7"
+    },
+    {
+      "id": "eval.generic_title.url",
+      "kind": "evaluate",
+      "why": "§9.4: the browser's URL placeholder is no title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "https://acme.example.com/items/7?x=1"
+    },
+    {
+      "id": "eval.generic_title.http_url",
+      "kind": "evaluate",
+      "why": "§9.4: an http URL placeholder is no title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "HTTP://acme.example.com"
+    },
+    {
+      "id": "eval.generic_title.host_then_word",
+      "kind": "evaluate",
+      "why": "§9.4: a title that only starts with the host is a title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": "acme.example.com notes", "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "acme.example.com notes"
+    },
+    {
+      "id": "eval.generic_title.host_longer_label",
+      "kind": "evaluate",
+      "why": "§9.4: a longer host is not the host",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": "acme.example.community/x", "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "acme.example.community/x"
+    },
+    {
+      "id": "eval.generic_title.other_host",
+      "kind": "evaluate",
+      "why": "§9.4: another host is a title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": "beta.example.com", "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "beta.example.com"
+    },
+    {
+      "id": "eval.generic_title.host_extracted",
+      "kind": "evaluate",
+      "why": "§9.4: the host rule applies to the extracted title too",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "acme.example.com - Acme"
+    },
+    {
+      "id": "eval.generic_title.empty",
+      "kind": "evaluate",
+      "why": "§9.4: an empty title is no title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": ""
+    },
+    {
+      "id": "eval.generic_title.blank",
+      "kind": "evaluate",
+      "why": "§9.4: a title of only white space is no title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": " \t "
+    },
+    {
+      "id": "eval.generic_title.port",
+      "kind": "evaluate",
+      "why": "§9.4: the host includes a non-default port",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com:8443/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com:8443", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}"}]},
+      "url": "https://acme.example.com:8443/items/7",
+      "title": "acme.example.com:8443/items/7"
+    },
+    {
+      "id": "eval.generic_title.port_missing",
+      "kind": "evaluate",
+      "why": "§9.4: the host without its port is a title",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com:8443/7", "mode": null, "title": "acme.example.com", "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com:8443", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}"}]},
+      "url": "https://acme.example.com:8443/items/7",
+      "title": "acme.example.com"
+    },
+    {
+      "id": "eval.generic_title.alias_dropped",
+      "kind": "evaluate",
+      "why": "§9.4: a generic title suggests no alias",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "t2.item", "captures": {"num": "7"}, "artifact_id": "t2:t2.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "t2.item", "origin": "https://t2.example.com", "match": [{"path": "/items/{num:int}"}], "id": "t2:{host}/{num}", "title": "{title} #{num:int}", "alias": {"from": "tab_title", "capture": "num"}, "generic_titles": ["Moved"]}]},
+      "url": "https://t2.example.com/items/7",
+      "title": "Moved #9"
+    },
+    {
+      "id": "eval.generic_title.alias_kept",
+      "kind": "evaluate",
+      "why": "§9.4: a title outside generic_titles keeps its alias",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "t2.item", "captures": {"num": "7"}, "artifact_id": "t2:t2.example.com/7", "mode": null, "title": "Plan", "title_entry": 0, "alias_id": "t2:t2.example.com/9", "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "t2.item", "origin": "https://t2.example.com", "match": [{"path": "/items/{num:int}"}], "id": "t2:{host}/{num}", "title": "{title} #{num:int}", "alias": {"from": "tab_title", "capture": "num"}, "generic_titles": ["Moved"]}]},
+      "url": "https://t2.example.com/items/7",
+      "title": "Plan #9"
+    },
+    {
+      "id": "eval.generic_title.128_scalars",
+      "kind": "evaluate",
+      "why": "§9.4: a 128-scalar entry is valid and matches",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx - Acme"
+    },
+    {
+      "id": "validate.generic_titles.ok",
+      "kind": "validate",
+      "why": "§9.4: a list of plain titles validates",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.generic_titles.sixteen",
+      "kind": "validate",
+      "why": "§9.4: at most 16 entries",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Page 0", "Page 1", "Page 2", "Page 3", "Page 4", "Page 5", "Page 6", "Page 7", "Page 8", "Page 9", "Page 10", "Page 11", "Page 12", "Page 13", "Page 14", "Page 15"]}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.generic_titles.not_list",
+      "kind": "validate",
+      "why": "§9.4: generic_titles is a list",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": "Sign in"}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.generic_titles.entry_not_string",
+      "kind": "validate",
+      "why": "§9.4: each entry is a string",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", 3]}]},
+      "expect": {"error": {"code": "wrong_type", "adapter": 0, "rule": null, "entry": 1}}
+    },
+    {
+      "id": "validate.generic_titles.empty_list",
+      "kind": "validate",
+      "why": "§9.4: an empty list is an error",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": []}]},
+      "expect": {"error": {"code": "empty_generic_titles", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.generic_titles.seventeen",
+      "kind": "validate",
+      "why": "§9.4: more than 16 entries is an error",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Page 0", "Page 1", "Page 2", "Page 3", "Page 4", "Page 5", "Page 6", "Page 7", "Page 8", "Page 9", "Page 10", "Page 11", "Page 12", "Page 13", "Page 14", "Page 15", "Page 16"]}]},
+      "expect": {"error": {"code": "too_many_generic_titles", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.generic_titles.empty_entry",
+      "kind": "validate",
+      "why": "§9.4: an entry is not empty",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", ""]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 1}}
+    },
+    {
+      "id": "validate.generic_titles.untrimmed",
+      "kind": "validate",
+      "why": "§9.4: an entry has no surrounding white space",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": [" Sign in"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.untrimmed_end",
+      "kind": "validate",
+      "why": "§9.4: an entry has no trailing white space",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in "]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.brace",
+      "kind": "validate",
+      "why": "§9.4: braces are reserved",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["{title}"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.close_brace",
+      "kind": "validate",
+      "why": "§9.4: braces are reserved",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["a}"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.control",
+      "kind": "validate",
+      "why": "§9.4: control characters are not allowed",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign\u0007in"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.del",
+      "kind": "validate",
+      "why": "§9.4: DEL is a control character",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Signin"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.129_scalars",
+      "kind": "validate",
+      "why": "§9.4: an entry is at most 128 scalar values",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.128_scalars",
+      "kind": "validate",
+      "why": "§9.4: 128 scalar values is valid",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"]}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "validate.generic_titles.after_title",
+      "kind": "validate",
+      "why": "§9.4: generic_titles is checked after title",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": ["{title} a", "{title} b", "{title} c", "{title} d", "{title} e"], "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["", ""]}]},
+      "expect": {"error": {"code": "too_many_titles", "adapter": 0, "rule": null, "entry": null}}
+    },
+    {
+      "id": "validate.generic_titles.before_alias",
+      "kind": "validate",
+      "why": "§9.4: generic_titles is checked before alias",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": [""], "alias": {"from": "nowhere"}}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.no_title_needed",
+      "kind": "validate",
+      "why": "§9.4: generic_titles needs no title template",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Sign in", "Loading…", "Error 404"]}]},
+      "expect": {"ok": true}
+    },
+    {
+      "id": "draft.forbidden_generic_titles",
+      "kind": "draft",
+      "why": "§10.4: a draft may not use generic_titles",
+      "impls": ["rust"],
+      "existing": {"$fixture": "starters"},
+      "draft": {"type": "github.project", "origin": "https://github.com", "match": [{"path": "/orgs/{owner:name|lower}/projects/{number:int}"}], "id": "github.project:{host}/{owner}/{number}", "generic_titles": ["Sign in"]},
+      "probes": [],
+      "search_keys": ["q", "query", "search", "jql", "filter"],
+      "expect": {"draft_error": "draft_forbidden_key"}
+    },
+    {
+      "id": "eval.jira.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "§9.4: an Atlassian sign-in page's title is generic: no title, alias or refs; docs/adapters/jira.issue.md",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "jira.issue", "captures": {"key": "PROJ-123"}, "artifact_id": "jira:acme.atlassian.net/PROJ-123", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"$fixture": "starters"},
+      "url": "https://acme.atlassian.net/browse/PROJ-123",
+      "title": "Log in to continue - Log in with Atlassian account"
+    },
+    {
+      "id": "eval.jira.generic_title_app_shell",
+      "kind": "evaluate",
+      "why": "§9.4: Jira's bare app-shell title is generic; docs/adapters/jira.issue.md",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "jira.issue", "captures": {"key": "PROJ-123"}, "artifact_id": "jira:acme.atlassian.net/PROJ-123", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"$fixture": "starters"},
+      "url": "https://acme.atlassian.net/browse/PROJ-123",
+      "title": "Jira"
+    },
+    {
+      "id": "eval.confluence.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "§9.4: an Atlassian sign-in page's title is generic; docs/adapters/confluence.page.md",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 1, "rule": 0, "type": "confluence.page", "captures": {"id": "12345"}, "artifact_id": "confluence.page:acme.atlassian.net/12345", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"$fixture": "starters"},
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Release+Plan",
+      "title": "Log in with Atlassian account"
+    },
+    {
+      "id": "eval.github.pr.generic_title_not_found",
+      "kind": "evaluate",
+      "why": "§9.4: GitHub's not-found page title is generic; docs/adapters/github.pr.md",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 3, "rule": 0, "type": "github.pr", "captures": {"owner": "acme-corp", "repo": "widgets", "number": "42"}, "artifact_id": "github.pr:github.com/acme-corp/widgets/42", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": [], "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}},
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp/widgets/pull/42",
+      "title": "Page not found · GitHub · GitHub"
+    },
+    {
+      "id": "eval.github.issue.generic_title_sign_in",
+      "kind": "evaluate",
+      "why": "§9.4: GitHub's sign-in page title is generic; docs/adapters/github.issue.md",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 4, "rule": 0, "type": "github.issue", "captures": {"owner": "acme-corp", "repo": "widgets", "number": "7"}, "artifact_id": "github.issue:github.com/acme-corp/widgets/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": [], "within": {"type": "github.repo", "artifact_id": "github.repo:github.com/acme-corp/widgets"}},
+      "doc": {"$fixture": "starters"},
+      "url": "https://github.com/acme-corp/widgets/issues/7",
+      "title": "Sign in to GitHub · GitHub"
+    },
+    {
+      "id": "eval.sharepoint.generic_title_working",
+      "kind": "evaluate",
+      "why": "§9.4: SharePoint's loading title is generic; docs/adapters/sharepoint.doc.md",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 6, "rule": 0, "type": "sharepoint.doc", "captures": {"doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"}, "artifact_id": "sharepoint:acme.sharepoint.com/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"$fixture": "starters"},
+      "url": "https://acme.sharepoint.com/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
+      "title": "Working..."
+    },
+    {
+      "id": "eval.miro.generic_title_app_shell",
+      "kind": "evaluate",
+      "why": "§9.4: Miro's app-shell title extracts to a generic one; docs/adapters/miro.board.md",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 8, "rule": 0, "type": "miro.board", "captures": {"board": "qK3nR8vDpZx="}, "artifact_id": "miro.board:miro.com/qK3nR8vDpZx=", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"$fixture": "starters"},
+      "url": "https://miro.com/app/board/qK3nR8vDpZx=/",
+      "title": "Miro - Miro"
+    },
+    {
+      "id": "eval.generic_title.non_ascii_case_not_folded",
+      "kind": "evaluate",
+      "why": "§9.4: only ASCII case is folded, so CAFÉ is not café",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": "CAFÉ", "title_entry": 0, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Café"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "CAFÉ - Acme"
+    },
+    {
+      "id": "eval.generic_title.ascii_part_folded",
+      "kind": "evaluate",
+      "why": "§9.4: the ASCII letters of a non-ASCII entry fold",
+      "impls": ["rust", "ts"],
+      "expect": {"match": true, "adapter": 0, "rule": 0, "type": "acme.item", "captures": {"id": "7"}, "artifact_id": "acme.item:acme.example.com/7", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["Café"]}]},
+      "url": "https://acme.example.com/items/7",
+      "title": "CAFé - Acme"
+    },
+    {
+      "id": "validate.generic_titles.c1_control",
+      "kind": "validate",
+      "why": "§9.4: C1 controls are control characters",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["ab"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.c1_control_end",
+      "kind": "validate",
+      "why": "§9.4: U+009F is the last C1 control",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["ab"]}]},
+      "expect": {"error": {"code": "bad_generic_title", "adapter": 0, "rule": null, "entry": 0}}
+    },
+    {
+      "id": "validate.generic_titles.nbsp_inside",
+      "kind": "validate",
+      "why": "§9.4: U+00A0 inside an entry is allowed",
+      "impls": ["rust", "ts"],
+      "doc": {"format": 1, "artifacts": [{"type": "acme.item", "origin": "https://acme.example.com", "match": [{"path": "/items/{id:int}"}], "id": "acme.item:{host}/{id}", "title": "{title} - Acme", "refs": [{"type": "acme.item", "find": "int"}], "generic_titles": ["a b"]}]},
+      "expect": {"ok": true}
     }
   ]
 }

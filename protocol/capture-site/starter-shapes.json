@@ -45,6 +45,11 @@
       "shape": "/jira/software/projects/{slug}/boards/{num}?{param}={key}"
     },
     {
+      "note": "Jira issue on a renamed-product tenant (docs/adapters/jira.issue.md)",
+      "url": "https://acme.atlassian.net/browse/PROJ-77",
+      "shape": "/browse/{key}"
+    },
+    {
       "note": "Confluence page (docs/adapters/confluence.page.md)",
       "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/1000001/Release+Plan",
       "shape": "/wiki/spaces/{slug}/pages/{num}/{slug}"
@@ -106,7 +111,7 @@
     },
     {
       "note": "Miro board (docs/adapters/miro.board.md)",
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
+      "url": "https://miro.com/app/board/qK3nR8vDpZx=/",
       "shape": "/app/board/{id}/"
     },
     {

@@ -13,11 +13,11 @@ John enabled GitHub capture and then worked in a repository: its home page, its 
 
 **The model, in John's words:** "any time you visit anything inside a GitHub repo we should log the specific adapter page and also separately the repo that it's in. We should only log the repo once."
 
-- A visit to PR #42 in `cisco-sbg/cloudsec-skills-marketplace` is recorded against the PR, **and** against the repository.
+- A visit to PR #42 in `acme-corp/example-repo` is recorded against the PR, **and** against the repository.
 - A visit to any other page inside the repository (code on any branch, Actions, the PR list) is recorded against the repository only.
 - The repository is **one** record. Its focused time, background time, opens, and days are John's real total in that repository. Each second is counted once, never once for the PR and again for the repo.
 
-**Second goal, a product principle: adapter creation should be as easy as possible, with Brauser doing the work.** When enabling GitHub, Brauser asked John to type his work org even though the URL (`github.com/cisco-sbg/…`) named it. Anything the current page already tells us gets pre-filled, and the user's part is to confirm.
+**Second goal, a product principle: adapter creation should be as easy as possible, with Brauser doing the work.** When enabling GitHub, Brauser asked John to type his work org even though the URL (`github.com/acme-corp/…`) named it. Anything the current page already tells us gets pre-filled, and the user's part is to confirm.
 
 ## Goals
 
@@ -112,7 +112,7 @@ John enabled GitHub capture and then worked in a repository: its home page, its 
   - engine parity on example URLs:
     - home page, `blob` on a slashed branch, `tree` at a SHA, the `pulls` list → repo
     - `pull/7/files` and `issues/3` → PR or issue, within the repo
-    - `/cisco-sbg`, `/other-org/x`, `/settings` → not an artifact
+    - `/acme-corp`, `/other-org/x`, `/settings` → not an artifact
   - roll-up totals: PR + repo-page time sums once into the repo; days union; the PR total is unchanged
   - precedence across enable orders
   - the guard amendment, in both directions

@@ -20,6 +20,8 @@
         </button>
       </header>
 
+      <div class="panel-scroll">
+
       <div id="setup-warning" class="setup-warning" role="alert" hidden>
         <p><strong>{{APP_NAME}} isn't set up yet.</strong> <span id="setup-reason"></span></p>
         <button id="setup-open-settings" type="button">Open settings</button>
@@ -35,8 +37,6 @@
         <p><strong>{{APP_NAME}} needs site access — re-enable in Chrome.</strong> Chrome has withdrawn {{APP_NAME}}'s access to websites, so it cannot see this tab.</p>
         <button id="site-access-reenable" type="button">Open {{APP_NAME}} in Chrome's extension settings</button>
       </div>
-
-      <div id="status" class="status" role="status" aria-live="polite">Connecting to native host…</div>
 
       <section class="focus-session" aria-labelledby="focus-heading">
         <details id="focus-details">
@@ -99,7 +99,6 @@
             <button id="capture-site-improve" type="button" class="secondary compact" hidden>Improve with AI</button>
             <button id="capture-site-basic" type="button" class="secondary compact" hidden>Use basic draft</button>
             <p id="capture-site-improve-hint" class="page-url" hidden></p>
-            <div id="capture-site-agent-run"></div>
           </div>
           <div id="capture-site-starter"></div>
           <div id="capture-site-draft"></div>
@@ -125,7 +124,6 @@
         </div>
       </section>
         </div>
-        <div id="run-area" class="run-area" aria-live="polite"></div>
       </section>
 
       <section id="task-bar" class="task-bar" aria-labelledby="task-heading" hidden>
@@ -156,7 +154,6 @@
         <p id="task-hint" class="task-hint" hidden><span id="task-hint-text"></span>
           <button id="task-hint-settings" type="button" class="secondary compact" hidden>Open settings</button></p>
         <p id="task-announce" class="visually-hidden" role="status" aria-live="polite"></p>
-        <div id="task-run-area" class="run-area"></div>
       </section>
 
       <div class="panel-tabs" role="tablist" aria-label="Panel views">
@@ -349,6 +346,28 @@
           </details>
         </section>
       </div>
+
+      </div>
+
+      <section id="activity-dock" class="activity-dock" aria-label="Activity and notifications">
+        <p class="activity-empty">No current activity</p>
+        <details class="activity-item">
+          <summary id="notice-activity-label" aria-live="polite">Connecting to native host…</summary>
+          <div id="status" class="status" role="status">Connecting to native host…</div>
+        </details>
+        <details class="activity-item">
+          <summary id="summary-activity-label" aria-live="polite">Summary activity</summary>
+          <div id="run-area" class="run-area"></div>
+        </details>
+        <details class="activity-item">
+          <summary id="task-activity-label">Task activity</summary>
+          <div id="task-run-area" class="run-area"></div>
+        </details>
+        <details class="activity-item">
+          <summary id="site-activity-label" aria-live="polite">Site draft activity</summary>
+          <div id="capture-site-agent-run" class="run-area"></div>
+        </details>
+      </section>
 
       <div class="capture-bar">
         <details id="capture-strip" class="capture-strip">
