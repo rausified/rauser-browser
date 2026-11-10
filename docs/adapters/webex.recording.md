@@ -4,11 +4,14 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/webex/`, researched blind: public sources only, no
 browsing history, cookies or a signed-in Webex account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 20 real URLs
-(39 visits) matched, 2/6 rules confirmed, the recorded title right on
-7/20, and 11 real URLs of this type matched no rule. Not every rule and
-title was confirmed, so this type stays a development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 22 real URLs (43 visits) matched, 2/6
+rules confirmed, and the title right on 22/22, counting a sign-in, loading
+or error title that records no title as right. 12 real recording-link URLs
+(`ldr.php?RCID=`) matched no rule; they are redirect hops to the recording
+player, not missed recordings. Not every rule was matched by a real visit,
+so this type stays a development draft.
 
 Brauser offers this draft on a tenant's own Webex Meetings site,
 `<site>.webex.com` (the `webex` family's strict subdomain origin, `labels:
@@ -41,7 +44,14 @@ match  = [
 ]
 id     = "webex.recording:{host}/{id}"
 title  = "{title} - {~}"
+generic_titles = ["Recorded Meeting Password", "Replay Recorded Meeting", "Sign In"]
 ```
+
+`generic_titles` lists the titles shown by Webex's sign-in page and recording
+password gate instead of the item's own name (`adapter-templates.md` §9.4). A
+visit whose title is one of them, ASCII case aside, or is empty or the bare
+host, records no title, so the artifact keeps the title it already has
+("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -80,23 +90,23 @@ One entry: `{title} - {~}` drops everything after the last ` - `, the
 site's configured brand (default `Webex`) that the player and the router
 both append.
 
-The vectors show two outcomes before a recording has set its real title:
+The vectors show what happens before a recording has set its real title:
 
-- **Branded interstitials are recorded stripped.** Before a recording
-  loads, and at the share link's password gate, the router's own route
-  title still carries the site's brand as ` - Webex` (`Replay Recorded
-  Meeting - Webex`, `Recorded Meeting Password - Webex`), so the template
-  strips it the same as a loaded title, recording `Replay Recorded Meeting`
-  or `Recorded Meeting Password`
+- **Interstitials record no title.** Before a recording loads, and at the
+  share link's password gate, the router's own route title still carries
+  the site's brand as ` - Webex` (`Replay Recorded Meeting - Webex`,
+  `Recorded Meeting Password - Webex`), so the template strips it, and the
+  result is a generic title, so the visit records no title and the
+  recording keeps its own name
   (`eval.webex.recording.player_loading_title`,
-  `eval.webex.recording.share_recordingservice`).
-- **An unbranded title is kept whole,** `title_entry` null, whenever the
-  page has not attached a `-`-joined brand at all: the password gate's
-  title before any brand is attached, `Recorded Meeting Password`
-  (`eval.webex.recording.password_title`), and a dead or unbranded page
-  title, `Cisco Webex Meetings`
-  (`eval.webex.recording.title_no_suffix_kept_whole`), both match no split
-  point and are recorded exactly as shown.
+  `eval.webex.recording.share_recordingservice`). The password gate's title
+  before any brand is attached, `Recorded Meeting Password`, matches no
+  split point and is generic the same way
+  (`eval.webex.recording.password_title`).
+- **An unbranded page title is kept whole,** `title_entry` null: a dead or
+  unbranded page title, `Cisco Webex Meetings`
+  (`eval.webex.recording.title_no_suffix_kept_whole`), matches no split
+  point and is recorded exactly as shown.
 
 ## Recorded samples
 

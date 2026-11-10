@@ -117,6 +117,7 @@
           }
         ],
         "id": "aha.feature:{host}/{ref}",
+        "generic_titles": ["Log in to your workspace", "Login"],
         "title": [
           "{ref:jira_key} {title} | Aha!{~}",
           "{title} | Aha!{~}"
@@ -637,7 +638,7 @@
         {
           "id": "eval.aha.feature.login_title",
           "kind": "evaluate",
-          "why": "KNOWN LIMIT: a login tab's title on a record URL is recorded whole until the real title loads",
+          "why": "a login tab's title on a record URL is generic (adapter-templates.md §9.4): no title until the real title loads",
           "impls": [
             "rust",
             "ts"
@@ -652,11 +653,20 @@
             },
             "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
             "mode": null,
-            "title": "Log in to your workspace",
-            "title_entry": 1,
+            "title": null,
+            "title_entry": null,
             "alias_id": null,
             "refs": []
           },
+          "url": "https://acme.aha.io/features/PRJ-123",
+          "title": "Log in to your workspace | Aha!"
+        },
+        {
+          "id": "eval.aha.feature.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 0, "type": "aha.feature", "captures": {"ref": "PRJ-123"}, "artifact_id": "aha.feature:acme.aha.io/PRJ-123", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
           "url": "https://acme.aha.io/features/PRJ-123",
           "title": "Log in to your workspace | Aha!"
         }
@@ -681,6 +691,7 @@
           }
         ],
         "id": "aha.requirement:{host}/{ref}",
+        "generic_titles": ["Log in to your workspace", "Login"],
         "title": [
           "{ref:name} {title} | Aha!{~}",
           "{title} | Aha!{~}"
@@ -906,6 +917,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.aha.io/requirements/new"
+        },
+        {
+          "id": "eval.aha.requirement.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 1, "rule": 0, "type": "aha.requirement", "captures": {"ref": "PRJ-123-1"}, "artifact_id": "aha.requirement:acme.aha.io/PRJ-123-1", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.aha.io/requirements/PRJ-123-1",
+          "title": "Log in to your workspace | Aha!"
         }
       ]
     },
@@ -928,6 +948,7 @@
           }
         ],
         "id": "aha.epic:{host}/{ref}",
+        "generic_titles": ["Log in to your workspace", "Login"],
         "title": [
           "{ref:name} {title} | Aha!{~}",
           "{title} | Aha!{~}"
@@ -1148,6 +1169,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.aha.io/epics/PRJ-E-12/features"
+        },
+        {
+          "id": "eval.aha.epic.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 2, "rule": 0, "type": "aha.epic", "captures": {"ref": "PRJ-E-12"}, "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.aha.io/epics/PRJ-E-12",
+          "title": "Log in to your workspace | Aha!"
         }
       ]
     },
@@ -1167,6 +1197,7 @@
           }
         ],
         "id": "aha.release:{host}/{ref}",
+        "generic_titles": ["Log in to your workspace", "Login"],
         "title": [
           "{ref:name} {title} | Aha!{~}",
           "{title} | Aha!{~}"
@@ -1411,6 +1442,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.aha.io/releases/new"
+        },
+        {
+          "id": "eval.aha.release.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 3, "rule": 0, "type": "aha.release", "captures": {"ref": "PRJ-R-3"}, "artifact_id": "aha.release:acme.aha.io/PRJ-R-3", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.aha.io/releases/PRJ-R-3",
+          "title": "Log in to your workspace | Aha!"
         }
       ]
     },
@@ -1433,6 +1473,7 @@
           }
         ],
         "id": "aha.idea:{host}/{ref}",
+        "generic_titles": ["Log in to your workspace", "Login"],
         "title": [
           "{ref:name} {title} | Aha!{~}",
           "{title} | Aha!{~}"
@@ -1667,6 +1708,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.aha.io/ideas/PRJ-I-45"
+        },
+        {
+          "id": "eval.aha.idea.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 4, "rule": 0, "type": "aha.idea", "captures": {"ref": "PRJ-I-45"}, "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45",
+          "title": "Log in to your workspace | Aha!"
         }
       ]
     },
@@ -1692,6 +1742,7 @@
           }
         ],
         "id": "aha.note:{host}/{ref}",
+        "generic_titles": ["Log in to your workspace", "Login"],
         "title": [
           "{ref:name} {title} | Aha!{~}",
           "{title} | Aha!{~}"
@@ -1933,6 +1984,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.aha.io/pages/new"
+        },
+        {
+          "id": "eval.aha.note.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 5, "rule": 0, "type": "aha.note", "captures": {"ref": "PRJ-N-67"}, "artifact_id": "aha.note:acme.aha.io/PRJ-N-67", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.aha.io/pages/PRJ-N-67",
+          "title": "Log in to your workspace | Aha!"
         }
       ]
     }

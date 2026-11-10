@@ -20,6 +20,12 @@
             }
           ],
           "id": "jira:{host}/{key}",
+          "generic_titles": [
+            "Jira",
+            "Log in with Atlassian account",
+            "Log in to continue - Log in with Atlassian account",
+            "Choose an account to continue - Log in with Atlassian account"
+          ],
           "title": "[{key:jira_key}] {title} - Jira",
           "alias": {
             "from": "tab_title",
@@ -55,6 +61,13 @@
             }
           ],
           "id": "confluence.page:{host}/{id}",
+          "generic_titles": [
+            "Confluence",
+            "For you - Confluence",
+            "Log in with Atlassian account",
+            "Log in to continue - Log in with Atlassian account",
+            "Choose an account to continue - Log in with Atlassian account"
+          ],
           "title": [
             "Version history - {title} - {~} - Confluence",
             "{title} - {~} - Confluence"
@@ -95,7 +108,15 @@
               }
             }
           ],
-          "id": "sharepoint:{host}/{doc}"
+          "id": "sharepoint:{host}/{doc}",
+          "generic_titles": [
+            "Working...",
+            "Working…",
+            "Login",
+            "Redirecting",
+            "Error",
+            "Sign in is not complete"
+          ]
         }
       ]
     },
@@ -121,6 +142,11 @@
             "checks": "view"
           },
           "id": "github.pr:{host}/{owner}/{repo}/{number}",
+          "generic_titles": [
+            "Sign in to GitHub · GitHub",
+            "Page not found · GitHub",
+            "Page not found · GitHub · GitHub"
+          ],
           "title": "{title} by {~} · Pull Request #{number:int} · {owner:name}/{repo:name} · GitHub",
           "refs": [
             {
@@ -147,6 +173,11 @@
             ]
           },
           "id": "github.issue:{host}/{owner}/{repo}/{number}",
+          "generic_titles": [
+            "Sign in to GitHub · GitHub",
+            "Page not found · GitHub",
+            "Page not found · GitHub · GitHub"
+          ],
           "title": "{title} · Issue #{number:int} · {owner:name}/{repo:name} · GitHub",
           "refs": [
             {
@@ -188,6 +219,10 @@
             }
           ],
           "id": "miro.board:{host}/{board}",
+          "generic_titles": [
+            "Miro",
+            "Sign in | Miro | The Visual Workspace for Innovation"
+          ],
           "title": "{title} - Miro"
         }
       ]
@@ -217,6 +252,16 @@
             "mobilebasic": "view"
           },
           "id": "google.doc:{host}/{id}",
+          "generic_titles": [
+            "Service Not Allowed",
+            "Page Not Found",
+            "Access Denied",
+            "Redirecting",
+            "Sign in - Google Accounts",
+            "Sign in – Google Accounts",
+            "Google Drive: Sign-in",
+            "Login"
+          ],
           "title": [
             "{title} - Google Docs",
             "{title} – Google Docs"
@@ -250,6 +295,16 @@
             "htmlview": "view"
           },
           "id": "google.sheet:{host}/{id}",
+          "generic_titles": [
+            "Service Not Allowed",
+            "Page Not Found",
+            "Access Denied",
+            "Redirecting",
+            "Sign in - Google Accounts",
+            "Sign in – Google Accounts",
+            "Google Drive: Sign-in",
+            "Login"
+          ],
           "title": [
             "{title} - Google Sheets",
             "{title} – Google Sheets",
@@ -286,6 +341,16 @@
             "embed": "view"
           },
           "id": "google.slides:{host}/{id}",
+          "generic_titles": [
+            "Service Not Allowed",
+            "Page Not Found",
+            "Access Denied",
+            "Redirecting",
+            "Sign in - Google Accounts",
+            "Sign in – Google Accounts",
+            "Google Drive: Sign-in",
+            "Login"
+          ],
           "title": [
             "{title} - Google Slides",
             "{title} – Google Slides"
@@ -317,6 +382,16 @@
             "viewform": "view"
           },
           "id": "google.form:{host}/{id}",
+          "generic_titles": [
+            "Service Not Allowed",
+            "Page Not Found",
+            "Access Denied",
+            "Redirecting",
+            "Sign in - Google Accounts",
+            "Sign in – Google Accounts",
+            "Google Drive: Sign-in",
+            "Login"
+          ],
           "title": [
             "{title} - Google Forms",
             "{title} – Google Forms"
@@ -340,7 +415,17 @@
             }
           ],
           "unscoped": "acknowledged",
-          "id": "google.formresponse:{host}/{id}"
+          "id": "google.formresponse:{host}/{id}",
+          "generic_titles": [
+            "Service Not Allowed",
+            "Page Not Found",
+            "Access Denied",
+            "Redirecting",
+            "Sign in - Google Accounts",
+            "Sign in – Google Accounts",
+            "Google Drive: Sign-in",
+            "Login"
+          ]
         }
       ]
     },
@@ -368,6 +453,9 @@
           ],
           "unscoped": "acknowledged",
           "id": "figma.file:{host}/{key}",
+          "generic_titles": [
+            "Figma"
+          ],
           "title": [
             "{~} · {title} - Figma Slides",
             "{title} – {~}",
@@ -395,6 +483,9 @@
           ],
           "unscoped": "acknowledged",
           "id": "figma.branch:{host}/{branch}",
+          "generic_titles": [
+            "Figma"
+          ],
           "title": [
             "{~} · {title} - Figma Slides",
             "{title} – {~}",
@@ -424,6 +515,11 @@
             }
           ],
           "id": "vidcast.video:{host}/{video}",
+          "generic_titles": [
+            "Vidcast",
+            "Sign In",
+            "Video Edit"
+          ],
           "title": "Vidcast - {title}"
         },
         {
@@ -444,6 +540,10 @@
             }
           ],
           "id": "vidcast.playlist:{host}/{playlist}",
+          "generic_titles": [
+            "Vidcast",
+            "Vidcast - Sign In"
+          ],
           "title": "Vidcast - Playlist - {title}"
         },
         {
@@ -464,6 +564,11 @@
             }
           ],
           "id": "vidcast.page:{host}/{page}",
+          "generic_titles": [
+            "Vidcast",
+            "Sign In",
+            "Page Edit"
+          ],
           "title": "Vidcast - {title}"
         }
       ]
@@ -499,6 +604,9 @@
             }
           ],
           "id": "box.file:{host}/{id}",
+          "generic_titles": [
+            "Box | Login"
+          ],
           "title": "{title} | Powered by Box"
         },
         {
@@ -516,6 +624,9 @@
             }
           ],
           "id": "box.folder:{host}/{id}",
+          "generic_titles": [
+            "Box | Login"
+          ],
           "title": "{title} | Powered by Box"
         },
         {
@@ -527,6 +638,9 @@
             }
           ],
           "id": "box.share:{host}/{kind}/{link}",
+          "generic_titles": [
+            "Box | Login"
+          ],
           "title": "{title} | Powered by Box"
         }
       ]
@@ -558,6 +672,11 @@
             }
           ],
           "id": "webex.recording:{host}/{id}",
+          "generic_titles": [
+            "Recorded Meeting Password",
+            "Replay Recorded Meeting",
+            "Sign In"
+          ],
           "title": "{title} - {~}"
         },
         {
@@ -571,7 +690,10 @@
               "path": "/webappng/sites/{_}/postinfo/{id:token(32,128)}"
             }
           ],
-          "id": "webex.meeting:{host}/{id}"
+          "id": "webex.meeting:{host}/{id}",
+          "generic_titles": [
+            "Sign In - Webex"
+          ]
         }
       ]
     },
@@ -590,6 +712,10 @@
             }
           ],
           "id": "aha.feature:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:jira_key} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -613,6 +739,10 @@
             }
           ],
           "id": "aha.requirement:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -636,6 +766,10 @@
             }
           ],
           "id": "aha.epic:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -656,6 +790,10 @@
             }
           ],
           "id": "aha.release:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -679,6 +817,10 @@
             }
           ],
           "id": "aha.idea:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -705,6 +847,10 @@
             }
           ],
           "id": "aha.note:{host}/{ref}",
+          "generic_titles": [
+            "Log in to your workspace",
+            "Login"
+          ],
           "title": [
             "{ref:name} {title} | Aha!{~}",
             "{title} | Aha!{~}"
@@ -773,6 +919,9 @@
             }
           ],
           "id": "servicenow.incident:{host}/{id}",
+          "generic_titles": [
+            "Login"
+          ],
           "title": "{title} | Incident | {~}"
         },
         {
@@ -827,6 +976,9 @@
             }
           ],
           "id": "servicenow.ritm:{host}/{id}",
+          "generic_titles": [
+            "Login"
+          ],
           "title": "{title} | Requested Item | {~}"
         },
         {
@@ -873,6 +1025,9 @@
             }
           ],
           "id": "servicenow.change:{host}/{id}",
+          "generic_titles": [
+            "Login"
+          ],
           "title": "{title} | Change Request | {~}"
         },
         {
@@ -906,7 +1061,11 @@
               ]
             }
           ],
-          "id": "servicenow.kb:{host}/{number}"
+          "id": "servicenow.kb:{host}/{number}",
+          "generic_titles": [
+            "Knowledge Base",
+            "Login"
+          ]
         }
       ]
     },
@@ -954,6 +1113,9 @@
             "edit": "edit"
           },
           "id": "splunk.dashboard:{host}/{app}/{view}",
+          "generic_titles": [
+            "Dashboard"
+          ],
           "title": [
             "{title} | Splunk {~}",
             "{title} | Splunk"
@@ -980,6 +1142,9 @@
             "edit": "edit"
           },
           "id": "splunk.dashboard:{host}/{app}/{view}",
+          "generic_titles": [
+            "Dashboard"
+          ],
           "title": [
             "{title} | Splunk {~}",
             "{title} | Splunk"
@@ -1002,6 +1167,16 @@
             }
           ],
           "id": "google.drivefolder:{host}/{id}",
+          "generic_titles": [
+            "Service Not Allowed",
+            "Page Not Found",
+            "Access Denied",
+            "Redirecting",
+            "Sign in - Google Accounts",
+            "Sign in – Google Accounts",
+            "Google Drive: Sign-in",
+            "Login"
+          ],
           "title": [
             "{title} - Google Drive",
             "{title} – Google Drive"
@@ -1714,6 +1889,36 @@
       "url": "https://docs.google.com/Document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit"
     },
     {
+      "id": "eval.google.doc.generic_title_error_page",
+      "kind": "evaluate",
+      "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.doc",
+        "captures": {
+          "id": "1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+          "mode": "edit"
+        },
+        "artifact_id": "google.doc:docs.google.com/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa",
+        "mode": "edit",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/document/d/1SyntheticDocIdAAAAAAAAAAAAAAAAAAAAAAAAAAAAa/edit",
+      "title": "Service not allowed"
+    },
+    {
       "id": "eval.google-workspace.sheet.edit",
       "kind": "evaluate",
       "why": "edit route, title suffix stripped",
@@ -2056,6 +2261,36 @@
       "url": "https://docs.google.com/spreadsheet/ccc?key=1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b"
     },
     {
+      "id": "eval.google.sheet.generic_title_error_page",
+      "kind": "evaluate",
+      "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "google.sheet",
+        "captures": {
+          "id": "1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+          "mode": "edit"
+        },
+        "artifact_id": "google.sheet:docs.google.com/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b",
+        "mode": "edit",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/spreadsheets/d/1SyntheticSheetIdBBBBBBBBBBBBBBBBBBBBBBBBB_b/edit",
+      "title": "Service not allowed"
+    },
+    {
       "id": "eval.google-workspace.slides.edit",
       "kind": "evaluate",
       "why": "edit route, title suffix stripped",
@@ -2379,6 +2614,36 @@
       "url": "https://docs.google.com/presentation/u/0/?tgif=d"
     },
     {
+      "id": "eval.google.slides.generic_title_error_page",
+      "kind": "evaluate",
+      "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "google.slides",
+        "captures": {
+          "id": "1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+          "mode": "edit"
+        },
+        "artifact_id": "google.slides:docs.google.com/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c",
+        "mode": "edit",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/presentation/d/1SyntheticSlidesIdCCCCCCCCCCCCCCCCCCCCCCC-c/edit",
+      "title": "Service not allowed"
+    },
+    {
       "id": "eval.google-workspace.form.edit",
       "kind": "evaluate",
       "why": "edit route, title suffix stripped",
@@ -2635,6 +2900,36 @@
       "url": "https://docs.google.com/forms/u/0/"
     },
     {
+      "id": "eval.google.form.generic_title_error_page",
+      "kind": "evaluate",
+      "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "google.form",
+        "captures": {
+          "id": "1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+          "mode": "edit"
+        },
+        "artifact_id": "google.form:docs.google.com/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd",
+        "mode": "edit",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/1SyntheticFormIdDDDDDDDDDDDDDDDDDDDDDDDDDDd/edit",
+      "title": "Service not allowed"
+    },
+    {
       "id": "eval.google-workspace.formresponse.viewform",
       "kind": "evaluate",
       "why": "responder viewform; first match wins in adapter order, proving google.form (adapter 3) never claims a responder link",
@@ -2864,6 +3159,35 @@
         "reason": "no_rule"
       },
       "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+    },
+    {
+      "id": "eval.google.formresponse.generic_title_error_page",
+      "kind": "evaluate",
+      "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-workspace"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "google.formresponse",
+        "captures": {
+          "id": "1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe"
+        },
+        "artifact_id": "google.formresponse:docs.google.com/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe",
+        "mode": "view",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeSyntheticResponderIdEEEEEEEEEEEEEEEEEEEEEEEEEe/viewform",
+      "title": "Service not allowed"
     },
     {
       "id": "validate.starter.figma",
@@ -3129,7 +3453,7 @@
     {
       "id": "eval.figma.file.loading",
       "kind": "evaluate",
-      "why": "while a file loads the tab title is just Figma; no entry matches, so the whole title is recorded",
+      "why": "while a file loads the tab title is just Figma; no entry matches, and that title is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -3147,7 +3471,7 @@
         },
         "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
         "mode": null,
-        "title": "Figma",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -3861,6 +4185,35 @@
       "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv%2FCheckout-Flow"
     },
     {
+      "id": "eval.figma.file.generic_title_loading_shell",
+      "kind": "evaluate",
+      "why": "the app shell's loading title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "figma.file",
+        "captures": {
+          "key": "AbCdEfGhIjKlMnOpQrStUv"
+        },
+        "artifact_id": "figma.file:www.figma.com/AbCdEfGhIjKlMnOpQrStUv",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/Checkout-Flow",
+      "title": "Figma"
+    },
+    {
       "id": "eval.figma.branch.design",
       "kind": "evaluate",
       "why": "a branch of a design file, keyed by the branch key alone",
@@ -4139,6 +4492,35 @@
       "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/short/Checkout-Flow"
     },
     {
+      "id": "eval.figma.branch.generic_title_loading_shell",
+      "kind": "evaluate",
+      "why": "the app shell's loading title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:figma"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 1,
+        "type": "figma.branch",
+        "captures": {
+          "branch": "BrAnChKeYaBcDeFgHiJkLm"
+        },
+        "artifact_id": "figma.branch:www.figma.com/BrAnChKeYaBcDeFgHiJkLm",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/branch/BrAnChKeYaBcDeFgHiJkLm/Checkout-Flow?node-id=1-2",
+      "title": "Figma"
+    },
+    {
       "id": "validate.starter.vidcast",
       "kind": "validate",
       "why": "generated: the synthesized starter:vidcast fixture (protocol/starters/vidcast.json) is a valid format-1 document",
@@ -4406,7 +4788,7 @@
     {
       "id": "eval.vidcast.video.embed",
       "kind": "evaluate",
-      "why": "embed link opened top-level; bare 'Vidcast' title matches no entry and is recorded whole",
+      "why": "embed link opened top-level; the bare 'Vidcast' title matches no entry and is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -4424,7 +4806,7 @@
         },
         "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
         "mode": "view",
-        "title": "Vidcast",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -4459,7 +4841,7 @@
     {
       "id": "eval.vidcast.video.edit",
       "kind": "evaluate",
-      "why": "editor; known limit: fixed editor title",
+      "why": "editor; its fixed 'Video Edit' title is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -4477,8 +4859,8 @@
         },
         "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
         "mode": "edit",
-        "title": "Video Edit",
-        "title_entry": 0,
+        "title": null,
+        "title_entry": null,
         "alias_id": null,
         "refs": []
       },
@@ -4845,6 +5227,35 @@
       "url": "https://app.vidcast.io/Share/0a1b2c3d-0000-4000-8000-00000000c0de"
     },
     {
+      "id": "eval.vidcast.video.generic_title_editor_title",
+      "kind": "evaluate",
+      "why": "the editor's own title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "vidcast.video",
+        "captures": {
+          "video": "0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
+        "mode": "view",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de",
+      "title": "Vidcast - Video Edit"
+    },
+    {
       "id": "eval.vidcast.playlist.page",
       "kind": "evaluate",
       "why": "playlist page",
@@ -4977,7 +5388,7 @@
     {
       "id": "eval.vidcast.playlist.embed",
       "kind": "evaluate",
-      "why": "help-article embed query form; bare title recorded whole",
+      "why": "help-article embed query form; the bare 'Vidcast' title is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -4995,7 +5406,7 @@
         },
         "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
         "mode": "view",
-        "title": "Vidcast",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -5156,6 +5567,35 @@
       "url": "https://app.vidcast.io/playlists/embed/playlist_link?index=3"
     },
     {
+      "id": "eval.vidcast.playlist.generic_title_loading_shell",
+      "kind": "evaluate",
+      "why": "the app shell's loading title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "vidcast.playlist",
+        "captures": {
+          "playlist": "5e7e1157-1111-4222-8333-444444444444"
+        },
+        "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
+        "mode": "view",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444",
+      "title": "Vidcast"
+    },
+    {
       "id": "eval.vidcast.page.view",
       "kind": "evaluate",
       "why": "published page (ID shape assumed uuid; low confidence)",
@@ -5259,7 +5699,7 @@
     {
       "id": "eval.vidcast.page.edit",
       "kind": "evaluate",
-      "why": "page editor; fixed title",
+      "why": "page editor; its fixed 'Page Edit' title is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -5277,8 +5717,8 @@
         },
         "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
         "mode": "edit",
-        "title": "Page Edit",
-        "title_entry": 0,
+        "title": null,
+        "title_entry": null,
         "alias_id": null,
         "refs": []
       },
@@ -5390,6 +5830,35 @@
         "reason": "no_rule"
       },
       "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/more"
+    },
+    {
+      "id": "eval.vidcast.page.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:vidcast"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "vidcast.page",
+        "captures": {
+          "page": "9a9e9a9e-0000-4abc-9def-123456789abc"
+        },
+        "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
+        "mode": "view",
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc",
+      "title": "Vidcast - Sign In"
     },
     {
       "id": "validate.starter.box",
@@ -5946,6 +6415,35 @@
       "url": "https://acme.app.box.com/integrations/officeonline/openOfficeOnline?sharedAccessCode="
     },
     {
+      "id": "eval.box.file.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "box.file",
+        "captures": {
+          "id": "111122223333"
+        },
+        "artifact_id": "box.file:acme.app.box.com/111122223333",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/file/111122223333",
+      "title": "Box | Login"
+    },
+    {
       "id": "eval.box.folder.view",
       "kind": "evaluate",
       "why": "logged-in folder view",
@@ -6207,6 +6705,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.app.box.com/folder/123412341234/search?query=x"
+    },
+    {
+      "id": "eval.box.folder.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "box.folder",
+        "captures": {
+          "id": "123412341234"
+        },
+        "artifact_id": "box.folder:acme.app.box.com/123412341234",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/folder/123412341234",
+      "title": "Box | Login"
     },
     {
       "id": "eval.box.share.s32",
@@ -6534,6 +7061,36 @@
       "url": "https://acme.app.box.com/S/abcdefghij0123456789"
     },
     {
+      "id": "eval.box.share.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:box"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "box.share",
+        "captures": {
+          "kind": "s",
+          "link": "abcd1234efgh5678ijkl9012mnop3456"
+        },
+        "artifact_id": "box.share:acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+      "title": "Box | Login"
+    },
+    {
       "id": "validate.starter.webex",
       "kind": "validate",
       "why": "generated: the synthesized starter:webex fixture (protocol/starters/webex.json) is a valid format-1 document",
@@ -6676,7 +7233,7 @@
     {
       "id": "eval.webex.recording.player_loading_title",
       "kind": "evaluate",
-      "why": "KNOWN LIMIT: pre-load router title recorded whole once the brand suffix is stripped",
+      "why": "pre-load router title, once the brand suffix is stripped, is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -6694,8 +7251,8 @@
         },
         "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
         "mode": null,
-        "title": "Replay Recorded Meeting",
-        "title_entry": 0,
+        "title": null,
+        "title_entry": null,
         "alias_id": null,
         "refs": []
       },
@@ -6705,7 +7262,7 @@
     {
       "id": "eval.webex.recording.share_recordingservice",
       "kind": "evaluate",
-      "why": "share link route; password-gate route title before the recording loads",
+      "why": "share link route; the password-gate route title before the recording loads is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -6723,8 +7280,8 @@
         },
         "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
         "mode": null,
-        "title": "Recorded Meeting Password",
-        "title_entry": 0,
+        "title": null,
+        "title_entry": null,
         "alias_id": null,
         "refs": []
       },
@@ -6888,7 +7445,7 @@
     {
       "id": "eval.webex.recording.password_title",
       "kind": "evaluate",
-      "why": "KNOWN LIMIT: interstitial password-gate title with no ' - ' brand suffix yet: kept whole (title_entry null)",
+      "why": "interstitial password-gate title with no ' - ' brand suffix yet matches no entry and is generic (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -6906,7 +7463,7 @@
         },
         "artifact_id": "webex.recording:example.webex.com/bbbbccccddddeeeeffff000011112222",
         "mode": null,
-        "title": "Recorded Meeting Password",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -7083,6 +7640,35 @@
         "reason": "path_rejected"
       },
       "url": "https://example.webex.com/recordingservice/sites/example%2Fother/recording/0123456789abcdef0123456789abcdef/playback"
+    },
+    {
+      "id": "eval.webex.recording.generic_title_password_gate",
+      "kind": "evaluate",
+      "why": "a password gate's title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "webex.recording",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "webex.recording:example.webex.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/recordingservice/sites/example/recording/0123456789abcdef0123456789abcdef/playback",
+      "title": "Recorded Meeting Password - Webex"
     },
     {
       "id": "eval.webex.meeting.postinfo_instance_id",
@@ -7399,6 +7985,35 @@
         "reason": "no_rule"
       },
       "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/abc123"
+    },
+    {
+      "id": "eval.webex.meeting.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:webex"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "webex.meeting",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef_I_123456789012345678"
+        },
+        "artifact_id": "webex.meeting:example.webex.com/0123456789abcdef0123456789abcdef_I_123456789012345678",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://example.webex.com/webappng/sites/example/meeting/postinfo/0123456789abcdef0123456789abcdef_I_123456789012345678",
+      "title": "Sign In - Webex"
     },
     {
       "id": "validate.starter.aha",
@@ -7998,7 +8613,7 @@
     {
       "id": "eval.aha.feature.login_title",
       "kind": "evaluate",
-      "why": "KNOWN LIMIT: a login tab's title on a record URL is recorded whole until the real title loads",
+      "why": "a login tab's title on a record URL is generic (adapter-templates.md §9.4): no title until the real title loads",
       "impls": [
         "rust",
         "ts"
@@ -8016,8 +8631,37 @@
         },
         "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
         "mode": null,
-        "title": "Log in to your workspace",
-        "title_entry": 1,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/features/PRJ-123",
+      "title": "Log in to your workspace | Aha!"
+    },
+    {
+      "id": "eval.aha.feature.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "aha.feature",
+        "captures": {
+          "ref": "PRJ-123"
+        },
+        "artifact_id": "aha.feature:acme.aha.io/PRJ-123",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
         "alias_id": null,
         "refs": []
       },
@@ -8249,6 +8893,35 @@
       "url": "https://acme.aha.io/requirements/new"
     },
     {
+      "id": "eval.aha.requirement.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "aha.requirement",
+        "captures": {
+          "ref": "PRJ-123-1"
+        },
+        "artifact_id": "aha.requirement:acme.aha.io/PRJ-123-1",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/requirements/PRJ-123-1",
+      "title": "Log in to your workspace | Aha!"
+    },
+    {
       "id": "eval.aha.epic.basic",
       "kind": "evaluate",
       "why": "epic.basic",
@@ -8466,6 +9139,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.aha.io/epics/PRJ-E-12/features"
+    },
+    {
+      "id": "eval.aha.epic.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "aha.epic",
+        "captures": {
+          "ref": "PRJ-E-12"
+        },
+        "artifact_id": "aha.epic:acme.aha.io/PRJ-E-12",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/epics/PRJ-E-12",
+      "title": "Log in to your workspace | Aha!"
     },
     {
       "id": "eval.aha.release.basic",
@@ -8714,6 +9416,35 @@
       "url": "https://acme.aha.io/releases/new"
     },
     {
+      "id": "eval.aha.release.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "aha.release",
+        "captures": {
+          "ref": "PRJ-R-3"
+        },
+        "artifact_id": "aha.release:acme.aha.io/PRJ-R-3",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/releases/PRJ-R-3",
+      "title": "Log in to your workspace | Aha!"
+    },
+    {
       "id": "eval.aha.idea.basic",
       "kind": "evaluate",
       "why": "idea.basic",
@@ -8948,6 +9679,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.aha.io/ideas/PRJ-I-45"
+    },
+    {
+      "id": "eval.aha.idea.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 4,
+        "rule": 0,
+        "type": "aha.idea",
+        "captures": {
+          "ref": "PRJ-I-45"
+        },
+        "artifact_id": "aha.idea:acme.aha.io/PRJ-I-45",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/ideas/ideas/PRJ-I-45",
+      "title": "Log in to your workspace | Aha!"
     },
     {
       "id": "eval.aha.note.basic",
@@ -9191,6 +9951,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.aha.io/pages/new"
+    },
+    {
+      "id": "eval.aha.note.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:aha"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 5,
+        "rule": 0,
+        "type": "aha.note",
+        "captures": {
+          "ref": "PRJ-N-67"
+        },
+        "artifact_id": "aha.note:acme.aha.io/PRJ-N-67",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.aha.io/pages/PRJ-N-67",
+      "title": "Log in to your workspace | Aha!"
     },
     {
       "id": "validate.starter.servicenow",
@@ -9899,6 +10688,35 @@
       "url": "https://acme.service-now.com/helpzone?id=ticket&table=incident&sys_id=0123456789abcdef0123456789abcdef"
     },
     {
+      "id": "eval.servicenow.incident.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "servicenow.incident",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.incident:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/incident.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "Login"
+    },
+    {
       "id": "eval.servicenow.ritm.classic_form_direct",
       "kind": "evaluate",
       "why": "classic form, direct",
@@ -10372,6 +11190,35 @@
       "url": "https://acme.service-now.com/helpzone?id=ticket&table=sc_req_item&sys_id=0123456789abcdef0123456789abcdef"
     },
     {
+      "id": "eval.servicenow.ritm.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "servicenow.ritm",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.ritm:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/sc_req_item.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "Login"
+    },
+    {
       "id": "eval.servicenow.change.classic_form_direct",
       "kind": "evaluate",
       "why": "classic form, direct",
@@ -10819,6 +11666,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.service-now.com/helpzone?id=ticket&table=change_request&sys_id=0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "eval.servicenow.change.generic_title_sign_in_page",
+      "kind": "evaluate",
+      "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 2,
+        "rule": 0,
+        "type": "servicenow.change",
+        "captures": {
+          "id": "0123456789abcdef0123456789abcdef"
+        },
+        "artifact_id": "servicenow.change:acme.service-now.com/0123456789abcdef0123456789abcdef",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef",
+      "title": "Login"
     },
     {
       "id": "eval.servicenow.kb.platform_article_view",
@@ -11386,6 +12262,35 @@
         "reason": "no_rule"
       },
       "url": "https://acme.service-now.com/helpzone/extra?id=kb_article&sysparm_article=KB0012345"
+    },
+    {
+      "id": "eval.servicenow.kb.generic_title_portal_default",
+      "kind": "evaluate",
+      "why": "the portal's default title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:servicenow"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 3,
+        "rule": 0,
+        "type": "servicenow.kb",
+        "captures": {
+          "number": "KB0010035"
+        },
+        "artifact_id": "servicenow.kb:acme.service-now.com/KB0010035",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.service-now.com/kb_view.do?sysparm_article=KB0010035",
+      "title": "Knowledge Base"
     },
     {
       "id": "validate.starter.aha-ideas",
@@ -12168,6 +13073,30 @@
       "url": "https://acme.splunkcloud.com/en-US/app/search/reports/extra"
     },
     {
+      "id": "eval.splunk.app.long_search_url",
+      "kind": "evaluate",
+      "why": "a real-shaped 3542-character search URL, past the old 2048 cap, still matches (adapter-templates.md §5.1)",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 1,
+        "type": "splunk.app",
+        "captures": {
+          "app": "search"
+        },
+        "artifact_id": "splunk.app:acme.splunkcloud.com/app/search",
+        "mode": null
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/search?q=search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20search%20index%3Dacme_web%20sourcetype%3Daccess_combined%20status%3D500%20%7C%20stats%20count%20by%20uri_path%20%7C%20head%2020&sid=1730000000.12345_ACME0000-0000-4000-8000-000000000000&display.page.search.mode=smart&dispatch.sample_ratio=1&earliest=-24h%40h&latest=now&display.general.type=statistics"
+    },
+    {
       "id": "eval.splunk.dashboard.dashboard_view_mode_classic_versioned_title",
       "kind": "evaluate",
       "why": "dashboard view mode, Classic, versioned title",
@@ -12770,6 +13699,40 @@
       "url": "https://acme-dev.splunkcloud.com/en-US/app/search/web_traffic_overview"
     },
     {
+      "id": "eval.splunk.dashboard.generic_title_loading_shell",
+      "kind": "evaluate",
+      "why": "the app shell's loading title is generic (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 1,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": [],
+        "within": {
+          "type": "splunk.app",
+          "artifact_id": "splunk.app:acme.splunkcloud.com/app/search"
+        }
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+      "title": "Dashboard | Splunk 9.4.2"
+    },
+    {
       "id": "eval.splunk.dashboard.dashboard_view_mode_classic_versioned_title.alone",
       "kind": "evaluate",
       "why": "generated: dashboard view mode, Classic, versioned title, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
@@ -13133,6 +14096,36 @@
       "title": "Loading..."
     },
     {
+      "id": "eval.splunk.dashboard.generic_title_loading_shell.alone",
+      "kind": "evaluate",
+      "why": "generated: the app shell's loading title is generic (§9.4): no title, with splunk.dashboard configured without splunk.app (protocol/starters/splunk.json container_first), so no within",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:splunk/splunk.dashboard"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "splunk.dashboard",
+        "captures": {
+          "app": "search",
+          "view": "web_traffic_overview"
+        },
+        "artifact_id": "splunk.dashboard:acme.splunkcloud.com/search/web_traffic_overview",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://acme.splunkcloud.com/en-US/app/search/web_traffic_overview",
+      "title": "Dashboard | Splunk 9.4.2"
+    },
+    {
       "id": "validate.starter.google-drive",
       "kind": "validate",
       "why": "generated: the synthesized starter:google-drive fixture (protocol/starters/google-drive.json) is a valid format-1 document",
@@ -13318,7 +14311,7 @@
     {
       "id": "eval.google.drivefolder.generic_title",
       "kind": "evaluate",
-      "why": "access-denied page: whole tab title recorded",
+      "why": "access-denied page: its title is generic, ASCII case aside (adapter-templates.md §9.4): no title",
       "impls": [
         "rust",
         "ts"
@@ -13336,7 +14329,7 @@
         },
         "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
         "mode": null,
-        "title": "Access denied",
+        "title": null,
         "title_entry": null,
         "alias_id": null,
         "refs": []
@@ -13428,6 +14421,35 @@
         "reason": "no_rule"
       },
       "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/extra"
+    },
+    {
+      "id": "eval.google.drivefolder.generic_title_error_page",
+      "kind": "evaluate",
+      "why": "an error page's title is generic, compared with ASCII case folded (§9.4): no title",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "doc": {
+        "$fixture": "starter:google-drive"
+      },
+      "expect": {
+        "match": true,
+        "adapter": 0,
+        "rule": 0,
+        "type": "google.drivefolder",
+        "captures": {
+          "id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "mode": null,
+        "title": null,
+        "title_entry": null,
+        "alias_id": null,
+        "refs": []
+      },
+      "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      "title": "Service not allowed"
     }
   ]
 }

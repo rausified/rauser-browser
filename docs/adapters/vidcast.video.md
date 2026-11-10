@@ -4,11 +4,12 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/vidcast/`, researched blind: public sources only, no
 browsing history, cookies or a Vidcast account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 11 real URLs
-(26 visits) matched, 2/3 rules confirmed, the recorded title right on
-8/11. Not every rule and title was confirmed, so this type stays a
-development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 11 real URLs (25 visits) matched, 2/3
+rules confirmed, and the title right on 11/11, counting a sign-in, loading
+or error title that records no title as right. Not every rule was matched
+by a real visit, so this type stays a development draft.
 
 Brauser offers this draft on the exact origin `https://app.vidcast.io`,
 alongside Vidcast playlists and Vidcast pages (the `vidcast` family). Any
@@ -36,7 +37,14 @@ match  = [
 ]
 id     = "vidcast.video:{host}/{video}"
 title  = "Vidcast - {title}"
+generic_titles = ["Vidcast", "Sign In", "Video Edit"]
 ```
+
+`generic_titles` lists the titles shown by Vidcast's app shell, sign-in page
+and editor instead of the item's own name (`adapter-templates.md` §9.4). A
+visit whose title is one of them, ASCII case aside, or is empty or the bare
+host, records no title, so the artifact keeps the title it already has
+("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -80,7 +88,7 @@ Synthetic equivalents of the recorded shapes, on `app.vidcast.io`:
 | URL | Tab title | Records |
 |---|---|---|
 | `/share/<36-char share ID>` | `Vidcast - Q3 roadmap walkthrough` | that share ID, view mode, title `Q3 roadmap walkthrough` |
-| `/share/edit/<same share ID>` | `Vidcast - Video Edit` | the same artifact, edit mode, title `Video Edit` (Known limits, below) |
+| `/share/edit/<same share ID>` | `Vidcast - Video Edit` | the same artifact, edit mode, no title: `Video Edit` is generic (Known limits, below) |
 
 The blind research scored 58 synthetic vectors across this family's three
 types (14 `vidcast.video` positives among them), all correctly classified by
@@ -123,18 +131,16 @@ them), and the engine's own vectors above independently confirm every rule.
 ## Known limits
 
 - **The editor title is fixed.** Every edit visit's tab title is `Vidcast -
-  Video Edit`, recorded as the useless title `Video Edit` (Review Focus item
-  5). If a later visit's share-page title would otherwise be kept as the
-  artifact's best title, an edit visit can overwrite it with `Video Edit`;
-  the engine has no per-rule title policy, so this is a host-level decision,
-  not something this adapter can fix alone.
+  Video Edit` (Review Focus item 5). `Video Edit` is listed in
+  `generic_titles`, so an edit visit records no title and never overwrites
+  the video's own name.
 - **Error and access states are recorded as artifacts.** A no-access viewer
   sees `Vidcast - Request Access`, a logged-out viewer of a restricted video
   sees `Vidcast - Sign In`, and a dead link shows `Vidcast - Not Found`; each
-  is a valid share URL, so each is recorded, with that string as its title.
-- **The embed page's title is bare `Vidcast`.** It matches no entry, so the
-  whole string `Vidcast` is recorded whenever an embed URL is opened
-  top-level before any worker title-hold intervenes.
+  is a valid share URL, so each is recorded. `Sign In` is a generic title and
+  records no title; the other two are still recorded as titles.
+- **The embed page's title is bare `Vidcast`.** It matches no entry and is
+  a generic title, so an embed URL opened top-level records no title.
 - **Loading title (low confidence, not observed live).** The share page may
   briefly show `Vidcast - <share id>` while the video's name is still
   loading, from reading the research's loading-state code path; this was not

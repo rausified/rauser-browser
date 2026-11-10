@@ -1,10 +1,18 @@
 # Miro board starter draft
 
-Status: development draft. The URL and tab-title formats were checked on
-2026-11-01 against 12 real board visits in the maintainer's Chrome history
-(Miro web app, `https://miro.com`). Both adapter-template engines verify the
-samples below. A live check in the Capture Site review is still needed before
-this draft is release-certified.
+Status: certified 2026-11-09 from real browsing history. The URL and
+tab-title formats were first checked on 2026-11-01 against 12 real board
+visits in the maintainer's Chrome history (Miro web app,
+`https://miro.com`), and both adapter-template engines verify the samples
+below.
+
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on the Miro origin: 12 real URLs (25 visits) matched, 1/1 rules
+confirmed, and the title right on 12/12, counting the app-shell `Miro`
+title, which records no title. None of the 8 other real Miro URLs
+(dashboard, team, sign-in and SSO pages) matched, and no real board URL
+was missed. The live check below is still needed before this type is
+release-certified.
 
 Brauser offers this draft on the exact origin `https://miro.com`. It records
 one artifact per board:
@@ -25,7 +33,14 @@ origin = "https://miro.com"
 match  = [{ path = "/app/board/{board:token(12)}" }]
 id     = "miro.board:{host}/{board}"
 title  = "{title} - Miro"
+generic_titles = ["Miro", "Sign in | Miro | The Visual Workspace for Innovation"]
 ```
+
+`generic_titles` lists the titles shown by Miro's app shell and sign-in page
+instead of the item's own name (`adapter-templates.md` §9.4). A visit whose
+title is one of them, ASCII case aside, or is empty or the bare host, records
+no title, so the artifact keeps the title it already has ("Untitled" for a new
+one).
 
 Recorded samples. Each one is a shared vector (`eval.miro.*` in
 `protocol/adapter-templates/vectors.json`):
@@ -60,11 +75,10 @@ for personal Miro work if you do not want it recorded.
 **Known limits.**
 
 - While a board loads, Miro's tab title is `Miro - Miro`, which the title
-  entry would record as `Miro`. The worker holds a new visit briefly and takes
-  its title from a later title update (DESIGN.md §5.1), so the board name
-  usually wins. A visit that ends before the board finishes loading can still
-  be recorded as `Miro`. An untitled board's title is `Untitled - Miro` and is
-  recorded as `Untitled`.
+  entry extracts as `Miro`, a generic title, so the visit records no title and
+  the board keeps its own name. A visit that ends before the board finishes
+  loading records no title. An untitled board's title is `Untitled - Miro` and
+  is recorded as `Untitled`, which is the board's real name.
 - Embedded boards (`/app/live-embed/<id>/`) and board links on other origins
   are not recorded. Each needs its own recorded sample before it joins the
   starter.
@@ -86,8 +100,8 @@ with real Chrome and a real Miro account, the way the Jira, SharePoint and
 GitHub starters were certified on 2026-11-02:
 
 1. On a board page with no saved Miro rules, **Capture Site** offers **Miro
-   boards** with the every-account statement and the development-draft source
-   line. Saving it turns the page card's status to "● Artifact recognized",
+   boards** with the every-account statement and the certified source line
+   ("Certified starter rules · checked on real pages."). Saving it turns the page card's status to "● Artifact recognized",
    and settings' starter gallery then shows Miro boards as **Already
    configured**.
 2. The same board opened directly, from a share link (`?share_link_id=…`) and

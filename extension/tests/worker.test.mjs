@@ -903,6 +903,52 @@ test("a committed page updates the live hourly activity title before freezing", 
   assert.equal(live.title, "x".repeat(300));
 });
 
+test("a generic title never replaces the live hour's title", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://generic.example";
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin),
+    adapters: { format: 1, artifacts: [artifact(origin, { title: "{title} - Acme", generic_titles: ["Sign in"] })] },
+  });
+  // A same-document update reads the tab's current title, here a sign-in
+  // page's: it is generic, so the hour records no title rather than it.
+  tabs.set(9, { id: 9, url: `${origin}/items/a`, title: "Sign in - Acme", incognito: false });
+  onHistoryStateUpdated({
+    tabId: 9, frameId: 0, documentId: "doc-generic", documentLifecycle: "active",
+    url: `${origin}/items/a`, timeStamp: Date.now(),
+  });
+  await flush();
+  let [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, null);
+
+  onTabUpdated(9, { title: "Plan - Acme" }, { id: 9, url: `${origin}/items/a`, incognito: false });
+  await flush();
+  [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, "Plan");
+
+  // A later sign-in page, the browser's host placeholder, or an empty title
+  // keeps the real name.
+  for (const title of ["Sign in - Acme", "SIGN IN", "generic.example/items/a", ""]) {
+    onTabUpdated(9, { title }, { id: 9, url: `${origin}/items/a`, incognito: false });
+    await flush();
+    [live] = await send({ kind: "get_activity" });
+    assert.equal(live.title, "Plan", title);
+  }
+
+  // A same-document navigation within the same artifact whose current title
+  // is generic keeps the hour's title rather than clearing it.
+  tabs.set(9, { id: 9, url: `${origin}/items/a?view=1`, title: "Sign in - Acme", incognito: false });
+  onHistoryStateUpdated({
+    tabId: 9, frameId: 0, documentId: "doc-generic", documentLifecycle: "active",
+    url: `${origin}/items/a?view=1`, timeStamp: Date.now(),
+  });
+  await flush();
+  [live] = await send({ kind: "get_activity" });
+  assert.equal(live.title, "Plan");
+});
+
 test("a stored visit without a dispatch flag is never patched", async () => {
   values.clear();
   sessionValues.clear();
@@ -1445,6 +1491,90 @@ test("worker-start map rebuild settles activity restored from storage.session", 
   assert.equal(total.focused_ms, 15_000,
     "ordinary service-worker suspension must not discard restored dwell time");
   assert.equal(sessionValues.get(storageKey("activity_session_v1")).measured_at, now);
+});
+
+test("a tab restored on a gate page never records the gate's generic title", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://gate.example";
+  const start = new Date("2026-10-16T10:15:00Z").getTime();
+  const hour = (at) => `${localTimestamp(new Date(at)).slice(0, 13)}:00:00${localTimestamp(new Date(at)).slice(19)}`;
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin), expires_at: start + 7_200_000 * 4,
+    adapters: { format: 1, artifacts: [artifact(origin, { title: "{title} - Acme", generic_titles: ["Sign in"] })] },
+  });
+  values.set(storageKey("activity_totals_v1"), {
+    version: 1,
+    totals: [{
+      event_id: "00000000-0000-4000-8000-000000000011",
+      artifact_id: "test:gate.example/a", artifact_type: "test.item", hour_start: hour(start),
+      url: `${origin}/items/a`, title: "Plan",
+      opens: 1, focused_ms: 0, background_ms: 0, modes: [], trails: [], refs: [],
+    }],
+  });
+  // A browser restart: the session map is gone and the tab sits on a gate.
+  tabs.set(30, {
+    id: 30, windowId: 1, active: true, status: "complete",
+    url: `${origin}/items/a`, title: "Sign in - Acme", incognito: false,
+  });
+  const realNow = Date.now;
+  const titles = () => [
+    ...values.get(storageKey("activity_totals_v1")).totals.map((total) => total.title),
+    ...(values.get(storageKey("queue_v1"))?.items ?? []).map((item) => item.event.title),
+  ];
+  try {
+    Date.now = () => start;
+    await rebuildActivityMap();
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan",
+      "the restored tab takes the artifact's latest recorded title, not the gate's");
+
+    // The hour boundary falls inside the gate period: the new hour is seeded
+    // from the tab, and nothing records the gate title.
+    Date.now = () => start + 3_600_000;
+    await send({ kind: "get_activity" });
+    assert.ok(titles().every((title) => title === "Plan"), JSON.stringify(titles()));
+
+    // good → generic → good across a second restart keeps the good name.
+    Date.now = () => start + 3_700_000;
+    onTabUpdated(30, { title: "Plan v2 - Acme" }, { id: 30, url: `${origin}/items/a`, incognito: false });
+    await flush();
+    sessionValues.clear();
+    tabs.get(30).title = "Sign in - Acme";
+    await rebuildActivityMap();
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan v2");
+    Date.now = () => start + 7_200_000;
+    await send({ kind: "get_activity" });
+    assert.ok(titles().every((title) => title === "Plan" || title === "Plan v2"), JSON.stringify(titles()));
+    assert.ok(titles().includes("Plan v2"), JSON.stringify(titles()));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a restored tab skips an hour whose stored title is now generic", async () => {
+  values.clear();
+  sessionValues.clear();
+  tabs.clear();
+  const origin = "https://gate-old.example";
+  values.set(storageKey("policy_v1"), {
+    ...lease(origin),
+    adapters: { format: 1, artifacts: [artifact(origin, { title: "{title} - Acme", generic_titles: ["Sign in"] })] },
+  });
+  const total = (n, title) => ({
+    event_id: `00000000-0000-4000-8000-00000000002${n}`,
+    artifact_id: "test:gate-old.example/a", artifact_type: "test.item",
+    hour_start: `2026-10-1${n}T10:00:00+00:00`, url: `${origin}/items/a`, title,
+    opens: 1, focused_ms: 0, background_ms: 0, modes: [], trails: [], refs: [],
+  });
+  // The newer hour was recorded before the rule made its title generic.
+  values.set(storageKey("activity_totals_v1"), { version: 1, totals: [total(4, "Plan"), total(5, "Sign in")] });
+  tabs.set(30, {
+    id: 30, windowId: 1, active: true, status: "complete",
+    url: `${origin}/items/a`, title: "Sign in - Acme", incognito: false,
+  });
+  await rebuildActivityMap();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan");
 });
 
 test("a successful ack clears retry state but keeps notices until dismissed", async () => {

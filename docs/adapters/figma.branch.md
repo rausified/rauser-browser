@@ -6,10 +6,11 @@ browsing history, cookies or a Figma account. Both adapter-template engines
 verify the samples below. A live check with a real Figma account is still
 needed before this draft is release-certified.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): no visits of
-this type in the sample, so 0/4 rules confirmed. Not every rule and
-title was confirmed, so this type stays a development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: no real visit of this type, so 0/4
+rules confirmed. Not every rule was matched by a real visit, so this type
+stays a development draft.
 
 Brauser offers this draft on the exact origin `https://www.figma.com`,
 alongside Figma files (the `figma` family). Either can be chosen alone in
@@ -38,7 +39,14 @@ match    = [
 ]
 id       = "figma.branch:{host}/{branch}"
 title    = ["{~} · {title} - Figma Slides", "{title} – {~}", "{title} - {~}"]
+generic_titles = ["Figma"]
 ```
+
+`generic_titles` lists the titles shown by Figma's app shell while a file
+loads instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 
@@ -122,8 +130,8 @@ drafter, are what Brauser actually ships.
   trailing segment the same way (probe: `Q3 - Roadmap` → `Q3`). See
   `docs/adapters/figma.file.md` "Known limits" for the full detail; this is
   believed rare for the same reason given there.
-- **Title is set client-side**, the same `Figma`-while-loading limit as
-  `figma.file`.
+- **Title is set client-side**, the same `Figma`-while-loading behaviour as
+  `figma.file`: that generic title is never recorded.
 - The ID template is frozen once shipped (adapter-templates.md §8.2).
 
 ## Live check still needed

@@ -6,10 +6,12 @@ only, no browsing history, cookies or Google account. Both adapter-template
 engines verify the samples below. A live check with a real Google account is
 still needed before this draft is release-certified.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): no visits of
-this type in the sample, so 0/3 rules confirmed. Not every rule and
-title was confirmed, so this type stays a development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 1 real URL (0 visits) matched, 1/3
+rules confirmed, and the title right on 1/1, counting a sign-in, loading
+or error title that records no title as right. Not every rule was matched
+by a real visit, so this type stays a development draft.
 
 Brauser offers this draft on the exact origin `https://docs.google.com`,
 alongside Google Docs, Slides, Forms editor and Forms responder (the
@@ -36,8 +38,15 @@ match    = [
 modes    = { edit = "edit", view = "view", preview = "view", htmlview = "view" }
 id       = "google.sheet:{host}/{id}"
 title    = ["{title} - Google Sheets", "{title} – Google Sheets", "{title} - Google Drive", "{title} – Google Drive"]
+generic_titles = ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"]
 refs     = [{ type = "jira.issue", find = "jira_key" }]
 ```
+
+`generic_titles` lists the titles shown by Google's sign-in, access and error
+pages instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 

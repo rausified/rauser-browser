@@ -3003,11 +3003,13 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             let within =
                 document.and_then(|document| crate::index::unvisited_within(document, &matched));
             let (title, url) = container.unwrap_or_else(|| {
-                let title = matched
-                    .title
-                    .map(|title| title.title)
-                    .or(value.title)
-                    .unwrap_or_else(|| "Untitled".into());
+                // A title the adapter found generic (§9.4) is no title, so the
+                // card does not fall back to the raw tab title either.
+                let title = match matched.title {
+                    Some(found) => found.title,
+                    None => value.title,
+                }
+                .unwrap_or_else(|| "Untitled".into());
                 (title, canonical)
             });
             (
@@ -9768,6 +9770,52 @@ id = "work:{host}/{id}"
             panic!("expected capture result")
         };
         reply.outcome
+    }
+
+    /// A generic tab title (adapter-templates.md §9.4) is no title: the card
+    /// of an unvisited artifact says "Untitled" rather than the sign-in or
+    /// loading page's title.
+    #[test]
+    fn an_unvisited_artifact_never_takes_a_generic_tab_title() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let path = folder.path().join("config.toml");
+        config::fixtures::write(
+            &path,
+            &root,
+            "artifacts_dir = \"artifacts\"",
+            "capture_enabled = true\nsites = [{ origin = \"https://acme.example.com\", path_prefix = \"/\" }]",
+            r#"[adapters]
+format = 1
+
+[[artifacts]]
+type = "acme.item"
+origin = "https://acme.example.com"
+match = [{ path = "/items/{id:int}" }]
+id = "acme.item:{host}/{id}"
+title = "{title} - Acme"
+generic_titles = ["Sign in"]
+"#,
+        );
+        let mut config = loaded(&path);
+        let mut title_for = |title: &str| {
+            let Response::ArtifactResult(reply) = get_artifact(
+                brauser_protocol::GetArtifactRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "artifact".into(),
+                    url: "https://acme.example.com/items/7".into(),
+                    title: Some(title.into()),
+                },
+                &mut config,
+            ) else {
+                panic!("expected artifact result")
+            };
+            reply.artifact.unwrap().title
+        };
+        assert_eq!(title_for("Plan - Acme"), "Plan");
+        assert_eq!(title_for("Sign in - Acme"), "Untitled");
+        assert_eq!(title_for("acme.example.com"), "Untitled");
     }
 
     #[test]

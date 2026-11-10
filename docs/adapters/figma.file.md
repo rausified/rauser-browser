@@ -6,11 +6,12 @@ browsing history, cookies or a Figma account. Both adapter-template engines
 verify the samples below. A live check with a real Figma account is still
 needed before this draft is release-certified.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 34 real URLs
-(42 visits) matched, 2/4 rules confirmed, the recorded title right on
-30/34. Not every rule and title was confirmed, so this type stays a
-development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 34 real URLs (41 visits) matched, 2/4
+rules confirmed, and the title right on 34/34, counting a sign-in, loading
+or error title that records no title as right. Not every rule was matched
+by a real visit, so this type stays a development draft.
 
 Brauser offers this draft on the exact origin `https://www.figma.com`,
 alongside Figma branches (the `figma` family). Either can be chosen alone in
@@ -37,7 +38,14 @@ match    = [
 ]
 id       = "figma.file:{host}/{key}"
 title    = ["{~} · {title} - Figma Slides", "{title} – {~}", "{title} - {~}"]
+generic_titles = ["Figma"]
 ```
+
+`generic_titles` lists the titles shown by Figma's app shell while a file
+loads instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 
@@ -91,8 +99,9 @@ Three entries, tried in order:
    tab's title is.
 
 While a file is still loading, the tab title is just `Figma`: no entry
-matches (there is no ` · `, ` – ` or ` - ` to anchor on), so the whole title
-`Figma` is recorded, the same fallback Miro uses for an unloaded board.
+matches (there is no ` · `, ` – ` or ` - ` to anchor on), and `Figma` is a
+generic title, so the visit records no title and the file keeps its own, as
+Miro does for an unloaded board.
 
 ## Recorded samples
 
@@ -131,8 +140,8 @@ reads `<file> - <page>`.
 ## Known limits
 
 - **Title is set client-side.** The server's own `<title>` is just `Figma`;
-  until the real title loads, the whole string `Figma` is recorded (Review
-  Focus item 4).
+  until the real title loads, that generic title is not recorded (Review
+  Focus item 4), so a visit that ends before then records no title.
 - **Multi-page prototypes.** A prototype's page name is part of the recorded
   shape (`<file> - <page>`) but the hyphen entry strips it, so only the file
   name is recorded; the page name itself is never kept anywhere.
