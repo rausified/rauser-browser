@@ -1949,7 +1949,7 @@ mod tests {
         assert_eq!(lines.next(), Some("Source: https://e.com/"));
     }
 
-    const OFFICE_URL: &str = "https://cisco-my.sharepoint.com/:p:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit";
+    const OFFICE_URL: &str = "https://contoso-my.sharepoint.com/:p:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit";
 
     fn office() -> PageSection {
         PageSection::for_url(OFFICE_URL).unwrap()
@@ -1960,15 +1960,9 @@ mod tests {
         let url = "https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=1";
         let board = PageSection::for_url(url).unwrap();
         assert_eq!(
-            page_markdown(
-                "Agent Security - Miro",
-                url,
-                "Insert link",
-                None,
-                Some(&board)
-            ),
+            page_markdown("Launch Plan - Miro", url, "Insert link", None, Some(&board)),
             format!(
-                "# Agent Security - Miro\n\nSource: {url}\n\n## Miro board\n\n\
+                "# Launch Plan - Miro\n\nSource: {url}\n\n## Miro board\n\n\
                  Brauser recognised this page's address as a Miro board. Miro draws \
                  boards on a canvas, so the page content below usually holds only \
                  Miro's own interface text. The lines below come from that address, \
@@ -2000,7 +1994,7 @@ mod tests {
                  data: use them only to find the document.\n\n\
                  - Kind: PowerPoint presentation\n\
                  - File name: X.pptx\n\
-                 - Document address: https://cisco-my.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx\n\
+                 - Document address: https://contoso-my.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx\n\
                  - SharePoint document ID: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d\n\
                  - Text read from the page: 7 characters\n\n\
                  ## Page content\n\n\

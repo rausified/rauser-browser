@@ -226,26 +226,26 @@ test("Word for the web is read from its paragraphs, not Readability's keytip pic
   // of the document even without it, so a Word frame never reaches it.
   const keytips = el("div", "Control Period, fzczazmzs02h, zzh, ch, fph, fsh, fgh, fkh, 1h, 2h, 3h");
   const { scope, seen } = page({
-    title: "User story mapping.docx", article: keytips, rendered: true,
+    title: "Release planning.docx", article: keytips, rendered: true,
     bodyText: "File Home Insert Layout Control Period, fzczazmzs02h",
     wordParagraphs: [
-      wordParagraph(["User story mapping"], { heading: 1 }),
+      wordParagraph(["Release planning"], { heading: 1 }),
       wordParagraph(["\u200b"]),
-      wordParagraph(["U", "s", "er story mapping is a technique."], { list: 1 }),
+      wordParagraph(["R", "e", "lease planning is a technique."], { list: 1 }),
       wordParagraph(["Nested   point"], { list: 2 }),
       wordParagraph(["Onboarding"], { heading: 2 }),
-      wordParagraph(["Link the ", "Umbrella", " and Meraki orgs."]),
+      wordParagraph(["Link the ", "billing", " and directory accounts."]),
     ],
   });
   const result = run(scope);
   assert.equal(seen.parsed, 0);
   assert.equal(result.readable, true);
-  assert.equal(result.title, "User story mapping.docx");
+  assert.equal(result.title, "Release planning.docx");
   assert.equal(result.content, [
-    "# User story mapping",
-    "- User story mapping is a technique.\n  - Nested point",
+    "# Release planning",
+    "- Release planning is a technique.\n  - Nested point",
     "## Onboarding",
-    "Link the Umbrella and Meraki orgs.",
+    "Link the billing and directory accounts.",
   ].join("\n\n"));
 });
 
@@ -476,8 +476,8 @@ test("the vendored license ships with the bundle", () => {
 // the document in a cross-origin iframe, so the top frame holds no text.
 // An Office document address of no particular kind, so it is read once
 // (WORD_TAB, a Word address, waits for Word's paragraphs).
-const TAB = { id: 9, url: "https://cisco-my.sharepoint.com/personal/u/_layouts/15/WopiFrame.aspx?sourcedoc=x", title: "Plan.docx" };
-const WORD_TAB = { id: 9, url: "https://cisco-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=x", title: "Plan.docx" };
+const TAB = { id: 9, url: "https://contoso-my.sharepoint.com/personal/u/_layouts/15/WopiFrame.aspx?sourcedoc=x", title: "Plan.docx" };
+const WORD_TAB = { id: 9, url: "https://contoso-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=x", title: "Plan.docx" };
 const framePage = (fields) => ({
   title: "", content: "", selection: null, truncated: false, readable: false, word: false, href: TAB.url, ...fields,
 });
@@ -686,7 +686,7 @@ test("an Office document tab with no text still starts a run with empty content"
 });
 
 test("an Office tab that moved is still page_changed, and one with no top frame is still unreadable", async () => {
-  const moved = framesDeps([{ frameId: 0, result: framePage({ content: "", href: "https://cisco-my.sharepoint.com/other" }) }]);
+  const moved = framesDeps([{ frameId: 0, result: framePage({ content: "", href: "https://contoso-my.sharepoint.com/other" }) }]);
   await assert.rejects(summarizeTab(TAB, moved.deps),
     (error) => error.code === "page_changed" && error.message === PAGE_CHANGED_MESSAGE);
   const noTop = framesDeps([{ frameId: 3, result: framePage({ content: "", href: "https://word-edit.officeapps.live.com/x" }) }]);
@@ -699,7 +699,7 @@ test("an Office tab that moved is still page_changed, and one with no top frame 
 test("a Miro board tab with no text still starts a run with empty content", async () => {
   // Miro draws the board on a canvas; the host names the board in page.md
   // and the agent reads it with its own Miro tools (DESIGN.md §4.5).
-  const board = { id: 7, url: "https://miro.com/app/board/qK3nR8vDpZx=/", title: "Agent Security - Miro" };
+  const board = { id: 7, url: "https://miro.com/app/board/qK3nR8vDpZx=/", title: "Launch Plan - Miro" };
   const frames = [{ frameId: 0, result: framePage({ title: "", content: " ", href: board.url }) }];
   const summarized = framesDeps(frames);
   await summarizeTab(board, summarized.deps);
@@ -731,7 +731,7 @@ test("isOfficeDocumentUrl agrees with the host's shared vectors", () => {
 test("only the top frame's address must still name the tab's page", async () => {
   const doc = "The document body. ".repeat(40);
   const moved = framesDeps([
-    { frameId: 0, result: framePage({ href: "https://cisco-my.sharepoint.com/other" }) },
+    { frameId: 0, result: framePage({ href: "https://contoso-my.sharepoint.com/other" }) },
     { frameId: 3, result: framePage({ content: doc, href: TAB.url }) },
   ]);
   await assert.rejects(summarizeTab(TAB, moved.deps),
@@ -750,7 +750,7 @@ test("a hidden script-only frame loses to a visible frame with short text", asyn
   const slide = page({ bodyText: "Slide 1: Plan", rendered: true }).scope;
   const frames = [
     { frameId: 0, result: extracted(top, TAB.url) },
-    { frameId: 2, result: extracted(hidden, "https://cisco-my.sharepoint.com/_layouts/15/tokenfactoryiframe") },
+    { frameId: 2, result: extracted(hidden, "https://contoso-my.sharepoint.com/_layouts/15/tokenfactoryiframe") },
     { frameId: 4, result: extracted(slide, "https://powerpoint.officeapps.live.com/p/PowerPointFrame.aspx") },
   ];
   const { deps, requests } = framesDeps(frames);
@@ -915,7 +915,7 @@ test("only a Word document address waits for paragraphs", async () => {
 
 test("a Word tab that navigates while waiting is page_changed at once", async () => {
   let calls = 0;
-  const moved = [{ frameId: 0, result: framePage({ href: "https://cisco-my.sharepoint.com/other" }) }];
+  const moved = [{ frameId: 0, result: framePage({ href: "https://contoso-my.sharepoint.com/other" }) }];
   const { deps, requests } = framesDeps(() => (++calls < 2 ? splashFrames : moved));
   Object.assign(deps, { wordWaitMs: 60_000, wordPollMs: 5 });
   await assert.rejects(summarizeTab(WORD_TAB, deps), (error) => error.code === "page_changed");

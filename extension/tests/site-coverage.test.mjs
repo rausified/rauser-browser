@@ -101,11 +101,11 @@ test("accounts are named only when every adapter is scoped to the same accounts"
 });
 
 // Near-miss detection runs only after the full document returned no_rule.
-const GUID = "%7B8BAF1543-CDBF-4003-A48F-D4A939774FC0%7D";
+const GUID = "%7B5E2A9C47-1B3D-4F60-9A8E-7C21D4B06F13%7D";
 const SOURCEDOC = { sourcedoc: "{doc:uuid}" };
 const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
 const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
-const staleOneDrive = (origin = "https://cisco-my.sharepoint.com") => ({
+const staleOneDrive = (origin = "https://contoso-my.sharepoint.com") => ({
   type: "sharepoint.doc", origin, path_case: "insensitive",
   match: [
     { path: "/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
@@ -128,7 +128,7 @@ function noRule(artifacts, url) {
 
 test("a stale OneDrive starter is one current rule short of a sharing link", () => {
   const other = { type: "work.item", origin: "https://a.com", match: [{ path: "/i/{id:int}" }], id: "work.item:{host}/{id}" };
-  const url = `https://cisco-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=${GUID}&file=x.docx`;
+  const url = `https://contoso-my.sharepoint.com/:w:/r/personal/u/_layouts/15/Doc.aspx?sourcedoc=${GUID}&file=x.docx`;
   assert.deepEqual(noRule([other, staleOneDrive()], url),
     { kind: "starter_rule", adapter: 1, label: "OneDrive for work documents", rule: SHARE_RULE });
 });
