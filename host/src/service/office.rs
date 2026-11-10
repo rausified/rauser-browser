@@ -187,7 +187,7 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    const SAMPLE: &str = "https://cisco-my.sharepoint.com/:p:/r/personal/u_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true";
+    const SAMPLE: &str = "https://contoso-my.sharepoint.com/:p:/r/personal/u_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true";
 
     fn kind_name(kind: OfficeKind) -> &'static str {
         match kind {
@@ -253,7 +253,7 @@ mod tests {
         let found = office_document(SAMPLE).unwrap();
         assert_eq!(
             found.url,
-            "https://cisco-my.sharepoint.com/personal/u_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx"
+            "https://contoso-my.sharepoint.com/personal/u_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx"
         );
         // Order is sourcedoc, then file, whatever the page's order; the
         // fragment and any credentials go.

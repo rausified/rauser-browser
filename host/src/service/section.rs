@@ -175,7 +175,7 @@ mod tests {
         .unwrap();
         assert_eq!(office.kind(), SectionKind::Office);
         assert!(office.office().is_some());
-        let miro = PageSection::for_url("https://miro.com/app/board/uXjVM0uuBLo=/").unwrap();
+        let miro = PageSection::for_url("https://miro.com/app/board/uXjVQ7rTn2c=/").unwrap();
         assert_eq!(miro.kind(), SectionKind::Miro);
         assert!(miro.office().is_none());
         assert_eq!(PageSection::for_url("https://example.com/"), None);

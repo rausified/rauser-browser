@@ -20,7 +20,7 @@ one artifact per board:
 `miro.board:miro.com/<board ID>`
 
 A board ID is 12 characters from token's alphabet, ending in base64 padding:
-`uXjVM0uuBLo=` (current boards) or `o9J_kpXb3Lw=` (the older `o9J_` form,
+`uXjVQ7rTn2c=` (current boards) or `o9J_kpXb3Lw=` (the older `o9J_` form,
 illustrative). Every board seen on 2026-11-01 had exactly 12 characters with
 one `=`, so the rule is `{board:token(12)}`. `token` accepts at most two
 trailing `=` (adapter-templates.md §7.1). The ID is case-sensitive and is
@@ -45,14 +45,14 @@ one).
 Recorded samples. Each one is a shared vector (`eval.miro.*` in
 `protocol/adapter-templates/vectors.json`):
 
-- `https://miro.com/app/board/uXjVM0uuBLo=/`: a board opened directly. The
+- `https://miro.com/app/board/uXjVQ7rTn2c=/`: a board opened directly. The
   trailing slash Miro always adds is dropped before matching (§5.1).
-- `https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990`: a
+- `https://miro.com/app/board/uXjVQ7rTn2c=/?share_link_id=510293847561`: a
   board opened from a share link.
-- `https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764680052296737&cot=14`:
+- `https://miro.com/app/board/uXjVQ7rTn2c=/?moveToWidget=3458764512345678901&cot=14`:
   a board opened at a widget, for example from a comment or a mention.
   Query parameters never change the ID.
-- Tab title `SSE ZTA SWOT - Miro`: the title entry records `SSE ZTA SWOT`.
+- Tab title `Team Retro Board - Miro`: the title entry records `Team Retro Board`.
 
 The draft deliberately does not record:
 

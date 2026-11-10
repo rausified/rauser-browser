@@ -3,12 +3,12 @@
   "cases": [
     {
       "name": "the goal's PowerPoint sample: the /:p:/r prefix and extra parameters are dropped from the address",
-      "url": "https://cisco-my.sharepoint.com/:p:/r/personal/u_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true",
+      "url": "https://contoso-my.sharepoint.com/:p:/r/personal/u_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true",
       "office": true,
       "kind": "powerpoint",
       "file": "X.pptx",
       "sourcedoc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
-      "document_url": "https://cisco-my.sharepoint.com/personal/u_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx"
+      "document_url": "https://contoso-my.sharepoint.com/personal/u_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx"
     },
     {
       "name": "a Word sharing link on a site keeps its address",

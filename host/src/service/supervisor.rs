@@ -5667,7 +5667,7 @@ mod tests {
     }
 
     /// The goal's PowerPoint sample (plan decision 2).
-    const OFFICE_URL: &str = "https://cisco-my.sharepoint.com/:p:/r/personal/u_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true";
+    const OFFICE_URL: &str = "https://contoso-my.sharepoint.com/:p:/r/personal/u_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true";
 
     /// `request` on the Office sample, with `content` as the page text.
     fn office_request(mut req: StartRun, content: &str) -> StartRun {
@@ -5792,7 +5792,7 @@ mod tests {
         );
     }
 
-    const MIRO_URL: &str = "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=1";
+    const MIRO_URL: &str = "https://miro.com/app/board/uXjVQ7rTn2c=/?share_link_id=1";
 
     #[test]
     fn a_miro_board_run_gets_the_board_section_and_the_miro_paragraph() {
@@ -5817,12 +5817,12 @@ mod tests {
         assert!(seen.prompts[0].contains(miro_summary_paragraph()));
         assert!(!seen.prompts[0].contains(office_summary_paragraph()));
         assert!(
-            !seen.prompts[0].contains("uXjVM0uuBLo"),
+            !seen.prompts[0].contains("uXjVQ7rTn2c"),
             "the board ID stays in page.md"
         );
         let page = &seen.starts[0].1;
         assert!(page.contains("\n## Miro board\n"), "{page}");
-        assert!(page.contains("- Board ID: uXjVM0uuBLo=\n"), "{page}");
+        assert!(page.contains("- Board ID: uXjVQ7rTn2c=\n"), "{page}");
         // A task on the board gets the task paragraph.
         let (tasks, task_seen) = recording(&["Done."]);
         let mut req = tasks.task_request("t", INSTRUCTION);
@@ -5902,7 +5902,7 @@ mod tests {
         for leak in [
             "X.pptx",
             "_layouts",
-            "personal/u_cisco_com",
+            "personal/u_contoso_com",
             "0A1B2C3D",
             "0a1b2c3d",
             "sourcedoc",

@@ -33,7 +33,7 @@ test("one shaper covers Jira, SharePoint, GitHub and named future tool URL forms
     ["https://wiki.example/pages/Customer%20Roadmap", "/pages/{slug}"],
     ["https://wiki.example/pages/VeryLongMixedCaseCustomerRoadmap", "/pages/{slug}"],
     ["https://wiki.example/items/123e4567-e89b-12d3-a456-426614174000", "/items/{uuid}"],
-    ["https://miro.com/app/board/uXjVM0uuBLo=/", "/app/board/{id}/"],
+    ["https://miro.com/app/board/uXjVQ7rTn2c=/", "/app/board/{id}/"],
     ["https://wiki.example/items/Ab12==", "/items/{id}"],
     ["https://wiki.example/items/Ab12===", "/items/{slug}"],
     ["https://wiki.example/items/Ab=12", "/items/{slug}"],

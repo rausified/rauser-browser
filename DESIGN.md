@@ -191,7 +191,7 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
     - `{uuid}`: a UUID. Suggests `uuid`.
     - `{hex32}`, `{hex40}`, `{hex64}`: exactly 32, 40, or 64 hex digits. Suggests `hex(32)`, `hex(40)`, or `hex(64)`.
     - `{tailhex32}`: text, a `-`, and then exactly 32 hex digits, as in Notion's `Release-Plan-0123…`. Suggests `hex(32)@tail`.
-    - `{id}`: anything else containing a digit that uses only `token`'s characters (letters, digits, `_`, and `-`, then at most two trailing `=` of base64 padding), such as base64-style document IDs and Miro board IDs (`uXjVM0uuBLo=`). Suggests `token`. (Before 2026-11-01 a padded ID shaped as `{slug}` and `token` refused `=`, so Capture Site on Miro saved a rule that recorded no board.)
+    - `{id}`: anything else containing a digit that uses only `token`'s characters (letters, digits, `_`, and `-`, then at most two trailing `=` of base64 padding), such as base64-style document IDs and Miro board IDs (`uXjVQ7rTn2c=`). Suggests `token`. (Before 2026-11-01 a padded ID shaped as `{slug}` and `token` refused `=`, so Capture Site on Miro saved a rule that recorded no board.)
     - `{slug}`: the rest, such as title-derived text like `Release-blocker-SBOM`, a percent-encoded page name, or a value with other characters.
 
     Placeholder names are fixed, so the only digits a shape can contain are inside those names.

@@ -529,7 +529,7 @@ const TODAY_STARTER_ROWS = [
   },
   {
     note: "Miro board (docs/adapters/miro.board.md)",
-    url: "https://miro.com/app/board/uXjVM0uuBLo=/",
+    url: "https://miro.com/app/board/uXjVQ7rTn2c=/",
     shape: "/app/board/{id}/",
   },
   {

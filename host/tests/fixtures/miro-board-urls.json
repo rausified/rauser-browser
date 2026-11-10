@@ -2,40 +2,40 @@
   "description": "Shared Miro board URL vectors (DESIGN.md \u00a74.5 \"Miro boards\"): host/src/service/miro.rs miro_board and extension/summarize.ts isMiroBoardUrl must agree on every case.",
   "cases": [
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c=/",
       "board": true,
-      "board_id": "uXjVM0uuBLo=",
-      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+      "board_id": "uXjVQ7rTn2c=",
+      "board_url": "https://miro.com/app/board/uXjVQ7rTn2c=/"
     },
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c=",
       "board": true,
-      "board_id": "uXjVM0uuBLo=",
-      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+      "board_id": "uXjVQ7rTn2c=",
+      "board_url": "https://miro.com/app/board/uXjVQ7rTn2c=/"
     },
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c=/?share_link_id=510293847561",
       "board": true,
-      "board_id": "uXjVM0uuBLo=",
-      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+      "board_id": "uXjVQ7rTn2c=",
+      "board_url": "https://miro.com/app/board/uXjVQ7rTn2c=/"
     },
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/?moveToWidget=3458764680052296737&cot=14",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c=/?moveToWidget=3458764512345678901&cot=14",
       "board": true,
-      "board_id": "uXjVM0uuBLo=",
-      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+      "board_id": "uXjVQ7rTn2c=",
+      "board_url": "https://miro.com/app/board/uXjVQ7rTn2c=/"
     },
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo%3D/",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c%3D/",
       "board": true,
-      "board_id": "uXjVM0uuBLo=",
-      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+      "board_id": "uXjVQ7rTn2c=",
+      "board_url": "https://miro.com/app/board/uXjVQ7rTn2c=/"
     },
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/#frame",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c=/#frame",
       "board": true,
-      "board_id": "uXjVM0uuBLo=",
-      "board_url": "https://miro.com/app/board/uXjVM0uuBLo=/"
+      "board_id": "uXjVQ7rTn2c=",
+      "board_url": "https://miro.com/app/board/uXjVQ7rTn2c=/"
     },
     {
       "url": "https://miro.com/app/board/o9J_kpXb3Lw=/",
@@ -56,7 +56,7 @@
       "board": false
     },
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=/export",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c=/export",
       "board": false
     },
     {
@@ -64,35 +64,35 @@
       "board": false
     },
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo=x/",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c=x/",
       "board": false
     },
     {
-      "url": "https://miro.com/app/live-embed/uXjVM0uuBLo=/",
+      "url": "https://miro.com/app/live-embed/uXjVQ7rTn2c=/",
       "board": false
     },
     {
-      "url": "http://miro.com/app/board/uXjVM0uuBLo=/",
+      "url": "http://miro.com/app/board/uXjVQ7rTn2c=/",
       "board": false
     },
     {
-      "url": "https://www.miro.com/app/board/uXjVM0uuBLo=/",
+      "url": "https://www.miro.com/app/board/uXjVQ7rTn2c=/",
       "board": false
     },
     {
-      "url": "https://miro.com.evil.example/app/board/uXjVM0uuBLo=/",
+      "url": "https://miro.com.evil.example/app/board/uXjVQ7rTn2c=/",
       "board": false
     },
     {
-      "url": "https://miro.com:8443/app/board/uXjVM0uuBLo=/",
+      "url": "https://miro.com:8443/app/board/uXjVQ7rTn2c=/",
       "board": false
     },
     {
-      "url": "https://user@miro.com/app/board/uXjVM0uuBLo=/",
+      "url": "https://user@miro.com/app/board/uXjVQ7rTn2c=/",
       "board": false
     },
     {
-      "url": "https://miro.com/app/board/uXjVM0uuBLo%2F/",
+      "url": "https://miro.com/app/board/uXjVQ7rTn2c%2F/",
       "board": false
     },
     {

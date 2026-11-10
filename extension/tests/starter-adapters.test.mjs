@@ -242,13 +242,13 @@ test("GitHub organization scopes normalize, deduplicate, and reject unsafe forms
 });
 
 test("githubOwnerFromUrl pre-fills a confident owner and nothing else", () => {
-  assert.equal(githubOwnerFromUrl("https://github.com/Cisco-SBG/x/blob/main/a.md"), "cisco-sbg");
-  assert.equal(githubOwnerFromUrl("https://github.com/orgs/cisco-sbg/repositories"), "cisco-sbg");
+  assert.equal(githubOwnerFromUrl("https://github.com/Acme-Corp/x/blob/main/a.md"), "acme-corp");
+  assert.equal(githubOwnerFromUrl("https://github.com/orgs/acme-corp/repositories"), "acme-corp");
   assert.equal(githubOwnerFromUrl("https://github.com/rausified/dotfiles"), "rausified");
   assert.equal(githubOwnerFromUrl("https://github.com/settings/profile"), null);
   assert.equal(githubOwnerFromUrl("https://github.com/"), null);
   assert.equal(githubOwnerFromUrl("https://github.com/orgs"), null);
-  assert.equal(githubOwnerFromUrl("https://example.com/cisco-sbg"), null);
+  assert.equal(githubOwnerFromUrl("https://example.com/acme-corp"), null);
   assert.equal(githubOwnerFromUrl("not a URL"), null);
   for (const route of [
     "notifications", "search", "explore", "marketplace", "topics", "trending", "collections",
@@ -351,11 +351,11 @@ test("Miro draft keys boards by their padded board ID and ignores dashboards", (
   assert.equal(offer.needs_scope, false);
   assert.match(offer.description, /every Miro account/);
   const doc = compiled([offer]);
-  const board = evaluate(doc, "https://miro.com/app/board/uXjVM0uuBLo=/", "SSE ZTA SWOT - Miro");
+  const board = evaluate(doc, "https://miro.com/app/board/uXjVQ7rTn2c=/", "Team Retro Board - Miro");
   assert.equal(board.match, true);
-  assert.equal(board.artifact_id, "miro.board:miro.com/uXjVM0uuBLo=");
-  assert.equal(board.title, "SSE ZTA SWOT");
-  const shared = evaluate(doc, "https://miro.com/app/board/uXjVM0uuBLo=/?share_link_id=687498250990");
+  assert.equal(board.artifact_id, "miro.board:miro.com/uXjVQ7rTn2c=");
+  assert.equal(board.title, "Team Retro Board");
+  const shared = evaluate(doc, "https://miro.com/app/board/uXjVQ7rTn2c=/?share_link_id=510293847561");
   assert.equal(shared.artifact_id, board.artifact_id);
   assert.equal(evaluate(doc, "https://miro.com/app/dashboard/").match, false);
   assert.equal(evaluate(doc, "https://miro.com/login/").match, false);
@@ -413,7 +413,7 @@ test("withContainerLinks links only rules whose linked copy compiles, and leaves
   assert.deepEqual(containerLinks(artifacts, { ...repo, type: "github.other" }), { linked: 0, skipped: 0 });
 });
 
-const ONEDRIVE = "https://cisco-my.sharepoint.com";
+const ONEDRIVE = "https://contoso-my.sharepoint.com";
 const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
 // The SharePoint/OneDrive starter as saved before sharing links covered OneDrive.
 const staleOneDrive = () => ({
@@ -449,12 +449,12 @@ test("the real OneDrive sharing link matches the updated adapter", () => {
   const { adapter } = starterRuleUpdate(staleOneDrive());
   const result = compileDocument({ format: 1, artifacts: [adapter] });
   assert.equal(result.ok, true);
-  const url = `${ONEDRIVE}/:w:/r/personal/havishwa_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B8BAF1543-CDBF-4003-A48F-D4A939774FC0%7D&file=x.docx`;
+  const url = `${ONEDRIVE}/:w:/r/personal/jdoe_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B5E2A9C47-1B3D-4F60-9A8E-7C21D4B06F13%7D&file=x.docx`;
   const before = compileDocument({ format: 1, artifacts: [staleOneDrive()] });
   assert.equal(evaluate(before.doc, url).match, false);
   const found = evaluate(result.doc, url);
   assert.equal(found.match, true);
-  assert.equal(found.artifact_id, "sharepoint:cisco-my.sharepoint.com/8baf1543-cdbf-4003-a48f-d4a939774fc0");
+  assert.equal(found.artifact_id, "sharepoint:contoso-my.sharepoint.com/5e2a9c47-1b3d-4f60-9a8e-7c21d4b06f13");
 });
 
 test("an up-to-date, narrowed, hand-written, or non-starter adapter has no update", () => {
@@ -507,7 +507,7 @@ test("starterRuleAddition appends one current starter rule and changes nothing e
   assert.equal(starterRuleUpdate(saved), null);
   const doc = compileDocument({ format: 1, artifacts: [addition.adapter] });
   assert.equal(doc.ok, true);
-  const url = "https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B8BAF1543-CDBF-4003-A48F-D4A939774FC0%7D";
+  const url = "https://acme.sharepoint.com/personal/u/_layouts/15/Doc.aspx?sourcedoc=%7B5E2A9C47-1B3D-4F60-9A8E-7C21D4B06F13%7D";
   assert.equal(evaluate(doc.doc, url).match, true);
 });
 
