@@ -13,7 +13,12 @@ pub(crate) struct Replacement {
 impl ConfigStore {
     /// The transaction caller holds config then capture locks. Rendering has
     /// no side effects and deliberately bypasses only the frozen-ID check.
-    pub(crate) fn prepare_relearn(&self, request: &PlanRequest) -> Result<Replacement> {
+    pub(crate) fn prepare_relearn(
+        &self,
+        request: &PlanRequest,
+        guard: &ConfigLock,
+    ) -> Result<Replacement> {
+        self.require_lock(guard)?;
         let current = read_disk_state(&self.path)?;
         anyhow::ensure!(
             current.revision == request.expected_revision && current.issue.is_none(),

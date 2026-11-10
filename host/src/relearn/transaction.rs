@@ -78,11 +78,11 @@ fn commit_with(
     checkpoint: &dyn Fn(&str) -> Result<()>,
 ) -> Result<Entry> {
     require_directory_sync()?;
-    let _config_lock = config.lock_current()?;
+    let config_lock = config.lock_for_read()?;
     let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
     recover_locked(config)?;
     let decision = approval(config, request)?;
-    let current = config.reopen();
+    let current = config.reopen_locked(&config_lock)?;
     let storage = current
         .snapshot()
         .storage
@@ -109,14 +109,14 @@ fn commit_with(
             return Ok(entry);
         }
     }
-    let plan = plan_locked(config, &request.review)?;
+    let plan = plan_locked(config, &request.review, &config_lock)?;
     ensure!(
         plan.plan_revision == request.expected_plan_revision,
         "review evidence changed; review a fresh plan before applying"
     );
     journal::validate_decision(Decision::Approve, &plan)?;
     Resolution::from_plan(&plan)?;
-    let replacement = config.prepare_relearn(&request.review)?;
+    let replacement = config.prepare_relearn(&request.review, &config_lock)?;
     ensure!(
         replacement.storage.root == decision.payload.home_root
             && replacement.root_identity == decision.payload.home_identity,
@@ -179,7 +179,7 @@ fn commit_with(
     // Recheck config, owned content, contracts and all evidence after rendering.
     // Local editors need not honor Brauser's locks.
     ensure!(
-        plan_locked(config, &request.review)?.plan_revision == plan.plan_revision,
+        plan_locked(config, &request.review, &config_lock)?.plan_revision == plan.plan_revision,
         "review evidence changed during preparation"
     );
     let store = Store::open(config.dir()?, true)?.context("missing rekey directory")?;
@@ -220,7 +220,7 @@ fn approval(config: &ConfigStore, request: &RecordRequest) -> Result<journal::En
 /// reopen. The future universal recovery gate must call recover_locked while
 /// holding config then capture locks, before serving any ordinary request.
 fn recover(config: &ConfigStore) -> Result<()> {
-    let _config_lock = config.lock_current()?;
+    let _config_lock = config.lock_for_read()?;
     let _capture_lock = crate::capture::lock_capture(config.dir()?)?;
     recover_locked(config)
 }

@@ -136,6 +136,67 @@ fn checksum(pending: &mut Pending) {
 }
 
 #[test]
+fn ordinary_and_locked_reads_leave_prepared_transactions_dormant() {
+    let mut f = Fixture::new();
+    f.prepare();
+    let pending = fs::read(f.pending_path()).unwrap();
+    let before = fs::read(&f.path).unwrap();
+    let decisions = f.decisions();
+    let notes = f.notes();
+    let loaded = ConfigStore::load_from(f.path.clone());
+    assert!(loaded.configured());
+    assert_eq!(loaded.revision(), f.config.revision());
+    let guard = f.config.lock_for_read().unwrap();
+    f.config.refresh().unwrap();
+    let nested = f.config.reopen_locked(&guard).unwrap();
+    assert_eq!(nested.revision(), loaded.revision());
+    assert_eq!(fs::read(f.pending_path()).unwrap(), pending);
+    assert_eq!(fs::read(&f.path).unwrap(), before);
+    assert_eq!(f.decisions(), decisions);
+    assert_eq!(f.notes(), notes);
+    assert!(!f.history_path().exists());
+    assert!(
+        !f.config
+            .dir()
+            .unwrap()
+            .join("adopted-contracts.json")
+            .exists()
+    );
+    drop(guard);
+    // Reads must not consume recovery authority; explicit private recovery
+    // can still finish this exact prepared operation afterwards.
+    recover(&f.config).unwrap();
+    assert!(!f.pending_path().exists());
+}
+
+#[test]
+fn a_foreign_lock_cannot_plan_or_prepare_a_config_replacement() {
+    let f = Fixture::new();
+    let other = ConfigStore::load_from(f.path.parent().unwrap().join("other.toml"));
+    let guard = other.lock_for_read().unwrap();
+    let before = fs::read(&f.path).unwrap();
+    assert!(
+        plan_locked(&f.config, &f.request.review, &guard)
+            .unwrap_err()
+            .to_string()
+            .contains("configuration lock belongs to another path")
+    );
+    let error = f
+        .config
+        .prepare_relearn(&f.request.review, &guard)
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("configuration lock belongs to another path")
+    );
+    assert_eq!(fs::read(&f.path).unwrap(), before);
+    assert!(!f.pending_path().exists());
+    assert!(!f.history_path().exists());
+}
+
+#[test]
 fn exact_approval_publishes_bound_history_and_preserves_host_fields_and_physical_notes() {
     let f = Fixture::new();
     let before: toml::Table = toml::from_str(&fs::read_to_string(&f.path).unwrap()).unwrap();
