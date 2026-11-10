@@ -328,7 +328,7 @@ export class CaptureSitePanel {
       : !config?.storage ? "Choose a home folder in settings, then capture this site here."
       : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings before adding a site."
       : recurring ? `Looks like you have recurring pages on ${new URL(page!.url).host}.`
-      : "Remember work on this site without configuring rules by hand.";
+      : "";
     if (this.target) this.updateControls(busy);
   }
 

@@ -2079,3 +2079,10 @@ created a false link from a recorded self-reference. Added library and CLI
 regressions exercise changed captures, duplicate/self mentions, unknown
 targets, unchanged config/home bytes and separation of container rules. This
 changes no wire contract, durable history, ordinary note routing or ID freeze.
+
+## 2026-11-10 — Put unconfigured-page actions below the status
+
+Unconfigured sites now show Save Page and Capture Site directly below the
+Not an artifact status. The duplicate Review Capture Site action and both
+introductory hints are removed. Missing-home and repair warnings, configured-site
+capture explanations and the recurring-pages hint remain available.

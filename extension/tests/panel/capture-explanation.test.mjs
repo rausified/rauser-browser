@@ -216,34 +216,23 @@ for (const [name, url, config, expected] of [
   });
 }
 
-test("an unknown site's explanation opens the existing Capture Site review", async () => {
-  const page = await install({
-    tab: { id: 1, url: JIRA_URL, title: "Issue" }, config: CAPTURING, workerStatus: LIVE_POLICY,
+for (const [name, url] of [["starter", JIRA_URL], ["unknown", "https://wiki.example.com/pages/123"]]) {
+  test(`an unconfigured ${name} site offers Capture Site without a duplicate explanation`, async () => {
+    const page = await install({
+      tab: { id: 1, url, title: "Page" }, config: CAPTURING, workerStatus: LIVE_POLICY,
+    });
+    await noteLoaded(page);
+    await until(() => !page.el("capture-site").disabled, "capture action");
+    assert.equal(page.el("capture-explanation").hidden, true);
+    assert.equal(page.el("capture-explanation-text").textContent, "");
+    assert.equal(page.el("capture-site-hint").textContent, "");
+    assert.equal(page.el("capture-site").hidden, false);
+    assert.equal(updates(page).length, 0);
+    page.el("capture-site").click();
+    await until(() => !page.el("capture-site-review").hidden, "the site review");
+    assert.equal(updates(page).length, 0, "review still requires explicit save");
   });
-  await noteLoaded(page);
-  await until(() => !page.el("capture-explanation-action").disabled, "capture review action");
-  assert.match(page.el("capture-explanation-text").textContent, /no capture rules/);
-  assert.equal(page.el("capture-explanation-action").textContent, "Review Capture Site");
-  page.el("capture-explanation-action").click();
-  await until(() => !page.el("capture-site-review").hidden, "the existing site review");
-  assert.equal(updates(page).length, 0, "review still requires explicit save");
-});
-
-test("Review Capture Site from Recent reveals the page view containing the review", async () => {
-  const page = await install({
-    tab: { id: 1, url: JIRA_URL, title: "Issue" }, config: CAPTURING, workerStatus: LIVE_POLICY,
-  });
-  await noteLoaded(page);
-  await until(() => !page.el("capture-explanation-action").disabled, "capture review action");
-  page.el("tab-recent").click();
-  assert.equal(page.el("page-view").hidden, true);
-  page.el("capture-explanation-action").click();
-  await until(() => !page.el("capture-site-review").hidden, "the existing site review");
-  assert.equal(page.el("page-view").hidden, false, "the review's parent must be visible");
-  assert.equal(page.el("recent-view").hidden, true);
-  assert.equal(page.el("tab-page").getAttribute("aria-selected"), "true");
-  assert.equal(updates(page).length, 0, "review still requires explicit save");
-});
+}
 
 test("capture explanation follows navigation and the latest policy revision and scope", async () => {
   const page = await install({
