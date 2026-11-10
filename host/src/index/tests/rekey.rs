@@ -286,6 +286,46 @@ fn rekey_projection_resolves_refs_with_recorded_captures_before_aliasing() {
 }
 
 #[test]
+fn rekey_projection_classifies_titles_under_the_proposed_policy() {
+    // Recorded rules resolve mention values; title rules must still come
+    // from the proposal, or the preview keeps a title the rebuilt index drops.
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let recorded = document(serde_json::json!({"format":1,"artifacts":[{
+        "type":"work.item","origin":"https://example.com",
+        "match":[{"path":"/items/{id:jira_key}"}],"id":"work:{host}/{id}",
+        "title":"{title} - Acme"}]}));
+    let proposed = document(serde_json::json!({"format":1,"artifacts":[{
+        "type":"work.item","origin":"https://example.com",
+        "match":[{"path":"/items/{id:jira_key}"}],"id":"work:{host}/{id}",
+        "title":"{title} - Acme","generic_titles":["Loading"]}]}));
+    let index = index(&root, &cache).with_adapters(Some(&proposed));
+    let mut event = activity(
+        &Uuid::from_u128(1).to_string(),
+        "A-1",
+        "Loading",
+        "2026-11-02T10:00:00Z",
+    );
+    event.artifact_id = "work:example.com/A-1".into();
+    event.url = "https://example.com/items/A-1".into();
+    logged(&index, &[event], &[]);
+    let (revision, _) = index.relearn_evidence().unwrap();
+    let result = serde_json::to_value(
+        index
+            .relearn_projection(&Resolution::default(), &revision, Some(&recorded))
+            .unwrap(),
+    )
+    .unwrap();
+    let row = result["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["artifact_id"] == "work:example.com/A-1")
+        .unwrap();
+    assert_eq!(row["title"], "Untitled", "{row}");
+}
+
+#[test]
 fn rekey_projection_preserves_container_rollups_and_counts_visits_once() {
     let root = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
