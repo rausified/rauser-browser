@@ -1,0 +1,289 @@
+name: macOS release
+
+# Builds the macOS release (DESIGN.md §11 "macOS app" and "Release
+# artifacts"): Brauser.app with a universal host binary, in a
+# drag-to-Applications disk image; Developer ID signing, notarization and
+# stapling when the signing secrets exist; SBOMs and checksums; and, for a
+# signed and notarized build only, SLSA build provenance and a draft GitHub
+# release. TESTING.md "macOS release packaging" lists the secrets and the
+# one-time Apple setup.
+#
+# Never runs on pull requests, so no PR can reach the signing secrets.
+#   - Push a tag vX.Y.Z (equal to host/Cargo.toml's version): a full signed
+#     release build and a draft release. Fails if the secrets are missing.
+#   - Run by hand: gh workflow run release-macos.yml --ref <branch>
+#     builds and uploads the image as a workflow artifact. Without the
+#     secrets the app gets an AD-HOC signature (a local test signature that
+#     Gatekeeper rejects) and the image is named *-unsigned.dmg. Pass
+#     -f draft_release=true for a draft release (signed builds only).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      draft_release:
+        description: Create a draft GitHub release (needs the signing and notarization secrets).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, sign and notarize
+    runs-on: macos-15
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      notarized: ${{ steps.mode.outputs.notarize }}
+      release: ${{ steps.mode.outputs.release }}
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      # The runner context is not available in job-level env.
+      - name: Name the working paths
+        run: |
+          {
+            echo "KEYCHAIN_PATH=$RUNNER_TEMP/brauser-signing.keychain-db"
+            echo "DIST=$RUNNER_TEMP/dist"
+          } >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # build-os.yml explains why: only the pinned toolchain should be installed.
+      - name: Drop the runner image's own stable Rust toolchain
+        run: rustup toolchain uninstall stable
+      - name: Add both macOS Rust targets
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+          cache: npm
+
+      - name: Read the version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          source packaging/macos/common.sh
+          version="$(brauser_version)"
+          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" != "v$version" ]]; then
+            echo "::error title=Tag and version differ::The tag $REF_NAME does not match host/Cargo.toml's version $version (want v$version)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Secrets cannot appear in `if:`, so this step turns their presence
+      # into outputs. It never prints a secret's value.
+      - name: Decide signing, notarization and release
+        id: mode
+        env:
+          P12: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          REF_TYPE: ${{ github.ref_type }}
+          DRAFT_RELEASE: ${{ inputs.draft_release }}
+        run: |
+          sign=false
+          notarize=false
+          if [[ -n "$P12" && -n "$P12_PASSWORD" ]]; then sign=true; fi
+          if $sign && [[ -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER_ID" && -n "$NOTARY_KEY_P8" ]]; then notarize=true; fi
+          release=false
+          if [[ "$REF_TYPE" == "tag" || "$DRAFT_RELEASE" == "true" ]]; then release=true; fi
+          if ! $sign; then
+            echo "::notice title=Signing skipped::MACOS_DEVELOPER_ID_P12_BASE64 and MACOS_DEVELOPER_ID_P12_PASSWORD are not set, so the app gets an AD-HOC signature (local testing only; Gatekeeper rejects it) and the image is unsigned. See TESTING.md \"macOS release packaging\"."
+          fi
+          if ! $notarize; then
+            echo "::notice title=Notarization skipped::The Developer ID certificate or APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER_ID and APPLE_NOTARY_KEY_P8_BASE64 are not all set, so nothing is notarized or stapled."
+          fi
+          if $release && ! $notarize; then
+            echo "::error title=No release without signing::A release (tag push or draft_release) needs a Developer ID signed and notarized build; set the five secrets in TESTING.md \"macOS release packaging\"."
+            exit 1
+          fi
+          if $notarize; then suffix=""; else suffix="-unsigned"; fi
+          {
+            echo "sign=$sign"
+            echo "notarize=$notarize"
+            echo "release=$release"
+            echo "dmg=Brauser-${{ steps.version.outputs.version }}${suffix}.dmg"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build Brauser.app (universal)
+        run: packaging/macos/build-app.sh "$RUNNER_TEMP/app"
+
+      - name: Import the Developer ID identity
+        id: identity
+        if: steps.mode.outputs.sign == 'true'
+        env:
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          identity="$(packaging/macos/import-identity.sh "$KEYCHAIN_PATH")"
+          echo "name=$identity" >> "$GITHUB_OUTPUT"
+      - name: Write the notary API key
+        if: steps.mode.outputs.notarize == 'true'
+        env:
+          NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+        run: |
+          key="$RUNNER_TEMP/notary/AuthKey.p8"
+          mkdir -p "$(dirname "$key")"
+          umask 077
+          printf '%s' "$NOTARY_KEY_P8" | base64 --decode > "$key"
+          echo "APPLE_NOTARY_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      - name: Sign the app (Developer ID)
+        if: steps.mode.outputs.sign == 'true'
+        env:
+          IDENTITY: ${{ steps.identity.outputs.name }}
+        run: packaging/macos/sign.sh --identity "$IDENTITY" --keychain "$KEYCHAIN_PATH" "$RUNNER_TEMP/app/Brauser.app"
+      - name: Sign the app (AD-HOC, local testing only)
+        if: steps.mode.outputs.sign != 'true'
+        run: packaging/macos/sign.sh --adhoc "$RUNNER_TEMP/app/Brauser.app"
+      # The app is notarized and stapled on its own first, so the copy in the
+      # image carries its ticket; the image is then notarized and stapled too.
+      - name: Notarize and staple the app
+        if: steps.mode.outputs.notarize == 'true'
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: packaging/macos/notarize.sh "$RUNNER_TEMP/app/Brauser.app"
+
+      - name: Make the disk image
+        env:
+          DMG: ${{ steps.mode.outputs.dmg }}
+        run: |
+          mkdir -p "$DIST"
+          packaging/macos/make-dmg.sh "$RUNNER_TEMP/app/Brauser.app" "$DIST/$DMG"
+      - name: Sign the disk image (Developer ID)
+        if: steps.mode.outputs.sign == 'true'
+        env:
+          IDENTITY: ${{ steps.identity.outputs.name }}
+          DMG: ${{ steps.mode.outputs.dmg }}
+        run: packaging/macos/sign.sh --identity "$IDENTITY" --keychain "$KEYCHAIN_PATH" "$DIST/$DMG"
+      - name: Notarize and staple the disk image
+        if: steps.mode.outputs.notarize == 'true'
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          DMG: ${{ steps.mode.outputs.dmg }}
+        run: packaging/macos/notarize.sh "$DIST/$DMG"
+
+      - name: Verify the disk image and the app inside it
+        env:
+          SIGN: ${{ steps.mode.outputs.sign }}
+          NOTARIZE: ${{ steps.mode.outputs.notarize }}
+          DMG: ${{ steps.mode.outputs.dmg }}
+        run: |
+          if [[ "$NOTARIZE" == "true" ]]; then
+            packaging/macos/verify-dmg.sh "$DIST/$DMG" --signature developer-id --notarized
+          elif [[ "$SIGN" == "true" ]]; then
+            packaging/macos/verify-dmg.sh "$DIST/$DMG" --signature developer-id
+          else
+            # An unsigned image holding the ad-hoc signed app.
+            packaging/macos/verify-dmg.sh "$DIST/$DMG" --signature none --app-signature adhoc
+          fi
+
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx --version 0.5.9
+      - name: Install the extension's npm packages (for its SBOM)
+        run: npm ci --ignore-scripts
+      - name: Write the SBOMs and checksums
+        run: packaging/macos/release-assets.sh "$DIST"
+
+      - name: Summarize the build
+        env:
+          SIGN: ${{ steps.mode.outputs.sign }}
+          NOTARIZE: ${{ steps.mode.outputs.notarize }}
+        run: |
+          {
+            echo "## Brauser ${{ steps.version.outputs.version }} for macOS"
+            echo
+            echo "- Universal binary: \`$(lipo -archs "$RUNNER_TEMP/app/Brauser.app/Contents/MacOS/brauser")\`"
+            if [[ "$SIGN" == "true" ]]; then echo "- Signature: Developer ID Application"; else echo "- Signature: **AD-HOC app, unsigned image (local testing only; Gatekeeper rejects it)**"; fi
+            if [[ "$NOTARIZE" == "true" ]]; then echo "- Notarized and stapled: app and image"; else echo "- Notarized: **no**"; fi
+            echo
+            echo '```'
+            cat "$DIST/SHA256SUMS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: brauser-macos
+          path: ${{ env.DIST }}
+          if-no-files-found: error
+
+      - name: Remove the signing keychain
+        if: always() && steps.mode.outputs.sign == 'true'
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
+          rm -rf "$RUNNER_TEMP/notary"
+
+  # Only a Developer ID signed and notarized build reaches here (the build
+  # job fails a release request otherwise). The release is a draft: John
+  # publishes it after the install, move, update and removal checks
+  # (DESIGN.md §11 "Release page and support").
+  release:
+    name: Provenance and draft release
+    needs: build
+    if: needs.build.outputs.release == 'true' && needs.build.outputs.notarized == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: brauser-macos
+          path: dist
+      - name: Check the checksums
+        working-directory: dist
+        run: sha256sum -c SHA256SUMS
+      - name: Attest SLSA build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.dmg
+            dist/*.cdx.json
+      - name: Add the provenance bundle to the release files
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        working-directory: dist
+        run: |
+          cp "$BUNDLE" "brauser-$VERSION.intoto.sigstore.json"
+          # SHA256SUMS covers every release file, the bundle included.
+          sha256sum "brauser-$VERSION.intoto.sigstore.json" >> SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ github.sha }}
+        run: |
+          cat > notes.md <<EOF
+          Brauser $VERSION for macOS 15 Sequoia and later (Intel and Apple silicon).
+
+          1. Install the Brauser extension in Google Chrome.
+          2. Open \`Brauser-$VERSION.dmg\`, drag Brauser to Applications, and open it once from Applications.
+
+          The app and the disk image are signed with a Developer ID Application identity, notarized by Apple, and stapled.
+          \`SHA256SUMS\` lists every file's checksum; the \`*.cdx.json\` files are CycloneDX SBOMs.
+          Verify the build provenance with \`gh attestation verify Brauser-$VERSION.dmg --repo $GH_REPO\`.
+
+          Draft: publish only after the install, move, update and removal checks (DESIGN.md §11).
+          EOF
+          gh release create "v$VERSION" --draft --target "$TARGET" \
+            --title "Brauser $VERSION" --notes-file notes.md dist/*

@@ -2027,7 +2027,7 @@ M1.5a adds `idle` and uses `tabs.onActivated`, `tabs.onRemoved`, `tabs.onReplace
 
 The root `Cargo.toml` workspace members are `protocol`, `host`, and `adapter-templates` (the `macos-alert` crate was removed with protocol v6). The message schema is defined once and code-generated for both sides, so the extension and host cannot drift.
 
-The layout above is the planned release layout. The repository currently contains `extension/`, `host/`, `protocol/`, `adapter-templates/`, `scripts/`, and CI, with DESIGN.md and adapter-templates.md at the root for now. The packaging scripts and fixtures arrive in later milestones, and `/docs` so far holds the starter-adapter pages and design specs.
+The layout above is the planned release layout. The repository currently contains `extension/`, `host/`, `protocol/`, `adapter-templates/`, `scripts/`, and CI, with DESIGN.md and adapter-templates.md at the root for now. The macOS packaging scripts are in `packaging/macos/` (the Windows ones and the fixtures arrive in later milestones), and `/docs` so far holds the starter-adapter pages and design specs.
 
 ## 10. Quality
 
