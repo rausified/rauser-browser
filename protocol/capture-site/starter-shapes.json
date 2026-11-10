@@ -85,6 +85,11 @@
       "shape": "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
     },
     {
+      "note": "SharePoint doc2 presentation sharing form (docs/adapters/sharepoint.doc.md)",
+      "url": "https://acme.sharepoint.com/:p:/r/sites/Eng/_layouts/15/doc2.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Deck.pptx&action=edit",
+      "shape": "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&sourcedoc={uuid}"
+    },
+    {
       "note": "GitHub pull request overview (docs/adapters/github.pr.md)",
       "url": "https://github.com/Acme/Widget/pull/42",
       "shape": "/{slug}/{slug}/pull/{num}"

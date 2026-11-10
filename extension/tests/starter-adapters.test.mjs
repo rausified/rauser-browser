@@ -345,6 +345,34 @@ test("SharePoint and OneDrive drafts key documents by sourcedoc and ignore roots
   assert.equal(evaluate(doc, `${origin}/personal/alex/Documents/Forms/AllItems.aspx`).match, false);
 });
 
+test("SharePoint Doc.aspx and doc2.aspx routes keep one sourcedoc identity", () => {
+  const guid = "123e4567-e89b-12d3-a456-426614174000";
+  const paths = ["/sites/team", "/personal/alex"];
+  for (const kind of ["w", "x", "p"]) {
+    for (const sharing of ["r", "g"]) {
+      paths.push(`/:${kind}:/${sharing}/sites/team`, `/:${kind}:/${sharing}/personal/alex`);
+    }
+  }
+  for (const origin of ["https://acme.sharepoint.com", "https://acme-my.sharepoint.com"]) {
+    const doc = compiled(starterOffers(origin, []));
+    const expected = `sharepoint:${new URL(origin).hostname}/${guid}`;
+    for (const path of paths) {
+      for (const name of ["Doc.aspx", "doc2.aspx", "DOC2.ASPX"]) {
+        const url = `${origin}${path}/_layouts/15/${name}?sourcedoc=%7B${guid.toUpperCase()}%7D&file=Deck.pptx&action=edit`;
+        const found = evaluate(doc, url);
+        assert.equal(found.match, true, url);
+        assert.equal(found.artifact_id, expected, url);
+      }
+      for (const query of ["", "?file=Deck.pptx", "?sourcedoc=", "?sourcedoc=not-a-guid"]) {
+        const url = `${origin}${path}/_layouts/15/doc2.aspx${query}`;
+        assert.equal(evaluate(doc, url).match, false, url);
+      }
+      const unreviewed = `${origin}${path}/_layouts/15/doc3.aspx?sourcedoc=${guid}`;
+      assert.equal(evaluate(doc, unreviewed).match, false, unreviewed);
+    }
+  }
+});
+
 test("Miro draft keys boards by their padded board ID and ignores dashboards", () => {
   const [offer, ...rest] = starterOffers("https://miro.com", []);
   assert.equal(rest.length, 0);
@@ -434,7 +462,10 @@ test("withContainerLinks links only rules whose linked copy compiles, and leaves
 });
 
 const ONEDRIVE = "https://contoso-my.sharepoint.com";
-const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+const SITES_RULE = { path: "/sites/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: { sourcedoc: "{doc:uuid}" } };
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: { sourcedoc: "{doc:uuid}" } };
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: { sourcedoc: "{doc:uuid}" } };
+const CURRENT_SHAREPOINT_RULES = [SITES_RULE, SHARE_RULE, PERSONAL_RULE];
 // The SharePoint/OneDrive starter as saved before sharing links covered OneDrive.
 const staleOneDrive = () => ({
   type: "sharepoint.doc",
@@ -449,20 +480,49 @@ const staleOneDrive = () => ({
 });
 
 const OLD_SHARE_RULE = { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+// The next shipped version supported every Office sharing route, but only Doc.aspx.
+const preDoc2OneDrive = () => ({
+  ...staleOneDrive(),
+  match: staleOneDrive().match.map((rule) => rule.path === OLD_SHARE_RULE.path
+    ? { ...rule, path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx" }
+    : rule),
+});
 
-test("a saved earlier OneDrive starter swaps its retired rule for the current one and keeps a user rule", () => {
+test("a saved earlier OneDrive starter replaces its retired rules and keeps a user rule", () => {
   const extra = { path: "/:b:/r/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
   const saved = { ...staleOneDrive(), match: [...staleOneDrive().match, extra] };
   const update = starterRuleUpdate(saved);
   assert.ok(update);
-  assert.deepEqual(update.added, [SHARE_RULE]);
-  assert.deepEqual(update.removed, [OLD_SHARE_RULE]);
-  const [sites, , personal] = staleOneDrive().match;
-  assert.deepEqual(update.adapter, { ...saved, match: [sites, personal, extra, SHARE_RULE] });
+  assert.deepEqual(update.added, CURRENT_SHAREPOINT_RULES);
+  assert.deepEqual(update.removed, staleOneDrive().match);
+  assert.deepEqual(update.adapter, { ...saved, match: [extra, ...CURRENT_SHAREPOINT_RULES] });
   assert.deepEqual(saved.match.slice(0, 3), staleOneDrive().match, "the saved adapter is not mutated");
-  assert.deepEqual(starterRuleUpdate(staleOneDrive()).adapter.match, [sites, personal, SHARE_RULE]);
+  assert.deepEqual(starterRuleUpdate(staleOneDrive()).adapter.match, CURRENT_SHAREPOINT_RULES);
   // Already at the current rules: nothing to offer.
   assert.equal(starterRuleUpdate(update.adapter), null);
+});
+
+test("a saved pre-doc2 starter gains doc2 routes without changing its existing document identity", () => {
+  const extra = { path: "/custom/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+  const saved = { ...preDoc2OneDrive(), title: "{title}", match: [...preDoc2OneDrive().match, extra] };
+  const update = starterRuleUpdate(saved);
+  assert.ok(update);
+  assert.deepEqual(update.added, CURRENT_SHAREPOINT_RULES);
+  assert.deepEqual(update.removed, preDoc2OneDrive().match);
+  assert.deepEqual(update.adapter, { ...saved, match: [extra, ...CURRENT_SHAREPOINT_RULES] });
+  assert.deepEqual(saved.match.slice(0, 3), preDoc2OneDrive().match, "the saved adapter is not mutated");
+  const before = compileDocument({ format: 1, artifacts: [saved] });
+  const after = compileDocument({ format: 1, artifacts: [update.adapter] });
+  assert.equal(before.ok, true);
+  assert.equal(after.ok, true);
+  const docUrl = `${ONEDRIVE}/:p:/r/sites/team/_layouts/15/Doc.aspx?sourcedoc=%7B5E2A9C47-1B3D-4F60-9A8E-7C21D4B06F13%7D`;
+  const doc2Url = docUrl.replace("Doc.aspx", "doc2.aspx");
+  assert.equal(evaluate(before.doc, doc2Url).match, false);
+  const expected = evaluate(before.doc, docUrl).artifact_id;
+  assert.equal(evaluate(after.doc, docUrl).artifact_id, expected);
+  assert.equal(evaluate(after.doc, doc2Url).artifact_id, expected);
+  assert.equal(starterRuleUpdate(update.adapter), null);
+  assert.equal(starterRuleUpdate({ ...saved, match: saved.match.slice(1) }), null, "a narrowed starter stays narrowed");
 });
 
 test("the real OneDrive sharing link matches the updated adapter", () => {
@@ -508,12 +568,11 @@ test("an update stays within 16 rules", () => {
   assert.equal(full.match.length, 16);
   const update = starterRuleUpdate(full);
   assert.equal(update.adapter.match.length, 16);
-  assert.deepEqual(update.adapter.match.slice(2, 15), filler);
+  assert.deepEqual(update.adapter.match, [...filler, ...CURRENT_SHAREPOINT_RULES]);
 });
 
 // A hand-narrowed SharePoint adapter: the sites rule only.
 const narrowed = () => ({ ...staleOneDrive(), origin: "https://acme.sharepoint.com", match: [staleOneDrive().match[0]] });
-const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
 
 test("starterRuleAddition appends one current starter rule and changes nothing else", () => {
   const saved = { ...narrowed(), title: "{title}.docx" };

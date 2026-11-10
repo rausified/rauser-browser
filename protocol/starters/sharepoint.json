@@ -20,9 +20,9 @@
         "type": "sharepoint.doc",
         "path_case": "insensitive",
         "match": [
-          { "path": "/sites/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
-          { "path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
-          { "path": "/personal/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } }
+          { "path": "/sites/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": { "sourcedoc": "{doc:uuid}" } },
+          { "path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": { "sourcedoc": "{doc:uuid}" } },
+          { "path": "/personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": { "sourcedoc": "{doc:uuid}" } }
         ],
         "id": "sharepoint:{host}/{doc}",
         "generic_titles": ["Working...", "Working…", "Login", "Redirecting", "Error", "Sign in is not complete"]
@@ -32,6 +32,13 @@
           "match": [
             { "path": "/sites/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
             { "path": "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
+            { "path": "/personal/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } }
+          ]
+        },
+        {
+          "match": [
+            { "path": "/sites/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
+            { "path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } },
             { "path": "/personal/{_}/_layouts/15/Doc.aspx", "query": { "sourcedoc": "{doc:uuid}" } }
           ]
         }
@@ -56,6 +63,12 @@
           "url": "https://acme.sharepoint.com/:w:/r/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true",
           "title": null,
           "shape": "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&mobileredirect={slug}&sourcedoc={uuid}"
+        },
+        {
+          "note": "SharePoint doc2 presentation sharing form",
+          "url": "https://acme.sharepoint.com/:p:/r/sites/Eng/_layouts/15/doc2.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Deck.pptx&action=edit",
+          "title": null,
+          "shape": "/{slug}/r/sites/{slug}/_layouts/{num}/{slug}?action={slug}&file={slug}&sourcedoc={uuid}"
         }
       ],
       "samples_shape": true,

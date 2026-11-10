@@ -49,7 +49,7 @@ pub struct OfficeDocument {
 ///
 /// Recognised, on `https` only (plan decision 2): a SharePoint or OneDrive
 /// for work address (`*.sharepoint.com`) with a `:w:`, `:x:` or `:p:` path
-/// segment, or ending in `/_layouts/15/Doc.aspx` or `WopiFrame.aspx` with a
+/// segment, or ending in `/_layouts/15/Doc.aspx`, `doc2.aspx` or `WopiFrame.aspx` with a
 /// non-empty `sourcedoc` or `file`; and a top-level Office viewer
 /// (`*.officeapps.live.com`) whose `src` is an `https` URL on any host.
 pub fn office_document(url: &str) -> Option<OfficeDocument> {
@@ -94,6 +94,7 @@ pub fn office_document(url: &str) -> Option<OfficeDocument> {
     let share = segments.iter().find_map(|segment| share_kind(segment));
     let lower_path = page.path().to_ascii_lowercase();
     let doc_page = (lower_path.ends_with("/_layouts/15/doc.aspx")
+        || lower_path.ends_with("/_layouts/15/doc2.aspx")
         || lower_path.ends_with("/_layouts/15/wopiframe.aspx"))
         && (sourcedoc_value.is_some() || file_value.is_some());
     if share.is_none() && !doc_page {

@@ -103,14 +103,14 @@ test("accounts are named only when every adapter is scoped to the same accounts"
 // Near-miss detection runs only after the full document returned no_rule.
 const GUID = "%7B5E2A9C47-1B3D-4F60-9A8E-7C21D4B06F13%7D";
 const SOURCEDOC = { sourcedoc: "{doc:uuid}" };
-const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
-const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: SOURCEDOC };
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: SOURCEDOC };
 const staleOneDrive = (origin = "https://contoso-my.sharepoint.com") => ({
   type: "sharepoint.doc", origin, path_case: "insensitive",
   match: [
     { path: "/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
     { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
-    PERSONAL_RULE,
+    { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
   ],
   id: "sharepoint:{host}/{doc}",
 });

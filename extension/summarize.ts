@@ -154,7 +154,8 @@ export function officeDocumentKind(url: string): OfficeDocumentKind | null {
     }
   }
   const path = page.pathname.toLowerCase();
-  const docPage = (path.endsWith("/_layouts/15/doc.aspx") || path.endsWith("/_layouts/15/wopiframe.aspx"))
+  const docPage = (path.endsWith("/_layouts/15/doc.aspx")
+    || path.endsWith("/_layouts/15/doc2.aspx") || path.endsWith("/_layouts/15/wopiframe.aspx"))
     && (param("sourcedoc") !== null || file !== null);
   if (share === null && !docPage) return null;
   return share ?? (file === null ? "unknown" : kindOfName(file));

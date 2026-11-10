@@ -117,14 +117,14 @@ test("custom types, long account lists and mixed scope read as configured", asyn
 // Near-miss offers (brwr-0t1): settings opens the review; the panel saves nothing.
 const GUID = "5E2A9C47-1B3D-4F60-9A8E-7C21D4B06F13";
 const SOURCEDOC = { sourcedoc: "{doc:uuid}" };
-const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
-const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC };
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: SOURCEDOC };
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: SOURCEDOC };
 const staleOneDrive = () => ({
   type: "sharepoint.doc", origin: "https://acme-my.sharepoint.com", path_case: "insensitive",
   match: [
     { path: "/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
     { path: "/:w:/r/sites/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
-    PERSONAL_RULE,
+    { path: "/personal/{_}/_layouts/15/Doc.aspx", query: SOURCEDOC },
   ],
   id: "sharepoint:{host}/{doc}",
 });
