@@ -22,6 +22,41 @@ const MAX_PREPARE: usize = 8 * 1024 * 1024;
 const MAX_OPERATIONS: usize = 4096;
 const MAX_EVENTS: usize = 32_768;
 
+/// Ordinary note access consumes authoritative history, never a review or
+/// cache. The caller has refreshed config under this live lock. Until the
+/// universal recovery gate is enabled, pending publication must refuse here;
+/// this reader cannot decide which side of an interrupted apply to expose.
+pub(crate) fn note_resolution(
+    config: &ConfigStore,
+    guard: &crate::config::ConfigLock,
+) -> Result<Resolution> {
+    config.require_lock(guard)?;
+    if let Some(store) = Store::open(config.dir()?, false)? {
+        ensure!(
+            store.read(PENDING, MAX_PREPARE)?.is_none(),
+            "re-key publication is pending; note access requires recovery"
+        );
+    }
+    let storage = config
+        .snapshot()
+        .storage
+        .as_ref()
+        .context("choose a home folder")?;
+    let identity = config
+        .root_identity()
+        .context("home folder identity is unavailable")?;
+    let Some(dir) = history_dir(storage, Some(identity), false)? else {
+        return Ok(Resolution::default());
+    };
+    let entries = replay(&read_history(&dir)?, &storage.root, identity)?;
+    Resolution::from_events(
+        &entries
+            .into_iter()
+            .flat_map(|entry| entry.payload.events)
+            .collect::<Vec<_>>(),
+    )
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {

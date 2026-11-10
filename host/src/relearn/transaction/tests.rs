@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 const ORIGIN: &str = "https://work.example";
 
+mod note_history;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     config: ConfigStore,

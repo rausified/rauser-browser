@@ -102,6 +102,33 @@ impl NoteLocation {
         Ok(loaded)
     }
 
+    /// An older URL copy may become the artifact note only when no selected
+    /// owner exists. In particular, absence at the canonical path must never
+    /// hide an existing alias note. The source keeps its raw URL revision.
+    pub(crate) fn use_older_note(
+        &self,
+        vault: &Vault,
+        canonical_url: &str,
+        source_url: &str,
+        expected_revision: &str,
+    ) -> Result<LoadedNote, NoteRequestError> {
+        if self.load(vault, canonical_url, &[])?.exists || self.physical != self.logical {
+            return Err(NoteRequestError::Conflict(OwnershipConflict(
+                "an artifact note already exists; the older note was left unchanged".into(),
+            )));
+        }
+        let mut loaded = use_as_artifact_note(
+            vault,
+            canonical_url,
+            &self.logical,
+            source_url,
+            expected_revision,
+        )?;
+        loaded.key = self.logical.clone();
+        loaded.revision = self.revision(&loaded.revision);
+        Ok(loaded)
+    }
+
     pub(crate) fn save(
         &self,
         vault: &Vault,

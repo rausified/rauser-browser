@@ -50,6 +50,56 @@ fn location(vault: &Vault, id: &str, resolution: &Resolution) -> NoteLocation {
     NoteLocation::resolve(vault, URL, &key(id), resolution).unwrap()
 }
 
+#[test]
+fn older_url_import_refuses_an_owned_alias_even_without_a_canonical_file() {
+    let (_folder, vault) = super::super::tests::vault();
+    create(&vault, "A", "original owner");
+    let url_key = crate::vault::url_record_key(URL).unwrap();
+    save_keyed_note(&vault, URL, &url_key, "URL note", "separate", "missing").unwrap();
+    let source = load_older_note(&vault, URL).unwrap();
+    let selected = location(&vault, "B", &confirmed());
+    let original = vault.read_note(&key("A"), URL).unwrap().unwrap();
+    assert!(matches!(
+        selected.use_older_note(&vault, URL, URL, &source.revision),
+        Err(NoteRequestError::Conflict(_))
+    ));
+    assert_eq!(vault.read_note(&key("A"), URL).unwrap().unwrap(), original);
+    assert!(vault.read_note(&key("B"), URL).unwrap().is_none());
+    assert_eq!(load_older_note(&vault, URL).unwrap().body, "separate");
+}
+
+#[test]
+fn older_url_import_into_empty_group_binds_the_returned_edit_revision() {
+    let (_folder, vault) = super::super::tests::vault();
+    let url_key = crate::vault::url_record_key(URL).unwrap();
+    save_keyed_note(&vault, URL, &url_key, "URL note", "import me", "missing").unwrap();
+    let source = load_older_note(&vault, URL).unwrap();
+    let selected = location(&vault, "A", &confirmed());
+    let imported = selected
+        .use_older_note(&vault, URL, URL, &source.revision)
+        .unwrap();
+    assert_eq!(imported.key, key("B"));
+    assert!(imported.revision.starts_with("location-v1:"));
+    assert_eq!(
+        selected.load(&vault, URL, &[]).unwrap().revision,
+        imported.revision
+    );
+    assert!(matches!(
+        selected.save(
+            &vault,
+            &stored(URL),
+            "Edited",
+            "after import",
+            &imported.revision
+        ),
+        Ok(SaveOutcome::Saved { .. })
+    ));
+    assert_eq!(
+        selected.load(&vault, URL, &[]).unwrap().body,
+        "after import"
+    );
+}
+
 fn bytes(vault: &Vault, id: &str) -> String {
     vault.read_note(&key(id), URL).unwrap().unwrap()
 }
