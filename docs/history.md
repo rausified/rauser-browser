@@ -1914,3 +1914,72 @@ the current dates; a simulated-clock regression covers the rollover.
 ## 2026-11-09 — Keep run activity in a compact bottom dock
 
 The side panel now scrolls its page content independently of a bottom activity area. General notices, summary runs, task runs, and Capture Site AI draft progress or notices appear there as collapsed rows with a title and current state. Runs hidden after a page switch leave no empty row. Expanding a row reveals its existing details and actions. The dock and streamed text have bounded heights, and the capture strip remains below it with its own scrolling when expanded in a short panel. Setup and permission banners remain visible in the page content when action is required.
+
+
+## 2026-11-09 — Restore private re-key transaction groundwork
+
+Assigned brwr-dbp's direct prerequisite brwr-gpnm was described as locally
+complete in the queue but absent from main 20a81a304. Restored source/tests
+from archived f61e71c7d rather than implementing a second mechanism. The private
+renderer preserves host-owned fields; the transaction binds the existing
+approval, exact config before/after and a chained home-history append.
+Config/capture locks, fresh evidence checks and exact prepared suffix recovery
+preserve original decisions and physical files. The original journal receipt
+continues to say applied: false. No CLI/native apply or ordinary recovery was
+activated; AGENTS.md's component state therefore stays unchanged.
+
+The required pre-build challenge by /root/transaction_challenge retained this
+mechanism and identified the Windows directory-sync no-op. Private publication
+and pending recovery now explicitly refuse there, with a Windows-only fixture;
+Unix interruption fixtures include corrupt history after config publication.
+Brwr-4qt4 tracks supported Windows durability before activation. These callback
+fixtures do not establish process-kill/power-loss safety or eliminate external
+editors racing later writes. The staged plan and TESTING.md state those limits.
+
+Baseline health passed the full requested sequence: 1,690 Rust outcomes,
+2 ignored, 51 extension files, both Clippy configurations, protocol/format/
+TypeScript/ESLint checks; 94 IPC cases and 59 browser cases explicitly skipped
+inside the sandbox. The driver must provide its independent unsandboxed gate
+and publication before this prerequisite closes. Parent brwr-dbp remains open.
+
+Restoration validation: 60 Re-learn tests (15 transaction), 156 config tests
+and 10 CLI tests passed, alongside workspace Clippy and static/current-state
+checks. Complete fresh diff self-review and a final Codex session review found
+no remaining findings. Windows fixture execution awaits Windows CI; only its
+conditional compilation was inspected locally.
+
+## 2026-11-09 — Re-sync transaction preparation before recovery publication
+
+Independent review found that prepare publication can leave its hard-linked
+record visible when the following directory sync fails. Recovery must retry
+that sync before writing history or config, or another crash could lose the
+prepare while retaining a partial publication. The private transaction now
+re-syncs the prepare directory after participant validation and before either
+write. A regression injects an error from this sync, checks both participants
+are still original, then exercises repeated recovery; the interruption matrix
+includes the same boundary. The sync failure uses an injected function; these
+tests do not establish process-kill or power-loss safety.
+
+Review validation passes the full Rust workspace suite, both Clippy feature
+configurations, all-target build, extension suite, TypeScript, ESLint,
+accessibility, Markdown-neutralizer, script and Python tooling suites, queue
+consistency and static checks. Sandbox IPC/browser and platform-specific skips
+remain explicit; no Windows or interactive macOS acceptance is claimed.
+
+## 2026-11-09 — Verify re-key directory-sync failure recovery
+
+On main `7b0ce56e6`, restored the missing driver-green `eb0572103`
+transaction prerequisite. Extended the existing prepare sync seam to history
+and cleanup directory syncs and supplied a config-parent sync seam. Production
+uses the existing real helpers. New temporary-home fixtures fail each operation
+and prove exact-once retry with unchanged notes and original decisions. Cleanup
+failure covers both absent prepare and modeled private prepare reappearance.
+These are operation-error/interruption fixtures, not power-loss certification.
+
+The required `/root/recovery_challenge` review kept the small callback approach
+and caught the reappearing fixture's file-permission error before final checks.
+It also audited the remaining config gate: preserve read-only contract adoption,
+avoid recursive filesystem locks in nested reopen, expose recovery-specific
+inert state, and activate recovery together with replay-aware ordinary readers.
+No production apply or startup recovery is enabled; brwr-dbp remains incomplete.
+brwr-yii4 tracks remaining write/rename/hard-link error injection.
