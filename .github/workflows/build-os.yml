@@ -39,13 +39,24 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Swatinem/rust-cache hashes the rustc version of every toolchain
+      # `rustup toolchain list` finds installed, not just the one
+      # rust-toolchain.toml pins, so the runner image's own preinstalled
+      # stable toolchain rides along in the key even though no step ever
+      # runs it. Drop it before the cache step, so the next line's own
+      # rustc probe auto-installs (and the key is keyed on) only the
+      # pinned 1.98.1. A GitHub image bump of its stable Rust then leaves
+      # the cache alone instead of evicting it.
+      - name: Drop the runner image's own stable Rust toolchain
+        shell: bash
+        run: rustup toolchain uninstall stable
       # Caches the Cargo registry and the compiled dependencies in `target`,
       # including the nested `target/scripted-dialogs` (the action cleans it
       # as its own target dir and drops workspace crates, which always
-      # rebuild). The key has the runner label, toolchain and Cargo.lock.
-      # Only pushes to main save: PR runs and the Mergify queue's draft PRs
-      # restore main's cache (a branch may read its base branch's caches)
-      # and never write their own, so they cannot evict it.
+      # rebuild). The key has the runner label, the pinned toolchain and
+      # Cargo.lock. Only pushes to main save: PR runs and the Mergify queue's
+      # draft PRs restore main's cache (a branch may read its base branch's
+      # caches) and never write their own, so they cannot evict it.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ inputs.os }}
@@ -86,8 +97,8 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # The scripted-dialogs builds keep their own target dir on purpose:
       # `target/debug/brauser` must stay the production host (the adapter
-      # diff below runs it), and a shared
-      # dir would overwrite it with the scripted binary. A shared Cargo
+      # diff below runs it), and a shared dir would overwrite it with the
+      # scripted binary. A shared Cargo
       # build-dir (deps compiled once, binaries uplifted apart) is not safe
       # either: Windows MSVC executables carry no hash in `deps/`, so the two
       # feature sets would overwrite each other's `deps/brauser.exe`. The

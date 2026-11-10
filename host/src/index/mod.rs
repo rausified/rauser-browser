@@ -1295,7 +1295,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&temporary);
         return Err(error.into());
     }
-    if let Err(error) = fs::rename(&temporary, path) {
+    if let Err(error) = crate::fsutil::rename_or_copy(&temporary, path) {
         let _ = fs::remove_file(&temporary);
         return Err(error.into());
     }
