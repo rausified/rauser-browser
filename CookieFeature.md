@@ -1932,3 +1932,34 @@ config, decisions and physical notes unchanged. No apply endpoint or automatic
 recovery was enabled. The parent still needs the universal recovery gate,
 authoritative replay in ordinary readers, preserved-note presentation, artifact
 stubs and rebuild acceptance.
+
+
+## 2026-11-10 — Keep ordinary page notes on their original files after re-keying
+
+Brauser's ordinary note requests now read the authoritative home-folder re-key
+history and apply the existing logical-versus-physical note contract. After a
+reviewed identity change, a sole original note stays editable in its original
+file while the browser receives the current artifact key. If a canonical note
+already exists, it takes precedence and every other original remains intact.
+Autosaves bind their revision to the selected owner and complete replay history,
+so an old editor cannot overwrite a newly selected note or regain permission
+when an identity moves away and back. Missing history keeps existing revisions.
+
+The same resolver now protects explicit task-report appends and older URL-note
+imports. Importing into a group with an existing selected owner refuses; a group
+without a note can import through the existing no-clobber move and immediately
+edit using the returned history-bound revision. Older URL-note discovery follows
+alias members while retaining its stripped-parameter provenance checks. Pending,
+torn, corrupt, unknown-field or foreign-home histories refuse ordinary note
+access without repairing history; independent read-only preserved-note access
+remains available.
+
+This completes the note-reader prerequisite `brwr-8qgs` within assigned
+`brwr-dbp`, not durable apply itself. Production apply/recovery remain disabled
+until the ordinary SQL index, summary/run readers, in-flight handoff and universal
+recovery agree. Validation: 326 focused cases pass (76 Re-learn, 189 native,
+51 note and 10 CLI boundary tests), including 13 new regressions; host all-target Clippy and fast static
+checks pass. A fresh manual diff review and the required design reviewer checked
+the ownership/import boundary. The driver owns the complete external gate and
+publication. Suggested follow-up `brwr-pkrk`: show when the editor uses a note
+retained from an earlier capture identity and offer read-only alternatives.
