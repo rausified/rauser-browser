@@ -83,14 +83,18 @@ test("files Unix-only code embeds or names need macOS: SUMMARY.md, service fixtu
 
 test("toolchain, manifests, the native port, smoke, macOS dev tools and CI need macOS; the rest skips it", () => {
   for (const file of ["Cargo.lock", "host/Cargo.toml", "adapter-templates/Cargo.toml", "rust-toolchain.toml", "host/build.rs",
-    "adapter-templates/fuzz/fuzz_targets/match.rs", "extension/native.ts", "extension/manifest.json", "scripts/smoke-macos.mjs",
+    "extension/native.ts", "extension/manifest.json", "scripts/smoke-macos.mjs",
     "scripts/dev/deploy-live", "scripts/dev-service.mjs", "scripts/register-dev-host.mjs", "scripts/tests/dev-service.test.mjs",
     ".github/workflows/ci.yml", ".github/workflows/build-os.yml", "scripts/ci-changes.mjs", "scripts/ci-macos.mjs"]) {
     assert.equal(needs([file]), true, file);
   }
+  // The fuzz crate's compile check is its own unconditional ubuntu job
+  // (brwr-nu0m), not a macOS-only check, so neither it nor the engine it
+  // depends on sends this change to macOS.
   for (const file of ["extension/starter-adapters.ts", "extension/panel.ts", "extension/panel.html", "extension/worker.ts",
     "extension/build.mjs", "protocol/schema.json", "protocol/adapter-templates/vectors.json", "protocol/capture-site/catalog.json",
-    "adapter-templates/src/lib.rs", "package.json", "package-lock.json", "scripts/gate-adapter.mjs", "scripts/dev/pr-watch.mjs",
+    "adapter-templates/src/lib.rs", "adapter-templates/fuzz/fuzz_targets/match.rs",
+    "package.json", "package-lock.json", "scripts/gate-adapter.mjs", "scripts/dev/pr-watch.mjs",
     // Starter families PR C, Task 6: the scaffolder and the generated files
     // it and the generator write are cross-platform Node/JSON/Markdown,
     // same as every other starter source.
