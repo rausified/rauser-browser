@@ -128,6 +128,7 @@ test("the Confluence change runs every extension, engine and host check plus a11
     "cargo fmt",
     "adapter-templates tests",
     "adapter-templates clippy",
+    "adapter-templates fuzz targets compile",
     "host capture_site tests",
   ]);
 });
@@ -172,6 +173,7 @@ test("a vectors-only change skips the host and Rust lints", () => {
     "build:extension",
     "test:extension",
     "adapter-templates tests",
+    "adapter-templates fuzz targets compile",
   ]);
 });
 
@@ -184,6 +186,7 @@ test("a site-draft fixture runs the engine's and the host's tests but not the ex
   assert.deepEqual(names(["host/tests/fixtures/site-draft-answers/x.json"]), [
     "status docs",
     "adapter-templates tests",
+    "adapter-templates fuzz targets compile",
     "host capture_site tests",
   ]);
 });

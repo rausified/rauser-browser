@@ -1171,7 +1171,7 @@ additional cases cover older summaries and mixed legacy history.
 ## 2026-11-02 — Recognize padded IDs in tab titles (brwr-tp1)
 
 Custom capture rules can now remove an identifier from a tab title even when
-it ends with base64 padding, such as `[uXjVM0uuBLo=] Roadmap`. The same ID
+it ends with base64 padding, such as `[qK3nR8vDpZx=] Roadmap`. The same ID
 already worked in URLs; the title matcher stopped before its `=` and left the
 whole title in place. Both the native host and browser now recognize the
 padded title in either direction, and tab-title alias suggestions retain the

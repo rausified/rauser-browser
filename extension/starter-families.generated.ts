@@ -395,7 +395,10 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
             "Log in to continue - Log in with Atlassian account",
             "Choose an account to continue - Log in with Atlassian account"
           ],
-          "title": "[{key:jira_key}] {title} - Jira",
+          "title": [
+            "[{key:jira_key}] {title} - Jira",
+            "[{key:jira_key}] {title} - {~} Jira"
+          ],
           "alias": {
             "from": "tab_title",
             "capture": "key"
