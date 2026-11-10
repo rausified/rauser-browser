@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Brauser.app's Info.plist (DESIGN.md §11 "macOS app"). build-app.sh fills in
+  @VERSION@ from host/Cargo.toml; verify-app.sh checks every key below.
+  CFBundleExecutable must stay `brauser`: the native-messaging manifest and the
+  service LaunchAgent both name Contents/MacOS/brauser (DESIGN.md §11
+  "Self-registration on macOS").
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Brauser</string>
+	<key>CFBundleExecutable</key>
+	<string>brauser</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.rauser.brauser</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Brauser</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Brauser. Licensed under the Apache License, Version 2.0.</string>
+</dict>
+</plist>
