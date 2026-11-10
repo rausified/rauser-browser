@@ -1243,6 +1243,12 @@ This standard is meant to improve with use. When you change it:
 
 ## Learning log
 
+- 2026-11-10: Branch `feat/macos-release-packaging` (`brwr-3ppp`). The macOS
+  release scripts check what they build rather than trusting the build: the
+  bundle's exact file list, plist keys, `lipo -archs`, each slice's minos and a
+  `--version` run of both slices (Rosetta for x86_64), then the mounted
+  image's layout. Signing and notarization run only when the secrets exist and
+  are untested until John adds them ("macOS release packaging").
 - 2026-11-02: Branch `feat/sqlite-index` (`brwr-b2e`, `brwr-7vf`). The
   index tests stopped shelling out to `python3`: a read-only rusqlite reader
   checks rows and integrity, golden fixtures pinned every read before any
@@ -2155,3 +2161,113 @@ cancellation, explicit choice/default, and removed-folder Reuse;
 `extension/tests/task-folders.test.mjs` exercises reordered list replies and
 older hosts. The a11y fixture includes the new list reply. Real native-picker,
 Chrome selector and platform acceptance remain separate human checks.
+
+## macOS release packaging
+
+`packaging/macos/` builds the macOS release (DESIGN.md §11 "macOS app" and
+"Release artifacts") and `.github/workflows/release-macos.yml` runs it. The
+workflow runs on a `v*` tag (which must equal `host/Cargo.toml`'s version) or
+by hand, never on a pull request, so no PR can reach the signing secrets.
+
+### What runs without credentials, and how to run it locally
+
+On a Mac with both Rust targets (`rustup target add x86_64-apple-darwin
+aarch64-apple-darwin`):
+
+```sh
+packaging/macos/build-app.sh target/macos-pkg            # universal Brauser.app, then verify-app.sh
+packaging/macos/sign.sh --adhoc target/macos-pkg/Brauser.app
+packaging/macos/make-dmg.sh target/macos-pkg/Brauser.app target/macos-dist/Brauser-<version>-unsigned.dmg
+packaging/macos/verify-dmg.sh target/macos-dist/Brauser-<version>-unsigned.dmg --app-signature adhoc
+packaging/macos/release-assets.sh target/macos-dist      # needs cargo-cyclonedx and `npm ci`
+```
+
+`verify-app.sh` checks the bundle's exact file list, every `Info.plist` key
+that matters (`CFBundleExecutable` `brauser`, `CFBundleIdentifier`
+`com.rauser.brauser`, the version from `host/Cargo.toml`,
+`LSMinimumSystemVersion` 15.0, `LSUIElement`), that `lipo -archs` is exactly
+`x86_64 arm64`, each slice's `minos` 15.0 (`vtool -show-build`), and that each
+slice this Mac can run (x86_64 through Rosetta) prints `brauser <version>` for
+`--version`. `verify-dmg.sh` mounts the image read-only and checks that it
+holds only `Brauser.app` and an `Applications` link to `/Applications`, then
+runs `verify-app.sh` on the app inside it. Both take `--signature
+none|adhoc|developer-id` and `--notarized`; `--notarized` adds `xcrun stapler
+validate` and `spctl --assess` and refuses anything but a Developer ID
+signature.
+
+The executable is `Contents/MacOS/brauser`, the path the native-messaging
+manifest and the service LaunchAgent will name when self-registration is built
+(DESIGN.md §11 "Self-registration on macOS"). Registration on open is not
+built yet: opening the app runs the host with no arguments, like
+`target/debug/brauser` today.
+
+An ad-hoc signature (`sign.sh --adhoc`, `codesign -s -`) is a local test
+signature only: `spctl --assess` rejects it and Apple will not notarize it.
+Without the secrets, a dispatched run ad-hoc signs the app, leaves the image
+unsigned, names it `Brauser-<version>-unsigned.dmg`, prints a "Signing
+skipped" and a "Notarization skipped" notice, and uploads the image, SBOMs and
+`SHA256SUMS` as the `brauser-macos` workflow artifact. It creates no
+attestation and no release; a tag push or `draft_release=true` without the
+secrets fails instead.
+
+SBOMs: `brauser-<version>-host.cdx.json` is the CycloneDX SBOM of the crates
+linked into the binary (`cargo-cyclonedx` 0.5.9, once per macOS target with
+`--no-build-deps`, merged by `merge-cdx.mjs`); `brauser-<version>-extension.cdx.json`
+is the extension's runtime npm packages (`npm sbom --omit dev`). Neither tool
+is a project dependency, so `deny.toml` does not apply; the workflow installs
+`cargo-cyclonedx` with `cargo install --locked --version`.
+
+### Signing setup John must do (one time)
+
+*Untested: no Developer ID identity or notary key has been used with these
+scripts yet, so the signing, notarization, stapling, provenance and release
+steps have never run.*
+
+1. In the Apple Developer account (paid membership), create a **Developer ID
+   Application** certificate (Certificates, Identifiers & Profiles; a
+   Developer ID Installer certificate is not needed). Install it in Keychain
+   Access, then export the certificate with its private key as a `.p12` with
+   a strong export password.
+2. In App Store Connect, Users and Access, Integrations, App Store Connect
+   API, create a team key with the **Developer** role. Note its **Key ID** and
+   the **Issuer ID**, and download `AuthKey_<KEYID>.p8` (it downloads once).
+3. Add five repository secrets (Settings, Secrets and variables, Actions), or
+   `gh secret set <NAME> --repo rausified/rauser-browser`:
+
+   | Secret | Value |
+   |---|---|
+   | `MACOS_DEVELOPER_ID_P12_BASE64` | `base64 -i DeveloperID.p12` |
+   | `MACOS_DEVELOPER_ID_P12_PASSWORD` | the `.p12` export password |
+   | `APPLE_NOTARY_KEY_ID` | the API key's Key ID |
+   | `APPLE_NOTARY_ISSUER_ID` | the Issuer ID |
+   | `APPLE_NOTARY_KEY_P8_BASE64` | `base64 -i AuthKey_<KEYID>.p8` |
+
+4. Prove it with a dispatched run that publishes nothing:
+   `gh workflow run release-macos.yml --ref main`. The run imports the
+   identity into a throwaway keychain (`import-identity.sh` refuses a `.p12`
+   that does not hold exactly one Developer ID Application identity), signs
+   the app with the hardened runtime and a secure timestamp, notarizes and
+   staples it, puts it in `Brauser-<version>.dmg`, signs, notarizes and
+   staples the image, and runs `verify-dmg.sh --signature developer-id
+   --notarized`. That last step is the bead's acceptance (`spctl --assess`
+   and `stapler validate` on both the app and the image).
+5. For a release: push a tag `v<version>`, or dispatch with
+   `-f draft_release=true`. The release job attests SLSA build provenance for
+   the image and SBOMs (`actions/attest-build-provenance`; check with `gh
+   attestation verify Brauser-<version>.dmg --repo rausified/rauser-browser`),
+   adds the provenance bundle, and creates a **draft** release. Publish it only
+   after the install, move, update and removal checks (DESIGN.md §11).
+
+Locally, with the identity in the login keychain and the key on disk:
+`sign.sh --identity "Developer ID Application: <Name> (<TEAMID>)"`, then
+`APPLE_NOTARY_KEY_ID=… APPLE_NOTARY_ISSUER_ID=… APPLE_NOTARY_KEY_PATH=…/AuthKey_<KEYID>.p8 notarize.sh <app or dmg>`.
+
+### Known gaps
+
+- The image window has no custom background or icon positions (that needs a
+  Finder session to write `.DS_Store`); it shows the app and the Applications
+  link in Finder's default layout.
+- The app has no icon yet (`CFBundleIconFile`).
+- On a toolchain whose `rust-objcopy` cannot load `libLLVM.dylib` (seen on
+  John's Mac, 2026-11-10), the release build warns that stripping debug info
+  failed and the binary keeps it; CI's fresh toolchain is unaffected.
