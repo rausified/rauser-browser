@@ -16,6 +16,13 @@ on:
     - cron: "*/20 * * * *"
   push:
     branches: [main]
+  # A push to a PR the doctor labelled needs-merge (usually the fix for the
+  # conflict) runs it at once, so the label that keeps the PR out of
+  # Mergify's queue clears within a minute. The */20 cron above runs only
+  # every 4-7 hours on this repository (2026-11-09), and #384 waited an hour
+  # on the label after its conflict was fixed. The job's `if` skips other PRs.
+  pull_request:
+    types: [synchronize]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -28,13 +35,19 @@ permissions:
   pull-requests: write
   issues: write
 
-concurrency:
-  group: pr-doctor
-  cancel-in-progress: false
-
 jobs:
   doctor:
     name: PR doctor
+    # Fork PRs get no secrets and no write token; the doctor ignores them anyway.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'needs-merge') &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    # Job-level, so a skipped pull_request run never enters the group: GitHub
+    # keeps one pending run per group and would cancel a pending real one.
+    concurrency:
+      group: pr-doctor
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
