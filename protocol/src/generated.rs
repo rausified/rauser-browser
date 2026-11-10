@@ -704,6 +704,13 @@ pub struct ArtifactView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OpenTab {
+    pub url: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IncomingTrailView {
     pub source: ArtifactRefView,
     pub transition: String,
@@ -1118,6 +1125,8 @@ pub struct StartRunRequest {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_truncated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_tabs: Option<Vec<OpenTab>>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub selection: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
@@ -1337,6 +1346,8 @@ pub struct StartAutoSummaryRequest {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_truncated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_tabs: Option<Vec<OpenTab>>,
     pub requested_at: String,
 }
 

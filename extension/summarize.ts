@@ -8,6 +8,7 @@ import { APP_NAME, BINARY_NAME } from "./brand.js";
 import { EXTRACT_LIMITS, extractReadablePage, wellFormed, type ExtractedPage } from "./extract.js";
 import { localTimestamp } from "./model.js";
 import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
+import { openTabsFor, type OpenTabsApi } from "./open-tabs.js";
 import { markRunsMayExist } from "./run-card.js";
 
 export const SUMMARIZE_MENU_ID = `${BINARY_NAME}-summarize`;
@@ -29,6 +30,9 @@ export interface SummarizeDeps {
   /** Where an accepted run is recorded, so a later panel restores it. */
   storage: Pick<ChromeStorageArea, "set">;
   now(): Date;
+  /** Where the other tabs in the summarized tab's window come from
+   * (open-tabs.ts); without it a summary is sent with none. */
+  tabs?: OpenTabsApi;
   /** Overrides ALL_FRAMES_TIMEOUT_MS (tests). */
   allFramesTimeoutMs?: number;
   /** Override WORD_WAIT_MS and WORD_POLL_MS (tests). */
@@ -354,6 +358,7 @@ export async function summarizeTab(
   deps: SummarizeDeps,
 ): Promise<{ run: RunView; existing: boolean }> {
   const page = await readTab(tab, deps);
+  const openTabs = await openTabsFor(tab.id, deps.tabs);
   const response = await deps.host.call({
     type: "start_run",
     protocol_version: PROTOCOL_VERSION,
@@ -365,6 +370,7 @@ export async function summarizeTab(
     selection: page.selection,
     harness: null,
     record_key: null,
+    ...(openTabs.length > 0 ? { open_tabs: openTabs } : {}),
     requested_at: localTimestamp(deps.now()),
   }, "run_started");
   await markRunsMayExist(deps.storage, deps.now().getTime());
@@ -391,6 +397,7 @@ export async function autoSummarizeTab(
     }
     throw error;
   }
+  const openTabs = await openTabsFor(tab.id, deps.tabs);
   const response = await deps.host.callAny({
     type: "start_auto_summary",
     protocol_version: PROTOCOL_VERSION,
@@ -399,6 +406,7 @@ export async function autoSummarizeTab(
     title: page.title,
     content: page.content,
     ...(page.truncated ? { capture_truncated: true } : {}),
+    ...(openTabs.length > 0 ? { open_tabs: openTabs } : {}),
     requested_at: localTimestamp(deps.now()),
   }, ["run_started", "auto_summary_skipped"]);
   if (response.type === "auto_summary_skipped") return response.reason;

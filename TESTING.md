@@ -1808,6 +1808,50 @@ This proves read-only preview only: durable apply, note storage selection,
 artifact stubs, replay from applied home history and panel review remain
 separate acceptance work on brwr-dbp/brwr-6x2.
 
+## Related open tabs in summaries
+
+`brwr-sm2` (DESIGN.md §5.2 Related open tabs) is covered offline, with no
+real harness and no real Chrome:
+
+- Wire: `protocol/tests/wire_related_tabs.rs` (3 tests) checks that
+  `open_tabs` is optional on `start_run` and `start_auto_summary`, round
+  trips, holds at most 20 entries with a 1–2048 character `url` and a title of
+  at most 300, and carries only `url` and `title` (a `content` key is refused).
+- Extension: built `panel/summarize.test.mjs` ("Summarize sends the window's
+  other readable tabs as titles and addresses only", "Summarize sends no
+  open_tabs when the window has no other readable tab") drives the real
+  panel: the window's other HTTP(S) tabs go most recently used first, and the
+  summarized tab, the same address, `chrome://`, an addressless tab,
+  credentials, a 2048+ character address and an incognito tab are left out; a
+  300+ character title is cut; no other tab is injected. The panel harness's
+  `windowTabs` option backs `chrome.tabs.query({ windowId })` and
+  `chrome.tabs.get`. `worker.test.mjs`
+  `autoSummaryCarriesTheArtifactWindowsOtherReadableTabs` checks that
+  `start_auto_summary` carries only the same window's readable tabs.
+- Host: `cargo test --locked -p brauser --lib open_tabs related_tabs related_open`
+  runs the bounds check and snapshot filter (`summary::open_tabs`), answer
+  validation (an unsupplied address is dropped, a repeat or respelling is
+  kept once with the supplied address and title, a missing list is none, a
+  bad shape or reason names its field, at most 80 candidates are looked at),
+  the summary file section (escaped titles, reasons and destinations; a
+  non-listable address written as text), the prompt's conditional
+  `{{#open_tabs}}` paragraph, the queued record and bounded `page.md` section
+  (a forged closing heading in a title stays inside one line), the service's
+  refusal on task and site-draft runs and past 20 entries, and the
+  acceptance test
+  `related_open_tabs_reach_the_answer_and_the_summary_file_only_from_the_supplied_list`
+  (`service::finisher`). `native::tests::run_proxy`'s
+  `start_run_forwards_host_resolved_key` and
+  `auto_summary_forwards_a_summary_run_for_a_new_artifact` check the host
+  forwards the list.
+
+What this does not prove: that a real Codex or Claude Code agent picks the
+right related tabs, or how Chrome orders `lastAccessed` across a real window.
+No smoke step or dialog count changed. The private run record's optional
+`open_tabs` and a kept answer's `related_tabs` are omitted when empty; older
+services cannot read records holding them, so roll back only with no such run
+queued or running.
+
 ## Recorded incoming navigation in summaries
 
 `cargo test --locked -p brauser --lib incoming_navigation` exercises the host-owned

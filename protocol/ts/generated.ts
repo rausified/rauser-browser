@@ -538,6 +538,11 @@ export interface ArtifactView {
   incoming_trails: IncomingTrailView[];
 }
 
+export interface OpenTab {
+  url: string;
+  title: string;
+}
+
 export interface IncomingTrailView {
   source: ArtifactRefView;
   transition: string;
@@ -799,6 +804,7 @@ export interface StartRunRequest {
   title: string;
   content: string;
   capture_truncated?: boolean;
+  open_tabs?: OpenTab[];
   selection: string | null;
   harness: HarnessId | null;
   record_key: RecordKey | null;
@@ -973,6 +979,7 @@ export interface StartAutoSummaryRequest {
   title: string;
   content: string;
   capture_truncated?: boolean;
+  open_tabs?: OpenTab[];
   requested_at: string;
 }
 

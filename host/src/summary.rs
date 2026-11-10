@@ -25,13 +25,15 @@ use url::Url;
 
 use crate::answer::{
     MAX_ENTITY_CHARS, MAX_KEY_POINT_CHARS, MAX_LABEL_CHARS, MAX_METADATA_CHARS, MAX_OVERVIEW_CHARS,
-    MAX_REASON_CHARS, MAX_REFERENCE_TITLE_CHARS, ReadScope, SummaryAnswer,
+    MAX_REASON_CHARS, MAX_REFERENCE_TITLE_CHARS, MAX_RELATED_TAB_REASON_CHARS, ReadScope,
+    SummaryAnswer,
 };
 use crate::markdown::{LinkStyle, inline, neutralize_remote, wikilink, yaml_string};
 use crate::presentation::plain_line;
 use crate::vault::{note_filename, owned_frontmatter};
 
 pub(crate) mod incoming;
+pub(crate) mod open_tabs;
 
 pub const MAX_TITLE_BYTES: usize = 2048;
 /// The most characters (not bytes) of a summary's document type and
@@ -446,6 +448,36 @@ fn page_destination(url: &str) -> String {
     out
 }
 
+/// The answer's related tabs, one link a line: the supplied tab's title (or
+/// its address when it had none) and address, then the agent's reason.
+/// Every value is escaped context-free (`inline`, `page_destination`), and
+/// an address [`open_tabs`]'s rules would no longer list (a hand-edited run
+/// record) is written as text, never as a link.
+fn related_tabs(tabs: &[crate::answer::RelatedTab]) -> String {
+    use open_tabs::{MAX_OPEN_TAB_TITLE_CHARS, MAX_OPEN_TAB_URL_CHARS};
+    let mut out = String::new();
+    for tab in tabs {
+        let label = if tab.title.trim().is_empty() {
+            &tab.url
+        } else {
+            &tab.title
+        };
+        let label = inline(label, MAX_OPEN_TAB_TITLE_CHARS.max(MAX_OPEN_TAB_URL_CHARS));
+        let mut line = if open_tabs::listable(&tab.url) {
+            format!("- [{label}](<{}>)", page_destination(&tab.url))
+        } else {
+            format!("- {label}")
+        };
+        if !tab.reason.is_empty() {
+            line.push_str(" — ");
+            line.push_str(&inline(&tab.reason, MAX_RELATED_TAB_REASON_CHARS));
+        }
+        line.push('\n');
+        out.push_str(&line);
+    }
+    out
+}
+
 /// A wikilink to `target` when it can carry `target` unchanged, and the
 /// escaped single-line text otherwise, so a name with `#`, `|` or `[` never
 /// links to some other note. A backslash (which can escape the closing
@@ -657,6 +689,12 @@ pub fn render_summary(doc: &SummaryDocument<'_>, style: LinkStyle) -> String {
     if !incoming.is_empty() {
         out.push_str("\n## Incoming\n\nRecorded navigation when this summary was requested.\n\n");
         out.push_str(&incoming);
+    }
+    if !answer.related_tabs.is_empty() {
+        out.push_str(
+            "\n## Related open tabs\n\nOther tabs open in the same window when this summary was requested.\n\n",
+        );
+        out.push_str(&related_tabs(&answer.related_tabs));
     }
     if !answer.references.is_empty() {
         out.push_str("\n## References\n");
@@ -1424,6 +1462,7 @@ mod tests {
             },
             assessment: "Fills a gap in the widget notes.".into(),
             related_notes: vec!["projects/widget.md".into()],
+            related_tabs: Vec::new(),
         }
     }
 
@@ -1461,6 +1500,73 @@ mod tests {
         );
         assert!(rendered.contains("Link navigation from [Planning ticket](<https://example.com/items/1>) · last recorded 2026-11-02"));
         assert!(rendered.contains("## References"));
+        assert_eq!(frontmatter(&rendered), frontmatter(&plain));
+    }
+
+    #[test]
+    fn summary_related_open_tabs_are_listed_escaped_and_absent_without_any() {
+        let key = url_record_key(PAGE_URL).unwrap();
+        let plain_answer = answer();
+        let plain = render_summary(
+            &document(&key, &plain_answer, "Page note".into()),
+            LinkStyle::Relative,
+        );
+        assert!(!plain.contains("## Related open tabs"));
+        let mut related = answer();
+        related.related_tabs = vec![
+            crate::answer::RelatedTab {
+                url: "https://jira.example/browse/PRJ-1?a=1&b=`x`".into(),
+                title: "PRJ-1 ![x](https://evil.example) Ship".into(),
+                reason: "The ticket this spec implements. $x$".into(),
+            },
+            crate::answer::RelatedTab {
+                url: "https://untitled.example/".into(),
+                title: String::new(),
+                reason: String::new(),
+            },
+            // Only a hand-edited record could hold this; it is never a link.
+            crate::answer::RelatedTab {
+                url: "javascript:alert(1)".into(),
+                title: "Edited".into(),
+                reason: String::new(),
+            },
+        ];
+        let rendered = render_summary(
+            &document(&key, &related, "Page note".into()),
+            LinkStyle::Relative,
+        );
+        let section = rendered
+            .split_once("\n## Related open tabs\n\n")
+            .map(|(_, rest)| rest)
+            .expect("a Related open tabs section");
+        let lines: Vec<&str> = section.lines().collect();
+        assert_eq!(
+            lines[0],
+            "Other tabs open in the same window when this summary was requested."
+        );
+        assert!(lines[2].starts_with("- [PRJ-1 "), "{}", lines[2]);
+        assert!(!lines[2].contains("![x]"), "{}", lines[2]);
+        assert!(
+            lines[2].contains("(<https://jira.example/browse/PRJ-1?a=1&#38;b=&#96;x&#96;>)"),
+            "{}",
+            lines[2]
+        );
+        assert!(
+            lines[2].ends_with(" — The ticket this spec implements. &#36;x&#36;"),
+            "{}",
+            lines[2]
+        );
+        assert_eq!(
+            lines[3],
+            "- [https://untitled.example/](<https://untitled.example/>)"
+        );
+        assert_eq!(lines[4], "- Edited");
+        assert!(!rendered.contains("(<javascript:"));
+        // The section sits after the assessment, beside the other host lists.
+        assert!(
+            rendered.find("## Assessment").unwrap()
+                < rendered.find("## Related open tabs").unwrap()
+        );
         assert_eq!(frontmatter(&rendered), frontmatter(&plain));
     }
 

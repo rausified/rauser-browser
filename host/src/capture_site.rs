@@ -1003,6 +1003,7 @@ pub fn start_site_draft(
         requested_at: value.requested_at,
         kind: Some(RunKind::SiteDraft),
         instruction: None,
+        open_tabs: None,
     });
     crate::native::forward(&request, service)
 }
