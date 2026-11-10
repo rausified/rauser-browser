@@ -1461,7 +1461,7 @@ async function summarize(): Promise<void> {
     // (or keeps) the same card.
     const { run } = await summarizeTab(
       { id: tabId, url: page.url, title: page.title },
-      { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, now: () => new Date() },
+      { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, tabs: chrome.tabs, now: () => new Date() },
     );
     // The card shows only while its page is followed; this tab's line goes.
     if (runLines.get(runArea)?.tabId === tabId) clearRunLine(runArea);

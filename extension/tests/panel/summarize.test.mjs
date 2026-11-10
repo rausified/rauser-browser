@@ -62,6 +62,50 @@ test("clicking Summarize extracts in every frame then sends start_run with no re
   await until(() => /Readable title.*Queued/.test(page.el("run-area").textContent), "the run card");
 });
 
+test("Summarize sends the window's other readable tabs as titles and addresses only", async () => {
+  const windowTabs = [
+    { id: 2, url: "https://jira.example/browse/PRJ-1", title: "PRJ-1 Ship the widget", incognito: false, windowId: 1, lastAccessed: 10 },
+    // Most recently used first.
+    { id: 3, url: "https://docs.example/spec", title: "Widget spec", incognito: false, windowId: 1, lastAccessed: 20 },
+    // Left out: another scheme, no address (outside site access), the same
+    // page as the summarized tab, credentials, an address too long to send
+    // whole, and an incognito tab.
+    { id: 4, url: "chrome://settings/", title: "Settings", incognito: false, windowId: 1 },
+    { id: 5, title: "New Tab", incognito: false, windowId: 1 },
+    { id: 6, url: ARTICLE_URL, title: "Same page", incognito: false, windowId: 1 },
+    { id: 7, url: "https://user:pw@example.com/", title: "Creds", incognito: false, windowId: 1 },
+    { id: 8, url: `https://long.example/${"a".repeat(2048)}`, title: "Long", incognito: false, windowId: 1 },
+    { id: 9, url: "https://private.example/", title: "Private", incognito: true, windowId: 1 },
+    // A title past the bound is cut, never a reason to drop the tab.
+    { id: 10, url: "https://wiki.example/page", title: "t".repeat(400), incognito: false, windowId: 1, lastAccessed: 5 },
+  ];
+  const page = await summarizePanel({ local: new Map([[WARNING_SEEN_KEY, true]]), windowTabs });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  const [request] = page.sent("start_run");
+  assert.deepEqual(request.open_tabs, [
+    { url: "https://docs.example/spec", title: "Widget spec" },
+    { url: "https://jira.example/browse/PRJ-1", title: "PRJ-1 Ship the widget" },
+    { url: "https://wiki.example/page", title: "t".repeat(300) },
+  ]);
+  for (const tab of request.open_tabs) assert.deepEqual(Object.keys(tab).sort(), ["title", "url"]);
+  // No other tab is read: extraction ran in the summarized tab only.
+  assert.ok(page.state.injections.every((injection) => injection.target.tabId === 1));
+  await until(() => /Queued/.test(page.el("run-area").textContent), "the run card");
+});
+
+test("Summarize sends no open_tabs when the window has no other readable tab", async () => {
+  const page = await summarizePanel({
+    local: new Map([[WARNING_SEEN_KEY, true]]),
+    windowTabs: [{ id: 4, url: "chrome://newtab/", title: "New Tab", incognito: false, windowId: 1 }],
+  });
+  await until(() => page.el("summarize").disabled === false, "the button to enable");
+  page.el("summarize").click();
+  await until(() => page.sent("start_run").length === 1, "start_run");
+  assert.equal("open_tabs" in page.sent("start_run")[0], false);
+});
+
 test("Summarize carries truncation from the chosen content frame, not discarded frame text", async () => {
   for (const truncated of [true, false]) {
     const page = await summarizePanel({

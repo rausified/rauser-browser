@@ -21,6 +21,8 @@ interface ChromeTab {
   url?: string;
   title?: string;
   incognito: boolean;
+  /** Milliseconds since the epoch the tab was last active (Chrome 121+). */
+  lastAccessed?: number;
 }
 
 interface ChromeTabActivatedInfo {
@@ -177,7 +179,7 @@ interface ChromeApi {
   };
   tabs: {
     get(tabId: number): Promise<ChromeTab>;
-    query(queryInfo: { active?: boolean; currentWindow?: boolean }): Promise<ChromeTab[]>;
+    query(queryInfo: { active?: boolean; currentWindow?: boolean; windowId?: number }): Promise<ChromeTab[]>;
     create(properties: { url: string; windowId?: number; active?: boolean }): Promise<ChromeTab>;
     update(tabId: number, updateProperties: { active?: boolean; url?: string }): Promise<ChromeTab>;
     onUpdated: {

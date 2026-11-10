@@ -42,6 +42,11 @@ pub const MAX_RELATED_NOTES: usize = 32;
 /// dropped unchecked, so an answer cannot make the service check the
 /// filesystem for every entry it fits in [`MAX_ANSWER_BYTES`].
 pub const MAX_RELATED_CANDIDATES: usize = 4 * MAX_RELATED_NOTES;
+/// Bounds on a related tab's reason, in characters.
+pub const MAX_RELATED_TAB_REASON_CHARS: usize = 200;
+/// The most `related_tabs` entries looked at, kept or not; later ones are
+/// dropped unchecked. At most every supplied tab is kept.
+pub const MAX_RELATED_TAB_CANDIDATES: usize = 4 * crate::summary::open_tabs::MAX_OPEN_TABS;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -94,6 +99,17 @@ impl Metadata {
 pub struct Reference {
     pub title: String,
     pub url: String,
+}
+
+/// One of the run's supplied open tabs that the agent judged related to the
+/// artifact. `url` and `title` are the supplied tab's own (host data, never
+/// the agent's spelling); `reason` is the agent's one line, or `""`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RelatedTab {
+    pub url: String,
+    pub title: String,
+    pub reason: String,
 }
 
 /// How much of the artifact the agent read.
@@ -164,6 +180,10 @@ pub struct SummaryAnswer {
     pub importance: Importance,
     pub assessment: String,
     pub related_notes: Vec<String>,
+    /// Optional, and not forward compatible, as the fields above: an older
+    /// service rejects a kept answer that has any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_tabs: Vec<RelatedTab>,
 }
 
 /// Parse and normalize an agent's final message. The error names the field
@@ -175,8 +195,14 @@ pub struct SummaryAnswer {
 /// keywords and references past their limits are dropped, as is a
 /// reference address that is not `http`/`https`; `related_notes` silently
 /// drops entries that are not existing regular files inside
-/// `knowledge_base`.
-pub fn parse_answer(final_text: &str, knowledge_base: &Path) -> Result<SummaryAnswer, String> {
+/// `knowledge_base`, and `related_tabs` silently drops entries whose
+/// address is not one of `open_tabs` (the run's supplied list); a missing
+/// `related_tabs` reads as none.
+pub fn parse_answer(
+    final_text: &str,
+    knowledge_base: &Path,
+    open_tabs: &[brauser_protocol::OpenTab],
+) -> Result<SummaryAnswer, String> {
     if final_text.len() > MAX_ANSWER_BYTES {
         return Err("the answer is too large".to_string());
     }
@@ -239,6 +265,7 @@ pub fn parse_answer(final_text: &str, knowledge_base: &Path) -> Result<SummaryAn
         importance,
         assessment: text_field(&object, "assessment", "assessment", MAX_ASSESSMENT_CHARS)?,
         related_notes: related_notes(&object, knowledge_base)?,
+        related_tabs: related_tabs(&object, open_tabs)?,
     })
 }
 
@@ -254,7 +281,8 @@ pub fn answer_schema() -> Value {
         "required": [
             "overview", "description", "key_points", "document_type",
             "category", "keywords", "entities", "metadata", "references",
-            "read_scope", "access", "importance", "assessment", "related_notes"
+            "read_scope", "access", "importance", "assessment", "related_notes",
+            "related_tabs"
         ],
         "properties": {
             "overview": string(),
@@ -308,7 +336,16 @@ pub fn answer_schema() -> Value {
                 }
             },
             "assessment": string(),
-            "related_notes": strings()
+            "related_notes": strings(),
+            "related_tabs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["url", "reason"],
+                    "properties": { "url": string(), "reason": string() }
+                }
+            }
         }
     })
 }
@@ -644,6 +681,47 @@ fn related_notes(
     Ok(kept)
 }
 
+/// The listed tabs that are among the run's supplied `open_tabs`, each once,
+/// with the supplied address and title and the agent's one-line reason.
+/// Entries naming any other address are dropped, as are entries past the
+/// first [`MAX_RELATED_TAB_CANDIDATES`]; a missing list is none.
+fn related_tabs(
+    object: &Map<String, Value>,
+    open_tabs: &[brauser_protocol::OpenTab],
+) -> Result<Vec<RelatedTab>, String> {
+    let name = "related_tabs";
+    let items = match object.get(name) {
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(format!("{name} must be a list")),
+        None => return Ok(Vec::new()),
+    };
+    let mut kept: Vec<RelatedTab> = Vec::new();
+    for item in items.iter().take(MAX_RELATED_TAB_CANDIDATES) {
+        let Value::Object(entry) = item else {
+            return Err(format!("{name} must contain only objects"));
+        };
+        let url = string_field(entry, "url", "related_tabs.url")?;
+        let reason = optional_line(
+            entry,
+            "reason",
+            "related_tabs.reason",
+            MAX_RELATED_TAB_REASON_CHARS,
+        )?;
+        let Some(tab) = crate::summary::open_tabs::find(open_tabs, url) else {
+            continue;
+        };
+        if kept.iter().any(|seen| seen.url == tab.url) {
+            continue;
+        }
+        kept.push(RelatedTab {
+            url: tab.url.clone(),
+            title: tab.title.clone(),
+            reason,
+        });
+    }
+    Ok(kept)
+}
+
 /// A valid one-line answer for tests that run a fake harness.
 #[cfg(test)]
 pub(crate) const TEST_ANSWER: &str = r#"{"overview":"A page about a thing.","description":"A page.","key_points":["It says one thing."],"document_type":"report","category":"news","keywords":["thing"],"entities":{"technologies":[],"products":[],"people":[],"companies":[]},"metadata":{"authors":[],"owner":"","status":"","created":"","updated":"","version":""},"references":[],"read_scope":"whole","access":"ok","importance":{"level":"high","reason":"It matters."},"assessment":"It adds to the notes.","related_notes":[]}"#;
@@ -691,7 +769,15 @@ mod tests {
     }
 
     fn parse(value: &Value, kb: &Path) -> Result<SummaryAnswer, String> {
-        parse_answer(&value.to_string(), kb)
+        parse_with_tabs(value, kb, &[])
+    }
+
+    fn parse_with_tabs(
+        value: &Value,
+        kb: &Path,
+        open_tabs: &[brauser_protocol::OpenTab],
+    ) -> Result<SummaryAnswer, String> {
+        parse_answer(&value.to_string(), kb, open_tabs)
     }
 
     #[test]
@@ -719,15 +805,15 @@ mod tests {
         let (_dir, kb) = knowledge_base();
         let text = format!("\n```json\n{}\n```\n", answer());
         assert_eq!(
-            parse_answer(&text, &kb).unwrap(),
+            parse_answer(&text, &kb, &[]).unwrap(),
             parse(&answer(), &kb).unwrap()
         );
         let bare = format!("```\n{}\n```", answer());
-        assert!(parse_answer(&bare, &kb).is_ok());
+        assert!(parse_answer(&bare, &kb, &[]).is_ok());
         // Prose around the object, or two objects, is still invalid.
-        assert!(parse_answer(&format!("Here it is: {}", answer()), &kb).is_err());
-        assert!(parse_answer(&format!("{} {}", answer(), answer()), &kb).is_err());
-        assert!(parse_answer("[1]", &kb).is_err());
+        assert!(parse_answer(&format!("Here it is: {}", answer()), &kb, &[]).is_err());
+        assert!(parse_answer(&format!("{} {}", answer(), answer()), &kb, &[]).is_err());
+        assert!(parse_answer("[1]", &kb, &[]).is_err());
     }
 
     #[test]
@@ -787,6 +873,120 @@ mod tests {
         listed.push("b.md".to_string());
         value["related_notes"] = json!(listed);
         assert!(parse(&value, &kb).unwrap().related_notes.is_empty());
+    }
+
+    fn supplied_tabs() -> Vec<brauser_protocol::OpenTab> {
+        vec![
+            brauser_protocol::OpenTab {
+                url: "https://jira.example/browse/PRJ-1".into(),
+                title: "PRJ-1 Ship the widget".into(),
+            },
+            brauser_protocol::OpenTab {
+                url: "https://news.example/".into(),
+                title: "Unrelated news".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn related_tabs_keep_only_supplied_addresses() {
+        let (_dir, kb) = knowledge_base();
+        let mut value = answer();
+        value["related_tabs"] = json!([
+            { "url": "https://jira.example/browse/PRJ-1", "reason": " The ticket this spec implements. " },
+            // Never supplied: an agent (or a page it read) cannot add one.
+            { "url": "https://evil.example/exfiltrate", "reason": "Looks related." },
+            // A repeat, and the same address spelled differently.
+            { "url": "https://jira.example/browse/PRJ-1", "reason": "Again." },
+            { "url": "HTTPS://jira.example:443/browse/PRJ-1", "reason": "Again." },
+            { "url": "javascript:alert(1)", "reason": "" },
+        ]);
+        let parsed = parse_with_tabs(&value, &kb, &supplied_tabs()).unwrap();
+        assert_eq!(
+            parsed.related_tabs,
+            [RelatedTab {
+                url: "https://jira.example/browse/PRJ-1".into(),
+                title: "PRJ-1 Ship the widget".into(),
+                reason: "The ticket this spec implements.".into(),
+            }]
+        );
+        // With nothing supplied, every entry is dropped.
+        assert!(parse(&value, &kb).unwrap().related_tabs.is_empty());
+        // The supplied address and title are kept, not the agent's spelling.
+        value["related_tabs"] = json!([{ "url": "https://news.example", "reason": "" }]);
+        let parsed = parse_with_tabs(&value, &kb, &supplied_tabs()).unwrap();
+        assert_eq!(parsed.related_tabs[0].url, "https://news.example/");
+        assert_eq!(parsed.related_tabs[0].title, "Unrelated news");
+        assert_eq!(parsed.related_tabs[0].reason, "");
+    }
+
+    #[test]
+    fn related_tabs_are_optional_typed_and_bounded() {
+        let (_dir, kb) = knowledge_base();
+        let tabs = supplied_tabs();
+        let mut value = answer();
+        assert!(value.get("related_tabs").is_none());
+        assert!(
+            parse_with_tabs(&value, &kb, &tabs)
+                .unwrap()
+                .related_tabs
+                .is_empty()
+        );
+        for (bad, field) in [
+            (json!("https://news.example/"), "related_tabs"),
+            (json!(["https://news.example/"]), "related_tabs"),
+            (json!([{ "reason": "x" }]), "related_tabs.url"),
+            (
+                json!([{ "url": "https://news.example/" }]),
+                "related_tabs.reason",
+            ),
+            (
+                json!([{ "url": "https://news.example/", "reason": "a\nb" }]),
+                "related_tabs.reason",
+            ),
+            (
+                json!([{ "url": "https://news.example/", "reason": "r".repeat(MAX_RELATED_TAB_REASON_CHARS + 1) }]),
+                "related_tabs.reason",
+            ),
+        ] {
+            value["related_tabs"] = bad;
+            let error = parse_with_tabs(&value, &kb, &tabs).unwrap_err();
+            assert!(error.starts_with(field), "{error}");
+        }
+        // Only the first candidates are looked at.
+        let mut listed = vec![
+            json!({ "url": "https://elsewhere.example/", "reason": "" });
+            MAX_RELATED_TAB_CANDIDATES
+        ];
+        listed.push(json!({ "url": "https://news.example/", "reason": "" }));
+        value["related_tabs"] = json!(listed);
+        assert!(
+            parse_with_tabs(&value, &kb, &tabs)
+                .unwrap()
+                .related_tabs
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_kept_answer_without_related_tabs_serializes_as_before() {
+        let (_dir, kb) = knowledge_base();
+        let parsed = parse(&answer(), &kb).unwrap();
+        assert!(
+            serde_json::to_value(&parsed)
+                .unwrap()
+                .get("related_tabs")
+                .is_none()
+        );
+        let mut value = answer();
+        value["related_tabs"] = json!([{ "url": "https://news.example/", "reason": "Same team." }]);
+        let parsed = parse_with_tabs(&value, &kb, &supplied_tabs()).unwrap();
+        let kept = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(kept["related_tabs"][0]["title"], "Unrelated news");
+        assert_eq!(
+            serde_json::from_value::<SummaryAnswer>(kept).unwrap(),
+            parsed
+        );
     }
 
     #[test]
@@ -1059,8 +1259,16 @@ mod tests {
     #[test]
     fn empty_too_large_or_non_json_answers_are_invalid() {
         let (_dir, kb) = knowledge_base();
-        assert!(parse_answer("  \n", &kb).unwrap_err().contains("empty"));
-        assert!(parse_answer("not json", &kb).unwrap_err().contains("JSON"));
+        assert!(
+            parse_answer("  \n", &kb, &[])
+                .unwrap_err()
+                .contains("empty")
+        );
+        assert!(
+            parse_answer("not json", &kb, &[])
+                .unwrap_err()
+                .contains("JSON")
+        );
         let mut value = answer();
         value["padding"] = json!("x".repeat(MAX_ANSWER_BYTES));
         assert!(parse(&value, &kb).unwrap_err().contains("too large"));
@@ -1093,7 +1301,8 @@ mod tests {
                 "access",
                 "importance",
                 "assessment",
-                "related_notes"
+                "related_notes",
+                "related_tabs"
             ]
         );
         // Every property is required, as strict structured-output modes need.
@@ -1112,6 +1321,10 @@ mod tests {
         assert_eq!(
             schema["properties"]["references"]["items"]["required"],
             json!(["title", "url"])
+        );
+        assert_eq!(
+            schema["properties"]["related_tabs"]["items"]["required"],
+            json!(["url", "reason"])
         );
         assert_eq!(
             schema["properties"]["importance"]["properties"]["level"]["enum"],

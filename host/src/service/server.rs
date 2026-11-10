@@ -567,6 +567,20 @@ impl Server {
                 "task_folder_id is only for a task",
             );
         }
+        if value.open_tabs.is_some() && kind != RunKind::Summary {
+            return error(
+                &id,
+                ErrorCode::InvalidRequest,
+                "open_tabs is only for a summary",
+            );
+        }
+        if let Some(Err(message)) = value
+            .open_tabs
+            .as_deref()
+            .map(crate::summary::open_tabs::check)
+        {
+            return error(&id, ErrorCode::InvalidRequest, message);
+        }
         let setup = match kind {
             RunKind::Summary => self.run_setup(value.harness, &value.url),
             RunKind::SiteDraft => self.site_draft_setup(value.harness),
@@ -590,6 +604,7 @@ impl Server {
         });
         match self.supervisor.start_run(StartRun {
             incoming: setup.incoming,
+            open_tabs: value.open_tabs.unwrap_or_default(),
             summary_style: setup.summary_style,
             kind,
             url: value.url,
@@ -1135,6 +1150,7 @@ mod tests {
                 requested_at: "2026-10-26T10:00:00Z".into(),
                 kind: None,
                 instruction: None,
+                open_tabs: None,
             }))
         }
 
@@ -1501,6 +1517,7 @@ mod tests {
                 requested_at: "2026-10-26T10:00:00Z".into(),
                 kind: None,
                 instruction: None,
+                open_tabs: None,
             }));
             run_id = match started {
                 Response::RunStarted(started) => started.run.run_id,
@@ -1709,6 +1726,7 @@ mod tests {
             requested_at: "2026-10-26T10:00:00Z".into(),
             kind: None,
             instruction: None,
+            open_tabs: None,
         })));
         assert_eq!(code, ErrorCode::InvalidRequest);
         assert!(message.contains("title"), "{message}");
@@ -1980,6 +1998,7 @@ mod tests {
             requested_at: "2026-10-26T10:00:00Z".into(),
             kind: None,
             instruction: None,
+            open_tabs: None,
         }
     }
 
@@ -2013,6 +2032,7 @@ mod tests {
             requested_at: "2026-10-26T10:00:00Z".into(),
             kind: Some(RunKind::SiteDraft),
             instruction: None,
+            open_tabs: None,
         }
     }
 
@@ -2405,6 +2425,7 @@ mod tests {
             requested_at: "2026-10-26T10:00:00Z".into(),
             kind: Some(RunKind::Task),
             instruction: instruction.map(str::to_owned),
+            open_tabs: None,
         }
     }
 
@@ -2451,6 +2472,43 @@ mod tests {
                 )
             );
         }
+        assert!(runs_are_empty(&world));
+    }
+
+    #[test]
+    fn open_tabs_off_a_summary_or_past_their_bounds_are_refused() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        let tabs = Some(vec![crate::summary::open_tabs::example(1)]);
+        let mut task = task_start(Some("Tidy"));
+        task.open_tabs = tabs.clone();
+        let mut site_draft = site_draft_start(TOOLS);
+        site_draft.open_tabs = tabs;
+        for request in [task, site_draft] {
+            assert_eq!(
+                error_of(world.call(&Request::StartRun(request))),
+                (
+                    ErrorCode::InvalidRequest,
+                    "open_tabs is only for a summary".to_string()
+                )
+            );
+        }
+        let mut many = named_start_run(HarnessId::Claude);
+        many.open_tabs = Some(
+            (0..=crate::summary::open_tabs::MAX_OPEN_TABS)
+                .map(crate::summary::open_tabs::example)
+                .collect(),
+        );
+        assert_eq!(
+            error_of(world.call(&Request::StartRun(many))),
+            (
+                ErrorCode::InvalidRequest,
+                "open_tabs has more than 20 entries".to_string()
+            )
+        );
         assert!(runs_are_empty(&world));
     }
 
@@ -2870,6 +2928,7 @@ mod tests {
                 requested_at: "2026-10-26T10:00:00Z".into(),
                 kind: Some(RunKind::Task),
                 instruction: Some(instruction.into()),
+                open_tabs: None,
             })
         };
         let started = |response: Response| match response {

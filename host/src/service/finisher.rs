@@ -820,6 +820,7 @@ mod tests {
             incoming: Vec::new(),
             kind: RunKind::Summary,
             task: None,
+            open_tabs: Vec::new(),
         }
     }
 
@@ -1211,6 +1212,53 @@ mod tests {
         world.later_finisher().save(&reloaded, &answer()).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
         assert_eq!(world.summary_events().len(), 1);
+    }
+
+    /// brwr-sm2 acceptance: a summary started with other tabs open keeps
+    /// only the related ones the run was given, in its answer and its file.
+    #[test]
+    fn related_open_tabs_reach_the_answer_and_the_summary_file_only_from_the_supplied_list() {
+        let world = World::new();
+        let mut status = run(&world, PAGE, HarnessId::Codex);
+        status.answered_at = Some(timestamp(fixed_now()));
+        status.first_answered_at = status.answered_at.clone();
+        status.open_tabs = vec![
+            brauser_protocol::OpenTab {
+                url: "https://jira.example/browse/PRJ-1".into(),
+                title: "PRJ-1 Ship the widget".into(),
+            },
+            brauser_protocol::OpenTab {
+                url: "https://news.example/today".into(),
+                title: "Today's news".into(),
+            },
+        ];
+        let mut text = answer();
+        text["related_tabs"] = serde_json::json!([
+            { "url": "https://jira.example/browse/PRJ-1", "reason": "The ticket this page tracks." },
+            { "url": "https://elsewhere.example/never-open", "reason": "Invented." },
+        ]);
+        let finisher = world.finisher();
+        let kept = finisher.accept(&status, &text.to_string()).unwrap();
+        assert_eq!(
+            kept["related_tabs"],
+            serde_json::json!([{
+                "url": "https://jira.example/browse/PRJ-1",
+                "title": "PRJ-1 Ship the widget",
+                "reason": "The ticket this page tracks.",
+            }])
+        );
+        let saved = finisher.save(&status, &kept).unwrap();
+        let file = fs::read_to_string(world.root.join(saved.summary_path.unwrap())).unwrap();
+        assert!(file.contains(
+            "## Related open tabs\n\nOther tabs open in the same window when this summary was requested.\n\n- [PRJ-1 Ship the widget](<https://jira.example/browse/PRJ-1>) — The ticket this page tracks.\n"
+        ), "{file}");
+        assert!(!file.contains("news.example"), "{file}");
+        assert!(!file.contains("elsewhere.example"), "{file}");
+
+        // A run given no tabs keeps none, whatever the agent names.
+        status.open_tabs.clear();
+        let kept = finisher.accept(&status, &text.to_string()).unwrap();
+        assert!(kept.get("related_tabs").is_none(), "{kept}");
     }
 
     /// A 64-character label of multibyte letters passes the answer's

@@ -712,6 +712,36 @@ history queries; their reindex skips the newer summary markers. Re-upgrade
 and run `brauser reindex` to recover the view from the unchanged logs.
 
 
+### Related open tabs (additive within version 8)
+
+`start_run` and `start_auto_summary` accept an optional `open_tabs` list of
+`OpenTab` entries (`url`, 1 to 2048 characters, and `title`, at most 300
+characters), at most 20 (`brwr-sm2`). They are the other tabs in the
+summarized tab's own window, titles and addresses only: no page text ever
+crosses for them. The extension leaves out the summarized tab and tabs
+showing the same address, non-HTTP(S) addresses, addresses with credentials,
+tabs Chrome reports no address for, incognito tabs (and sends none for an
+incognito window), and addresses longer than 2048 characters (dropped, not
+cut). It cuts titles to 300 characters, sends the most recently used tabs
+first, and omits the field when none remain; missing means none. The native
+host refuses a list past these bounds as `invalid_request` and forwards it
+unchanged, including from `start_auto_summary` into the summary `start_run`.
+The service refuses it too, and refuses `open_tabs` on a site-draft or task
+`start_run`.
+
+The list is untrusted data. The service keeps a filtered snapshot in the
+run's `status.json`, writes it into `page.md` as a Brauser-bounded
+`## Open tabs` section, and sends `SUMMARY.md`'s Open tabs paragraph only when
+that snapshot is nonempty. The answer's `related_tabs` (`url` and a one-line
+`reason`) keeps only addresses from that snapshot; the kept answer in
+`result.json` and the summary file then carry the related tabs. No reply
+shape changes: `RunAnswer` does not carry them.
+
+Deploy the host and extension together: an older host rejects a request with
+`open_tabs` (`invalid or unsupported request JSON`). Roll the service back
+only once no queued or running summary carries open tabs and no kept answer
+has `related_tabs`, since an older service rejects both records.
+
 ## Focus-session activity snapshots
 
 An `ActivityEvent` may include `focus_session: {id, name, revision}` within
