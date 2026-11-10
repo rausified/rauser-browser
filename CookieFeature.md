@@ -1876,3 +1876,39 @@ cleared node_modules before reporting a missing cache entry, and the sandbox
 blocks the reinstall. The outer driver must install the exact lockfile,
 rebuild the extension and pass its complete independent gate. No new feature
 was started from that failed health gate.
+
+## 2026-11-09 — Restore the private re-key transaction prerequisite
+
+The shared queue pointed to transaction work that existed only in an archived
+local commit, so this cycle restored that missing prerequisite for the assigned
+Re-learn apply work. It binds a freshly rechecked recorded approval to exact
+before/after configuration bytes and a chained history append inside the
+selected home. Recovery finishes only an exact prepared append, keeps the
+original decision and physical notes intact, and refuses changed config,
+history, ownership or approval evidence. It preserves host-only settings and
+the existing frozen-ID rule for ordinary config saves.
+
+The restoration adds an explicit Windows refusal because the existing Windows
+directory-sync helpers cannot guarantee this multi-file ordering. A new fixture
+checks that corrupt history is preserved even when the replacement config is
+already published. The 15 Unix transaction fixtures are interruption tests,
+not power-loss certification. This remains private groundwork: no CLI/native
+apply endpoint or ordinary startup recovery is enabled. Universal recovery,
+replay-aware readers and actual rebuild acceptance remain assigned work under
+brwr-dbp; brwr-4qt4 tracks Windows durability and brwr-9w4t tracks in-flight runs.
+
+## 2026-11-09 — Exercise failed directory syncs during re-key recovery
+
+This checkout also lacked the driver's green transaction commit, so the
+prerequisite was restored before extending its tests. The recovery fixtures
+now fail the actual directory-sync calls for home history, replacement config
+and prepare cleanup. They show that a history sync error keeps the old config,
+a config sync error retains the exact recovery authority after rename, and
+a prepare that reappears after unsynced cleanup cannot duplicate history.
+Each retry preserves the original notes and approval decisions. These isolated
+fixtures model errors and interruptions; they do not certify a power failure.
+
+The design review also identified how startup recovery must fit the existing
+locks and read-only config reads. That integration remains part of brwr-dbp,
+together with replay-aware readers and index rebuilds. No user-facing apply
+command or automatic startup recovery has been enabled by this work.

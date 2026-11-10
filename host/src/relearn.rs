@@ -17,6 +17,14 @@ const MAX_EVIDENCE: usize = 32_768;
 
 pub(crate) mod aliases;
 pub mod journal;
+// Activation requires replay-aware ordinary readers and a universal recovery
+// gate. Keep the transaction compiled on every platform, with no CLI/native
+// entry point until that integration is complete (brwr-dbp).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "dormant durable apply prerequisite for brwr-dbp")
+)]
+mod transaction;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,7 +35,7 @@ pub struct PlanRequest {
     pub proposed: AdapterDocument,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Identity {
     pub artifact_type: String,
     pub artifact_id: String,
