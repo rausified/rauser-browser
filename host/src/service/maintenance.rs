@@ -230,6 +230,7 @@ mod tests {
             incoming: Vec::new(),
             kind: RunKind::Summary,
             task: None,
+            open_tabs: Vec::new(),
         }
     }
 

@@ -217,6 +217,10 @@ export async function install({
   // The panel's own window (chrome.windows.getCurrent), and the Tasks tabs
   // runtime.getContexts reports already open, for Tasks ↗ (task-handoff.ts).
   windowId = 1, tasksContexts = [],
+  // The other tabs in the followed tab's window, for chrome.tabs.query({
+  // windowId }) (Summarize's related open tabs, open-tabs.ts); `state.tab`
+  // is listed first, as Chrome lists every tab of the window.
+  windowTabs = [],
   // The build Chrome loaded (getManifest().version_name) and the manifest a
   // fetch of the extension's own manifest.json reads from disk;
   // `state.diskManifest` can change mid-test, as a deploy does.
@@ -246,6 +250,7 @@ export async function install({
     session,
     runtimeMessages: listeners(),
     windowId,
+    windowTabs: structuredClone(windowTabs),
     diskManifest,
     tasksContexts,
     tabUpdates: [],
@@ -392,9 +397,23 @@ export async function install({
       onChanged: listeners(),
     },
     tabs: {
-      async query() {
+      async query(queryInfo = {}) {
+        if (queryInfo.windowId !== undefined) {
+          count("tabs.query.window");
+          const own = state.tab ? [{ windowId: state.windowId, ...state.tab }] : [];
+          return queryInfo.windowId === state.windowId
+            ? [...own, ...structuredClone(state.windowTabs)]
+            : [];
+        }
         count("tabs.query");
         return state.tab ? [{ ...state.tab }] : [];
+      },
+      async get(tabId) {
+        count("tabs.get");
+        if (state.tab?.id === tabId) return { windowId: state.windowId, ...state.tab };
+        const other = state.windowTabs.find((tab) => tab.id === tabId);
+        if (other) return structuredClone(other);
+        throw new Error(`No tab with id: ${tabId}.`);
       },
       async create(properties) {
         state.created.push(properties);

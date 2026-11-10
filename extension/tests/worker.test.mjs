@@ -162,7 +162,11 @@ globalThis.chrome = {
     onActivated: { addListener(listener) { onTabActivated = listener; } },
     onRemoved: { addListener(listener) { onTabRemoved = listener; } },
     onReplaced: { addListener(listener) { onTabReplaced = listener; } },
-    async query() { return [...tabs.values()].map((tab) => structuredClone(tab)); },
+    async query(info = {}) {
+      return [...tabs.values()]
+        .filter((tab) => info.windowId === undefined || tab.windowId === info.windowId)
+        .map((tab) => structuredClone(tab));
+    },
   },
   webNavigation: {
     onCommitted: { addListener(listener) { onCommitted = listener; } },
@@ -3298,6 +3302,31 @@ test("recognizedOpenAtDwellZeroSendsOneStartAutoSummary", async () => {
   onTabUpdated(201, { status: "complete" }, tabs.get(201));
   await noAutoRequest(after);
   assert.equal(autoRequests(before).length, 1);
+});
+
+test("autoSummaryCarriesTheArtifactWindowsOtherReadableTabs", async () => {
+  resetAuto();
+  values.set(storageKey("policy_v1"), autoLease());
+  tabs.set(211, { id: 211, windowId: 7, url: "https://jira.example/browse/PRJ-1", title: "PRJ-1", incognito: false });
+  tabs.set(212, { id: 212, windowId: 8, url: "https://other-window.example/", title: "Elsewhere", incognito: false });
+  tabs.set(213, { id: 213, windowId: 7, url: "chrome://newtab/", title: "New Tab", incognito: false });
+  const before = ports.length;
+  const url = `${AUTO_ORIGIN}/items/related`;
+  await openArtifact(210, "related", { load: false });
+  tabs.set(210, { ...tabs.get(210), windowId: 7 });
+  onTabUpdated(210, { status: "complete" }, tabs.get(210));
+  const { port, request } = await autoRequest(before);
+  assert.equal(request.url, url);
+  // Only the same window's other http(s) tabs, titles and addresses only.
+  assert.deepEqual(request.open_tabs, [{ url: "https://jira.example/browse/PRJ-1", title: "PRJ-1" }]);
+  port.reply({
+    type: "run_started", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    run: { ...SUMMARY_RUN, url, record_key: { kind: "artifact", value: "test:auto.example/related" } },
+    existing: false,
+  });
+  await until(() => sessionValues.get(AUTO_KEY)?.skipped?.["test:auto.example/related"] > Date.now(),
+    "the artifact skipped for a while");
+  for (const id of [210, 211, 212, 213]) tabs.delete(id);
 });
 
 test("unrecognizedPagesSendNothing", async () => {

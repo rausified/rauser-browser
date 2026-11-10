@@ -2123,6 +2123,16 @@
         "incoming_trails": { "type": "array", "maxItems": 5, "items": { "$ref": "#/$defs/IncomingTrailView" } }
       }
     },
+    "OpenTab": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Another open tab offered to a summary as possible related context: its address and title as Chrome reports them, never its content. Untrusted data; the title is cut to 300 characters, and an address longer than 2048 characters is left out rather than cut.",
+      "required": ["url", "title"],
+      "properties": {
+        "url": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "title": { "type": "string", "maxLength": 300 }
+      }
+    },
     "IncomingTrailView": {
       "type": "object",
       "additionalProperties": false,
@@ -2683,6 +2693,7 @@
         "title": { "type": "string", "maxLength": 2048 },
         "content": { "type": "string", "maxLength": 1048576 },
         "capture_truncated": { "description": "Optional; missing or false means no reported cut. True when the extractor capped page text or highlighted selection. The service persists this provenance and discloses it in page.md and the prompt.", "type": "boolean" },
+        "open_tabs": { "description": "Optional, summary runs only; missing means none. The other readable HTTP(S) tabs in the summarized tab's own window when the summary was requested, titles and addresses only (never page text), at most 20. The extension leaves out the summarized tab, other schemes, incognito tabs and addresses longer than 2048 characters, and cuts titles to 300. The host refuses it on any other run kind; the service drops unsafe entries and lists the rest in page.md as untrusted data, and the answer's related_tabs may name only these addresses.", "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/OpenTab" } },
         "selection": { "oneOf": [{ "type": "string", "maxLength": 65536 }, { "type": "null" }] },
         "harness": { "oneOf": [{ "$ref": "#/$defs/HarnessId" }, { "type": "null" }] },
         "record_key": { "oneOf": [{ "$ref": "#/$defs/RecordKey" }, { "type": "null" }] },
@@ -2975,6 +2986,7 @@
         "title": { "type": "string", "maxLength": 2048 },
         "content": { "type": "string", "maxLength": 1048576 },
         "capture_truncated": { "description": "Optional; missing or false means no reported cut. True when the extractor capped page text or highlighted selection. The service persists this provenance and discloses it in page.md and the prompt.", "type": "boolean" },
+        "open_tabs": { "description": "Optional; missing means none. As start_run's open_tabs: the other readable HTTP(S) tabs in the artifact tab's own window, forwarded into the summary start_run.", "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/OpenTab" } },
         "requested_at": { "description": "When the artifact became due, with its UTC offset, as start_run's is.", "type": "string", "minLength": 20, "maxLength": 25, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$" }
       }
     },

@@ -216,6 +216,7 @@ fn summary_file(input: &str, url: &str, style: LinkStyle) -> String {
         },
         assessment: input.into(),
         related_notes: vec![input.into(), "projects/widget.md".into()],
+        related_tabs: Vec::new(),
     };
     let key = url_record_key(url).unwrap();
     let note_link = match style {

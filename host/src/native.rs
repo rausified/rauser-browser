@@ -1155,6 +1155,13 @@ fn start_run(
             "record_key is chosen by the host",
         );
     }
+    if let Some(Err(message)) = value
+        .open_tabs
+        .as_deref()
+        .map(crate::summary::open_tabs::check)
+    {
+        return error(&value.request_id, ErrorCode::InvalidRequest, message);
+    }
     let page = RunPage {
         url: &value.url,
         title: &value.title,
@@ -1208,6 +1215,13 @@ fn start_auto_summary(
     }
     if config.agent_status().state != brauser_protocol::AgentState::Ready {
         return skipped(Skip::NotSetUp);
+    }
+    if let Some(Err(message)) = value
+        .open_tabs
+        .as_deref()
+        .map(crate::summary::open_tabs::check)
+    {
+        return error(&value.request_id, ErrorCode::InvalidRequest, message);
     }
     let page = RunPage {
         url: &value.url,
@@ -1268,6 +1282,7 @@ fn start_auto_summary(
         requested_at: value.requested_at,
         kind: Some(brauser_protocol::RunKind::Summary),
         instruction: None,
+        open_tabs: value.open_tabs,
     };
     drop(config_lock);
     forward(&Request::StartRun(request), service)
@@ -1455,6 +1470,7 @@ fn task_request(
         requested_at: value.requested_at,
         kind: Some(brauser_protocol::RunKind::Task),
         instruction: Some(instruction),
+        open_tabs: None,
     })
 }
 
@@ -11813,6 +11829,7 @@ title = "{title} - Jira"
                 requested_at: requested_at.into(),
                 kind: None,
                 instruction: None,
+                open_tabs: None,
             })
         }
 
@@ -12101,6 +12118,7 @@ title = "{title} - Jira"
                 unreachable!();
             };
             request.capture_truncated = Some(true);
+            request.open_tabs = Some(vec![crate::summary::open_tabs::example(1)]);
             let response = call(
                 &mut config,
                 &link(socket, never),
@@ -12118,6 +12136,10 @@ title = "{title} - Jira"
                     assert_eq!(forwarded.url, url);
                     assert_eq!(forwarded.content, "Some text");
                     assert_eq!(forwarded.capture_truncated, Some(true));
+                    assert_eq!(
+                        forwarded.open_tabs,
+                        Some(vec![crate::summary::open_tabs::example(1)])
+                    );
                 }
                 other => panic!("expected start_run, got {other:?}"),
             }
@@ -12664,6 +12686,7 @@ title = "{title} - Jira"
                     requested_at,
                     kind: Some(brauser_protocol::RunKind::Task),
                     instruction: Some(TASK_INSTRUCTION.into()),
+                    open_tabs: None,
                 })
             );
         }
@@ -12816,6 +12839,7 @@ title = "{title} - Jira"
                 requested_at: value.requested_at.clone(),
                 kind: Some(brauser_protocol::RunKind::Task),
                 instruction: Some(value.instruction.clone()),
+                open_tabs: None,
             };
             let base = serde_json::to_vec(&Request::StartRun(forwarded))
                 .unwrap()
@@ -13060,6 +13084,7 @@ id = "gdoc:{host}/{id}"
                 content: "Some text".into(),
                 capture_truncated: None,
                 requested_at: now(),
+                open_tabs: None,
             })
         }
 
@@ -13274,6 +13299,7 @@ id = "gdoc:{host}/{id}"
                 unreachable!();
             };
             request.capture_truncated = Some(true);
+            request.open_tabs = Some(vec![crate::summary::open_tabs::example(2)]);
             let response = call(
                 &mut config,
                 &link(socket, never),
@@ -13290,6 +13316,10 @@ id = "gdoc:{host}/{id}"
             };
             assert_eq!(forwarded.kind, Some(RunKind::Summary));
             assert_eq!(forwarded.capture_truncated, Some(true));
+            assert_eq!(
+                forwarded.open_tabs,
+                Some(vec![crate::summary::open_tabs::example(2)])
+            );
             assert_eq!(forwarded.record_key, Some(expected));
             assert_eq!(forwarded.harness, None);
             assert_eq!(forwarded.selection, None);

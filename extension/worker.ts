@@ -392,7 +392,7 @@ async function attemptAuto(attempt: AutoAttempt): Promise<string> {
     return await autoSummarizeTab(
       { id: attempt.tabId, url: tab.url, title: tab.title ?? "" },
       {
-        scripting: chrome.scripting, host, storage: chrome.storage.local,
+        scripting: chrome.scripting, host, storage: chrome.storage.local, tabs: chrome.tabs,
         now: () => {
           const date = new Date();
           attempt.requestedDay = localTimestamp(date).slice(0, 10);
@@ -1860,7 +1860,7 @@ async function summaryNotice(tab: ChromeTab, tabId: number): Promise<PanelNotice
   try {
     const { run } = await summarizeTab(
       { id: tabId, url: raw, title: tab.title ?? "" },
-      { scripting: chrome.scripting, host, storage: chrome.storage.local, now: () => new Date() },
+      { scripting: chrome.scripting, host, storage: chrome.storage.local, tabs: chrome.tabs, now: () => new Date() },
     );
     return { kind: "run_started", run_id: run.run_id, tab_id: tabId, at: Date.now() };
   } catch (error) {
