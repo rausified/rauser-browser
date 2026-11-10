@@ -100,6 +100,42 @@
       "sourcedoc": null,
       "document_url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?file=A%0A%23%23+Forged.docx"
     },
+    {
+      "name": "doc2.aspx presentation sharing route drops prefix, tracking and fragment",
+      "url": "https://contoso.sharepoint.com/:p:/r/sites/team/_layouts/15/doc2.aspx?file=Deck.pptx&action=edit&sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D#slide=2",
+      "office": true,
+      "kind": "powerpoint",
+      "file": "Deck.pptx",
+      "sourcedoc": "11111111-2222-3333-4444-555555555555",
+      "document_url": "https://contoso.sharepoint.com/sites/team/_layouts/15/doc2.aspx?sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D&file=Deck.pptx"
+    },
+    {
+      "name": "doc2.aspx without a share segment takes its kind from the file",
+      "url": "https://contoso.sharepoint.com/sites/team/_layouts/15/doc2.aspx?sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D&file=Plan.docx&action=edit",
+      "office": true,
+      "kind": "word",
+      "file": "Plan.docx",
+      "sourcedoc": "11111111-2222-3333-4444-555555555555",
+      "document_url": "https://contoso.sharepoint.com/sites/team/_layouts/15/doc2.aspx?sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D&file=Plan.docx"
+    },
+    {
+      "name": "OneDrive doc2.aspx with only a sourcedoc",
+      "url": "https://contoso-my.sharepoint.com/personal/u/_layouts/15/doc2.aspx?sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D",
+      "office": true,
+      "kind": "unknown",
+      "file": null,
+      "sourcedoc": "11111111-2222-3333-4444-555555555555",
+      "document_url": "https://contoso-my.sharepoint.com/personal/u/_layouts/15/doc2.aspx?sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D"
+    },
+    {
+      "name": "DOC2.ASPX is case insensitive with only a file",
+      "url": "https://contoso.sharepoint.com/sites/team/_layouts/15/DOC2.ASPX?file=Book.XLSX&wdOrigin=x",
+      "office": true,
+      "kind": "excel",
+      "file": "Book.XLSX",
+      "sourcedoc": null,
+      "document_url": "https://contoso.sharepoint.com/sites/team/_layouts/15/DOC2.ASPX?file=Book.XLSX"
+    },
     { "name": "http is not recognised", "url": "http://contoso.sharepoint.com/:p:/r/sites/s/_layouts/15/Doc.aspx?file=X.pptx", "office": false },
     { "name": "bare sharepoint.com", "url": "https://sharepoint.com/:p:/r/sites/s/_layouts/15/Doc.aspx?file=X.pptx", "office": false },
     { "name": "a lookalike host", "url": "https://evil-sharepoint.com.example/:p:/r/sites/s/_layouts/15/Doc.aspx?file=X.pptx", "office": false },
@@ -107,6 +143,9 @@
     { "name": "a SharePoint site page", "url": "https://contoso.sharepoint.com/sites/team/SitePages/Home.aspx", "office": false },
     { "name": "Doc.aspx with neither parameter", "url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?action=view", "office": false },
     { "name": "Doc.aspx with empty parameters", "url": "https://contoso.sharepoint.com/sites/s/_layouts/15/Doc.aspx?sourcedoc=&file=", "office": false },
+    { "name": "doc2.aspx without a share segment needs a document parameter", "url": "https://contoso.sharepoint.com/sites/team/_layouts/15/doc2.aspx?action=view", "office": false },
+    { "name": "doc2.aspx with empty document parameters", "url": "https://contoso.sharepoint.com/sites/team/_layouts/15/doc2.aspx?sourcedoc=&file=", "office": false },
+    { "name": "doc20.aspx is not a document route", "url": "https://contoso.sharepoint.com/sites/team/_layouts/15/doc20.aspx?file=Deck.pptx", "office": false },
     { "name": "a file parameter on another site", "url": "https://example.com/?file=a.pptx", "office": false },
     { "name": "officeapps without src", "url": "https://view.officeapps.live.com/op/view.aspx", "office": false },
     { "name": "officeapps with a non-https src", "url": "https://view.officeapps.live.com/op/view.aspx?src=http%3A%2F%2Fx.example%2FA.xlsx", "office": false },

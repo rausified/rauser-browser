@@ -83,9 +83,9 @@
           "origin": "https://acme.sharepoint.com",
           "path_case": "insensitive",
           "match": [
-            {"path": "/sites/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}},
-            {"path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}},
-            {"path": "/personal/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}}
+            {"path": "/sites/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": {"sourcedoc": "{doc:uuid}"}},
+            {"path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": {"sourcedoc": "{doc:uuid}"}},
+            {"path": "/personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": {"sourcedoc": "{doc:uuid}"}}
           ],
           "id": "sharepoint:{host}/{doc}",
           "generic_titles": ["Working...", "Working…", "Login", "Redirecting", "Error", "Sign in is not complete"]
@@ -95,9 +95,9 @@
           "origin": "https://acme-my.sharepoint.com",
           "path_case": "insensitive",
           "match": [
-            {"path": "/sites/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}},
-            {"path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}},
-            {"path": "/personal/{_}/_layouts/15/Doc.aspx", "query": {"sourcedoc": "{doc:uuid}"}}
+            {"path": "/sites/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": {"sourcedoc": "{doc:uuid}"}},
+            {"path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": {"sourcedoc": "{doc:uuid}"}},
+            {"path": "/personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", "query": {"sourcedoc": "{doc:uuid}"}}
           ],
           "id": "sharepoint:{host}/{doc}",
           "generic_titles": ["Working...", "Working…", "Login", "Redirecting", "Error", "Sign in is not complete"]
@@ -20005,6 +20005,149 @@
       "expect": {"match": false, "reason": "out_of_scope"},
       "doc": {"$fixture": "starters"},
       "url": "https://github.com/settings/profile"
+    },
+    {
+      "id": "eval.sharepoint.doc.doc2",
+      "kind": "evaluate",
+      "why": "doc2.aspx preserves the same document identity and sourcedoc requirement as Doc.aspx",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "expect": {
+        "match": true,
+        "adapter": 6,
+        "rule": 0,
+        "type": "sharepoint.doc",
+        "captures": {
+          "doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+        },
+        "artifact_id": "sharepoint:acme.sharepoint.com/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+        "mode": null
+      },
+      "doc": {
+        "$fixture": "starters"
+      },
+      "url": "https://acme.sharepoint.com/sites/Eng/_layouts/15/doc2.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true"
+    },
+    {
+      "id": "eval.sharepoint.share_link.doc2",
+      "kind": "evaluate",
+      "why": "doc2.aspx preserves the same document identity and sourcedoc requirement as Doc.aspx",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "expect": {
+        "match": true,
+        "adapter": 6,
+        "rule": 1,
+        "type": "sharepoint.doc",
+        "captures": {
+          "doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+        },
+        "artifact_id": "sharepoint:acme.sharepoint.com/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+        "mode": null
+      },
+      "doc": {
+        "$fixture": "starters"
+      },
+      "url": "https://acme.sharepoint.com/:p:/r/sites/Eng/_layouts/15/doc2.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true"
+    },
+    {
+      "id": "eval.sharepoint.case_insensitive.doc2",
+      "kind": "evaluate",
+      "why": "doc2.aspx preserves the same document identity and sourcedoc requirement as Doc.aspx",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "expect": {
+        "match": true,
+        "adapter": 6,
+        "rule": 0,
+        "type": "sharepoint.doc",
+        "captures": {
+          "doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+        },
+        "artifact_id": "sharepoint:acme.sharepoint.com/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+        "mode": null
+      },
+      "doc": {
+        "$fixture": "starters"
+      },
+      "url": "https://acme.sharepoint.com/SITES/Eng/_LAYOUTS/15/DOC2.ASPX?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true"
+    },
+    {
+      "id": "eval.sharepoint.no_sourcedoc.doc2",
+      "kind": "evaluate",
+      "why": "doc2.aspx preserves the same document identity and sourcedoc requirement as Doc.aspx",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "expect": {
+        "match": false,
+        "reason": "no_rule"
+      },
+      "doc": {
+        "$fixture": "starters"
+      },
+      "url": "https://acme.sharepoint.com/sites/Eng/_layouts/15/doc2.aspx?file=Plan.docx"
+    },
+    {
+      "id": "eval.sharepoint.personal_on_tenant.doc2",
+      "kind": "evaluate",
+      "why": "doc2.aspx preserves the same document identity and sourcedoc requirement as Doc.aspx",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "sq": [
+        "SQ-V2"
+      ],
+      "expect": {
+        "match": true,
+        "adapter": 6,
+        "rule": 2,
+        "type": "sharepoint.doc",
+        "captures": {
+          "doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+        },
+        "artifact_id": "sharepoint:acme.sharepoint.com/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+        "mode": null
+      },
+      "doc": {
+        "$fixture": "starters"
+      },
+      "url": "https://acme.sharepoint.com/personal/jdoe_acme_com/_layouts/15/doc2.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true"
+    },
+    {
+      "id": "eval.onedrive.doc.doc2",
+      "kind": "evaluate",
+      "why": "doc2.aspx preserves the same document identity and sourcedoc requirement as Doc.aspx",
+      "impls": [
+        "rust",
+        "ts"
+      ],
+      "sq": [
+        "SQ-V2"
+      ],
+      "expect": {
+        "match": true,
+        "adapter": 7,
+        "rule": 2,
+        "type": "sharepoint.doc",
+        "captures": {
+          "doc": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+        },
+        "artifact_id": "sharepoint:acme-my.sharepoint.com/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+        "mode": null
+      },
+      "doc": {
+        "$fixture": "starters"
+      },
+      "url": "https://acme-my.sharepoint.com/personal/jdoe_acme_com/_layouts/15/doc2.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true"
     },
     {
       "id": "eval.sharepoint.doc",

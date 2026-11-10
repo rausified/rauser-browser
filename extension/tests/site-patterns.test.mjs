@@ -23,6 +23,7 @@ test("one shaper covers Jira, SharePoint, GitHub and named future tool URL forms
     ["https://acme.atlassian.net/jira/software/projects/PROJ/boards/7?selectedIssue=PROJ-42", "/jira/software/projects/{slug}/boards/{num}?{param}={key}"],
     ["https://acme.sharepoint.com/sites/work/_layouts/15/Doc.aspx?sourcedoc=%7B123e4567-e89b-12d3-a456-426614174000%7D", "/sites/work/_layouts/{num}/{slug}?sourcedoc={uuid}"],
     ["https://acme-my.sharepoint.com/personal/person/_layouts/15/Doc.aspx?sourcedoc=123e4567-e89b-12d3-a456-426614174000", "/personal/person/_layouts/{num}/{slug}?sourcedoc={uuid}"],
+    ["https://acme.sharepoint.com/:p:/r/sites/work/_layouts/15/doc2.aspx?sourcedoc=%7B123e4567-e89b-12d3-a456-426614174000%7D", "/{slug}/r/sites/work/_layouts/{num}/{slug}?sourcedoc={uuid}"],
     ["https://github.com/Acme/Widget/pull/42/files", "/{slug}/{slug}/pull/{num}/files"],
     ["https://github.com/acme/widget/issues/42", "/acme/widget/issues/{num}"],
     ["https://wiki.example/display/SPACE/Title", "/display/{slug}/{slug}"],

@@ -20,6 +20,13 @@
 
 ## §4.5 Agent invocation rules — history
 
+**SharePoint doc2.aspx (2026-11-10).** The SharePoint/OneDrive starter now
+accepts `Doc.aspx` and `doc2.aspx` in each document route, retaining the
+`sourcedoc` UUID identity and both earlier starter versions for reviewed
+updates. The host and extension Office detectors also recognize `doc2.aspx`,
+including direct document links without a sharing prefix; shared Office and
+adapter vectors pin recognition, URL cleanup and identity.
+
 - The agent denylist, the single-use harness token with its native confirmation, and the PR 2-era lockdown (argument templates, `--help` and feature checks, an emptied environment with an allowlist, and host-owned work directories) were removed (protocol v6 and open access PR 3, 2026-10-26, §14).
 
 ## §5.1 Artifact logging — history

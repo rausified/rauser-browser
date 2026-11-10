@@ -1579,19 +1579,19 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
           "path_case": "insensitive",
           "match": [
             {
-              "path": "/sites/{_}/_layouts/15/Doc.aspx",
+              "path": "/sites/{_}/_layouts/15/(Doc.aspx|doc2.aspx)",
               "query": {
                 "sourcedoc": "{doc:uuid}"
               }
             },
             {
-              "path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx",
+              "path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx)",
               "query": {
                 "sourcedoc": "{doc:uuid}"
               }
             },
             {
-              "path": "/personal/{_}/_layouts/15/Doc.aspx",
+              "path": "/personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx)",
               "query": {
                 "sourcedoc": "{doc:uuid}"
               }
@@ -1618,6 +1618,28 @@ export const STARTER_FAMILIES: readonly StarterFamilyData[] = [
               },
               {
                 "path": "/:w:/r/sites/{_}/_layouts/15/Doc.aspx",
+                "query": {
+                  "sourcedoc": "{doc:uuid}"
+                }
+              },
+              {
+                "path": "/personal/{_}/_layouts/15/Doc.aspx",
+                "query": {
+                  "sourcedoc": "{doc:uuid}"
+                }
+              }
+            ]
+          },
+          {
+            "match": [
+              {
+                "path": "/sites/{_}/_layouts/15/Doc.aspx",
+                "query": {
+                  "sourcedoc": "{doc:uuid}"
+                }
+              },
+              {
+                "path": "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx",
                 "query": {
                   "sourcedoc": "{doc:uuid}"
                 }

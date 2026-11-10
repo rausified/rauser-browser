@@ -11,11 +11,17 @@ the common Office document routes under `/sites/` and `/personal/`, plus the
 Office sharing-link form that OneDrive and SharePoint use when a document is
 shared with you (`/:w:/`, `/:x:/`, or `/:p:/`, then `/r/` or `/g/`, then
 `/sites/` or `/personal/`). Route literals compare without ASCII case, and the
-braced or unbraced `sourcedoc` UUID becomes the identity:
+document page can be `Doc.aspx` or `doc2.aspx`; the braced or unbraced
+`sourcedoc` UUID becomes the identity:
 
 `sharepoint:<exact host>/<lowercase UUID>`
 
-Recorded samples, one per rule:
+The `doc2.aspx` form was reported on 2026-11-10. Its route is covered by
+synthetic regression cases; the original live certification date above is
+unchanged. Existing saved starters can adopt it through **Update to current rules**
+in Settings without changing document identities.
+
+Recorded route examples (tenant names and document IDs are synthetic):
 
 - `https://acme.sharepoint.com/sites/Eng/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true`
   — a site document opened directly.
@@ -34,6 +40,9 @@ Recorded samples, one per rule:
 - `https://acme-my.sharepoint.com/personal/jdoe_acme_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Plan.docx&action=default&mobileredirect=true`
   — a personal (OneDrive for work) document opened directly.
 
+- `https://acme.sharepoint.com/:p:/r/sites/Eng/_layouts/15/doc2.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=Deck.pptx&action=edit`
+  — the reported PowerPoint sharing route using `doc2.aspx`.
+
 Separately from this draft, the Brauser service recognises these Office
 document routes (and the plain `:w:`/`:x:`/`:p:` sharing links) from a page's
 URL so that a task or summary run's agent can fetch the document itself
@@ -43,10 +52,11 @@ that never changes record keys.
 The draft deliberately does not recognize folder listings, search results,
 ordinary site pages, a sharing link with no `sourcedoc` UUID (such as
 `https://acme-my.sharepoint.com/:w:/r/personal/x/_layouts/15/Doc.aspx`), or a
-document link that is not the `_layouts/15/Doc.aspx` sharing/open redirect at
-all (such as `https://acme-my.sharepoint.com/:w:/r/personal/x/Documents/a.docx`).
+document link outside the `_layouts/15/Doc.aspx` and
+`_layouts/15/doc2.aspx` sharing/open redirects (such as `https://acme-my.sharepoint.com/:w:/r/personal/x/Documents/a.docx`).
 It also does not recognize the short guest-link form that has no
-`_layouts/15/Doc.aspx` segment and carries no `sourcedoc`, such as
+`_layouts/15/Doc.aspx` or `_layouts/15/doc2.aspx` segment and carries no
+`sourcedoc`, such as
 `https://acme-my.sharepoint.com/:x:/g/personal/jdoe_acme_com/EbCdEfGh`; that
 link only resolves to a document after a redirect Brauser does not follow.
 
@@ -58,8 +68,8 @@ aside, or is empty or the bare host, records no title, so the artifact keeps
 the title it already has ("Untitled" for a new one).
 
 Known limits: sharing links for other kinds of file are not recognized, even
-in the `_layouts/15/Doc.aspx` form, because only Word, Excel and PowerPoint
-are recorded: `/:b:/` (PDF), `/:o:/` (OneNote), `/:v:/` (video), and `/:u:/`
+in the `_layouts/15/Doc.aspx` or `_layouts/15/doc2.aspx` form, because only
+Word, Excel and PowerPoint are recorded: `/:b:/` (PDF), `/:o:/` (OneNote), `/:v:/` (video), and `/:u:/`
 (other files). Neither is the older `/:w:/s/` sharing form. Each needs its own
 recorded sample before it joins the starter.
 

@@ -2668,7 +2668,10 @@ for (const { name, response } of ADAPTER_REPAIR_CASES) {
 }
 
 const ONEDRIVE = "https://contoso-my.sharepoint.com";
-const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
+const SITES_RULE = { path: "/sites/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: { sourcedoc: "{doc:uuid}" } };
+const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: { sourcedoc: "{doc:uuid}" } };
+const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx)", query: { sourcedoc: "{doc:uuid}" } };
+const CURRENT_SHAREPOINT_RULES = [SITES_RULE, SHARE_RULE, PERSONAL_RULE];
 function staleOneDrive() {
   return {
     type: "sharepoint.doc", origin: ONEDRIVE, path_case: "insensitive",
@@ -2692,17 +2695,17 @@ test("a stale starter adapter offers Update to current rules; an up-to-date one 
   assert.deepEqual(actions.children.slice(0, 2).map((button) => button.textContent),
     ["Edit and preview", "Update to current rules"]);
 
-  install({ adapters: [{ ...staleOneDrive(), match: [...staleOneDrive().match, SHARE_RULE] }] });
+  install({ adapters: [{ ...staleOneDrive(), match: CURRENT_SHAREPOINT_RULES }] });
   await openSettings();
   assert.equal(updateButtons().length, 0);
 });
 
 const updatedOneDrive = (saved) => {
-  const [sites, , personal, ...rest] = saved.match;
-  return { ...saved, match: [sites, personal, ...rest, SHARE_RULE] };
+  const rest = saved.match.slice(3);
+  return { ...saved, match: [...rest, ...CURRENT_SHAREPOINT_RULES] };
 };
 
-test("Update to current rules reviews the replaced rule and saves it only on Save", async () => {
+test("Update to current rules reviews the replaced rules and saves them only on Save", async () => {
   const saved = { ...staleOneDrive(), title: "{title}.docx" };
   const saves = [];
   const state = install({
@@ -2716,13 +2719,13 @@ test("Update to current rules reviews the replaced rule and saves it only on Sav
   const review = env.elements.get("adapter-editor-review");
   assert.equal(review.hidden, false);
   const text = nodeText(review);
-  assert.match(text, /Replaces 1 rule with 1 rule from the current OneDrive for work documents starter:/);
-  assert.ok(text.includes("Adds /(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), text);
+  assert.match(text, /Replaces 3 rules with 3 rules from the current OneDrive for work documents starter:/);
+  assert.ok(text.includes("Adds /(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/(Doc.aspx|doc2.aspx) · query sourcedoc={doc:uuid}"), text);
   assert.ok(text.includes("Removes /:w:/r/sites/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), text);
   // The preview starts on the new rule, and that example matches it.
   const example = env.elements.get("adapter-preview-url").value;
-  assert.match(example, /^https:\/\/contoso-my\.sharepoint\.com\/:w:\/r\/sites\/example\/_layouts\/15\/Doc\.aspx\?sourcedoc=/);
-  assert.match(nodeText(env.elements.get("adapter-preview")), /Example: [^ ]+ — Matches sharepoint\.doc rule 3 · sharepoint:contoso-my\.sharepoint\.com\//);
+  assert.match(example, /^https:\/\/contoso-my\.sharepoint\.com\/sites\/example\/_layouts\/15\/Doc\.aspx\?sourcedoc=/);
+  assert.match(nodeText(env.elements.get("adapter-preview")), /Example: [^ ]+ — Matches sharepoint\.doc rule 1 · sharepoint:contoso-my\.sharepoint\.com\//);
   assert.equal(saves.length, 0, "opening the review saves nothing");
 
   await saveOpenAdapter("the starter update");
@@ -2756,7 +2759,6 @@ test("a starter update the host refuses as a retired-contract change explains it
 
 // The side panel's near-miss offer hands an adapter (and a starter rule)
 // to settings in `#adapter-review=`; settings only opens a review.
-const PERSONAL_RULE = { path: "/personal/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
 const reviewHash = (adapter, rule) => `#adapter-review=${encodeURIComponent(JSON.stringify({
   adapter: [adapter.origin, adapter.type, adapter.id], rule,
 }))}`;
@@ -2780,7 +2782,7 @@ test("a handed-off rule from the current update opens Update to current rules, a
   assert.equal(env.elements.get("adapter-editor").hidden, false);
   assert.equal(env.elements.get("adapter-editor-heading").textContent, "Update sharepoint.doc to current rules");
   assert.deepEqual(JSON.parse(env.elements.get("adapter-json").value), updatedOneDrive(staleOneDrive()));
-  assert.match(nodeText(env.elements.get("adapter-editor-review")), /Replaces 1 rule with 1 rule from the current OneDrive for work documents starter:/);
+  assert.match(nodeText(env.elements.get("adapter-editor-review")), /Replaces 3 rules with 3 rules from the current OneDrive for work documents starter:/);
   assert.deepEqual(state.replaced, ["/options.html"], "the hash is cleared so a reload does not reopen it");
   assert.equal(updateRequests().length, 0, "nothing saves on load");
   env.elements.get("cancel-adapter").click();
@@ -2802,7 +2804,7 @@ test("a handed-off starter rule for a narrowed adapter opens a one-rule addition
   assert.equal(env.elements.get("adapter-editor-heading").textContent, "Add a rule to sharepoint.doc");
   const review = nodeText(env.elements.get("adapter-editor-review"));
   assert.match(review, /Adds 1 rule from the current SharePoint documents starter for the page you were on:/);
-  assert.ok(review.includes("Adds /personal/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), review);
+  assert.ok(review.includes("Adds /personal/{_}/_layouts/15/(Doc.aspx|doc2.aspx) · query sourcedoc={doc:uuid}"), review);
   assert.equal(env.elements.get("adapter-editor-review").querySelectorAll("li").length, 1);
   assert.match(env.elements.get("adapter-preview-url").value, /^https:\/\/acme\.sharepoint\.com\/personal\//);
   assert.equal(updateRequests().length, 0, "nothing saves on load");
