@@ -552,3 +552,48 @@ Clippy, protocol generation check, Rust formatting, TypeScript, ESLint and
 current-state/whitespace checks pass. Fresh full source/test/document review
 is complete. The driver owns the full unsandboxed gate and publication;
 Windows execution and real power-loss certification are not claimed.
+
+
+## Explicit nested config reads — 2026-11-09 (`brwr-l2ok`)
+
+### Open decisions
+
+No new policy decisions. John's recovery/history decisions above remain in
+force. This slice prepares the config-lock boundary; ordinary loading and
+refresh do not run transaction recovery, and no apply entry point is added.
+
+### Design challenge
+
+Before implementation, reviewer `/root/gate_challenge` recommended separating
+coordination-only locks from adopted-contract recording and requiring a live,
+matching config-lock token for nested reads. Adopt this simpler prerequisite
+instead of adding a dormant general recovery framework. Locked review, journal
+and transaction code must never reopen through the ordinary loader, since a
+future recovery gate there would reacquire its own config lock. Preserve
+config-before-capture ordering and ordinary write-lock adoption. Activation
+remains coupled to replay-aware index, note, summary and run readers.
+
+### Plan
+
+Split coordination lock acquisition from the recording flag. Add an explicit
+read-under-lock operation with a matching-path guard, thread it through nested
+planning, preview, decision recording and private transaction preparation, and
+prove foreign-lock refusal, read-only adopted-contract behavior and dormant
+pending-state preservation. Ordinary loader and refresh behavior stays intact.
+
+
+### Result and remaining work
+
+Explicit nested reads are implemented. Four new regressions plus existing
+coverage pass: 71 Re-learn, 158 config and 10 real CLI boundary tests (239
+focused cases). Host all-target Clippy, protocol generation, Rust formatting,
+TypeScript, ESLint and current-state/whitespace checks pass. Full fresh diff
+review and `/root/gate_challenge` source review found no blocking findings.
+The full unsandboxed gate and publication belong to the driver.
+
+This completes the nested-read implementation only. Do not add another dormant
+lock wrapper stage: the next integration must connect authoritative home-history
+replay to ordinary readers and the config recovery boundary, preserving inert
+error reporting and config-before-capture ordering. The lower-level recovery
+and journal inspection helpers still rely on documented caller locks.
+`brwr-dbp` remains incomplete; no apply/recovery activation is claimed.

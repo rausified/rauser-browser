@@ -1983,3 +1983,32 @@ avoid recursive filesystem locks in nested reopen, expose recovery-specific
 inert state, and activate recovery together with replay-aware ordinary readers.
 No production apply or startup recovery is enabled; brwr-dbp remains incomplete.
 brwr-yii4 tracks remaining write/rename/hard-link error injection.
+
+
+## 2026-11-09 — Make nested Re-learn config reads explicit
+
+Assigned `brwr-dbp` prerequisite `brwr-l2ok` separates coordination-only config
+locks from adopted-contract recording. Planning, preview, journal recording
+and private transaction preparation use `reopen_locked` with a live guard
+for the same config path. Nested reads bypass the ordinary loader, propagate
+unreadable-file errors, and use separate stores without recording ownership.
+Private config rendering checks its guard before reading. Config-before-capture
+ordering remains; capture ownership and the lower-level `inspect_locked`/
+`recover_locked` contracts are still documented caller obligations.
+
+The required `/root/gate_challenge` reviewer recommended this narrow prerequisite
+instead of adding a dormant recovery framework. Complete source review found no
+blocking findings. Four new tests cover foreign tokens (even in a shared lock
+directory), read-only nested adoption beneath recording ownership, guard-drop
+semantics and unchanged pending/config/note/decision bytes through ordinary
+and nested reads. Ordinary load/refresh, apply availability and startup recovery
+are unchanged. Universal recovery and replay-reader activation remain coupled
+work in the staged plan; the parent is incomplete.
+
+## 2026-11-10 — Limit ordinary config reopen to its remaining callers
+
+PR #392 moved Re-learn reads to `reopen_locked`, leaving `ConfigStore::reopen`
+used only by the Unix service and tests. Windows production builds omit that
+service, so their warnings-as-errors lint rejects the unused method. Compile
+`reopen` under `cfg(any(unix, test))` and correct its caller documentation.
+The method remains available to cross-platform tests; config behavior is unchanged.

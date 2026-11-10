@@ -614,6 +614,13 @@ Windows transaction publication and pending recovery refuse because the
 existing directory-sync helpers do not provide the required durability;
 no-pending recovery remains a no-op. See the staged plan for activation work.
 
+Re-learn planning, preview, journal recording and private transaction preparation
+use coordination-only config locks. Nested config reads require a live guard
+for the same config path and bypass the ordinary loader, without recording
+adopted contracts. Ordinary write-lock refreshes still record those contracts.
+This prepares the recovery boundary; ordinary loading and refresh do not run
+transaction recovery.
+
 Ordinary native note reads and saves share an internal location contract:
 the response key identifies the logical artifact, while ownership checks and
 file writes use the note's physical creation key. With host-verified replay,

@@ -195,18 +195,21 @@ pub struct ConfigStore {
     adopted_full: bool,
 }
 
-/// The config lock from `ConfigStore::lock_current`. While it is alive,
-/// that store's refreshes record the contracts they adopt.
+/// A live coordination lock for one config path. Only `lock_current` also
+/// enables that store's refreshes to record the contracts they adopt.
 #[must_use]
 pub struct ConfigLock {
-    held: Arc<AtomicBool>,
+    held: Option<Arc<AtomicBool>>,
+    path: PathBuf,
     _file: File,
 }
 
 impl Drop for ConfigLock {
     fn drop(&mut self) {
         // Fields drop after this, so the flag clears before the unlock.
-        self.held.store(false, Ordering::SeqCst);
+        if let Some(held) = &self.held {
+            held.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -779,6 +782,15 @@ impl ConfigStore {
     /// Hold this lock from the policy refresh through a privileged write.
     /// ConfigStore::update takes the same lock before replacing config.toml.
     pub fn lock_current(&self) -> Result<ConfigLock> {
+        let mut guard = self.lock_for_read()?;
+        self.lock_held.store(true, Ordering::SeqCst);
+        guard.held = Some(Arc::clone(&self.lock_held));
+        Ok(guard)
+    }
+
+    /// Coordinate a read/review without adopting contracts as a side effect.
+    /// This acquires only the config lock; capture locking follows it.
+    pub(crate) fn lock_for_read(&self) -> Result<ConfigLock> {
         let parent = self.path.parent().context("config path has no parent")?;
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         let path = parent.join(".config.lock");
@@ -790,9 +802,9 @@ impl ConfigStore {
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         file.lock().context("locking configuration")?;
-        self.lock_held.store(true, Ordering::SeqCst);
         Ok(ConfigLock {
-            held: Arc::clone(&self.lock_held),
+            held: None,
+            path: self.path.clone(),
             _file: file,
         })
     }
@@ -1570,9 +1582,30 @@ impl ConfigStore {
     }
 
     /// A second store for the same file, loaded now without layout migration
-    /// or recording adopted contracts. Also used by read-only review.
+    /// or recording adopted contracts. Used by the Unix service and tests.
+    #[cfg(any(unix, test))]
     pub(crate) fn reopen(&self) -> Self {
         Self::load_from(self.path.clone())
+    }
+
+    /// Nested read under a live lock for this config. Do not route through
+    /// `load_from`: the future ordinary recovery gate must acquire locks,
+    /// whereas the caller already owns config (and possibly capture).
+    /// A separate store preserves read-only adopted-contract semantics even
+    /// when the caller holds a recording lock from `lock_current`.
+    pub(crate) fn reopen_locked(&self, guard: &ConfigLock) -> Result<Self> {
+        self.require_lock(guard)?;
+        let mut store = Self::for_path(self.path.clone());
+        store.adopt(read_disk_state(&self.path)?);
+        Ok(store)
+    }
+
+    pub(crate) fn require_lock(&self, guard: &ConfigLock) -> Result<()> {
+        anyhow::ensure!(
+            guard.path == self.path,
+            "configuration lock belongs to another path"
+        );
+        Ok(())
     }
 
     #[cfg(test)]
@@ -5577,6 +5610,57 @@ mod tests {
             let store = adopted(&path);
             assert_eq!(store.note_key_rule(DOC_8), NoteKeyRule::Unrecognized);
             assert_eq!(entries(folder.path()).len(), 1);
+        }
+
+        #[test]
+        fn coordination_reads_do_not_record_contracts_but_a_write_refresh_still_does() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let mut store = loaded(&path);
+            let guard = store.lock_for_read().unwrap();
+            store.refresh().unwrap();
+            let nested = store.reopen_locked(&guard).unwrap();
+            assert_eq!(nested.revision(), store.revision());
+            assert!(!state_path(folder.path()).exists());
+            drop(guard);
+
+            let guard = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            let recorded = fs::read(state_path(folder.path())).unwrap();
+            write_by_hand(folder.path(), &[ITEM, DOC]);
+            let mut nested = store.reopen_locked(&guard).unwrap();
+            assert_ne!(nested.revision(), store.revision());
+            assert_eq!(fs::read(state_path(folder.path())).unwrap(), recorded);
+            drop(guard);
+            nested.refresh().unwrap();
+            assert_eq!(fs::read(state_path(folder.path())).unwrap(), recorded);
+            // Recording ownership ended with the original guard; neither a
+            // coordination lock nor its nested store may leave it enabled.
+            store.refresh().unwrap();
+            assert_eq!(fs::read(state_path(folder.path())).unwrap(), recorded);
+            let _guard = store.lock_current().unwrap();
+            store.refresh().unwrap();
+            assert_ne!(fs::read(state_path(folder.path())).unwrap(), recorded);
+        }
+
+        #[test]
+        fn nested_reads_require_the_matching_config_path_even_in_the_same_folder() {
+            let folder = tempfile::tempdir().unwrap();
+            let path = write_by_hand(folder.path(), &[ITEM]);
+            let store = loaded(&path);
+            let other_path = folder.path().join("other.toml");
+            fs::copy(&path, &other_path).unwrap();
+            let other = loaded(&other_path);
+            let same_path = loaded(&path);
+            let guard = store.lock_for_read().unwrap();
+            // Both paths use the same .config.lock. A token still cannot
+            // silently authorize a read for a different config file.
+            assert!(other.reopen_locked(&guard).is_err());
+            assert_eq!(
+                same_path.reopen_locked(&guard).unwrap().revision(),
+                store.revision()
+            );
+            assert!(!state_path(folder.path()).exists());
         }
 
         #[test]

@@ -1912,3 +1912,23 @@ The design review also identified how startup recovery must fit the existing
 locks and read-only config reads. That integration remains part of brwr-dbp,
 together with replay-aware readers and index rebuilds. No user-facing apply
 command or automatic startup recovery has been enabled by this work.
+
+
+## 2026-11-09 — Carry config-lock ownership through nested Re-learn reads
+
+Continued assigned Re-learn apply work with the locking prerequisite needed
+before automatic recovery can safely enter ordinary config loading. Planning,
+preview, decision recording and private transaction preparation now pass a live
+config-lock guard into nested reads instead of reopening through the ordinary
+loader. The host rejects a guard for another config path, including another
+config in the same directory. This prevents those nested paths from needing
+to reacquire their own lock when the later recovery gate is introduced.
+
+Coordination-only locks no longer enable adopted-contract recording. Ordinary
+write-lock refreshes still record contracts, while nested read stores remain
+read-only even beneath a recording lock. Four new regressions cover those
+boundaries and prove ordinary and locked reads leave private pending bytes,
+config, decisions and physical notes unchanged. No apply endpoint or automatic
+recovery was enabled. The parent still needs the universal recovery gate,
+authoritative replay in ordinary readers, preserved-note presentation, artifact
+stubs and rebuild acceptance.
