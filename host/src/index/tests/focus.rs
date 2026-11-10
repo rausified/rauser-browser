@@ -289,6 +289,185 @@ fn session_catalog_omission_never_limits_a_selected_sessions_entries() {
 }
 
 #[test]
+fn session_catalog_pages_all_tied_sessions_and_preserves_selected_direct_work() {
+    use brauser_protocol::WorklogChoicesPageRequest;
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let index = index(&root, &cache);
+    let mut events = (1..=140)
+        .map(|n| tagged(n, &format!("A{n}"), n, "Same name", 1))
+        .collect::<Vec<_>>();
+    // One session with several snapshots must occupy exactly one position;
+    // its highest revision supplies the name even on an older event.
+    events.push(tagged(141, "A1", 1, "Renamed", 3));
+    index.record_activities(events.iter(), &[]).unwrap();
+    let day = parse_date("2026-11-03").unwrap();
+    let mut request = WorklogChoicesPageRequest {
+        offset: 0,
+        snapshot: None,
+    };
+    let first = index
+        .worklog_focus_choices_page(day, day, None, &request)
+        .unwrap();
+    assert_eq!(first.sessions.len(), 64);
+    assert!(first.choices.is_empty());
+    let first_page = first.sessions_page.as_ref().unwrap();
+    let mut sessions = first.sessions.clone();
+    request.snapshot = Some(first_page.snapshot.clone());
+    request.offset = first_page.next_offset.unwrap();
+    loop {
+        let page = index
+            .worklog_focus_choices_page(day, day, None, &request)
+            .unwrap();
+        sessions.extend(page.sessions);
+        let info = page.sessions_page.unwrap();
+        assert!(!info.omitted);
+        assert_eq!(page.sessions_truncated, info.next_offset.is_some());
+        let Some(next) = info.next_offset else { break };
+        request.offset = next;
+    }
+    assert_eq!(sessions.len(), 140);
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|s| &s.id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        140
+    );
+    assert_eq!(
+        sessions
+            .iter()
+            .find(|s| s.id.ends_with("000000000001"))
+            .unwrap()
+            .name,
+        "Renamed"
+    );
+    let selected_id = &sessions.last().unwrap().id;
+    let selected = index
+        .worklog_focus_choices_page(day, day, Some(selected_id), &request)
+        .unwrap();
+    let legacy = index
+        .worklog_focus_choices(day, day, Some(selected_id))
+        .unwrap();
+    assert_eq!(selected.choices, legacy.choices);
+    assert_eq!(selected.selected_session, legacy.selected_session);
+    assert_eq!(selected.choices.len(), 1);
+    assert_eq!(
+        selected.sessions_page.unwrap().snapshot,
+        first_page.snapshot
+    );
+    request.offset = 140;
+    assert!(
+        index
+            .worklog_focus_choices_page(day, day, None, &request)
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+    request.offset = 141;
+    assert!(
+        index
+            .worklog_focus_choices_page(day, day, None, &request)
+            .err()
+            .unwrap()
+            .is::<StaleWorklogPage>()
+    );
+}
+
+#[test]
+fn session_continuations_bind_history_home_dates_and_survive_cache_rebuild() {
+    use brauser_protocol::WorklogChoicesPageRequest;
+    let root = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let events = (1..=70)
+        .map(|n| tagged(n, "A", n, "Same", 1))
+        .collect::<Vec<_>>();
+    write_log(
+        root.path(),
+        "2026-11-03.md",
+        &events.iter().collect::<Vec<_>>(),
+    );
+    let index = index(&root, &cache);
+    let day = parse_date("2026-11-03").unwrap();
+    let first = index
+        .worklog_focus_choices_page(
+            day,
+            day,
+            None,
+            &WorklogChoicesPageRequest {
+                offset: 0,
+                snapshot: None,
+            },
+        )
+        .unwrap();
+    let info = first.sessions_page.unwrap();
+    let request = WorklogChoicesPageRequest {
+        offset: 64,
+        snapshot: Some(info.snapshot),
+    };
+    let rebuilt_cache = TempDir::new().unwrap();
+    let rebuilt =
+        ArtifactIndex::open_in(&storage(root.path()), None, rebuilt_cache.path()).unwrap();
+    let tail = rebuilt
+        .worklog_focus_choices_page(day, day, None, &request)
+        .unwrap();
+    assert_eq!(tail.sessions.len(), 6);
+    assert_eq!(
+        tail.sessions,
+        index
+            .worklog_focus_choices_page(day, day, None, &request)
+            .unwrap()
+            .sessions
+    );
+    assert!(
+        index
+            .worklog_focus_choices_page(day.previous_day().unwrap(), day, None, &request)
+            .is_err()
+    );
+    let other = TempDir::new().unwrap();
+    write_log(
+        other.path(),
+        "2026-11-03.md",
+        &events.iter().collect::<Vec<_>>(),
+    );
+    let other_cache = TempDir::new().unwrap();
+    let other_index =
+        ArtifactIndex::open_in(&storage(other.path()), None, other_cache.path()).unwrap();
+    assert!(
+        other_index
+            .worklog_focus_choices_page(day, day, None, &request)
+            .is_err()
+    );
+    // Changed measures in an existing session must invalidate a catalog,
+    // even though the session list and names themselves are identical.
+    index
+        .record_activities([&tagged(71, "A", 1, "Same", 1)], &[])
+        .unwrap();
+    assert!(
+        index
+            .worklog_focus_choices_page(day, day, None, &request)
+            .is_err()
+    );
+    for bad in [
+        WorklogChoicesPageRequest {
+            offset: 1,
+            snapshot: None,
+        },
+        WorklogChoicesPageRequest {
+            offset: 0,
+            snapshot: Some("x".repeat(64)),
+        },
+    ] {
+        assert!(
+            index
+                .worklog_focus_choices_page(day, day, None, &bad)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn selected_session_choices_reuse_row_and_escaped_byte_bounds() {
     for (count, title) in [(205, "Brief".to_owned()), (200, "\"é".repeat(250))] {
         let root = TempDir::new().unwrap();

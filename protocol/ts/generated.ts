@@ -305,6 +305,7 @@ export interface WorklogFocusChoicesRequest {
   start_date: string;
   end_date: string;
   expected_revision: string;
+  sessions_page?: WorklogChoicesPageRequest;
   focus_session_id: string | null;
 }
 
@@ -316,6 +317,7 @@ export interface WorklogFocusChoicesResult {
   end_date: string;
   focus_session_id: string | null;
   sessions: FocusSession[];
+  sessions_page?: WorklogChoicesPageInfo;
   sessions_truncated: boolean;
   selected_session: FocusSession | null;
   name_changed: boolean;

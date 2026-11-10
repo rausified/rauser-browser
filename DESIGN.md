@@ -739,7 +739,9 @@ storage/clipboard failures remain visible and retryable. This flow starts no
 agent and edits no source log, note, configuration or measured activity.
 
 **One focus session.** In the sharing area, **Choose from → One focus session**
-lists up to 64 recorded sessions in the period, newest activity first. Selecting
+lists recorded sessions in the period, newest activity first, in pages of 64.
+**More sessions** explicitly extends the catalog without selecting a session
+or changing checked work. Duplicate names remain separate session identities. Selecting
 one offers only its direct activity as unchecked artifact-day choices. Select
 individual entries or **Select all shown**, then copy the exact preview, whose
 heading names the session. Summary-only days, untagged work, global Why context
@@ -752,7 +754,13 @@ UUID. A null selection returns only the catalog; an unknown or outside-period
 ID returns no choices. The host selects activity by session ID before grouping
 artifact-days, using each matching day's newest event title/URL. A renamed
 session retains its ID; its highest recorded revision in this period names it,
-with an explicit name-change notice. Catalog and entry truncation are separate;
+with an explicit name-change notice. Optional `sessions_page` request/result
+metadata binds continuation offsets to the home identity, adapter policy, dates
+and scanned activity snapshot. Changed history refuses continuation and offers
+**Reload sessions** before sharing; late replies after context changes are discarded.
+A fresh same-snapshot refresh retains loaded catalog pages; changed history drops
+later catalog pages while retaining the selected ID and surviving checked work.
+Catalog and entry truncation are separate;
 an explicitly requested session remains readable even if its catalog entry was
 omitted. Entries reuse the 200-row/96-KiB limits, and capture gaps still describe
 the whole period. A missing selection, empty period, unavailable session and
@@ -1011,6 +1019,8 @@ before rollback. Deploy both host and extension for command invocation.
 The panel is about the page in the active tab. A page card at the top shows a small tile for the page (the artifact type's glyph when an adapter recognizes it, else the host's first letter; `extension/panel-look.ts`), the page's title and URL, and the artifact status ("● Artifact recognized" or "○ Not an artifact"). This supersedes the status-only page area of earlier on 2026-11-02. For a recognized artifact the card adds chips for its type, last mode and a short "<focused> focused · <opens> opens" measure, the container it sits within, and the **Why I'm here** field, which saves on Enter (never during IME composition) or **Save**. Below them a dashed action box holds the one **Summarize & log** button, labelled **Save Page** for a page no adapter recognizes (its summary records it as a `web.page` artifact, §5.2) beside **Capture Site** when it is offered; once the page has a summary the same button moves into the Summary card head as its re-summarize icon, named **Summarize again** (its label visually hidden, `data-place="card"`), and returns to the box when the page has none. The header carries a capture pill: "Capture on", "Capture off", or "N pending" (amber) when records are queued and delivery reports an error; it reports global capture only, and the page card's status remains the page's verdict. Capture housekeeping collapses into a one-line strip at the bottom whose summary keeps its "● Capture on/off · N live · N pending" wording; beside it one quick action reads **Send now** while capture is on with records pending, or **Resume in settings** while capture is paused, and never pauses (pausing clears pending records, so it stays inside the strip). The This page view holds the Summary card (time, overview, type/category/importance chips, the high level highlighted), My note, and collapsed rows for Recorded navigation (with its count, the identity, measures, links, incoming navigation and contained artifacts) and Page patterns. Recent rows show the type's tile, title, a sub line and the focused time. Configuration stays on the settings page.
 
 **Visual design (2026-11-02).** The panel follows the "Brauser Sidebar" dark-glass design, with a matching light variant under `prefers-color-scheme: light`. Its styles live in `panel.css` under `body.panel-page`, so the settings and Tasks pages keep their own look. The extension CSP allows no inline styles and no fonts (`font-src 'none'`), so the design's IBM Plex Sans and JetBrains Mono map to the `system-ui` and `ui-monospace` stacks. Text sits on solid surfaces, never on a gradient or blur, so the accessibility gate measures every contrast pair in both themes; pulsing and spinning indicators stop under `prefers-reduced-motion`. Run cards carry their run state as `data-state` for the indicator only.
+
+**Activity dock.** The page content scrolls independently above a compact bottom area for general notices, summary runs, task runs, and Capture Site's AI draft progress or notices. Each visible activity is a closed row labelled with its current title and state, or its notice text; expanding it reveals the existing run details and actions. Runs hidden after a page switch do not leave an empty row. The dock and streamed text have height limits and scroll independently, so a long result does not move the page card or task controls. The capture strip stays below the dock and scrolls internally when expanded in a short panel. Setup and permission banners remain prominent because they require action before normal use.
 
 **Keyboard access.** This page and Recent form a labelled tablist with one
 tab stop, selected state and associated tabpanels. Left/Right switch tabs;
