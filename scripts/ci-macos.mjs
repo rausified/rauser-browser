@@ -3,8 +3,10 @@
 // The macOS job is slow and its runners are often starved, so ci.yml runs it
 // only for a change that can behave differently on macOS than on Windows.
 // Windows runs the same Rust and extension tests for every code change, the
-// ubuntu Accessibility job runs the axe and keyboard checks, and every push to
-// main runs macOS as well, so main's own run catches what a PR skipped.
+// ubuntu Accessibility job runs the axe and keyboard checks, the ubuntu
+// "Fuzz targets compile" job checks the adapter-templates/fuzz crate, and
+// every push to main runs macOS as well, so main's own run catches what a
+// PR skipped.
 //
 // A change needs macOS when it touches:
 //  1. a path in MACOS_PATHS (toolchain, the native port, the smoke, the
@@ -31,8 +33,11 @@ import path from "node:path";
 export const MACOS_PATHS = [
   // Build scripts, the Rust toolchain and dependencies.
   "host/build.rs", "Cargo.lock", "rust-toolchain.toml", ".cargo/",
-  // The fuzz targets compile only on macOS (Unix/libFuzzer).
-  "adapter-templates/fuzz/",
+  // The fuzz crate's own compile check (ci.yml's "Fuzz targets compile" job)
+  // runs on Linux for every code change, not only when this path changes
+  // (brwr-nu0m: #379 broke it by changing adapter-templates/src, which is
+  // not here either, and only macOS caught it), so neither the crate nor
+  // its targets belong in this list.
   // The extension's native port and its manifest (permissions, the native
   // host name): the boundary only the macOS smoke drives end to end. The wire
   // schema is checked on Windows by both sides' tests and generate.py --check.
