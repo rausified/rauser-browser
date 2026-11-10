@@ -167,7 +167,10 @@ mod tests {
     ];
 
     fn check_file_for_bypassed_renames(path: &Path, offending: &mut Vec<String>) {
-        let text = fs::read_to_string(path).unwrap();
+        // Windows checkouts use CRLF (core.autocrlf), so normalize before
+        // looking for the `\n`-spelled test-module markers; otherwise every
+        // file is scanned whole and test fixtures' renames are reported.
+        let text = fs::read_to_string(path).unwrap().replace("\r\n", "\n");
         let production_text = TEST_MODULE_MARKERS
             .iter()
             .filter_map(|marker| text.find(marker))
