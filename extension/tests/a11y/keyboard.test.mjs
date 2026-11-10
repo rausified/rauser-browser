@@ -172,8 +172,7 @@ test("sharing drafts survive reload and support explicit keyboard copy, comparis
   await enterPanelTab(page, "tab-recent");
   if (!await page.locator("#sharing-drafts").evaluate((node) => node.open)) await activate(page, "#sharing-drafts > summary");
   await activate(page, "#sharing-draft-list", null);
-  await page.keyboard.press("End");
-  await page.keyboard.press("Enter");
+  await selectByKeyboard(page, "#sharing-draft-list", "last");
   await page.locator("#sharing-draft-view:visible").waitFor();
   await focused(page, "#sharing-draft-list");
   assert.equal(await page.locator("#sharing-draft-original").textContent(), original);
