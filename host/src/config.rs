@@ -1582,7 +1582,8 @@ impl ConfigStore {
     }
 
     /// A second store for the same file, loaded now without layout migration
-    /// or recording adopted contracts. Also used by read-only review.
+    /// or recording adopted contracts. Used by the Unix service and tests.
+    #[cfg(any(unix, test))]
     pub(crate) fn reopen(&self) -> Self {
         Self::load_from(self.path.clone())
     }
