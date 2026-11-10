@@ -182,7 +182,7 @@ export interface ChooseFolderRequest {
   purpose: FolderPurpose;
 }
 
-export type FolderPurpose = "notes_folder" | "knowledge_base";
+export type FolderPurpose = "notes_folder" | "knowledge_base" | "task_folder";
 
 export interface RecordVisitRequest {
   type: "record_visit";
@@ -326,6 +326,7 @@ export interface WorklogFocusChoicesRequest {
   start_date: string;
   end_date: string;
   expected_revision: string;
+  sessions_page?: WorklogChoicesPageRequest;
   focus_session_id: string | null;
 }
 
@@ -337,6 +338,7 @@ export interface WorklogFocusChoicesResult {
   end_date: string;
   focus_session_id: string | null;
   sessions: FocusSession[];
+  sessions_page?: WorklogChoicesPageInfo;
   sessions_truncated: boolean;
   selected_session: FocusSession | null;
   name_changed: boolean;
@@ -785,6 +787,7 @@ export interface RunView {
   site_draft?: SiteDraftAnswerView | null;
   instruction?: string;
   task_report?: string | null;
+  task_folder_id?: string;
 }
 
 export interface StartRunRequest {
@@ -802,6 +805,7 @@ export interface StartRunRequest {
   requested_at: string;
   kind?: RunKind;
   instruction?: string;
+  task_folder_id?: string;
 }
 
 export interface RunStarted {
@@ -1046,6 +1050,7 @@ export interface StartTaskRequest {
   instruction: string;
   harness: HarnessId | null;
   requested_at: string;
+  task_folder_id?: string;
 }
 
 export type SiteDrafter = "structural" | "agent";
@@ -1188,6 +1193,41 @@ export interface SiteDraftChecked {
   preview: PreviewRowView[];
 }
 
-export type Request = SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest;
+export interface ListTaskFoldersRequest {
+  type: "list_task_folders";
+  protocol_version: 8;
+  request_id: string;
+}
 
-export type Response = EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse;
+export interface AddTaskFolderRequest {
+  type: "add_task_folder";
+  protocol_version: 8;
+  request_id: string;
+  expected_revision: string;
+  picker_token: string;
+}
+
+export interface RemoveTaskFolderRequest {
+  type: "remove_task_folder";
+  protocol_version: 8;
+  request_id: string;
+  expected_revision: string;
+  folder_id: string;
+}
+
+export interface TaskFolderChoice {
+  id: string;
+  path: string;
+}
+
+export interface TaskFoldersListed {
+  type: "task_folders_listed";
+  protocol_version: 8;
+  request_id: string;
+  revision: string;
+  folders: TaskFolderChoice[];
+}
+
+export type Request = SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
+
+export type Response = EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;

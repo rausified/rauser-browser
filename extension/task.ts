@@ -121,6 +121,7 @@ export async function startTask(
   deps: SummarizeDeps,
   commandRevision?: string,
   beforeStart?: (requestId: string) => Promise<void>,
+  taskFolderId: string | null = null,
 ): Promise<RunView | null> {
   const cleaned = cleanInstruction(instruction);
   if (cleaned === "") return null;
@@ -141,6 +142,7 @@ export async function startTask(
     }),
     instruction: cleaned,
     ...(command && commandRevision ? { command_revision: commandRevision } : {}),
+    ...(taskFolderId === null ? {} : { task_folder_id: taskFolderId }),
     harness: null,
     requested_at: localTimestamp(deps.now()),
   }, "run_started");

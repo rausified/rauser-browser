@@ -334,6 +334,9 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::ReplaceAdapters(_) => "replace_adapters",
         Request::UpdateConfig(_) => "update_config",
         Request::ChooseFolder(_) => "choose_folder",
+        Request::ListTaskFolders(_) => "list_task_folders",
+        Request::AddTaskFolder(_) => "add_task_folder",
+        Request::RemoveTaskFolder(_) => "remove_task_folder",
         Request::RecordVisit(_) => "record_visit",
         Request::RecordActivity(_) => "record_activity",
         Request::RecordBatch(_) => "record_batch",
@@ -946,6 +949,51 @@ fn dispatch(
                 }
             }
         }
+        Request::ListTaskFolders(value) => task_folders_result(&value.request_id, config),
+        Request::AddTaskFolder(value) => {
+            let grant = consent.task_folder_grant(&value.picker_token, &value.expected_revision);
+            let (path, identity) = match grant {
+                Ok(grant) => grant,
+                Err(err) => {
+                    return error(
+                        &value.request_id,
+                        ErrorCode::InvalidRequest,
+                        &err.to_string(),
+                    );
+                }
+            };
+            match config.add_task_folder(path, identity, &value.expected_revision) {
+                Ok(true) => {
+                    consent.consume_picker(&value.picker_token);
+                    task_folders_result(&value.request_id, config)
+                }
+                Ok(false) => error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "configuration changed; choose the task folder again",
+                ),
+                Err(err) => error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &err.to_string(),
+                ),
+            }
+        }
+        Request::RemoveTaskFolder(value) => {
+            match config.remove_task_folder(&value.folder_id, &value.expected_revision) {
+                Ok(true) => task_folders_result(&value.request_id, config),
+                Ok(false) => error(
+                    &value.request_id,
+                    ErrorCode::Conflict,
+                    "configuration changed; read task folders again",
+                ),
+                Err(err) => error(
+                    &value.request_id,
+                    ErrorCode::InvalidConfig,
+                    &err.to_string(),
+                ),
+            }
+        }
         Request::RecordVisit(value) => record_visit(value, config),
         Request::RecordActivity(value) => record_activity(value, config),
         Request::RecordBatch(value) => record_batch(value, config),
@@ -988,7 +1036,11 @@ fn dispatch(
                 end_date: value.end_date,
             },
             config,
-            WorklogMode::FocusChoices(value.expected_revision, value.focus_session_id),
+            WorklogMode::FocusChoices(
+                value.expected_revision,
+                value.focus_session_id,
+                value.sessions_page,
+            ),
         ),
         Request::RefreshArtifacts(value) => refresh_artifacts(value, config),
         #[cfg(unix)]
@@ -1082,7 +1134,7 @@ fn start_run(
             "kind is chosen by the host",
         );
     }
-    if value.no_page.is_some() {
+    if value.no_page.is_some() || value.task_folder_id.is_some() {
         return error(
             &value.request_id,
             ErrorCode::InvalidRequest,
@@ -1202,6 +1254,7 @@ fn start_auto_summary(
         }
     }
     let request = brauser_protocol::StartRunRequest {
+        task_folder_id: None,
         no_page: None,
         protocol_version: value.protocol_version,
         request_id: value.request_id.clone(),
@@ -1259,6 +1312,27 @@ fn existing_summary(
         .ok_or_else(|| anyhow::anyhow!("no home folder"))?;
     let cache_dir = config.cache_dir()?;
     open_index(config, storage, &cache_dir)?.summary_for(artifact_id)
+}
+
+/// List only public folder choices after refreshing the host configuration.
+fn task_folders_result(id: &str, config: &mut ConfigStore) -> Response {
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(err) => return error(id, ErrorCode::Internal, &err.to_string()),
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return error(
+            id,
+            ErrorCode::InvalidConfig,
+            "repair configuration before reading task folders",
+        );
+    }
+    Response::TaskFoldersListed(brauser_protocol::TaskFoldersListed {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: id.into(),
+        revision: config.revision().into(),
+        folders: config.task_folder_choices(),
+    })
 }
 
 /// Build a task-bar run: the user's instruction, bounded as the service
@@ -1367,6 +1441,7 @@ fn task_request(
     crate::service::record::check_task_instruction(&instruction)
         .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
     Ok(brauser_protocol::StartRunRequest {
+        task_folder_id: value.task_folder_id,
         no_page: no_page.then_some(true),
         protocol_version: value.protocol_version,
         request_id: value.request_id,
@@ -3319,7 +3394,11 @@ enum WorklogMode {
     Text,
     Report,
     Choices(String, Option<brauser_protocol::WorklogChoicesPageRequest>),
-    FocusChoices(String, Option<String>),
+    FocusChoices(
+        String,
+        Option<String>,
+        Option<brauser_protocol::WorklogChoicesPageRequest>,
+    ),
 }
 
 fn worklog_response(
@@ -3365,7 +3444,7 @@ fn worklog_response(
             "worklog range must be one to seven inclusive local dates",
         );
     }
-    if let WorklogMode::Choices(_, Some(page)) = &mode
+    if let WorklogMode::Choices(_, Some(page)) | WorklogMode::FocusChoices(_, _, Some(page)) = &mode
         && !crate::index::valid_page_request(page)
     {
         return error(
@@ -3374,7 +3453,7 @@ fn worklog_response(
             "worklog page needs a valid snapshot for continuation",
         );
     }
-    if let WorklogMode::FocusChoices(_, Some(id)) = &mode
+    if let WorklogMode::FocusChoices(_, Some(id), _) = &mode
         && !uuid::Uuid::parse_str(id).is_ok_and(|uuid| {
             uuid.get_version_num() == 4
                 && uuid.get_variant() == uuid::Variant::RFC4122
@@ -3388,7 +3467,7 @@ fn worklog_response(
         );
     }
     if let WorklogMode::Choices(expected_revision, _)
-    | WorklogMode::FocusChoices(expected_revision, _) = &mode
+    | WorklogMode::FocusChoices(expected_revision, _, _) = &mode
     {
         if config.refresh().is_err() {
             return error(
@@ -3409,8 +3488,14 @@ fn worklog_response(
         Ok(index) => index,
         Err((code, message)) => return error(&value.request_id, code, message),
     };
-    if let WorklogMode::FocusChoices(_, focus_session_id) = mode {
-        return match index.worklog_focus_choices(start, end, focus_session_id.as_deref()) {
+    if let WorklogMode::FocusChoices(_, focus_session_id, page) = mode {
+        let result = match &page {
+            Some(page) => {
+                index.worklog_focus_choices_page(start, end, focus_session_id.as_deref(), page)
+            }
+            None => index.worklog_focus_choices(start, end, focus_session_id.as_deref()),
+        };
+        return match result {
             Ok(result) => {
                 Response::WorklogFocusChoicesResult(brauser_protocol::WorklogFocusChoicesResult {
                     protocol_version: PROTOCOL_VERSION,
@@ -3420,6 +3505,7 @@ fn worklog_response(
                     focus_session_id,
                     sessions: result.sessions,
                     sessions_truncated: result.sessions_truncated,
+                    sessions_page: result.sessions_page,
                     selected_session: result.selected_session,
                     name_changed: result.name_changed,
                     choices: result.choices,
@@ -3428,6 +3514,11 @@ fn worklog_response(
                     gaps_truncated: result.gaps_truncated,
                 })
             }
+            Err(error_value) if error_value.is::<crate::index::StaleWorklogPage>() => error(
+                &value.request_id,
+                ErrorCode::Conflict,
+                "recorded sessions changed or this page is unavailable; reload sessions",
+            ),
             Err(_) => error(
                 &value.request_id,
                 ErrorCode::Internal,
@@ -10671,6 +10762,40 @@ id = "work:{host}/{id}"
             start_date: start.into(),
             end_date: end.into(),
         };
+        for page in [
+            brauser_protocol::WorklogChoicesPageRequest {
+                offset: 64,
+                snapshot: None,
+            },
+            brauser_protocol::WorklogChoicesPageRequest {
+                offset: 0,
+                snapshot: Some("x".repeat(64)),
+            },
+        ] {
+            let Response::Error(result) = worklog_response(
+                request("2026-11-01", "2026-11-07"),
+                &mut config,
+                WorklogMode::FocusChoices(revision.clone(), None, Some(page)),
+            ) else {
+                panic!("malformed continuation must refuse")
+            };
+            assert_eq!(result.code, ErrorCode::InvalidRequest);
+        }
+        let Response::Error(result) = worklog_response(
+            request("2026-11-01", "2026-11-07"),
+            &mut config,
+            WorklogMode::FocusChoices(
+                revision.clone(),
+                None,
+                Some(brauser_protocol::WorklogChoicesPageRequest {
+                    offset: 64,
+                    snapshot: Some("a".repeat(64)),
+                }),
+            ),
+        ) else {
+            panic!("unavailable continuation must refuse")
+        };
+        assert_eq!(result.code, ErrorCode::Conflict);
         for (start, end, id) in [
             ("2026-02-30", "2026-03-01", None),
             ("2026-11-02", "2026-11-01", None),
@@ -10685,7 +10810,7 @@ id = "work:{host}/{id}"
             let Response::Error(result) = worklog_response(
                 request(start, end),
                 &mut config,
-                WorklogMode::FocusChoices(revision.clone(), id.map(str::to_owned)),
+                WorklogMode::FocusChoices(revision.clone(), id.map(str::to_owned), None),
             ) else {
                 panic!("invalid scope must fail before loading history");
             };
@@ -10694,7 +10819,7 @@ id = "work:{host}/{id}"
         let Response::WorklogFocusChoicesResult(result) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::FocusChoices(revision.clone(), None),
+            WorklogMode::FocusChoices(revision.clone(), None, None),
         ) else {
             panic!("expected empty session catalog");
         };
@@ -10704,7 +10829,7 @@ id = "work:{host}/{id}"
         let Response::Error(stale) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::FocusChoices("stale".into(), None),
+            WorklogMode::FocusChoices("stale".into(), None, None),
         ) else {
             panic!("stale selection must refuse");
         };
@@ -10719,7 +10844,7 @@ id = "work:{host}/{id}"
         let Response::Error(changed) = worklog_response(
             request("2026-11-01", "2026-11-07"),
             &mut config,
-            WorklogMode::FocusChoices(revision, None),
+            WorklogMode::FocusChoices(revision, None, None),
         ) else {
             panic!("external settings change must refuse");
         };
@@ -11601,6 +11726,7 @@ title = "{title} - Jira"
 
         fn start_run(url: &str, record_key: Option<RecordKey>, requested_at: &str) -> Request {
             Request::StartRun(StartRunRequest {
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "run-1".into(),
@@ -12333,6 +12459,7 @@ title = "{title} - Jira"
         ) -> StartTaskRequest {
             StartTaskRequest {
                 command_revision: None,
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "task-1".into(),
@@ -12354,6 +12481,7 @@ title = "{title} - Jira"
         fn no_page_request() -> StartTaskRequest {
             StartTaskRequest {
                 command_revision: None,
+                task_folder_id: None,
                 no_page: Some(true),
                 url: None,
                 title: None,
@@ -12449,6 +12577,7 @@ title = "{title} - Jira"
             assert_eq!(
                 requests[1],
                 Request::StartRun(StartRunRequest {
+                    task_folder_id: None,
                     no_page: None,
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "task-1".into(),
@@ -12600,6 +12729,7 @@ title = "{title} - Jira"
             let mut value = start_task_request(url, TASK_INSTRUCTION, &now());
             value.content = Some(String::new());
             let forwarded = StartRunRequest {
+                task_folder_id: None,
                 no_page: None,
                 protocol_version: value.protocol_version,
                 request_id: value.request_id.clone(),
@@ -13380,6 +13510,7 @@ id = "gdoc:{host}/{id}"
         );
         let view = brauser_protocol::RunView {
             start_request_id: None,
+            task_folder_id: Some("f".repeat(36)),
             no_page: None,
             run_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
             state: RunState::Succeeded,

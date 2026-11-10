@@ -111,7 +111,7 @@ test("Capture Site previews Jira and installs the host-returned policy in one sa
   assert.equal(page.calls("permissions.remove"), 0);
   // The panel's opening list_runs restores run cards; it is not part of the save.
   assert.deepEqual([...new Set(page.state.requests.map((r) => r.type).filter((type) => type !== "list_runs"))].sort(),
-    ["check_capture_site", "get_artifact", "get_config", "get_site_restore", "hello", "load_note", "update_config"]);
+    ["check_capture_site", "get_artifact", "get_config", "get_site_restore", "hello", "list_task_folders", "load_note", "update_config"]);
 });
 
 test("Capture Site recognizes OneDrive document routes without scope or JSON", async () => {
