@@ -4,10 +4,11 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/webex/`, researched blind: public sources only, no
 browsing history, cookies or a signed-in Webex account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 2 real URLs of
-this type matched no rule, so 0/2 rules confirmed. Not every rule and
-title was confirmed, so this type stays a development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: no real visit of this type, so 0/2
+rules confirmed. Not every rule was matched by a real visit, so this type
+stays a development draft.
 
 Brauser offers this draft on a tenant's own Webex Meetings site,
 `<site>.webex.com` (the `webex` family's strict subdomain origin, `labels:

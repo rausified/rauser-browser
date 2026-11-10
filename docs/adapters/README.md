@@ -9,7 +9,7 @@
 | [github.pr](github.pr.md) | github | certified | live | 2026-11-02 | John |
 | [github.issue](github.issue.md) | github | certified | live | 2026-11-02 | John |
 | [github.repo](github.repo.md) | github | certified | live | 2026-11-02 | John |
-| [miro.board](miro.board.md) | miro | development | — | — | — |
+| [miro.board](miro.board.md) | miro | certified | history | 2026-11-09 | claude session da8a245c lane E: 12 real URLs, 25 visits, 1/1 rules, 12/12 titles |
 | [google.doc](google.doc.md) | google-workspace | development | — | — | — |
 | [google.sheet](google.sheet.md) | google-workspace | development | — | — | — |
 | [google.slides](google.slides.md) | google-workspace | development | — | — | — |
@@ -37,5 +37,5 @@
 | [servicenow.kb](servicenow.kb.md) | servicenow | development | — | — | — |
 | [aha.portalidea](aha.portalidea.md) | aha-ideas | development | — | — | — |
 | [splunk.app](splunk.app.md) | splunk | development | — | — | — |
-| [splunk.dashboard](splunk.dashboard.md) | splunk | development | — | — | — |
+| [splunk.dashboard](splunk.dashboard.md) | splunk | certified | history | 2026-11-09 | claude session da8a245c lane E: 6 real URLs, 11 visits, 1/1 rules, 6/6 titles |
 | [google.drivefolder](google.drivefolder.md) | google-drive | development | — | — | — |

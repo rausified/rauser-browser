@@ -1,14 +1,17 @@
 # splunk.dashboard starter draft
 
-Status: development draft. The URL and title rules come from
-`docs/research/blind/splunk-cloud/`, researched blind: public sources only,
-no browsing history, cookies or a Splunk account.
+Status: certified 2026-11-09 from real browsing history. The URL and
+title rules come from `docs/research/blind/splunk-cloud/`, researched
+blind: public sources only, no browsing history, cookies or a Splunk
+account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 5 real URLs
-(10 visits) matched, 1/1 rules confirmed, the recorded title right on
-4/5. Not every rule and title was confirmed, so this type stays a
-development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on Splunk Cloud hosts, plus the earlier held-back sample's
+Splunk URLs that have since left that history: 6 real URLs (11 visits)
+matched, 1/1 rules confirmed, and the title right on 6/6, counting the
+`Dashboard` loading title, which records no title. No real sign-in or
+search page matched, and no real dashboard URL was missed. The live check
+below is still needed before this type is release-certified.
 
 Brauser offers this draft on a Splunk Cloud stack's own host,
 `<stack>.splunkcloud.com` (the `splunk` family's strict subdomain origin,
@@ -149,8 +152,8 @@ with real Chrome and a real Splunk Cloud stack:
    because the ID is frozen.
 4. Publish a Studio dashboard and record its URL.
 5. On a Capture Site review on a dashboard with no saved rules, confirm
-   Brauser offers both Splunk types, each with the development-draft source
-   line; save both and confirm the page card shows "● Artifact recognized"
+   Brauser offers both Splunk types, with the source line naming Splunk
+   apps as the one type not yet checked on a real account; save both and confirm the page card shows "● Artifact recognized"
    as a Splunk dashboard, and that the Search page is recorded as its app.
 
 Then record the date in this page's status line (`Status: release-certified
