@@ -19,6 +19,9 @@ name: macOS release
 on:
   push:
     tags: ["v*"]
+    # TEMPORARY (reverted before review): proves the unsigned path on this
+    # branch, since workflow_dispatch needs the file on the default branch.
+    branches: [feat/macos-release-packaging]
   workflow_dispatch:
     inputs:
       draft_release:
