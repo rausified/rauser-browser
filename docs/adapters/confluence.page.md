@@ -32,8 +32,15 @@ match  = [
 ]
 id     = "confluence.page:{host}/{id}"
 title  = ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"]
+generic_titles = ["Confluence", "For you - Confluence", "Log in with Atlassian account", "Log in to continue - Log in with Atlassian account", "Choose an account to continue - Log in with Atlassian account"]
 refs   = [{ type = "jira.issue", find = "jira_key" }]
 ```
+
+`generic_titles` lists the titles shown by Atlassian's sign-in and account
+pages and the app shell instead of the item's own name (`adapter-templates.md`
+§9.4). A visit whose title is one of them, ASCII case aside, or is empty or
+the bare host, records no title, so the artifact keeps the title it already
+has ("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -122,11 +129,12 @@ open on that site, personal spaces included.
   the space name stays in the title.
 - **Interstitial and SPA-lag titles.** While Confluence loads or asks you to
   sign in, a page URL can carry `For you - Confluence`, `Log in with Atlassian
-  account`, or `Choose an account to continue - Log in with Atlassian account`.
-  No entry matches, so the whole tab title is recorded. A history tab titled
-  only `Confluence` is recorded as `Confluence`. The worker holds a new visit
-  briefly and takes its title from a later title update (DESIGN.md §5.1), so
-  the page title usually wins.
+  account`, or `Choose an account to continue - Log in with Atlassian account`,
+  and a history tab can be titled only `Confluence`. No entry matches them,
+  and `generic_titles` lists each, so the visit records no title and the page
+  keeps its own. An interstitial with a wording not in the list is still
+  recorded whole. The worker holds a new visit briefly and takes its title
+  from a later title update (DESIGN.md §5.1), so the page title usually wins.
 - **Editor titles** are unchecked (see Titles).
 - **Short links and other origins.** `/wiki/x/` links and Confluence links on
   other origins (custom domains, Data Center) are not recorded.

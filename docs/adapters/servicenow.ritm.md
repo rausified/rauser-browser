@@ -36,7 +36,14 @@ match  = [
 ]
 id     = "servicenow.ritm:{host}/{id}"
 title  = "{title} | Requested Item | {~}"
+generic_titles = ["Login"]
 ```
+
+`generic_titles` lists the titles shown by ServiceNow's sign-in page and
+portal instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 

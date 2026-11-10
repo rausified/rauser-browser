@@ -87,6 +87,7 @@
           }
         ],
         "id": "box.file:{host}/{id}",
+        "generic_titles": ["Box | Login"],
         "title": "{title} | Powered by Box"
       },
       "history": [],
@@ -565,6 +566,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.app.box.com/integrations/officeonline/openOfficeOnline?sharedAccessCode="
+        },
+        {
+          "id": "eval.box.file.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 0, "type": "box.file", "captures": {"id": "111122223333"}, "artifact_id": "box.file:acme.app.box.com/111122223333", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.app.box.com/file/111122223333",
+          "title": "Box | Login"
         }
       ]
     },
@@ -590,6 +600,7 @@
           }
         ],
         "id": "box.folder:{host}/{id}",
+        "generic_titles": ["Box | Login"],
         "title": "{title} | Powered by Box"
       },
       "history": [],
@@ -839,6 +850,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.app.box.com/folder/123412341234/search?query=x"
+        },
+        {
+          "id": "eval.box.folder.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 1, "rule": 0, "type": "box.folder", "captures": {"id": "123412341234"}, "artifact_id": "box.folder:acme.app.box.com/123412341234", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.app.box.com/folder/123412341234",
+          "title": "Box | Login"
         }
       ]
     },
@@ -858,6 +878,7 @@
           }
         ],
         "id": "box.share:{host}/{kind}/{link}",
+        "generic_titles": ["Box | Login"],
         "title": "{title} | Powered by Box"
       },
       "history": [],
@@ -1160,6 +1181,15 @@
             "reason": "no_rule"
           },
           "url": "https://acme.app.box.com/S/abcdefghij0123456789"
+        },
+        {
+          "id": "eval.box.share.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 2, "rule": 0, "type": "box.share", "captures": {"kind": "s", "link": "abcd1234efgh5678ijkl9012mnop3456"}, "artifact_id": "box.share:acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://acme.app.box.com/s/abcd1234efgh5678ijkl9012mnop3456",
+          "title": "Box | Login"
         }
       ]
     }

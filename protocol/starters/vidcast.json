@@ -31,6 +31,7 @@
           { "path": "/share/edit/{video:uuid}", "mode": "edit" }
         ],
         "id": "vidcast.video:{host}/{video}",
+        "generic_titles": ["Vidcast", "Sign In", "Video Edit"],
         "title": "Vidcast - {title}"
       },
       "history": [],
@@ -181,13 +182,13 @@
         {
           "id": "eval.vidcast.video.embed",
           "kind": "evaluate",
-          "why": "embed link opened top-level; bare 'Vidcast' title matches no entry and is recorded whole",
+          "why": "embed link opened top-level; the bare 'Vidcast' title matches no entry and is generic (adapter-templates.md §9.4): no title",
           "impls": ["rust", "ts"],
           "expect": {
             "match": true, "adapter": 0, "rule": 1, "type": "vidcast.video",
             "captures": {"video": "0a1b2c3d-0000-4000-8000-00000000c0de"},
             "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
-            "mode": "view", "title": "Vidcast", "title_entry": null, "alias_id": null, "refs": []
+            "mode": "view", "title": null, "title_entry": null, "alias_id": null, "refs": []
           },
           "url": "https://app.vidcast.io/share/embed/0a1b2c3d-0000-4000-8000-00000000c0de?autoplay=1&mute=1&cc=1",
           "title": "Vidcast"
@@ -208,13 +209,13 @@
         {
           "id": "eval.vidcast.video.edit",
           "kind": "evaluate",
-          "why": "editor; known limit: fixed editor title",
+          "why": "editor; its fixed 'Video Edit' title is generic (adapter-templates.md §9.4): no title",
           "impls": ["rust", "ts"],
           "expect": {
             "match": true, "adapter": 0, "rule": 2, "type": "vidcast.video",
             "captures": {"video": "0a1b2c3d-0000-4000-8000-00000000c0de"},
             "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de",
-            "mode": "edit", "title": "Video Edit", "title_entry": 0, "alias_id": null, "refs": []
+            "mode": "edit", "title": null, "title_entry": null, "alias_id": null, "refs": []
           },
           "url": "https://app.vidcast.io/share/edit/0a1b2c3d-0000-4000-8000-00000000c0de",
           "title": "Vidcast - Video Edit"
@@ -389,6 +390,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://app.vidcast.io/Share/0a1b2c3d-0000-4000-8000-00000000c0de"
+        },
+        {
+          "id": "eval.vidcast.video.generic_title_editor_title",
+          "kind": "evaluate",
+          "why": "the editor's own title is generic (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 0, "type": "vidcast.video", "captures": {"video": "0a1b2c3d-0000-4000-8000-00000000c0de"}, "artifact_id": "vidcast.video:app.vidcast.io/0a1b2c3d-0000-4000-8000-00000000c0de", "mode": "view", "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://app.vidcast.io/share/0a1b2c3d-0000-4000-8000-00000000c0de",
+          "title": "Vidcast - Video Edit"
         }
       ]
     },
@@ -408,6 +418,7 @@
           { "path": "/collections/share/{playlist:uuid}", "mode": "view" }
         ],
         "id": "vidcast.playlist:{host}/{playlist}",
+        "generic_titles": ["Vidcast", "Vidcast - Sign In"],
         "title": "Vidcast - Playlist - {title}"
       },
       "history": [],
@@ -498,13 +509,13 @@
         {
           "id": "eval.vidcast.playlist.embed",
           "kind": "evaluate",
-          "why": "help-article embed query form; bare title recorded whole",
+          "why": "help-article embed query form; the bare 'Vidcast' title is generic (adapter-templates.md §9.4): no title",
           "impls": ["rust", "ts"],
           "expect": {
             "match": true, "adapter": 1, "rule": 1, "type": "vidcast.playlist",
             "captures": {"playlist": "5e7e1157-1111-4222-8333-444444444444"},
             "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444",
-            "mode": "view", "title": "Vidcast", "title_entry": null, "alias_id": null, "refs": []
+            "mode": "view", "title": null, "title_entry": null, "alias_id": null, "refs": []
           },
           "url": "https://app.vidcast.io/playlists/embed/5e7e1157-1111-4222-8333-444444444444?index=3&t=60&cc=1",
           "title": "Vidcast"
@@ -585,6 +596,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://app.vidcast.io/playlists/embed/playlist_link?index=3"
+        },
+        {
+          "id": "eval.vidcast.playlist.generic_title_loading_shell",
+          "kind": "evaluate",
+          "why": "the app shell's loading title is generic (§9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 1, "rule": 0, "type": "vidcast.playlist", "captures": {"playlist": "5e7e1157-1111-4222-8333-444444444444"}, "artifact_id": "vidcast.playlist:app.vidcast.io/5e7e1157-1111-4222-8333-444444444444", "mode": "view", "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://app.vidcast.io/playlists/5e7e1157-1111-4222-8333-444444444444",
+          "title": "Vidcast"
         }
       ]
     },
@@ -604,6 +624,7 @@
           { "path": "/pages/embed/{page:uuid}", "mode": "view" }
         ],
         "id": "vidcast.page:{host}/{page}",
+        "generic_titles": ["Vidcast", "Sign In", "Page Edit"],
         "title": "Vidcast - {title}"
       },
       "history": [],
@@ -680,13 +701,13 @@
         {
           "id": "eval.vidcast.page.edit",
           "kind": "evaluate",
-          "why": "page editor; fixed title",
+          "why": "page editor; its fixed 'Page Edit' title is generic (adapter-templates.md §9.4): no title",
           "impls": ["rust", "ts"],
           "expect": {
             "match": true, "adapter": 2, "rule": 1, "type": "vidcast.page",
             "captures": {"page": "9a9e9a9e-0000-4abc-9def-123456789abc"},
             "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc",
-            "mode": "edit", "title": "Page Edit", "title_entry": 0, "alias_id": null, "refs": []
+            "mode": "edit", "title": null, "title_entry": null, "alias_id": null, "refs": []
           },
           "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit",
           "title": "Vidcast - Page Edit"
@@ -745,6 +766,15 @@
           "impls": ["rust", "ts"],
           "expect": {"match": false, "reason": "no_rule"},
           "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc/edit/more"
+        },
+        {
+          "id": "eval.vidcast.page.generic_title_sign_in_page",
+          "kind": "evaluate",
+          "why": "a sign-in page's title is generic (adapter-templates.md §9.4): no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 2, "rule": 0, "type": "vidcast.page", "captures": {"page": "9a9e9a9e-0000-4abc-9def-123456789abc"}, "artifact_id": "vidcast.page:app.vidcast.io/9a9e9a9e-0000-4abc-9def-123456789abc", "mode": "view", "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://app.vidcast.io/pages/9a9e9a9e-0000-4abc-9def-123456789abc",
+          "title": "Vidcast - Sign In"
         }
       ]
     }

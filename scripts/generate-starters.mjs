@@ -198,7 +198,9 @@ const TYPE_KEYS = [
   "type", "key", "label", "label_variants", "description", "record_label", "example_path",
   "adapter", "history", "status", "docs", "samples", "samples_shape", "vectors",
 ];
-const ADAPTER_KEYS = ["type", "path_case", "match", "scope", "modes", "id", "title", "alias", "refs", "within", "unscoped"];
+const ADAPTER_KEYS = [
+  "type", "path_case", "match", "scope", "modes", "id", "title", "generic_titles", "alias", "refs", "within", "unscoped",
+];
 const ADAPTER_REQUIRED = ["type", "match", "id"];
 const LABEL_VARIANT_KEYS = ["host_suffix", "label"];
 const HISTORY_ENTRY_KEYS = ["match"];

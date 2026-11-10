@@ -339,8 +339,15 @@ pub const SITE_DATA_BEGIN: &str = "BEGIN UNTRUSTED SITE DATA";
 pub const SITE_DATA_END: &str = "END UNTRUSTED SITE DATA";
 /// The keys an agent draft may never write: Tier 1, titles and scope stay
 /// the user's (plan "Out of scope"). The host refuses a draft with any.
-pub const FORBIDDEN_DRAFT_KEYS: [&str; 6] =
-    ["title", "scope", "unscoped", "alias", "fields", "path_case"];
+pub const FORBIDDEN_DRAFT_KEYS: [&str; 7] = [
+    "title",
+    "generic_titles",
+    "scope",
+    "unscoped",
+    "alias",
+    "fields",
+    "path_case",
+];
 
 /// The site-draft answer shape, with one example table.
 const SITE_DRAFT_EXAMPLE: &str = r#"{
@@ -1028,7 +1035,15 @@ mod tests {
         }
         assert_eq!(
             FORBIDDEN_DRAFT_KEYS,
-            ["title", "scope", "unscoped", "alias", "fields", "path_case"]
+            [
+                "title",
+                "generic_titles",
+                "scope",
+                "unscoped",
+                "alias",
+                "fields",
+                "path_case"
+            ]
         );
         for needle in [
             "a literal word before its first capture",

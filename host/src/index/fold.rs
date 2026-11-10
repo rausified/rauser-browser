@@ -142,7 +142,10 @@ impl<'a> Fold<'a> {
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_default();
-                let title = event.title.clone().unwrap_or_else(|| "Untitled".into());
+                // A title the adapter finds generic (adapter-templates.md
+                // §9.4) is no title, whichever extension sent it.
+                let recorded = recorded_title(adapters, &event.url, event.title.as_ref());
+                let title = recorded.clone().unwrap_or_else(|| "Untitled".into());
                 let row = artifacts
                     .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
@@ -183,7 +186,7 @@ impl<'a> Fold<'a> {
                 }
                 if at >= row.latest_at {
                     row.latest_at = at;
-                    if let Some(title) = &event.title {
+                    if let Some(title) = &recorded {
                         row.title = title.clone();
                     }
                     row.url = event.url.clone();
@@ -191,7 +194,17 @@ impl<'a> Fold<'a> {
                         row.last_mode = Some(mode.mode.clone());
                     }
                 }
-                row.activities.push(event.clone());
+                // A generic title carries no refs either (§9.4), even ones an
+                // older rule found in it.
+                let generic = event.title.is_some() && recorded.is_none();
+                if generic {
+                    let mut kept = event.clone();
+                    kept.title = None;
+                    kept.refs.clear();
+                    row.activities.push(kept);
+                } else {
+                    row.activities.push(event.clone());
+                }
                 visits.push(VisitRow {
                     event_id: event.event_id.clone(),
                     artifact_id: artifact_id.clone(),
@@ -223,6 +236,7 @@ impl<'a> Fold<'a> {
                 let refs = event
                     .refs
                     .iter()
+                    .filter(|_| !generic)
                     .map(|reference| Ref {
                         artifact_type: reference.artifact_type.clone(),
                         value: reference.value.clone(),
@@ -500,6 +514,24 @@ pub(super) fn container_for(
 
 /// A container ID's native part, after `<scheme>:<host>/`: for GitHub,
 /// `owner/repo`.
+/// The title an activity event records: its own, unless the adapter that
+/// matches its URL finds that title generic (adapter-templates.md §9.4), as
+/// a sign-in, password or loading page's is. The extension already omits
+/// such a title; this keeps an older or buggy one, or a title recorded
+/// before the rule, from replacing an artifact's real name.
+pub(super) fn recorded_title(
+    adapters: Option<&Document>,
+    url: &str,
+    title: Option<&String>,
+) -> Option<String> {
+    let title = title?;
+    let generic = adapters
+        .and_then(|document| document.evaluate(url, Some(title)).ok())
+        .and_then(|found| found.title)
+        .is_some_and(|found| found.title.is_none());
+    (!generic).then(|| title.clone())
+}
+
 pub(super) fn container_title(id: &str) -> String {
     let native = id.split_once(':').map_or(id, |(_, rest)| rest);
     native

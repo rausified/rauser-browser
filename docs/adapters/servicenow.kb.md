@@ -35,7 +35,14 @@ match  = [
   { path = "/{_}", query = { id = "kb_article_view", sysparm_article = "{number:token(3,40)|upper}" }, absent = ["sys_id"] },
 ]
 id     = "servicenow.kb:{host}/{number}"
+generic_titles = ["Knowledge Base", "Login"]
 ```
+
+`generic_titles` lists the titles shown by ServiceNow's sign-in page and
+portal instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 

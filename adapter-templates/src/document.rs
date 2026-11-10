@@ -21,6 +21,9 @@ pub const MAX_RULES: usize = 16;
 const MAX_QUERY: usize = 8;
 const MAX_ABSENT: usize = 8;
 const MAX_TITLES: usize = 4;
+/// §9.4: at most 16 generic titles of 1 to 128 scalar values each.
+const MAX_GENERIC_TITLES: usize = 16;
+const MAX_GENERIC_TITLE_CHARS: usize = 128;
 pub(crate) const MAX_SCOPE_VALUES: usize = 64;
 const MAX_REF_SPECS: usize = 8;
 const MAX_TYPE: usize = 32;
@@ -42,6 +45,7 @@ const ADAPTER_KEYS: &[&str] = &[
     "match",
     "id",
     "title",
+    "generic_titles",
     "alias",
     "refs",
     "modes",
@@ -295,7 +299,7 @@ impl Container {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Adapter {
     pub(crate) artifact_type: String,
     pub(crate) origin: String,
@@ -305,12 +309,42 @@ pub struct Adapter {
     pub(crate) rules: Vec<Rule>,
     pub(crate) id: IdTemplate,
     pub(crate) titles: Vec<TitleTemplate>,
+    /// §9.4: the generic titles, ASCII-lowercased for comparison.
+    pub(crate) generic_titles: Vec<String>,
     pub(crate) alias: Option<Alias>,
     pub(crate) refs: Vec<RefSpec>,
     pub(crate) modes: Vec<(String, Mode)>,
     pub(crate) scope: Option<Vec<(String, Vec<String>)>>,
     pub(crate) fields: Vec<(String, String)>,
     pub(crate) within: Option<Container>,
+}
+
+/// Written out so an adapter without `generic_titles` prints exactly as the
+/// derived form did before the field existed: the host fingerprints a
+/// document by its `Debug` text (`index::adapters_fingerprint`), and a new
+/// optional key must not mark every existing user's index as built under
+/// another document.
+impl std::fmt::Debug for Adapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("Adapter");
+        s.field("artifact_type", &self.artifact_type)
+            .field("origin", &self.origin)
+            .field("host", &self.host)
+            .field("insensitive", &self.insensitive)
+            .field("rules", &self.rules)
+            .field("id", &self.id)
+            .field("titles", &self.titles);
+        if !self.generic_titles.is_empty() {
+            s.field("generic_titles", &self.generic_titles);
+        }
+        s.field("alias", &self.alias)
+            .field("refs", &self.refs)
+            .field("modes", &self.modes)
+            .field("scope", &self.scope)
+            .field("fields", &self.fields)
+            .field("within", &self.within)
+            .finish()
+    }
 }
 
 impl Adapter {
@@ -773,6 +807,12 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
         Some(t) => validate_titles(t, &rules, at)?,
     };
 
+    // 8b. Generic titles (§9.4).
+    let generic_titles = match v.get("generic_titles") {
+        None => Vec::new(),
+        Some(g) => validate_generic_titles(g, at)?,
+    };
+
     // 9. Alias (§9.3).
     let alias = match v.get("alias") {
         None => None,
@@ -847,6 +887,7 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
         rules,
         id,
         titles,
+        generic_titles,
         alias,
         refs,
         modes,
@@ -854,6 +895,37 @@ fn validate_adapter(v: &Value, at: At) -> VResult<Adapter> {
         fields,
         within,
     })
+}
+
+/// §9.4: a list of 1 to 16 plain titles. Each is 1 to 128 scalar values with
+/// no surrounding white space, no control character (C0, DEL or C1), and no brace, which is
+/// reserved so a later format can add patterns without changing a valid list.
+fn validate_generic_titles(g: &Value, at: At) -> VResult<Vec<String>> {
+    let list = g.as_array().ok_or(at.err(ErrorCode::WrongType))?;
+    if list.is_empty() {
+        return Err(at.err(ErrorCode::EmptyGenericTitles));
+    }
+    if list.len() > MAX_GENERIC_TITLES {
+        return Err(at.err(ErrorCode::TooManyGenericTitles));
+    }
+    list.iter()
+        .enumerate()
+        .map(|(e, entry)| {
+            let at = at.entry(e);
+            let text = entry.as_str().ok_or(at.err(ErrorCode::WrongType))?;
+            let len = text.chars().count();
+            let bad = len == 0
+                || len > MAX_GENERIC_TITLE_CHARS
+                || text.trim_matches(char::is_whitespace) != text
+                || text
+                    .chars()
+                    .any(|c| matches!(c, '{' | '}' | '\0'..='\x1f' | '\x7f'..='\u{9f}'));
+            if bad {
+                return Err(at.err(ErrorCode::BadGenericTitle));
+            }
+            Ok(text.to_ascii_lowercase())
+        })
+        .collect()
 }
 
 fn validate_rule(v: &Value, at: At) -> VResult<Rule> {
@@ -1141,6 +1213,22 @@ mod tests {
 
     fn doc(json: &str) -> Result<Document, ValidationError> {
         Document::from_value(&serde_json::from_str(json).unwrap())
+    }
+
+    /// The host fingerprints a document by its `Debug` text, so an adapter
+    /// without `generic_titles` must print as it did before the key existed,
+    /// and one with it must print differently.
+    #[test]
+    fn generic_titles_change_the_debug_text_only_when_present() {
+        let base = r#"{"format": 1, "artifacts": [{"type": "a.item", "origin": "https://a.example.com", "match": [{"path": "/i/{id:int}"}], "id": "a:{host}/{id}"#;
+        let without = format!("{:?}", doc(&format!("{base}\"}}]}}")).unwrap());
+        assert!(!without.contains("generic_titles"));
+        assert!(without.contains("titles: [], alias: None,"));
+        let with = format!(
+            "{:?}",
+            doc(&format!("{base}\", \"generic_titles\": [\"Sign in\"]}}]}}")).unwrap()
+        );
+        assert!(with.contains("generic_titles: [\"sign in\"]"));
     }
 
     #[test]

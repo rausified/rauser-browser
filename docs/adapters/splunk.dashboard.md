@@ -34,8 +34,15 @@ match  = [
 modes  = { edit = "edit" }
 id     = "splunk.dashboard:{host}/{app}/{view}"
 title  = ["{title} | Splunk {~}", "{title} | Splunk"]
+generic_titles = ["Dashboard"]
 within = { type = "splunk.app", id = "splunk.app:{host}/app/{app}" }
 ```
+
+`generic_titles` lists the titles shown by Splunk's app shell while a
+dashboard loads instead of the item's own name (`adapter-templates.md` §9.4).
+A visit whose title is one of them, ASCII case aside, or is empty or the bare
+host, records no title, so the artifact keeps the title it already has
+("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -68,7 +75,10 @@ Two entries, tried in order:
 2. `{title} | Splunk` covers a title with no version.
 
 A title matching neither entry, such as `Loading...`, is kept whole
-(`title_entry` null). **Low confidence:** the ` | Splunk <version>` suffix
+(`title_entry` null). While a dashboard loads, its tab can read `Dashboard |
+Splunk <version>`; `Dashboard` is listed in `generic_titles`, so that visit
+records no title. A dashboard really named `Dashboard` is therefore never
+titled by Brauser, and keeps "Untitled" until it is renamed. **Low confidence:** the ` | Splunk <version>` suffix
 is from memory, not seen on a live stack or in Dashboard Studio.
 
 ## Recorded samples

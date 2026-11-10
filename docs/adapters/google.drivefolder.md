@@ -28,7 +28,14 @@ match  = [
 ]
 id     = "google.drivefolder:{host}/{id}"
 title  = ["{title} - Google Drive", "{title} – Google Drive"]
+generic_titles = ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"]
 ```
+
+`generic_titles` lists the titles shown by Google's sign-in, access and error
+pages instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 Why a separate family, not a second origin on the Google Workspace family:
 that family is `unscoped` on `docs.google.com`, and the engine allows
@@ -57,7 +64,8 @@ folder. The two entries take the folder name from either.
 When the signed-in account cannot open the folder, Drive shows an error or
 sign-in page on the folder's URL (seen titles: `Access denied`,
 `Service Not Allowed`, `Login`, `Google Drive: Sign-in`). No entry matches,
-so Brauser records the whole tab title for that visit.
+and each is in `generic_titles`, so that visit records no title and the
+folder keeps its own name.
 
 ## Recorded samples
 
@@ -68,7 +76,7 @@ Synthetic equivalents of the recorded shapes (shared vectors
 |---|---|---|
 | `/drive/folders/1AbC…345?usp=sharing` | `Team Templates - Google Drive` | the folder, `Team Templates` |
 | `/drive/u/1/folders/1AbC…345` | `Team Templates – Google Drive` | the same folder, `Team Templates` |
-| `/drive/folders/1AbC…345` | `Access denied` | the folder, whole tab title |
+| `/drive/folders/1AbC…345` | `Access denied` | the folder, no title (generic) |
 
 ## What the draft does not record
 

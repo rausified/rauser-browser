@@ -38,7 +38,14 @@ match    = [
 ]
 id       = "figma.branch:{host}/{branch}"
 title    = ["{~} · {title} - Figma Slides", "{title} – {~}", "{title} - {~}"]
+generic_titles = ["Figma"]
 ```
+
+`generic_titles` lists the titles shown by Figma's app shell while a file
+loads instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 
@@ -122,8 +129,8 @@ drafter, are what Brauser actually ships.
   trailing segment the same way (probe: `Q3 - Roadmap` → `Q3`). See
   `docs/adapters/figma.file.md` "Known limits" for the full detail; this is
   believed rare for the same reason given there.
-- **Title is set client-side**, the same `Figma`-while-loading limit as
-  `figma.file`.
+- **Title is set client-side**, the same `Figma`-while-loading behaviour as
+  `figma.file`: that generic title is never recorded.
 - The ID template is frozen once shipped (adapter-templates.md §8.2).
 
 ## Live check still needed

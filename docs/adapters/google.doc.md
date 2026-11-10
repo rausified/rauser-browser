@@ -36,8 +36,15 @@ match    = [
 modes    = { edit = "edit", view = "view", preview = "view", mobilebasic = "view" }
 id       = "google.doc:{host}/{id}"
 title    = ["{title} - Google Docs", "{title} – Google Docs"]
+generic_titles = ["Service Not Allowed", "Page Not Found", "Access Denied", "Redirecting", "Sign in - Google Accounts", "Sign in – Google Accounts", "Google Drive: Sign-in", "Login"]
 refs     = [{ type = "jira.issue", find = "jira_key" }]
 ```
+
+`generic_titles` lists the titles shown by Google's sign-in, access and error
+pages instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 

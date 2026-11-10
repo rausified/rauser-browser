@@ -20,6 +20,7 @@
         "type": "miro.board",
         "match": [{ "path": "/app/board/{board:token(12)}" }],
         "id": "miro.board:{host}/{board}",
+        "generic_titles": ["Miro", "Sign in | Miro | The Visual Workspace for Innovation"],
         "title": "{title} - Miro"
       },
       "history": [],

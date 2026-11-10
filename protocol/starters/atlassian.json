@@ -23,6 +23,7 @@
           { "path": "/jira/{*}", "query": { "selectedIssue": "{key:jira_key}" } }
         ],
         "id": "jira:{host}/{key}",
+        "generic_titles": ["Jira", "Log in with Atlassian account", "Log in to continue - Log in with Atlassian account", "Choose an account to continue - Log in with Atlassian account"],
         "title": "[{key:jira_key}] {title} - Jira",
         "alias": { "from": "tab_title", "capture": "key" },
         "refs": [{ "type": "jira.issue", "find": "jira_key" }]
@@ -64,6 +65,7 @@
           { "path": "/wiki/pages/viewpage.action", "query": { "pageId": "{id:int}" } }
         ],
         "id": "confluence.page:{host}/{id}",
+        "generic_titles": ["Confluence", "For you - Confluence", "Log in with Atlassian account", "Log in to continue - Log in with Atlassian account", "Choose an account to continue - Log in with Atlassian account"],
         "title": ["Version history - {title} - {~} - Confluence", "{title} - {~} - Confluence"],
         "refs": [{ "type": "jira.issue", "find": "jira_key" }]
       },

@@ -37,7 +37,14 @@ match    = [
 ]
 id       = "figma.file:{host}/{key}"
 title    = ["{~} · {title} - Figma Slides", "{title} – {~}", "{title} - {~}"]
+generic_titles = ["Figma"]
 ```
+
+`generic_titles` lists the titles shown by Figma's app shell while a file
+loads instead of the item's own name (`adapter-templates.md` §9.4). A visit
+whose title is one of them, ASCII case aside, or is empty or the bare host,
+records no title, so the artifact keeps the title it already has ("Untitled"
+for a new one).
 
 ## What each rule covers
 
@@ -91,8 +98,9 @@ Three entries, tried in order:
    tab's title is.
 
 While a file is still loading, the tab title is just `Figma`: no entry
-matches (there is no ` · `, ` – ` or ` - ` to anchor on), so the whole title
-`Figma` is recorded, the same fallback Miro uses for an unloaded board.
+matches (there is no ` · `, ` – ` or ` - ` to anchor on), and `Figma` is a
+generic title, so the visit records no title and the file keeps its own, as
+Miro does for an unloaded board.
 
 ## Recorded samples
 
@@ -131,8 +139,8 @@ reads `<file> - <page>`.
 ## Known limits
 
 - **Title is set client-side.** The server's own `<title>` is just `Figma`;
-  until the real title loads, the whole string `Figma` is recorded (Review
-  Focus item 4).
+  until the real title loads, that generic title is not recorded (Review
+  Focus item 4), so a visit that ends before then records no title.
 - **Multi-page prototypes.** A prototype's page name is part of the recorded
   shape (`<file> - <page>`) but the hyphen entry strips it, so only the file
   name is recorded; the page name itself is never kept anywhere.

@@ -41,7 +41,14 @@ match  = [
 ]
 id     = "webex.recording:{host}/{id}"
 title  = "{title} - {~}"
+generic_titles = ["Recorded Meeting Password", "Replay Recorded Meeting", "Sign In"]
 ```
+
+`generic_titles` lists the titles shown by Webex's sign-in page and recording
+password gate instead of the item's own name (`adapter-templates.md` §9.4). A
+visit whose title is one of them, ASCII case aside, or is empty or the bare
+host, records no title, so the artifact keeps the title it already has
+("Untitled" for a new one).
 
 ## What each rule covers
 
@@ -80,23 +87,23 @@ One entry: `{title} - {~}` drops everything after the last ` - `, the
 site's configured brand (default `Webex`) that the player and the router
 both append.
 
-The vectors show two outcomes before a recording has set its real title:
+The vectors show what happens before a recording has set its real title:
 
-- **Branded interstitials are recorded stripped.** Before a recording
-  loads, and at the share link's password gate, the router's own route
-  title still carries the site's brand as ` - Webex` (`Replay Recorded
-  Meeting - Webex`, `Recorded Meeting Password - Webex`), so the template
-  strips it the same as a loaded title, recording `Replay Recorded Meeting`
-  or `Recorded Meeting Password`
+- **Interstitials record no title.** Before a recording loads, and at the
+  share link's password gate, the router's own route title still carries
+  the site's brand as ` - Webex` (`Replay Recorded Meeting - Webex`,
+  `Recorded Meeting Password - Webex`), so the template strips it, and the
+  result is a generic title, so the visit records no title and the
+  recording keeps its own name
   (`eval.webex.recording.player_loading_title`,
-  `eval.webex.recording.share_recordingservice`).
-- **An unbranded title is kept whole,** `title_entry` null, whenever the
-  page has not attached a `-`-joined brand at all: the password gate's
-  title before any brand is attached, `Recorded Meeting Password`
-  (`eval.webex.recording.password_title`), and a dead or unbranded page
-  title, `Cisco Webex Meetings`
-  (`eval.webex.recording.title_no_suffix_kept_whole`), both match no split
-  point and are recorded exactly as shown.
+  `eval.webex.recording.share_recordingservice`). The password gate's title
+  before any brand is attached, `Recorded Meeting Password`, matches no
+  split point and is generic the same way
+  (`eval.webex.recording.password_title`).
+- **An unbranded page title is kept whole,** `title_entry` null: a dead or
+  unbranded page title, `Cisco Webex Meetings`
+  (`eval.webex.recording.title_no_suffix_kept_whole`), matches no split
+  point and is recorded exactly as shown.
 
 ## Recorded samples
 

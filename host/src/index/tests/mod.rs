@@ -27,6 +27,7 @@ mod scan;
 pub(crate) mod sql;
 mod store;
 mod summaries;
+mod titles;
 mod views;
 mod watermark;
 
