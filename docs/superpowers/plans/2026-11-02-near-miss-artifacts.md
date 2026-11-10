@@ -62,7 +62,7 @@ If no adapter on the origin has a type, there is no coverage and the result is `
 | `out_of_scope` | some | `<host> captures <types> for <accounts>; this page belongs to another account.` |
 | `out_of_scope` | none | `null` (keep today's sentence) |
 
-Example: `github.com captures repositories, pull requests and issues for cisco-sbg; this page isn't one of them.`
+Example: `github.com captures repositories, pull requests and issues for acme-corp; this page isn't one of them.`
 
 **Near-miss detection** (brwr-0t1). The caller runs it only after the full lease document returned `no_rule` for this URL. The first hit wins, in this order:
 

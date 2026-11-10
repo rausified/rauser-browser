@@ -1091,7 +1091,7 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
     importance_reason: "Adds detailed requirements.",
   };
   const { instruction: _instruction, task_report: _report, ...base } = task(2, {
-    kind: "summary", title: "User story mapping.docx", url: "https://work.example/doc",
+    kind: "summary", title: "Release planning.docx", url: "https://work.example/doc",
     summary_path: "Summaries/doc.summary.md", answer,
   });
   const older = base;
@@ -1106,10 +1106,10 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   const kinds = page.sent("list_runs").map((request) => request.kind);
   assert.deepEqual([...new Set(kinds)].sort(), ["summary", "task"]);
   assert.deepEqual(page.rows().map((row) => row.dataset.runId), [1, 2, 3, 4].map(runId));
-  assert.match(page.rows()[0].textContent, /Summary · User story mapping\.docx/);
+  assert.match(page.rows()[0].textContent, /Summary · Release planning\.docx/);
   assert.doesNotMatch(page.rows()[0].textContent, /superseded/);
   // The older runs wrote the same file, which the newest run replaced.
-  assert.match(page.rows()[1].textContent, /Summary · User story mapping\.docx · superseded/);
+  assert.match(page.rows()[1].textContent, /Summary · Release planning\.docx · superseded/);
   assert.match(page.rows()[3].textContent, /· superseded/);
   assert.match(page.rows()[2].textContent, /Task 3/);
 
@@ -1119,7 +1119,7 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   const detail = page.el("tasks-detail");
   await until(() => buttonIn(detail, "Open current summary"), "the Open current summary button");
   assert.match(detail.textContent, /Superseded by a newer summary of this page\./);
-  assert.match(detail.textContent, /Summary of User story mapping\.docx/);
+  assert.match(detail.textContent, /Summary of Release planning\.docx/);
   assert.match(detail.textContent, /Answer/);
   assert.match(detail.textContent, /Importance: medium — Adds detailed requirements\./);
   assert.equal(buttonIn(detail, "Reuse"), null);
@@ -1134,7 +1134,7 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   );
 
   // Search matches a summary by its page title.
-  page.el("tasks-search").value = "story";
+  page.el("tasks-search").value = "planning";
   page.el("tasks-search").dispatch("input", {});
   await until(() => page.rows().length === 3, "the three summaries");
 
@@ -1148,7 +1148,7 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
 
 test("a selected summary whose save was retried elsewhere shows its new state on refresh", async () => {
   const { instruction: _instruction, task_report: _report, ...failed } = task(1, {
-    kind: "summary", state: "failed", title: "User story mapping.docx", url: "https://work.example/doc",
+    kind: "summary", state: "failed", title: "Release planning.docx", url: "https://work.example/doc",
     error: "The notes folder is not mounted.", error_kind: "save_failed", can_retry_save: true,
   });
   const page = await openTasks({ runs: [failed] });

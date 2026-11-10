@@ -5667,7 +5667,7 @@ mod tests {
     }
 
     /// The goal's PowerPoint sample (plan decision 2).
-    const OFFICE_URL: &str = "https://cisco-my.sharepoint.com/:p:/r/personal/u_cisco_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true";
+    const OFFICE_URL: &str = "https://contoso-my.sharepoint.com/:p:/r/personal/u_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D%7D&file=X.pptx&action=edit&mobileredirect=true";
 
     /// `request` on the Office sample, with `content` as the page text.
     fn office_request(mut req: StartRun, content: &str) -> StartRun {
@@ -5902,7 +5902,7 @@ mod tests {
         for leak in [
             "X.pptx",
             "_layouts",
-            "personal/u_cisco_com",
+            "personal/u_contoso_com",
             "0A1B2C3D",
             "0a1b2c3d",
             "sourcedoc",

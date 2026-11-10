@@ -2667,7 +2667,7 @@ for (const { name, response } of ADAPTER_REPAIR_CASES) {
   });
 }
 
-const ONEDRIVE = "https://cisco-my.sharepoint.com";
+const ONEDRIVE = "https://contoso-my.sharepoint.com";
 const SHARE_RULE = { path: "/(:w:|:x:|:p:)/(r|g)/(sites|personal)/{_}/_layouts/15/Doc.aspx", query: { sourcedoc: "{doc:uuid}" } };
 function staleOneDrive() {
   return {
@@ -2721,8 +2721,8 @@ test("Update to current rules reviews the replaced rule and saves it only on Sav
   assert.ok(text.includes("Removes /:w:/r/sites/{_}/_layouts/15/Doc.aspx · query sourcedoc={doc:uuid}"), text);
   // The preview starts on the new rule, and that example matches it.
   const example = env.elements.get("adapter-preview-url").value;
-  assert.match(example, /^https:\/\/cisco-my\.sharepoint\.com\/:w:\/r\/sites\/example\/_layouts\/15\/Doc\.aspx\?sourcedoc=/);
-  assert.match(nodeText(env.elements.get("adapter-preview")), /Example: [^ ]+ — Matches sharepoint\.doc rule 3 · sharepoint:cisco-my\.sharepoint\.com\//);
+  assert.match(example, /^https:\/\/contoso-my\.sharepoint\.com\/:w:\/r\/sites\/example\/_layouts\/15\/Doc\.aspx\?sourcedoc=/);
+  assert.match(nodeText(env.elements.get("adapter-preview")), /Example: [^ ]+ — Matches sharepoint\.doc rule 3 · sharepoint:contoso-my\.sharepoint\.com\//);
   assert.equal(saves.length, 0, "opening the review saves nothing");
 
   await saveOpenAdapter("the starter update");

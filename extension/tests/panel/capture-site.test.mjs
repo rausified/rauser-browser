@@ -143,7 +143,7 @@ test("the starter source line follows each starter's certification status", asyn
 });
 
 test("Capture Site offers Miro boards as a starter, keyed by the padded board ID", async () => {
-  const url = "https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=687498250990";
+  const url = "https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=510293847561";
   const page = await captureReview(url);
   assert.equal(starterGroup(page), null);
   const preview = page.el("capture-site-preview").textContent;

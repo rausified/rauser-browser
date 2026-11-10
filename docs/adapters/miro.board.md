@@ -47,12 +47,12 @@ Recorded samples. Each one is a shared vector (`eval.miro.*` in
 
 - `https://miro.com/app/board/qK3nR8vDpZx=/`: a board opened directly. The
   trailing slash Miro always adds is dropped before matching (§5.1).
-- `https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=687498250990`: a
+- `https://miro.com/app/board/qK3nR8vDpZx=/?share_link_id=510293847561`: a
   board opened from a share link.
-- `https://miro.com/app/board/qK3nR8vDpZx=/?moveToWidget=3458764680052296737&cot=14`:
+- `https://miro.com/app/board/qK3nR8vDpZx=/?moveToWidget=3458764512345678901&cot=14`:
   a board opened at a widget, for example from a comment or a mention.
   Query parameters never change the ID.
-- Tab title `SSE ZTA SWOT - Miro`: the title entry records `SSE ZTA SWOT`.
+- Tab title `Team Retro Board - Miro`: the title entry records `Team Retro Board`.
 
 The draft deliberately does not record:
 
