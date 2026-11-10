@@ -97,3 +97,27 @@ test("the CLI fails the job for a PR event without an owner and passes one with 
   assert.equal(named.status, 0, named.stderr);
   assert.match(named.stdout, /Owner: lane D session/);
 });
+
+test("--body-file checks a PR body locally, before the PR is opened", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const script = fileURLToPath(new URL("../pr-owner.mjs", import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "pr-owner-body-"));
+  const env = { ...process.env };
+  delete env.GITHUB_EVENT_PATH;
+  const check = (body) => {
+    const path = join(dir, `body-${Math.random()}.md`);
+    writeFileSync(path, body);
+    return spawnSync(process.execPath, [script, "--body-file", path], { env, encoding: "utf8" });
+  };
+  const template = check("Owner: <!-- the session that owns this PR -->\n\n## Summary\n");
+  assert.equal(template.status, 1);
+  assert.match(template.stderr, /no filled-in 'Owner:' line/);
+  const named = check("Owner: claude session 99c47691\n");
+  assert.equal(named.status, 0, named.stderr);
+  assert.match(named.stdout, /Owner: claude session 99c47691/);
+});
