@@ -21,6 +21,8 @@ pub(crate) const MAX_OPEN_TAB_URL_CHARS: usize = 2048;
 
 /// Refuse a list past the schema's bounds, as `check_start_run` refuses the
 /// page fields: the host and the service both run it.
+// Its callers (the service and the Unix run proxy) are compiled out on Windows.
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn check(tabs: &[OpenTab]) -> Result<(), &'static str> {
     if tabs.len() > MAX_OPEN_TABS {
         return Err("open_tabs has more than 20 entries");
@@ -58,6 +60,8 @@ pub(crate) fn listable(url: &str) -> bool {
 /// repeats (of each other or of `page_url`, the summarized page) are
 /// dropped, never rewritten, and titles become one plain line. Run again on
 /// a stored list, so local run-record text cannot widen it.
+// Its callers (the service and the Unix run proxy) are compiled out on Windows.
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn snapshot(tabs: &[OpenTab], page_url: &str) -> Vec<OpenTab> {
     let page = Url::parse(page_url).ok();
     let mut kept: Vec<OpenTab> = Vec::new();
@@ -97,6 +101,8 @@ pub(crate) fn find<'a>(tabs: &'a [OpenTab], url: &str) -> Option<&'a OpenTab> {
 /// The `page.md` list, one tab a line: the address first (it has no
 /// whitespace, so where it ends is plain), then the flattened title. Both
 /// stay inside one line, so neither can start a heading.
+// Its callers (the service and the Unix run proxy) are compiled out on Windows.
+#[cfg_attr(not(any(test, unix)), allow(dead_code))]
 pub(crate) fn list(tabs: &[OpenTab]) -> String {
     let mut out = String::new();
     for tab in tabs {
