@@ -30,6 +30,7 @@ pub mod journal;
     expect(dead_code, reason = "dormant durable apply prerequisite for brwr-dbp")
 )]
 mod transaction;
+pub(crate) use transaction::note_resolution;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +42,7 @@ pub struct PlanRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Identity {
     pub artifact_type: String,
     pub artifact_id: String,

@@ -2012,3 +2012,36 @@ used only by the Unix service and tests. Windows production builds omit that
 service, so their warnings-as-errors lint rejects the unused method. Compile
 `reopen` under `cfg(any(unix, test))` and correct its caller documentation.
 The method remains available to cross-platform tests; config behavior is unchanged.
+
+
+## 2026-11-10 — Ordinary note requests consume home re-key history
+
+`brwr-8qgs` connects `native.rs` note context to the bounded, checksum-chained
+home-history parser in `relearn/transaction.rs` under a matching live config
+lock after refresh. Load/save and explicit task-note appends preserve physical
+ownership and history-bound revisions. Older URL evidence compares canonical
+identities, extracts each candidate owner once, and retains provenance checks.
+`NoteLocation::use_older_note` refuses an existing selected owner and returns
+bound revisions after importing into an empty group. Event and identity parsing
+now reject unknown fields. Independent preserved-note viewing stays available
+when ordinary history access refuses.
+
+The required design challenge distinguished consumer integration from activation:
+readers can ship incrementally while the production writer and recovery stay
+unreachable. Ordinary SQL indexing, summary/run replay and in-flight handoff,
+universal recovery, preserved alias-note presentation, stubs and multi-apply/
+reindex acceptance still belong to `brwr-dbp`. This slice does not enable apply.
+The move-back reader fixture authors a valid history chain; it is not evidence
+that two real applies are integrated. 326 focused cases pass, including 13 new
+regressions; the driver's external complete gate remains authoritative.
+
+## 2026-11-10 — Review: keep re-keyed notes reachable after site removal
+
+Independent review reproduced a re-key followed by ordinary site removal
+returning a URL key instead of the preserved artifact note. Raw retired IDs
+were declared ambiguous before authoritative replay could show their agreement.
+Ordinary note lookup and older-note authorization now deduplicate those IDs
+after replay. Run identity callers keep their existing raw resolution, and
+unavailable contracts and genuinely different canonical IDs retain their refusal
+or ambiguity behavior. Native regressions cover removal, subsequent editing,
+older URL-note viewing, and an unrelated third contract that must stay ambiguous.

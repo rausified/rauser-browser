@@ -493,3 +493,6 @@
 
 
 - **Brauser — prepare nested reads for automatic Re-learn recovery (2026-11-09).** Planning, preview, decision recording and private config preparation now carry a live matching config-lock guard into nested reads. Coordination-only locks preserve read-only adopted-contract behavior, while ordinary write-lock refreshes keep recording contracts. Four regressions cover foreign guards, ownership lifetime and untouched pending transactions. Automatic recovery/apply remains dormant pending the assigned replay-reader integration. This is a local briefing for optional morning integration.
+
+
+- **Brauser — ordinary notes consume authoritative re-key history (2026-11-10, brwr-8qgs).** Loads, saves, task-report appends and explicit older URL-note imports now preserve original physical ownership while using current logical identities and history-bound edit revisions. Pending or invalid home history refuses ordinary note access; independent preserved-note viewing remains available. 326 focused tests pass, including 13 new regressions. This is one assigned brwr-dbp prerequisite; production apply/recovery, ordinary index/run replay and panel presentation remain incomplete. Optional morning briefing only; all Brauser source and design artifacts remain in its repository.
