@@ -5,10 +5,11 @@ Status: development draft. The URL and title rules come from
 (ServiceNow Community threads and the public Raycast ServiceNow extension
 source), no browsing history, cookies or a ServiceNow account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): no visits of
-this type in the sample, so 0/5 rules confirmed. Not every rule and
-title was confirmed, so this type stays a development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: no real visit of this type, so 0/5
+rules confirmed. Not every rule was matched by a real visit, so this type
+stays a development draft.
 
 Brauser offers this draft on a customer instance, `<instance>.service-now.com`
 (the `servicenow` family's strict subdomain origin, `exclude: ["www"]`),

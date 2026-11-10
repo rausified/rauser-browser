@@ -4,11 +4,15 @@ Status: development draft. The URL and title rules come from
 `docs/research/blind/splunk-cloud/`, researched blind: public sources only,
 no browsing history, cookies or a Splunk account.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 5 real URLs
-(10 visits) matched, 1/1 rules confirmed, the recorded title right on
-4/5. Not every rule and title was confirmed, so this type stays a
-development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on Splunk Cloud hosts, plus the earlier held-back sample's
+Splunk URLs that have since left that history: 6 real URLs (11 visits)
+matched, 1/1 rules confirmed, and the title right on 6/6, counting the
+`Dashboard` loading title, which records no title. With Splunk apps
+chosen too, no real search page matched. Chosen alone, though, the
+dashboard rule also matches 3 real search-page URLs
+(`/app/<app>/search`) and records them as dashboards, so this type stays
+a development draft.
 
 Brauser offers this draft on a Splunk Cloud stack's own host,
 `<stack>.splunkcloud.com` (the `splunk` family's strict subdomain origin,

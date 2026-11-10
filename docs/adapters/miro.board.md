@@ -1,10 +1,18 @@
 # Miro board starter draft
 
-Status: development draft. The URL and tab-title formats were checked on
-2026-11-01 against 12 real board visits in the maintainer's Chrome history
-(Miro web app, `https://miro.com`). Both adapter-template engines verify the
-samples below. A live check in the Capture Site review is still needed before
-this draft is release-certified.
+Status: certified 2026-11-09 from real browsing history. The URL and
+tab-title formats were first checked on 2026-11-01 against 12 real board
+visits in the maintainer's Chrome history (Miro web app,
+`https://miro.com`), and both adapter-template engines verify the samples
+below.
+
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on the Miro origin: 12 real URLs (25 visits) matched, 1/1 rules
+confirmed, and the title right on 12/12, counting the app-shell `Miro`
+title, which records no title. None of the 8 other real Miro URLs
+(dashboard, team, sign-in and SSO pages) matched, and no real board URL
+was missed. The live check below is still needed before this type is
+release-certified.
 
 Brauser offers this draft on the exact origin `https://miro.com`. It records
 one artifact per board:
@@ -92,8 +100,8 @@ with real Chrome and a real Miro account, the way the Jira, SharePoint and
 GitHub starters were certified on 2026-11-02:
 
 1. On a board page with no saved Miro rules, **Capture Site** offers **Miro
-   boards** with the every-account statement and the development-draft source
-   line. Saving it turns the page card's status to "● Artifact recognized",
+   boards** with the every-account statement and the certified source line
+   ("Certified starter rules · checked on real pages."). Saving it turns the page card's status to "● Artifact recognized",
    and settings' starter gallery then shows Miro boards as **Already
    configured**.
 2. The same board opened directly, from a share link (`?share_link_id=…`) and
