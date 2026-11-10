@@ -5,12 +5,16 @@ browsing history (7 folder URLs, 18 visits, on `https://drive.google.com`).
 Both adapter-template engines verify the samples below. A live check in the
 Capture Site review is still needed before this draft is release-certified.
 
-History check (2026-11-09): graded against the maintainer's full Chrome
-history on this family's hosts, plus the earlier held-back sample's URLs
-that have since left that history: 7 real URLs (18 visits) matched, 1/2
-rules confirmed, and the title right on 7/7, counting a sign-in, loading
-or error title that records no title as right. Not every rule was matched
-by a real visit, so this type stays a development draft.
+History check (2026-11-10): graded against a hand-built answer key from
+the maintainer's Chrome history in all five Chrome profiles on
+`drive.google.com`: 7 real folder URLs (12 history rows across profiles,
+19 visits) matched with the right type and ID, 0 real folder URLs missed,
+1/2 rules confirmed, and the title right on 12/12, counting a sign-in or
+error title, or a never-loaded tab's URL placeholder, that records no
+title as right. None of the 10 other real Drive URLs (home, account roots,
+sign-in redirects and the PDF viewer's sign-in hop) matched. The
+`/drive/u/<n>/folders/<id>` rule matched no real visit, so this type stays
+a development draft.
 
 Brauser offers this draft on the exact origin `https://drive.google.com`, as
 its own `google-drive` family, beside the Google Workspace family on
@@ -74,6 +78,11 @@ sign-in page on the folder's URL (seen titles: `Access denied`,
 and each is in `generic_titles`, so that visit records no title and the
 folder keeps its own name.
 
+A folder tab Chrome never finished loading (seen on a synced row with no
+visit) keeps its full URL, `https://drive.google.com/drive/folders/<id>`, as
+the title. That is the browser's no-title placeholder (`adapter-templates.md`
+§9.4), so it records no title either.
+
 ## Recorded samples
 
 Synthetic equivalents of the recorded shapes (shared vectors
@@ -84,6 +93,10 @@ Synthetic equivalents of the recorded shapes (shared vectors
 | `/drive/folders/1AbC…345?usp=sharing` | `Team Templates - Google Drive` | the folder, `Team Templates` |
 | `/drive/u/1/folders/1AbC…345` | `Team Templates – Google Drive` | the same folder, `Team Templates` |
 | `/drive/folders/1AbC…345` | `Access denied` | the folder, no title (generic) |
+| `/drive/folders/1AbC…345` | `Google Drive: Sign-in` | the folder, no title (generic) |
+| `/drive/folders/1AbC…345` | `https://drive.google.com/drive/folders/1AbC…345` | the folder, no title (URL placeholder) |
+| `/viewerng/noncesigner?…` | (sign-in hop) | nothing |
+| `/drive/u/0/?pli=1` | `Google Drive` | nothing |
 
 ## What the draft does not record
 

@@ -300,6 +300,40 @@
           "expect": {"match": true, "adapter": 0, "rule": 0, "type": "google.drivefolder", "captures": {"id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"}, "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
           "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
           "title": "Service not allowed"
+        },
+        {
+          "id": "eval.google.drivefolder.signin_title",
+          "kind": "evaluate",
+          "why": "Drive's own sign-in page on a folder URL: generic title, no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 0, "type": "google.drivefolder", "captures": {"id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"}, "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+          "title": "Google Drive: Sign-in"
+        },
+        {
+          "id": "eval.google.drivefolder.url_title",
+          "kind": "evaluate",
+          "why": "a tab Chrome never loaded keeps its URL as the title: the browser's placeholder, no title (§9.4)",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 0, "type": "google.drivefolder", "captures": {"id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"}, "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+          "title": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+        },
+        {
+          "id": "eval.google.drivefolder.viewer_signin",
+          "kind": "evaluate",
+          "why": "the PDF viewer's sign-in hop is not a folder",
+          "impls": ["rust", "ts"],
+          "expect": {"match": false, "reason": "no_rule"},
+          "url": "https://drive.google.com/viewerng/noncesigner?authuser=0&nonce=a1b2c3d4e5f6&continue=https%3A%2F%2Fexample.invalid%2F&hash=0a1b2c3d4e5f6a7b"
+        },
+        {
+          "id": "eval.google.drivefolder.account_root",
+          "kind": "evaluate",
+          "why": "an account's Drive root is not a folder",
+          "impls": ["rust", "ts"],
+          "expect": {"match": false, "reason": "no_rule"},
+          "url": "https://drive.google.com/drive/u/0/?pli=1"
         }
       ]
     }
