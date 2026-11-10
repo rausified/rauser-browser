@@ -166,7 +166,7 @@ pub(crate) fn publish(
     drop(file);
     result?;
     checkpoint("config_file_synced")?;
-    fs::rename(&temporary, path)?;
+    crate::fsutil::rename_or_copy(&temporary, path)?;
     checkpoint("config_published")?;
     sync_config_parent(parent)?;
     checkpoint("config_synced")?;
