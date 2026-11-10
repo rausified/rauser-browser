@@ -2435,6 +2435,15 @@ fn note_context(
     })?;
     if key.kind == RecordKeyKind::Artifact {
         key.value = resolution.canonical(&key.value).into();
+    } else if let NoteKeyRule::Artifact(artifact_id) =
+        config.note_key_rule_mapped(url, |id| resolution.canonical(id).into())
+    {
+        // A removed site's old and new contracts can disagree on raw IDs
+        // while authoritative history proves they name the same artifact.
+        key = RecordKey {
+            kind: RecordKeyKind::Artifact,
+            value: artifact_id,
+        };
     }
     // `older_urls` is both the older-note list and the only authorization
     // for viewing or migrating one, so every candidate must name this
@@ -2452,7 +2461,7 @@ fn note_context(
         if let Ok(found) = config.adapter_match(candidate, None) {
             return resolution.canonical(&found.artifact_id) == key.value;
         }
-        match config.note_key_rule(candidate) {
+        match config.note_key_rule_mapped(candidate, |id| resolution.canonical(id).into()) {
             NoteKeyRule::Artifact(artifact_id) => resolution.canonical(&artifact_id) == key.value,
             NoteKeyRule::Ambiguous
             | NoteKeyRule::Unrecognized

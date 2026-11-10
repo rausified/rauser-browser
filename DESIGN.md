@@ -636,7 +636,10 @@ binding replay to the selected home and its physical identity. Missing history
 retains direct revisions. Pending publication or unreadable/torn history refuses
 these note paths without repairing history; independent preserved-note viewing
 remains available. Older URL-note discovery compares canonical identities while
-retaining stripped-parameter provenance checks. Explicit older URL-note imports
+retaining stripped-parameter provenance checks. Retired note contracts are
+deduplicated after canonical replay, so removing a re-keyed site preserves its
+note; contracts that still name different canonical artifacts remain ambiguous.
+Explicit older URL-note imports
 refuse if any selected physical owner exists; an empty group imports at its
 canonical key and returns a history-bound revision ready for editing.
 Authoritative apply/recovery, the ordinary index/run readers and preserved

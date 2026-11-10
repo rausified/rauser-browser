@@ -1001,6 +1001,16 @@ impl ConfigStore {
     /// Contracts that left config.toml by hand are read the same way from
     /// the host's adopted-contract state (`AdoptedContracts`).
     pub(crate) fn note_key_rule(&self, url: &str) -> NoteKeyRule {
+        self.note_key_rule_mapped(url, str::to_owned)
+    }
+
+    /// Ordinary notes may deduplicate retired identities through validated
+    /// alias history before deciding whether the contracts disagree.
+    pub(crate) fn note_key_rule_mapped(
+        &self,
+        url: &str,
+        map_id: impl Fn(&str) -> String,
+    ) -> NoteKeyRule {
         if self.note_key_rules.all_unavailable {
             return NoteKeyRule::StateUnavailable;
         }
@@ -1023,7 +1033,7 @@ impl ConfigStore {
             match document.evaluate(url, None) {
                 Ok(found) => {
                     covered = true;
-                    ids.insert(found.artifact_id);
+                    ids.insert(map_id(&found.artifact_id));
                 }
                 Err(NoMatch::NoAdapter) => {}
                 Err(_) => covered = true,

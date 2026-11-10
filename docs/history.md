@@ -2034,3 +2034,14 @@ reindex acceptance still belong to `brwr-dbp`. This slice does not enable apply.
 The move-back reader fixture authors a valid history chain; it is not evidence
 that two real applies are integrated. 326 focused cases pass, including 13 new
 regressions; the driver's external complete gate remains authoritative.
+
+## 2026-11-10 — Review: keep re-keyed notes reachable after site removal
+
+Independent review reproduced a re-key followed by ordinary site removal
+returning a URL key instead of the preserved artifact note. Raw retired IDs
+were declared ambiguous before authoritative replay could show their agreement.
+Ordinary note lookup and older-note authorization now deduplicate those IDs
+after replay. Run identity callers keep their existing raw resolution, and
+unavailable contracts and genuinely different canonical IDs retain their refusal
+or ambiguity behavior. Native regressions cover removal, subsequent editing,
+older URL-note viewing, and an unrelated third contract that must stay ambiguous.

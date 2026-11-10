@@ -101,6 +101,75 @@ fn ordinary_notes_without_history_keep_direct_revisions_and_create_no_history() 
 }
 
 #[test]
+fn removed_site_keeps_the_rekeyed_note_when_retired_contracts_agree_after_replay() {
+    let f = Fixture::new();
+    commit(&f.config, &f.request).unwrap();
+    let current = load(&f, URL);
+    let v = vault(&f);
+    crate::note::save_note(&v, URL, "Older URL note", "separate", "missing").unwrap();
+    let mut config = ConfigStore::load_from(f.path.clone());
+    let mut next = config.snapshot().clone();
+    next.adapters
+        .artifacts
+        .retain(|rule| rule["origin"] != ORIGIN);
+    let revision = config.revision().to_owned();
+    config.update(next, &revision).unwrap().unwrap();
+    let removed = load(&f, URL);
+    assert_eq!(removed.key, key(NEW));
+    assert_eq!(removed.body, current.body);
+    assert_eq!(removed.revision, current.revision);
+    assert_eq!(removed.older_notes.len(), 1);
+    match call(
+        &f,
+        Request::ViewOlderNote(brauser_protocol::ViewOlderNoteRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "view-removed-site".into(),
+            url: URL.into(),
+            source_url: URL.into(),
+        }),
+    ) {
+        Response::NoteLoaded(note) => assert_eq!(note.body, "separate"),
+        response => panic!("expected older URL note: {response:?}"),
+    }
+    assert!(matches!(
+        call(&f, save_request(&removed, "edit with capture removed")),
+        Response::NoteSaved(_)
+    ));
+    assert_eq!(load(&f, URL).body, "edit with capture removed");
+    assert_eq!(crate::note::load_note(&v, URL).unwrap().body, "separate");
+}
+
+#[test]
+fn removed_site_stays_ambiguous_when_a_retired_contract_names_an_unaliased_artifact() {
+    let f = Fixture::new();
+    commit(&f.config, &f.request).unwrap();
+    let current = load(&f, URL);
+    let mut config = ConfigStore::load_from(f.path.clone());
+    let mut next = config.snapshot().clone();
+    next.adapters
+        .artifacts
+        .retain(|rule| rule["origin"] != ORIGIN);
+    let revision = config.revision().to_owned();
+    config.update(next, &revision).unwrap().unwrap();
+    let mut raw: toml::Table = toml::from_str(&fs::read_to_string(&f.path).unwrap()).unwrap();
+    raw.get_mut("adapter_id_history")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .push(toml::Value::try_from(adapter("unrelated:{host}/{id}")).unwrap());
+    fs::write(&f.path, toml::to_string(&raw).unwrap()).unwrap();
+    let originals = f.notes();
+    let ambiguous = load(&f, URL);
+    assert_eq!(ambiguous.key, crate::vault::url_record_key(URL).unwrap());
+    assert!(!ambiguous.exists);
+    match call(&f, save_request(&current, "must not guess")) {
+        Response::NoteConflict(conflict) => assert_eq!(conflict.reason, "key_changed"),
+        response => panic!("expected ambiguous-key conflict: {response:?}"),
+    }
+    assert_eq!(f.notes(), originals);
+}
+
+#[test]
 fn ordinary_notes_follow_published_history_and_edit_original_physical_owner() {
     let mut f = Fixture::new();
     let original = load(&f, URL);

@@ -667,3 +667,13 @@ pass. Full manual source/test diff review found no remaining blocking issue;
 the required reviewer approved the import ownership rule and identified the
 candidate-parse multiplication fixed above. Full gate/publication belong to the
 driver. Follow-up `brwr-pkrk` tracks the note ownership indication in the panel.
+
+### Independent review challenge — 2026-11-10
+
+Reviewer `/root/fix_challenge` confirmed that retired contracts must be compared
+after canonical replay to preserve the existing removed-site note contract.
+Use a mapped variant of the existing contract lookup, retaining unavailable-state
+precedence, raw URL evaluation and provenance checks. Apply it only in ordinary
+note context and older-note authorization; leave run identity integration to its
+assigned work. A third, unaliased retired identity must remain ambiguous. This
+avoids duplicating the contract evaluator or broadening run behavior.
