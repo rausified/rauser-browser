@@ -5,6 +5,13 @@ browsing history (7 folder URLs, 18 visits, on `https://drive.google.com`).
 Both adapter-template engines verify the samples below. A live check in the
 Capture Site review is still needed before this draft is release-certified.
 
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 7 real URLs (18 visits) matched, 1/2
+rules confirmed, and the title right on 7/7, counting a sign-in, loading
+or error title that records no title as right. Not every rule was matched
+by a real visit, so this type stays a development draft.
+
 Brauser offers this draft on the exact origin `https://drive.google.com`, as
 its own `google-drive` family, beside the Google Workspace family on
 `https://docs.google.com`. It records one artifact per folder:

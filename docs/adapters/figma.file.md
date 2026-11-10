@@ -6,11 +6,12 @@ browsing history, cookies or a Figma account. Both adapter-template engines
 verify the samples below. A live check with a real Figma account is still
 needed before this draft is release-certified.
 
-History check (2026-11-09): graded against a held-back sample of real
-browsing history (real URLs from eight researched sites): 34 real URLs
-(42 visits) matched, 2/4 rules confirmed, the recorded title right on
-30/34. Not every rule and title was confirmed, so this type stays a
-development draft.
+History check (2026-11-09): graded against the maintainer's full Chrome
+history on this family's hosts, plus the earlier held-back sample's URLs
+that have since left that history: 34 real URLs (41 visits) matched, 2/4
+rules confirmed, and the title right on 34/34, counting a sign-in, loading
+or error title that records no title as right. Not every rule was matched
+by a real visit, so this type stays a development draft.
 
 Brauser offers this draft on the exact origin `https://www.figma.com`,
 alongside Figma branches (the `figma` family). Either can be chosen alone in
