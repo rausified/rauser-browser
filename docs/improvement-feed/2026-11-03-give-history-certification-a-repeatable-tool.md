@@ -19,3 +19,5 @@ every time.
 
 Where: `scripts/dev/` (beside `worktree-hygiene`), `protocol/starters/README.md`
 (the certification section), and `docs/adapters/<type>.md` status lines.
+
+- +1 2026-11-10: brwr-f8sn (google.drivefolder) still needed a hand-written answer key and grader in /tmp, plus a manual copy of five Chrome profiles' History files; the earlier held-back snapshot the 2026-11-09 check used was not reachable from a fresh session, so the tool should also own where snapshots are kept.
