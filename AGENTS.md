@@ -19,6 +19,7 @@
 | Index and artifact files | Built: a rebuildable SQLite `index.db` (cache format 9, written through `rusqlite` in small transactions and safe for several host processes at once), lazily regenerated artifact files, `brauser reindex` | DESIGN.md §5.5, §6.7 |
 | Focus sessions | Built: explicit profile-local Start/Rename/End, durable activity snapshots, direct-activity worklog groups, log-only replay, and explicit sharing of one recorded session in Recent | DESIGN.md §5.1 |
 | Panel views | Built: the artifact card, a cross-tool Recent list, copyable worklogs with capture-gap review, browser-local named sharing drafts with explicit evidence comparison, incoming navigation (protocol v8) | DESIGN.md §5.1, §5.7 |
+| Passage evidence | Built: the selection-only **Keep passage with Brauser** gesture saves an immutable source/key/time/digest card under `notes/evidence/`, without extraction or an agent | DESIGN.md §5.3a |
 | Note identity | Built: host-derived record keys, note-only recorded contracts (`adopted-contracts.json`), the `strip_params` reader guard, stripped-parameter provenance, preserved-note viewing | DESIGN.md §6.2 |
 | Capture Site | Built for starter sites, removed-site restoration, the Page patterns review, Capture Site for unknown sites (`brwr-t40`), and Improve with AI (`brwr-f45`, a `site_draft` service run judged by the host) | DESIGN.md §5.1, §12.2 steps 7.6–7.7 |
 | Containers | Built: GitHub repositories as container artifacts (protocol v7) | DESIGN.md §5.1, §6.2, §7.2 |

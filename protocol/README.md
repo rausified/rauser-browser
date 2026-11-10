@@ -742,3 +742,18 @@ existing report section. A stale configuration or an intervening file edit
 refuses with `conflict`; ownership, folder and note-size errors retain their
 ordinary codes. No automatic task finish or worker message sends this request.
 An older host refuses the new request; existing run/note messages are unchanged.
+
+### Selected passage evidence (additive v8)
+
+`save_evidence` accepts only `url` (at most 8192 UTF-8 bytes) and `selection`
+(nonblank, at most 32768 UTF-8 bytes), with the usual envelope. The host chooses
+all attribution and filesystem paths. `evidence_saved` returns `relative_path`,
+`key`, `canonical_url`, `captured_at`, `selection_sha256`, `already_saved` and
+up to two `warnings`; it never echoes the selection. Repeating an exact source,
+key and selection returns the original capture time. A changed selection has
+a different immutable card. An occupied edited/unowned name is `conflict`;
+invalid input is `invalid_request`; no home is `not_configured`. A warning
+means the card was published and retry can complete directory durability.
+This is a direct native write from a browser selection gesture, with no service
+or worker-message relay authority. Older hosts refuse the new request; deploy
+host and extension together. See DESIGN.md §5.3a for the storage contract.

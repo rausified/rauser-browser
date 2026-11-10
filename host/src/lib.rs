@@ -24,6 +24,7 @@ pub mod config;
 pub mod consent;
 pub mod diag;
 pub mod dialog;
+pub(crate) mod evidence;
 pub mod frame;
 mod fsutil;
 pub mod harness;

@@ -482,6 +482,14 @@
 
 - **Brauser — recover the Recent pagination gate (2026-11-09).** Restored the quarantined pagination change and aligned the existing disconnect regression with the deliberate stale-row clearing contract. The test still verifies page-summary disabling and now verifies fresh Recent reload and summary-button recovery. Testing guidance records both behaviors; reading-position follow-up is brwr-0401.
 
+- **Brauser — selected passage evidence (2026-11-03, brwr-edn4):** The
+  selection-only **Keep passage with Brauser** menu saves an immutable local
+  card with host-derived source/key/time, exact UTF-8 text and SHA-256 digest.
+  Exact retries retain the first card; changed text gets a separate card;
+  conflicts and invalid sources refuse. It performs no extraction, agent run,
+  network request or direct AMOS write. Full offline gates pass; real browser
+  and platform acceptance remain separate. Brauser-owned instructions and
+  design remain in this repository.
 - 2026-11-09 — Brauser now pages through all recorded focus sessions when sharing work. More sessions keeps the chosen session, checked entries and preview intact; snapshot-bound host replies refuse changed history and offer explicit reload. Duplicate names remain separate identities, and the final page returns focus to the selector. Local focused Rust/wire checks, 121 panel/sharing-draft tests and static gates pass; real-browser keyboard validation remains for the driver (56 local browser skips). See CookieFeature.md and TESTING.md in this repository.
 - **Brauser — Per-task project folders (2026-11-03, brwr-zla).** Settings can add native-picked project folders; the task bar selects one while retaining the knowledge base default. The service rechecks the original folder ID and filesystem identity before launch, and Tasks history/Reuse keep that location. Full local gates pass; real browser/platform acceptance remains with the external gate. This briefing stays in the Brauser repo for optional morning integration.
 

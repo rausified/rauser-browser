@@ -15,6 +15,29 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SaveEvidenceRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    pub selection: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceSaved {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub relative_path: String,
+    pub key: RecordKey,
+    pub canonical_url: String,
+    pub captured_at: String,
+    pub selection_sha256: String,
+    pub already_saved: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HelloRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1720,6 +1743,7 @@ pub struct TaskFoldersListed {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
+    SaveEvidence(SaveEvidenceRequest),
     GetAdapterRepair(GetAdapterRepairRequest),
     ReplaceAdapters(ReplaceAdaptersRequest),
     Hello(HelloRequest),
@@ -1774,6 +1798,7 @@ pub enum Request {
 impl Request {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::SaveEvidence(value) => value.protocol_version,
             Self::GetAdapterRepair(value) => value.protocol_version,
             Self::ReplaceAdapters(value) => value.protocol_version,
             Self::Hello(value) => value.protocol_version,
@@ -1828,6 +1853,7 @@ impl Request {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::SaveEvidence(value) => &value.request_id,
             Self::GetAdapterRepair(value) => &value.request_id,
             Self::ReplaceAdapters(value) => &value.request_id,
             Self::Hello(value) => &value.request_id,
@@ -1885,6 +1911,7 @@ impl Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
+    EvidenceSaved(EvidenceSaved),
     TaskCommandsListed(TaskCommandsListed),
     TaskCommandSettings(TaskCommandSettings),
     AdapterRepairLoaded(AdapterRepairLoaded),
@@ -1929,6 +1956,7 @@ pub enum Response {
 impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::EvidenceSaved(value) => value.protocol_version,
             Self::TaskCommandsListed(value) => value.protocol_version,
             Self::TaskCommandSettings(value) => value.protocol_version,
             Self::AdapterRepairLoaded(value) => value.protocol_version,
@@ -1973,6 +2001,7 @@ impl Response {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::EvidenceSaved(value) => &value.request_id,
             Self::TaskCommandsListed(value) => &value.request_id,
             Self::TaskCommandSettings(value) => &value.request_id,
             Self::AdapterRepairLoaded(value) => &value.request_id,

@@ -1814,6 +1814,39 @@ Recent now offers Load more to reach artifact-days beyond the first 32, includin
 
 The driver quarantined the first attempt because an older disconnect test still expected Recent rows to remain visible. Recovery keeps the new stale-result invalidation and updates that regression to check that rows disappear, the page summary disables while offline, and explicit reload restores enabled Recent summary buttons from offset zero. The follow-up for retaining the reading position is now brwr-0401 after the quarantine removed its original bead.
 
+## 2026-11-03 — Keep the exact passage behind a decision
+
+Brauser now offers **Keep passage with Brauser** when you right-click selected
+text. It saves a local evidence card under the chosen home folder's
+`notes/evidence/`, with the host-derived artifact or URL key, canonical source
+address, first capture time and SHA-256 of the selected UTF-8 bytes. The card
+contains a readable passage plus a lossless hex copy, so whitespace, Unicode
+and CRLF can be recovered exactly even though active Markdown is neutralized
+for display. A selection in an embedded frame belongs to that frame's address.
+The action uses only the text Chrome supplies with that deliberate gesture;
+it extracts no page-wide content, invokes no agent and makes no network call.
+
+This differs from an editable note or bookmark: it freezes the actual passage
+and its attribution at capture time. Repeating the same source, key and text
+returns the original card and timestamp, including after a lost answer;
+changed text gets another card. Brauser publishes through a no-clobber hard
+link and never replaces an edited or unrelated occupant. URL credentials,
+invalid sources, blank or oversized text, symlinked parents and conflicting
+files refuse. The panel reports the saved path or failure as plain text,
+without asking for a summary harness. Browser-provided text is not a claim of
+independent page verification or a guarantee that the passage can be relocated.
+
+Nine new Rust/wire cases and five new extension cases cover attribution,
+exact preservation, hostile markup, retries, concurrent publication, file
+conflicts, frame handling, and absence of scripting/fetch/agent requests.
+The complete required gate passes with 1,418 Rust-reported outcomes and all
+45 extension files; both Clippy configurations and README supplemental checks
+pass. Two accessibility fixture checks pass, while 42 real-browser cases explicitly
+skip in this sandbox. Separate Chrome/macOS/Windows acceptance belongs to the
+driver and platform checks. The independent Re-learn chain remains blocked
+on driver-held PR #262 (`brwr-9eio`); none of that held implementation was
+restored or duplicated. `brwr-fzya` proposes a later explicit agent comparison
+of an immutable card with changed page context.
 ## 2026-11-09 — Reach every recorded focus session when sharing work
 
 The sharing selector now has a More sessions button, so a busy day with more

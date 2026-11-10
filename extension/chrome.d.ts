@@ -60,6 +60,9 @@ interface ChromeMessageSender {
 
 interface ChromeContextMenuClickInfo {
   menuItemId: string | number;
+  selectionText?: string;
+  pageUrl?: string;
+  frameUrl?: string;
 }
 
 interface ChromeInjectionTarget {
