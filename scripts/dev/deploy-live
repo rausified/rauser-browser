@@ -60,6 +60,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -69,6 +70,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,6 +88,16 @@ STAGING = Path("target") / "deploy-staging"  # cargo --target-dir, relative to t
 SELF = Path("scripts") / "dev" / "deploy-live"  # this script, relative to the repo
 STATE_FILE = "deploy-live-state.json"  # in the git dir, so never committed or dirty
 NODE_VERSION = "24.14.0"  # pinned by CI; supports direct TypeScript imports
+SHA = re.compile(r"^[0-9a-f]{7,40}$")
+# --drain: the service refuses new runs while this file in its support dir
+# names a time still to come (host/src/service/drain.rs, which honours at
+# most DRAIN_MAX seconds from the file's own mtime, so a marker a killed
+# deploy left behind cannot pause runs for long).
+DRAIN_FILE = "deploy-drain.json"
+DRAIN_TIMEOUT = 600  # default --drain-timeout, seconds
+DRAIN_MAX = 3600  # the service's own cap, and the largest --drain-timeout
+DRAIN_GRACE = 300  # pause kept past the wait for publish, register and hello
+DRAIN_POLL = 5  # seconds between run scans while draining
 
 
 def check_node(runner: Runner, repo: Path) -> str:
@@ -211,24 +223,92 @@ def check_checkout(runner: Runner, repo: Path) -> Path:
     return Path(common_dir)
 
 
-def active_runs(support: Path) -> list[str]:
-    """Runs queued or running, plus runs whose status.json cannot be read."""
+def pid_alive(pid: object) -> bool:
+    """Whether a process with this ID exists (signal 0 checks, sends nothing)."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # it exists; it is another user's
+    except OSError:
+        return False
+    return True
+
+
+def heartbeat_age(stamp: object, now: float) -> Optional[float]:
+    """Seconds since an RFC 3339 heartbeat_at, or None when absent or unparsable."""
+    if not isinstance(stamp, str):
+        return None
+    # Rust writes up to nanoseconds; fromisoformat takes at most microseconds.
+    text = re.sub(r"(\.\d{6})\d+", r"\1", stamp.replace("Z", "+00:00"))
+    try:
+        when = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        return None
+    return max(0.0, now - when.timestamp())
+
+
+def ago(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h"
+
+
+def scan_runs(support: Path, alive: Callable[[object], bool] = pid_alive,
+              now: Optional[float] = None) -> tuple[list[str], list[str]]:
+    """(active, stale) runs. Active: queued or running under a live (or
+    unnamed) service, plus runs whose status.json cannot be read. Stale:
+    queued or running, but the record's service_pid names no live process,
+    so the service that owned it is gone (crashed, or a previous build that
+    exited) and a restart cannot end it further; the next service start
+    recovers it (supervisor.rs: a running run fails with service_restarted,
+    a queued summary resumes, a queued task fails)."""
     runs = support / "runs"
     if not runs.is_dir():
-        return []
-    found = []
+        return [], []
+    now = time.time() if now is None else now
+    active, stale = [], []
     for d in sorted(runs.iterdir()):
         status = d / "status.json"
         if not d.is_dir() or not status.exists():
             continue
         try:
-            state = json.loads(status.read_text(encoding="utf-8")).get("state")
+            data = json.loads(status.read_text(encoding="utf-8"))
+            state = data.get("state")
         except (OSError, ValueError, AttributeError) as exc:
-            found.append(f"{d.name} (unreadable status.json: {exc})")
+            active.append(f"{d.name} (unreadable status.json: {exc})")
             continue
-        if state in ACTIVE_STATES:
-            found.append(f"{d.name} ({state})")
-    return found
+        if state not in ACTIVE_STATES:
+            continue
+        pid = data.get("service_pid")
+        age = heartbeat_age(data.get("heartbeat_at"), now)
+        beat = f"; heartbeat {ago(age)} ago" if age is not None else ""
+        named = isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+        if named and not alive(pid):
+            stale.append(f"{d.name} ({state}; service pid {pid} is not running{beat})")
+        else:
+            active.append(f"{d.name} ({state}" + (f"; service pid {pid}" if named else "")
+                          + f"{beat})")
+    return active, stale
+
+
+def active_runs(support: Path, alive: Callable[[object], bool] = pid_alive,
+                now: Optional[float] = None) -> list[str]:
+    """Runs a service restart would end (scan_runs' first list)."""
+    return scan_runs(support, alive, now)[0]
+
+
+STALE_NOTE = ("stale: their service is gone, so the restart cannot end them; the next service "
+              "start recovers them (a running run fails with service_restarted, a queued summary "
+              "resumes, a queued task fails)")
 
 
 LATE_REFUSAL = ("The live binary is untouched (the new build is staged in {staging}); "
@@ -237,17 +317,116 @@ LATE_REFUSAL = ("The live binary is untouched (the new build is staged in {stagi
                 "scripts/dev/deploy-live (the staged build makes it quick).")
 
 
-def check_runs(d: "Deploy", support: Path, allow: bool, late: str = "") -> list[str]:
+def check_runs(d: "Deploy", support: Path, allow: bool, late: str = "",
+               drain: bool = False) -> list[str]:
     """Refuse (unless allowed) while runs are queued or running; report them.
-    late is added to the refusal once the builds have run."""
-    active = active_runs(support)
-    if active and not allow:
+    late is added to the refusal once the builds have run. With drain, the
+    runs are reported and waited for after the builds instead."""
+    active = active_runs(support, d.pid_alive, d.clock())
+    if active and not (allow or drain):
         raise DeployError("Brauser runs are queued or running; the service restart would end "
-                          "them. Wait for them, or pass --allow-active-runs: "
+                          "them. Wait for them, pass --drain to wait for them after the builds, "
+                          "or pass --allow-active-runs: "
                           + ", ".join(active) + (f"\n{late}" if late else ""))
-    d.say("    " + ("deploying anyway (--allow-active-runs): " + ", ".join(active)
-                    if active else "none queued or running"))
+    if active and not allow:
+        d.say("    waiting for them after the builds (--drain): " + ", ".join(active))
+    else:
+        d.say("    " + ("deploying anyway (--allow-active-runs): " + ", ".join(active)
+                        if active else "none queued or running"))
     return active
+
+
+def report_stale(d: "Deploy", support: Path) -> list[str]:
+    stale = scan_runs(support, d.pid_alive, d.clock())[1]
+    if stale:
+        d.say(f"    {STALE_NOTE}: " + ", ".join(stale))
+    return stale
+
+
+def write_drain(support: Path, until: float, now: float) -> Path:
+    """Write the pause marker the service reads (DRAIN_FILE), atomically, 0600."""
+    path = support / DRAIN_FILE
+    tmp = path.with_name(f".{DRAIN_FILE}.{uuid.uuid4().hex[:8]}")
+    body = json.dumps({"version": 1, "until_unix": int(until), "written_unix": int(now),
+                       "by": "deploy-live", "pid": os.getpid()}) + "\n"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        os.replace(tmp, path)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise DeployError(f"cannot write the drain marker {path}: {exc}") from exc
+    return path
+
+
+def drain_runs(d: "Deploy", support: Path, timeout: int, allow: bool, late: str) -> None:
+    """Wait up to timeout seconds for the active runs to finish."""
+    deadline = d.clock() + timeout
+    last: Optional[list[str]] = None
+    while True:
+        active = active_runs(support, d.pid_alive, d.clock())
+        if not active:
+            d.say("    drained: none queued or running")
+            return
+        if active != last:
+            d.say("    waiting for: " + ", ".join(active))
+            last = active
+        if d.clock() >= deadline:
+            if allow:
+                d.say(f"    still active after {timeout}s; deploying anyway "
+                      "(--allow-active-runs): " + ", ".join(active))
+                return
+            raise DeployError(f"Brauser runs did not finish within {timeout}s (--drain-timeout): "
+                              + ", ".join(active) + f"\n{late}")
+        d.sleep(DRAIN_POLL)
+
+
+def remote_main(runner: Runner, repo: Path) -> tuple[Optional[str], str]:
+    """origin main's commit by `git ls-remote` (reads, changes nothing), or
+    (None, why not)."""
+    res = git(runner, repo, "ls-remote", "origin", "refs/heads/main")
+    if res.returncode != 0:
+        return None, res.err or f"git ls-remote exit {res.returncode}"
+    for line in res.text.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == "refs/heads/main" and re.fullmatch(r"[0-9a-f]{40}",
+                                                                              parts[0]):
+            return parts[0], ""
+    return None, "git ls-remote printed no refs/heads/main"
+
+
+def fast_forward_to(d: "Deploy", runner: Runner, repo: Path, old: str, expected: str) -> str:
+    """Fetch origin main and fast-forward exactly to the expected commit;
+    refuse one that is not on origin main or that HEAD is already past."""
+    res = git(runner, repo, "fetch", "origin", "main")
+    if res.returncode != 0:
+        raise DeployError("git fetch origin main failed: " + (res.err or res.text.strip()))
+    res = git(runner, repo, "rev-parse", "--verify", f"{expected}^{{commit}}")
+    if res.returncode != 0:
+        raise DeployError(f"--expected-sha {expected} is not a commit here even after fetching "
+                          "origin main; nothing was deployed")
+    full = res.text.strip()
+    if git(runner, repo, "merge-base", "--is-ancestor", full, "origin/main").returncode != 0:
+        raise DeployError(f"--expected-sha {full[:COMMIT_LENGTH]} is not on origin/main; "
+                          "nothing was deployed")
+    if full == old:
+        d.say(f"    already at expected {full[:COMMIT_LENGTH]}")
+        return full
+    if git(runner, repo, "merge-base", "--is-ancestor", "HEAD", full).returncode != 0:
+        raise DeployError(f"the checkout is at {old[:COMMIT_LENGTH]}, newer than (or diverged "
+                          f"from) --expected-sha {full[:COMMIT_LENGTH]}; refusing to deploy "
+                          "anything else")
+    res = git(runner, repo, "merge", "--ff-only", full)
+    if res.returncode != 0:
+        raise DeployError(f"git merge --ff-only {full[:COMMIT_LENGTH]} failed: "
+                          + (res.err or res.text.strip()))
+    new = git_text(runner, repo, "rev-parse", "HEAD")
+    if new != full:
+        raise DeployError(f"HEAD is {new[:COMMIT_LENGTH]} after the fast-forward, not "
+                          f"{full[:COMMIT_LENGTH]}")
+    d.say(f"    {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]} (expected {full[:COMMIT_LENGTH]})")
+    return new
 
 
 def extension_id_from_manifest(path: Path) -> str:
@@ -393,8 +572,12 @@ def dist_digest(repo: Path) -> Optional[str]:
 
 
 class Deploy:
-    def __init__(self, runner: Runner, repo: Path, out, dry_run: bool):
+    def __init__(self, runner: Runner, repo: Path, out, dry_run: bool,
+                 pid_alive: Callable[[object], bool] = pid_alive,
+                 clock: Callable[[], float] = time.time,
+                 sleep: Callable[[float], None] = time.sleep):
         self.runner, self.repo, self.out, self.dry_run = runner, repo, out, dry_run
+        self.pid_alive, self.clock, self.sleep = pid_alive, clock, sleep
 
     def say(self, text: str) -> None:
         print(text, file=self.out, flush=True)
@@ -426,7 +609,10 @@ def exec_script(argv: list[str]) -> None:
 def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=sys.stdout,
          home: Optional[Path] = None, platform: Optional[str] = None,
          running_script: Optional[Path] = None,
-         reexec: Optional[Callable[[list[str]], None]] = None) -> int:
+         reexec: Optional[Callable[[list[str]], None]] = None,
+         pid_alive: Callable[[object], bool] = pid_alive,
+         clock: Callable[[], float] = time.time,
+         sleep: Callable[[float], None] = time.sleep) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # The bytes of the deploy-live now running, read before the pull can
     # replace the file.
@@ -446,6 +632,14 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
                         help="Brauser support dir (default: ~/Library/Application Support/Brauser)")
     parser.add_argument("--native-host-manifest", type=Path,
                         help="native host manifest to read the extension ID from")
+    parser.add_argument("--expected-sha", metavar="SHA",
+                        help="deploy exactly this commit of origin/main (7 to 40 hex digits), "
+                             "fast-forwarding to it instead of pulling; refuse anything else")
+    parser.add_argument("--drain", action="store_true",
+                        help="after the builds, pause new runs and wait for queued and running "
+                             "ones to finish before publishing, instead of refusing")
+    parser.add_argument("--drain-timeout", metavar="SECONDS", default=str(DRAIN_TIMEOUT),
+                        help=f"how long --drain waits (1 to {DRAIN_MAX}, default {DRAIN_TIMEOUT})")
     parser.add_argument("--dry-run", action="store_true", help="print the steps; change nothing")
     # Set only by deploy-live itself when a pull changed it (step d).
     parser.add_argument("--resumed-from", help=argparse.SUPPRESS)
@@ -461,20 +655,33 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
     home = home or Path.home()
     support = args.support_dir or default_support_dir(home)
     manifest = args.native_host_manifest or default_manifest(home)
+    drain_marker: Optional[Path] = None
+    d: Optional[Deploy] = None
     try:
         repo = (args.repo or default_repo(runner, Path(__file__).resolve().parent)).resolve()
-        d = Deploy(runner, repo, out, args.dry_run)
+        d = Deploy(runner, repo, out, args.dry_run, pid_alive, clock, sleep)
         d.say(f"deploy-live: {repo}" + (" (dry run: nothing changes)" if args.dry_run else "")
               + (" (resumed in the pulled deploy-live)" if args.resumed_from else ""))
         if args.resumed_from is not None and not re.fullmatch(r"[0-9a-f]{40}", args.resumed_from):
             raise DeployError(f"--resumed-from needs a full commit ID, not {args.resumed_from!r}")
+        expected = args.expected_sha
+        if expected is not None and not SHA.match(expected):
+            raise DeployError(f"--expected-sha needs 7 to 40 lowercase hex digits, not {expected!r}")
+        try:
+            drain_timeout = int(args.drain_timeout)
+        except ValueError:
+            drain_timeout = 0
+        if not 1 <= drain_timeout <= DRAIN_MAX:
+            raise DeployError(f"--drain-timeout needs whole seconds from 1 to {DRAIN_MAX}, "
+                              f"not {args.drain_timeout!r}")
 
         d.step("checkout: main worktree, branch main, no tracked changes")
         git_dir = check_checkout(runner, repo)
         d.say("    ok")
 
         d.step(f"runs in {support / 'runs'}")
-        active = check_runs(d, support, args.allow_active_runs)
+        active = check_runs(d, support, args.allow_active_runs, drain=args.drain)
+        stale = report_stale(d, support)
 
         if args.extension_id is not None:
             if not EXTENSION_ID.match(args.extension_id):
@@ -503,24 +710,63 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         old = args.resumed_from or git_text(runner, repo, "rev-parse", "HEAD")
         dist_before = dist_digest(repo)
 
-        d.step("git pull --ff-only")
+        # Read-only, so a dry run can say what the pull would bring.
+        d.step("origin main (git ls-remote)")
+        remote, remote_err = remote_main(runner, repo)
+        head_now = git_text(runner, repo, "rev-parse", "HEAD")
+        d.say(f"    local HEAD {head_now[:COMMIT_LENGTH]}; "
+              + (f"origin main {remote[:COMMIT_LENGTH]}" if remote
+                 else f"origin main: unavailable ({remote_err})"))
+
+        if expected is not None:
+            d.step(f"fast-forward to --expected-sha {expected}")
+        else:
+            d.step("git pull --ff-only")
         if args.resumed_from is not None:
             # This copy is the one the first pull brought; pulling again could
             # bring a newer deploy-live that this run would not execute.
             new = git_text(runner, repo, "rev-parse", "HEAD")
+            if expected is not None and not new.startswith(expected):
+                raise DeployError(f"HEAD is {new[:COMMIT_LENGTH]}, not --expected-sha {expected}")
             d.say(f"    pulled by the first run: {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}")
         elif args.dry_run:
-            d.act(["git", "-C", str(repo), "pull", "--ff-only"], "git pull")
             new = old
+            if expected is not None:
+                e = expected[:COMMIT_LENGTH]
+                if old.startswith(expected):
+                    d.say(f"    would deploy {e}: it is already checked out")
+                elif remote and remote.startswith(expected):
+                    d.say(f"    would fetch origin main and fast-forward {old[:COMMIT_LENGTH]}..{e}; "
+                          f"would deploy {e} (origin main's tip)")
+                else:
+                    d.say(f"    would fetch origin main, then would deploy {e} only if it is on "
+                          f"origin/main and {old[:COMMIT_LENGTH]} is its ancestor (origin main is "
+                          + (f"at {remote[:COMMIT_LENGTH]}" if remote else "unavailable")
+                          + "); otherwise it refuses")
+            else:
+                d.act(["git", "-C", str(repo), "pull", "--ff-only"], "git pull")
+                if remote is None:
+                    d.say("    what the pull brings is unknown: origin main is unavailable")
+                elif remote == old:
+                    d.say(f"    up to date with origin main at {old[:COMMIT_LENGTH]}")
+                else:
+                    d.say(f"    would pull {old[:COMMIT_LENGTH]}..{remote[:COMMIT_LENGTH]} "
+                          "(git pull --ff-only refuses if the checkout diverged)")
         else:
-            res = git(runner, repo, "pull", "--ff-only")
-            if res.returncode != 0:
-                raise DeployError("git pull --ff-only failed: " + (res.err or res.text.strip())
-                                  + "\n(an index.lock kept above blocks the pull; see "
-                                    "scripts/dev/index-lock-watch to find who leaves it)")
-            new = git_text(runner, repo, "rev-parse", "HEAD")
-            d.say(f"    {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}" if new != old
-                  else f"    already up to date at {old[:COMMIT_LENGTH]}")
+            if expected is not None:
+                new = fast_forward_to(d, runner, repo, old, expected)
+                if remote and remote != new:
+                    d.say(f"    origin main is at {remote[:COMMIT_LENGTH]}; deploying "
+                          f"{new[:COMMIT_LENGTH]} as --expected-sha asks")
+            else:
+                res = git(runner, repo, "pull", "--ff-only")
+                if res.returncode != 0:
+                    raise DeployError("git pull --ff-only failed: " + (res.err or res.text.strip())
+                                      + "\n(an index.lock kept above blocks the pull; see "
+                                        "scripts/dev/index-lock-watch to find who leaves it)")
+                new = git_text(runner, repo, "rev-parse", "HEAD")
+                d.say(f"    {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}" if new != old
+                      else f"    already up to date at {old[:COMMIT_LENGTH]}")
             pulled = repo / SELF
             try:
                 changed = new != old and running is not None and pulled.read_bytes() != running
@@ -574,8 +820,25 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         # would be ended by the service restart below, so check again before
         # the live binary changes.
         late = LATE_REFUSAL.format(staging=staging)
+        if args.drain:
+            d.step(f"drain: pause new runs, then wait up to {drain_timeout}s for queued and "
+                   "running runs")
+            if args.dry_run:
+                d.say(f"    would pause new runs by writing {support / DRAIN_FILE}, wait for "
+                      "queued and running runs, and lift the pause when the deploy ends")
+            elif not support.is_dir():
+                d.say(f"    no {support}: no service has run, so there is nothing to drain")
+            else:
+                now = d.clock()
+                drain_marker = write_drain(support, now + drain_timeout + DRAIN_GRACE, now)
+                d.say(f"    paused new runs ({drain_marker}); a service built before the pause "
+                      "existed ignores it, and the checks below still catch a run it starts")
+                drain_runs(d, support, drain_timeout, args.allow_active_runs, late)
         d.step(f"runs in {support / 'runs'} (again, before the binary is published)")
-        for run in check_runs(d, support, args.allow_active_runs, late):
+        # A dry run waits for nothing, so the runs a drain would wait for
+        # are reported, not refused.
+        for run in check_runs(d, support, args.allow_active_runs, late,
+                              drain=args.drain and args.dry_run):
             if run not in active:
                 active.append(run)
 
@@ -615,17 +878,33 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
             host_version = verify_hello(parse_frame(res.stdout), version, new)
             d.say(f"    host_version {host_version}, protocol_version {version}")
 
-        extension_changed = (not args.dry_run) and (
-            dist_digest(repo) != dist_before
-            or read_state(git_dir).get("pending_extension_reload") is True)
+        pending = read_state(git_dir).get("pending_extension_reload") is True
+        extension_changed = (not args.dry_run) and (dist_digest(repo) != dist_before or pending)
         d.say("")
         d.say("summary" + (" (dry run)" if args.dry_run else ""))
-        d.say(f"  commits:   {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}" if new != old
-              else f"  commits:   already up to date at {old[:COMMIT_LENGTH]}")
+        if args.dry_run:
+            target = (f"would deploy {expected[:COMMIT_LENGTH]} if it is on origin/main"
+                      if expected is not None else
+                      "origin main unavailable, so what the pull brings is unknown"
+                      if remote is None else
+                      f"up to date with origin main at {old[:COMMIT_LENGTH]}" if remote == old
+                      else f"would pull {old[:COMMIT_LENGTH]}..{remote[:COMMIT_LENGTH]}")
+            d.say(f"  commits:   local HEAD {old[:COMMIT_LENGTH]}; " + target)
+        else:
+            d.say(f"  commits:   {old[:COMMIT_LENGTH]}..{new[:COMMIT_LENGTH]}" if new != old
+                  else f"  commits:   already up to date at {old[:COMMIT_LENGTH]}")
+            if remote and remote != new:
+                d.say(f"  origin:    main is at {remote[:COMMIT_LENGTH]}")
         d.say("  locks:     " + ("; ".join(lock_lines) if lock_lines else "none"))
         d.say(f"  {npm_note}")
         d.say(f"  host:      {host_version} ({binary})")
-        d.say(f"  extension: {ext_id}" + (", changed" if extension_changed else ", unchanged"))
+        if args.dry_run:
+            d.say(f"  extension: {ext_id}, rebuilt by the deploy; whether it changed is known "
+                  "after the build" + (" (a reload is already pending)" if pending else ""))
+        else:
+            d.say(f"  extension: {ext_id}" + (", changed" if extension_changed else ", unchanged"))
+        if stale:
+            d.say("  stale runs: " + ", ".join(stale))
         if extension_changed:
             d.say("  Reload Brauser at chrome://extensions to load the new extension build,")
             d.say("  or click Reload Brauser in an open side panel.")
@@ -639,6 +918,14 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
     except DeployError as exc:
         print(f"deploy-live: error: {exc}", file=out)
         return 1
+    finally:
+        if drain_marker is not None:
+            try:
+                drain_marker.unlink(missing_ok=True)
+                print(f"    lifted the pause on new runs ({drain_marker})", file=out)
+            except OSError as exc:
+                print(f"deploy-live: warning: cannot remove {drain_marker}: {exc}; new runs "
+                      f"stay paused until it expires (at most {DRAIN_MAX}s)", file=out)
 
 
 if __name__ == "__main__":

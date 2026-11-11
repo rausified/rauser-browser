@@ -32,6 +32,7 @@ _loader.exec_module(dl)
 EXT_ID = "hngmhpdocldeeflhomgknpfilahjcidd"
 OLD = "1111111111111111111111111111111111111111"
 NEW = "abcdef012345abcdef012345abcdef012345abcd"
+MID = "5555555555555555555555555555555555555555"
 
 
 def frame(obj) -> bytes:
@@ -65,9 +66,12 @@ class FakeRunner:
         self.npm_hook = None  # optional callable(argv) -> Result or None for npm calls
         self.node_version = "v24.14.0"
         self.node_import_error = None
+        self.history = [OLD, MID, NEW]  # origin/main, oldest first
+        self.remote_head = NEW  # what git ls-remote reports for origin main
 
     # Calls whose first words match one of these act on the system.
-    ACTING = ("pull", "cargo", "npm", "node", "binary", "hygiene-apply", "publish")
+    ACTING = ("pull", "fetch", "merge", "cargo", "npm", "node", "binary", "hygiene-apply",
+              "publish")
 
     def kind(self, argv):
         if argv[0] == "os.replace":  # recorded by Fixture's os.replace wrapper
@@ -101,6 +105,23 @@ class FakeRunner:
             return dl.Result(0, text.encode())
         if k == "rev-parse" and argv[-1] == "HEAD":
             return dl.Result(0, (self.head + "\n").encode())
+        if k == "rev-parse" and "--verify" in argv:
+            want = argv[-1].removesuffix("^{commit}")
+            found = [c for c in self.history if c.startswith(want)]
+            if len(found) != 1:
+                return dl.Result(128, b"", b"fatal: Needed a single revision")
+            return dl.Result(0, (found[0] + "\n").encode())
+        if k == "ls-remote":
+            return dl.Result(0, f"{self.remote_head}\trefs/heads/main\n".encode())
+        if k == "merge-base":
+            a, b = argv[-2], argv[-1]
+            b = self.remote_head if b == "origin/main" else (self.head if b == "HEAD" else b)
+            a = self.head if a == "HEAD" else a
+            known = a in self.history and b in self.history
+            return dl.Result(0 if known and self.history.index(a) <= self.history.index(b) else 1)
+        if k == "merge":
+            self.head = argv[-1]
+            return dl.Result(0, b"Fast-forward\n")
         if k == "symbolic-ref":
             return dl.Result(0 if self.branch else 1, (self.branch + "\n").encode() if self.branch else b"")
         if k == "status":
@@ -237,18 +258,33 @@ class Fixture(unittest.TestCase):
             "type": "stdio", "allowed_origins": origins,
         }))
 
-    def add_run(self, run_id, state):
+    def add_run(self, run_id, state, **fields):
         d = self.support / "runs" / run_id
         d.mkdir()
-        (d / "status.json").write_text(json.dumps({"version": 1, "run_id": run_id, "state": state}))
+        (d / "status.json").write_text(json.dumps({"version": 1, "run_id": run_id, "state": state,
+                                                   **fields}))
         return d
+
+    # Process IDs the fake process table says are running.
+    alive: set = set()
+    now = 1_800_000_000.0  # the fake clock, in Unix seconds
+    on_sleep = None  # optional callable run on each fake sleep
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+        if self.on_sleep:
+            self.on_sleep()
 
     def deploy(self, *argv):
         out = io.StringIO()
+        self.slept = getattr(self, "slept", [])
         code = dl.main(["--repo", str(self.repo), "--support-dir", str(self.support),
                         "--native-host-manifest", str(self.manifest), *argv],
                        runner=self.runner, out=out, home=self.home,
-                       running_script=self.running_script, reexec=self.reexecs.append)
+                       running_script=self.running_script, reexec=self.reexecs.append,
+                       pid_alive=lambda pid: pid in self.alive, clock=lambda: self.now,
+                       sleep=self.sleep)
         return code, out.getvalue()
 
     def kinds(self):
@@ -442,7 +478,7 @@ class Refusals(Fixture):
 
     def test_run_started_just_before_the_publish_stops_it(self):
         answers = iter([[], [], ["late-9 (running)"]])
-        with mock.patch.object(dl, "active_runs", side_effect=lambda _s: next(answers)):
+        with mock.patch.object(dl, "active_runs", side_effect=lambda *_a, **_k: next(answers)):
             code, out = self.deploy()
         self.assertEqual(code, 1, out)
         self.assertNotIn("publish", self.kinds())
@@ -825,6 +861,248 @@ class DryRun(Fixture):
         self.runner.branch = "feat/x"
         code, out = self.deploy("--dry-run")
         self.assertNotEqual(code, 0, out)
+
+
+def iso(unix: float) -> str:
+    import datetime
+    return datetime.datetime.fromtimestamp(unix, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class ExpectedSha(Fixture):
+    """--expected-sha deploys exactly that commit of origin/main, or nothing."""
+
+    def test_deploys_the_expected_commit_instead_of_pulling(self):
+        code, out = self.deploy("--expected-sha", NEW[:12])
+        self.assertEqual(code, 0, out)
+        kinds = self.kinds()
+        self.assertNotIn("pull", kinds)
+        self.assertLess(kinds.index("fetch"), kinds.index("merge"))
+        self.assertLess(kinds.index("merge"), kinds.index("cargo"))
+        self.assertEqual(self.call("merge")["argv"][-2:], ["--ff-only", NEW])
+        self.assertIn(f"0.1.0+{NEW[:12]}", out)
+        self.assertIn(f"expected {NEW[:12]}", out)
+
+    def test_main_moved_past_it_deploys_exactly_the_expected_commit(self):
+        code, out = self.deploy("--expected-sha", MID)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.call("merge")["argv"][-1], MID)
+        self.assertIn(f"0.1.0+{MID[:12]}", out)
+        self.assertIn(f"{OLD[:12]}..{MID[:12]}", out)
+        self.assertIn(f"origin main is at {NEW[:12]}", out)
+
+    def test_a_commit_not_on_origin_main_is_refused_before_building(self):
+        self.runner.history = [OLD, NEW]
+        code, out = self.deploy("--expected-sha", MID[:12])
+        self.assertEqual(code, 1, out)
+        self.assertIn(MID[:12], out)
+        self.assertNotIn("merge", self.kinds())
+        self.assertNotIn("cargo", self.kinds())
+        self.assertEqual(self.live.read_text(), "old binary")
+
+    def test_a_checkout_already_past_the_expected_commit_is_refused(self):
+        self.runner.head = NEW
+        code, out = self.deploy("--expected-sha", MID[:12])
+        self.assertEqual(code, 1, out)
+        self.assertIn("newer", out)
+        self.assertNotIn("merge", self.kinds())
+        self.assertNotIn("cargo", self.kinds())
+
+    def test_already_at_the_expected_commit_builds_it(self):
+        self.runner.head = MID
+        code, out = self.deploy("--expected-sha", MID[:12])
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("merge", self.kinds())
+        self.assertIn(f"0.1.0+{MID[:12]}", out)
+
+    def test_a_malformed_sha_is_refused_before_acting(self):
+        for bad in ("xyz", "abc", "ABCDEF0", NEW + "0"):
+            code, out = self.deploy("--expected-sha", bad)
+            self.assertEqual(code, 1, out)
+            self.assertIn("--expected-sha", out)
+            self.assertEqual(self.runner.acting_calls(), [], out)
+
+    def test_a_resumed_deploy_checks_head_is_the_expected_commit(self):
+        self.runner.head = NEW
+        code, out = self.deploy("--expected-sha", MID[:12], "--resumed-from", OLD)
+        self.assertEqual(code, 1, out)
+        self.assertIn(MID[:12], out)
+        self.assertNotIn("cargo", self.kinds())
+
+
+class TruthfulDryRun(Fixture):
+    def test_reports_local_and_origin_main(self):
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("git -C", " ".join(self.call("ls-remote")["argv"]))
+        self.assertIn(f"local HEAD {OLD[:12]}", out)
+        self.assertIn(f"origin main {NEW[:12]}", out)
+        self.assertIn(f"would pull {OLD[:12]}..{NEW[:12]}", out)
+        self.assertNotIn("already up to date", out)
+        self.assertEqual(self.runner.acting_calls(), [], out)
+
+    def test_up_to_date_only_when_origin_main_is_head(self):
+        self.runner.remote_head = OLD
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"up to date with origin main at {OLD[:12]}", out)
+
+    def test_an_unreachable_origin_is_said_not_guessed(self):
+        self.runner.fail.add("ls-remote")
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("origin main: unavailable", out)
+        self.assertNotIn("up to date", out)
+
+    def test_dry_run_with_expected_sha_names_what_it_would_deploy(self):
+        code, out = self.deploy("--dry-run", "--expected-sha", MID[:12])
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("fetch", [self.runner.kind(c["argv"]) for c in self.runner.acting_calls()])
+        self.assertIn(f"would deploy {MID[:12]}", out)
+        self.assertEqual(self.runner.acting_calls(), [], out)
+
+    def test_dry_run_does_not_claim_the_extension_is_unchanged(self):
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("unchanged", out)
+        self.assertIn("known after the build", out)
+
+
+class StaleRuns(Fixture):
+    """A run whose service is gone cannot be ended by the restart; it is
+    reported, with what will recover it, and does not hold the deploy."""
+
+    def test_a_running_run_whose_service_is_gone_is_reported_and_does_not_block(self):
+        self.add_run("r-dead", "running", service_pid=4242, heartbeat_at=iso(self.now - 720))
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertIn("r-dead", out)
+        self.assertIn("stale", out)
+        self.assertIn("service pid 4242 is not running", out)
+        self.assertIn("heartbeat 12m ago", out)
+        self.assertIn("service_restarted", out)
+
+    def test_a_queued_run_whose_service_is_gone_does_not_block(self):
+        self.add_run("q-dead", "queued", service_pid=4243)
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertIn("q-dead", out)
+        self.assertIn("stale", out)
+
+    def test_a_run_whose_service_is_alive_still_blocks_and_says_its_heartbeat(self):
+        self.alive = {4244}
+        self.add_run("r-live", "running", service_pid=4244, heartbeat_at=iso(self.now - 3))
+        code, out = self.deploy()
+        self.assertEqual(code, 1, out)
+        self.assertIn("r-live", out)
+        self.assertIn("heartbeat 3s ago", out)
+        self.assertEqual(self.runner.acting_calls(), [], out)
+
+    def test_a_run_naming_no_service_pid_blocks(self):
+        self.add_run("r-unknown", "running")
+        code, out = self.deploy()
+        self.assertEqual(code, 1, out)
+        self.assertIn("r-unknown", out)
+
+    def test_dry_run_reports_stale_runs(self):
+        self.add_run("r-dead", "running", service_pid=4242)
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("stale", out)
+        self.assertIn("r-dead", out)
+
+    def test_pid_alive_default(self):
+        self.assertTrue(dl.pid_alive(os.getpid()))
+        self.assertFalse(dl.pid_alive(0))
+        self.assertFalse(dl.pid_alive(-1))
+
+
+class Drain(Fixture):
+    """--drain pauses new runs after the builds, waits (bounded) for the
+    admitted ones, publishes, and always lifts the pause."""
+
+    def marker(self):
+        return self.support / "deploy-drain.json"
+
+    def test_waits_for_active_runs_then_publishes_and_lifts_the_pause(self):
+        self.alive = {77}
+        self.add_run("r-1", "running", service_pid=77, heartbeat_at=iso(self.now))
+        seen = []
+
+        def finish():
+            seen.append(json.loads(self.marker().read_text()))
+            status = self.support / "runs" / "r-1" / "status.json"
+            status.write_text(json.dumps({"version": 1, "run_id": "r-1", "state": "succeeded"}))
+        self.on_sleep = finish
+        code, out = self.deploy("--drain")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(seen, out)
+        self.assertGreater(seen[0]["until_unix"], self.now - sum(self.slept))
+        self.assertEqual(seen[0]["version"], 1)
+        self.assertFalse(self.marker().exists())
+        self.assertEqual(self.live.read_text(), f"binary {NEW}")
+        kinds = self.kinds()
+        self.assertLess(kinds.index("cargo"), kinds.index("publish"))
+        self.assertIn("r-1", out)
+
+    def test_the_pause_starts_after_the_builds(self):
+        states = []
+        self.runner.on_cargo = lambda: states.append(self.marker().exists())
+        code, out = self.deploy("--drain")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(states, [False])
+        self.assertFalse(self.marker().exists())
+
+    def test_a_run_that_does_not_finish_in_time_refuses_and_lifts_the_pause(self):
+        self.alive = {78}
+        self.add_run("r-slow", "running", service_pid=78)
+        code, out = self.deploy("--drain", "--drain-timeout", "60")
+        self.assertEqual(code, 1, out)
+        self.assertIn("r-slow", out)
+        self.assertIn("60s", out)
+        self.assertFalse(self.marker().exists())
+        self.assertEqual(self.live.read_text(), "old binary")
+        self.assertNotIn("publish", self.kinds())
+        self.assertLessEqual(sum(self.slept), 60 + dl.DRAIN_POLL)
+
+    def test_the_pause_is_lifted_when_a_later_step_fails(self):
+        self.runner.fail.add("node")
+        code, out = self.deploy("--drain")
+        self.assertEqual(code, 1, out)
+        self.assertFalse(self.marker().exists())
+
+    def test_stale_runs_do_not_hold_the_drain(self):
+        self.add_run("r-dead", "running", service_pid=4242)
+        code, out = self.deploy("--drain")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.slept, [])
+
+    def test_dry_run_writes_no_marker(self):
+        self.alive = {79}
+        self.add_run("r-1", "running", service_pid=79)
+        code, out = self.deploy("--dry-run", "--drain")
+        self.assertEqual(code, 0, out)
+        self.assertFalse(self.marker().exists())
+        self.assertIn("would pause new runs", out)
+        self.assertEqual(self.slept, [])
+
+    def test_a_missing_support_dir_needs_no_pause(self):
+        shutil.rmtree(self.support)
+        code, out = self.deploy("--drain")
+        self.assertEqual(code, 0, out)
+        self.assertFalse(self.support.exists())
+
+    def test_marker_name_and_cap_match_the_service(self):
+        source = (SCRIPT.parents[2] / "host" / "src" / "service" / "drain.rs").read_text(
+            encoding="utf-8").replace("\r\n", "\n")
+        self.assertIn(f'pub const DRAIN_FILE: &str = "{dl.DRAIN_FILE}";', source)
+        self.assertIn(f"pub const DRAIN_MAX: Duration = Duration::from_secs({dl.DRAIN_MAX});",
+                      source)
+        self.assertIn("until_unix: u64", source)
+
+    def test_drain_timeout_is_bounded(self):
+        for bad in ("0", "-5", "3601", "x"):
+            code, out = self.deploy("--drain", "--drain-timeout", bad)
+            self.assertNotEqual(code, 0, out)
 
 
 class DefaultRepo(Fixture):
