@@ -134,6 +134,17 @@ Brauser has two kinds of instruction files. Keep them apart.
 
 Run the commands in [README.md](README.md#development) before proposing a code change. The Rust version is pinned in `rust-toolchain.toml`. `deny.toml` is the Rust dependency policy (license allowlist; no wildcard versions, unknown registries, or unknown git sources) that CI's `cargo-deny` job enforces — run `cargo deny check --all-features --locked` before adding or upgrading a Rust dependency. After changing either adapter-template engine, run `npm run test:adapter-diff` (differential testing against the shared vectors, `adapter-templates.md` §12).
 
+Shell traps and local habits (these cost several sessions time in 2026-11):
+
+- zsh does not word-split a variable, so `R="--repo x"; gh pr list $R` passes one argument; write `--repo rausified/rauser-browser` out in each command.
+- A command that starts with `=` is a zsh filename expansion, so `echo ====` fails with "not found"; quote it or print another separator.
+- macOS has no `timeout` command; bound a wait with the tool's own timeout or a flag such as `pr-watch.mjs --max-minutes`.
+- Chain a gate and the push it guards with `&&`, never `;`, so a failing gate stops the push.
+- Use Node 24.14.0 (`~/.nvm/versions/node/v24.14.0/bin`); an older Node on `PATH` breaks the extension build and tests.
+- Watch a PR with `scripts/dev/pr-watch.mjs`, never a hand-rolled `gh pr view` or `sleep` loop, which misses `dequeued` and `needs-merge`.
+- Report a PR, branch or deploy state with the SHA and the time you read it, and say whether a build is on disk, published to the host, or loaded in Chrome.
+- Never mutate the shared checkout (no checkout, detach, reset, stash or `bd import` there); work in your own worktree, and clean a worktree up only after its PR is `MERGED`.
+
 Protocol wire tests are split by feature so parallel branches do not all append to one file. Add a new test to the matching `protocol/tests/wire_<feature>.rs`: `wire_config.rs` (config and storage), `wire_agent.rs` (agent config, harness setup, agent env), `wire_activity.rs` (activity, why, batches), `wire_artifacts.rs` (artifact views and queries), `wire_summaries.rs`, `wire_runs.rs` (runs and the service handshake), `wire_capture_site.rs` (site drafting, Capture Site preflight, site restore), `wire_tasks.rs` (task-bar runs: `start_task` and the task fields of runs), `wire_notes.rs` (preserved notes), `wire_related_tabs.rs` (a summary's related open tabs), or `wire_adopted_state.rs`. Start a new `wire_<feature>.rs` for a new feature rather than growing an unrelated file. Helpers shared across files (`config`, `update`, the `assert_*_round_trips` checks, and the `schema_subset` validator) live in `protocol/tests/common/mod.rs`, used through `mod common;`; keep fixtures one feature uses in that feature's file.
 
 For end-to-end checks, use `npm run smoke:macos:headless`; it never shows a window or takes focus. Only when the user asks for it, run `npm run smoke:macos -- --auto` instead (real dialogs, UI scripting; warn them before it takes focus) — `--auto` and `--headless` are mutually exclusive flags of the same script, not combinable. See [TESTING.md](TESTING.md) for what each check (`smoke:macos:headless`, `probe:m15a`) actually does, how to run the real-dialog variants, and what headless cannot prove — it is the single, self-contained source for testing guidance; update it with anything you learn here.
@@ -210,12 +221,20 @@ Late design challenges cost more than early ones: the 2026-10-27 parser-matching
 
 - **Design challenge.** For any plan of more than five tasks, and for any security boundary, data migration, or parser/escaping design regardless of size, run a five-minute design challenge before task 1: ask one reviewer (a Codex or Claude session, or the coordinator) to argue for a simpler or safer alternative to the plan's central mechanism. Record the alternative and why the plan keeps or adopts it in the plan's "Design challenge" section.
 - **Open decisions first.** List every user-facing or policy decision the plan assumes in its "Open decisions" section, mark each resolved (with who decided) or open, and hand the open ones to the coordinator, who resolves them with John before task 1. Do not start building on an open decision; build an unrelated task meanwhile or stop.
+- **Invariant first for guard changes.** Before the first review of any change to a record-ownership or history guard in `host/src/config.rs` (which adapter records a URL, which contract owns a route, `[[adapter_id_history]]`), do the following.
+  State the invariant the guard protects in one sentence, for example "an accepted save never changes which type wins an already-recorded URL".
+  Implement it as one pure function, as `container_first_violation` does, rather than one patch per case a review names.
+  Test it with a seeded randomized test that saves through the real `ConfigStore::update` sequence and checks each accepted save against every page recorded so far in the sequence, not only the save before it (`recorded_splunk_pages_keep_their_recorder_across_coverage_edits`).
+  Make the generator produce every kind of change the invariant covers (narrowing, widening, reordering, removal, edits that change coverage) and assert that it reaches each.
+  Mutation-check the test against each guard it relies on, and list the mutations it catches in its doc comment.
+  PR #362 took five review rounds patching neighbouring cases before this approach held.
 - Plans in `docs/superpowers/plans/` carry both sections near the top, after the goal and before the task list (see `docs/superpowers/README.md`).
 
 ## PR ownership and handoff
 
 Sessions die, and a half-done PR whose owner is gone is invisible until someone trips over it. These rules make every PR findable and finishable.
 
+- **Parallel lanes use the lane brief.** A coordinator that splits work into parallel lanes starts from [docs/agents/lane-brief-template.md](docs/agents/lane-brief-template.md): durable workers, a lane ledger, a claimed bead per lane, and done meaning merged and closed.
 - **Check with the coordinator before taking rauser-browser work.** Lanes are assigned by the coordinator session; do not start a bead, branch, or worktree another lane owns. Without a coordinator (John asked a single session directly), that session is its own coordinator.
 - **Every PR names its owner session.** Fill in `.github/pull_request_template.md`: the `Owner:` line (which session; enough for another session to find it), `Lane / coordinator:`, and the Handoff state (what is done, what is next, how to finish if the owner disappears: worktree path, branch, remaining steps, review and CI state). Keep the handoff current as the PR moves. The `PR owner` job of `.github/workflows/pr-hygiene.yml` (`scripts/pr-owner.mjs`) fails a PR whose body has no filled-in `Owner:` line, and Mergify will not queue it until that passes. Write the body to a file starting from the template, check it with `node scripts/pr-owner.mjs --body-file <file>`, then open the PR with `gh pr create --body-file <file>`. On 2026-11-09, #380 and #381 lost 45 minutes each to a body written without the template. Cookie's driver PRs (`cookie/` branches or `Cookie cycle N:` titles) are exempt: Cookie owns them. The author login is not a signal, because every session and Cookie push as the same account. Then watch it with `scripts/dev/pr-watch.mjs` (see "Review and merge cadence"); a `PR owner` failure there means the body skipped the template.
 - **If a PR's owner is gone, the coordinator reassigns it.** The new owner edits the `Owner:` line and finishes from the handoff state; nobody else pushes to another session's PR branch without that reassignment.
