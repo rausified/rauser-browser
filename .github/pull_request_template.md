@@ -13,6 +13,8 @@ Lane / coordinator: <!-- the lane and the coordinator session that assigned it, 
 
 <!-- What changes and why. Link the bead (brwr-xxx) and the plan or spec. -->
 
+Overlap: <!-- paste the OVERLAP block from `scripts/dev/overlap-check --branch` (open PRs and in-progress beads on the same files, with their owners), or "none" -->
+
 ## Handoff state
 
 <!-- Keep this current: if this session disappears, the coordinator reassigns the PR from here. -->
