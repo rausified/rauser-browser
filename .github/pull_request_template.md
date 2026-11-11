@@ -2,8 +2,10 @@
 Every PR names its owner session (AGENTS.md "PR ownership and handoff").
 The PR owner check fails until the Owner line is filled in. Cookie's driver
 PRs (cookie/ branches, "Cookie cycle N:" titles) are exempt.
-To merge, queue it with `gh pr edit <n> --add-label queue` (the Mergify queue,
-AGENTS.md "Review and merge cadence"). Never `gh pr merge` into main.
+To merge, queue it only after the final push: `node scripts/dev/queue-pr.mjs <n> --head <sha>`
+(it adds the `queue` label and comments the Mergify queue command once GitHub shows
+that head; AGENTS.md "Review and merge cadence"). A later push cancels the request:
+run it again after every push. Never `gh pr merge` into main.
 -->
 
 Owner: <!-- the session that owns this PR, e.g. "claude session 2e52fe72" or "codex session in work/rb-foo" -->

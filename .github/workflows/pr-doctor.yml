@@ -1,5 +1,12 @@
 name: PR doctor
 
+# Two jobs, one owner for keeping PRs moving without a session watching:
+# `doctor` repairs conflicts (below); `keeper` (scripts/pr-keeper.mjs) then
+# queues labelled green PRs Mergify has not admitted, refreshes a stale
+# Mergify, clears a needs-merge label merge-tree shows is stale, alerts on
+# PRs only a person can unstick, and files a repair bead for the doctor's
+# needs-person verdict. Neither merges, pushes to main, or force-pushes.
+
 # A PR that conflicts with main runs no CI, so auto-merge waits on it forever
 # with nothing failing. This finds those PRs, merges main into the ones whose
 # conflicts are only old work-queue files (their bead edits are applied
@@ -13,7 +20,13 @@ name: PR doctor
 # repaired commit would get no CI. Without the secret the doctor reports only.
 on:
   schedule:
-    - cron: "*/20 * * * *"
+    - cron: "*/15 * * * *"
+  # CI finishing is when a PR turns green: the keeper runs then (and waits out
+  # its green window once), since the cron above fires only every few hours
+  # on this repository. Only the keeper job runs for this event.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   push:
     branches: [main]
   # A push to a PR the doctor labelled needs-merge (usually the fix for the
@@ -40,9 +53,10 @@ jobs:
     name: PR doctor
     # Fork PRs get no secrets and no write token; the doctor ignores them anyway.
     if: >-
-      github.event_name != 'pull_request' ||
-      (contains(github.event.pull_request.labels.*.name, 'needs-merge') &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+      github.event_name != 'workflow_run' &&
+      (github.event_name != 'pull_request' ||
+       (contains(github.event.pull_request.labels.*.name, 'needs-merge') &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     # Job-level, so a skipped pull_request run never enters the group: GitHub
     # keeps one pending run per group and would cancel a pending real one.
     concurrency:
@@ -66,9 +80,11 @@ jobs:
       - name: Keep main's tools outside the working tree
         # The repair checks out PR branches; only main's copies ever run.
         run: |
-          mkdir -p "$RUNNER_TEMP/pr-doctor"
-          cp scripts/pr-doctor.mjs scripts/work_queue.py scripts/render_backlog.py \
+          mkdir -p "$RUNNER_TEMP/pr-doctor/dev"
+          cp scripts/pr-doctor.mjs scripts/pr-constants.mjs scripts/work_queue.py scripts/render_backlog.py \
             scripts/check_queue_consistency.py "$RUNNER_TEMP/pr-doctor/"
+          # pr-doctor.mjs imports these; keep their relative layout.
+          cp scripts/dev/queue-pr.mjs "$RUNNER_TEMP/pr-doctor/dev/"
           git config user.name "PR doctor"
           git config user.email "pr-doctor@users.noreply.github.com"
       # A separate clone holds the bd database, so checking out PR branches
@@ -102,3 +118,51 @@ jobs:
         run: >-
           node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor"
           ${{ inputs.dry_run && '--dry-run' || '' }}
+
+  keeper:
+    name: PR keeper
+    needs: doctor
+    # After the doctor when it ran; alone when it was skipped (workflow_run).
+    if: >-
+      always() && github.event_name != 'pull_request'
+    concurrency:
+      group: pr-keeper
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+          token: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+      - name: Run the PR keeper
+        id: keeper
+        env:
+          # Mergify takes commands from a user token; the workflow's own token
+          # is the fallback (comments and labels still work).
+          GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          PR_KEEPER_REPAIRS: ${{ runner.temp }}/pr-keeper-repairs.json
+          # Wait out the green window once when CI just finished.
+          PR_KEEPER_SETTLE: ${{ github.event_name == 'workflow_run' && '1' || '0' }}
+        run: >-
+          node scripts/pr-keeper.mjs
+          ${{ inputs.dry_run && '--dry-run' || '' }}
+      # The unattended repair path: a P1 bead per needs-person PR head, filed
+      # through the queue tooling (scripts/dev/create-bead), only when needed.
+      - name: File repair beads
+        if: steps.keeper.outputs.repairs != '' && steps.keeper.outputs.repairs != '0'
+        env:
+          BD_NON_INTERACTIVE: "1"
+          GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+        run: |
+          sh scripts/install-bd.sh "$RUNNER_TEMP/bin"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          git config user.name "PR keeper"
+          git config user.email "pr-keeper@users.noreply.github.com"
+          bd bootstrap
+          BRAUSER_QUEUE_WORKSPACE="$GITHUB_WORKSPACE" \
+            node scripts/pr-keeper.mjs --file-repairs "$RUNNER_TEMP/pr-keeper-repairs.json"
