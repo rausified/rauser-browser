@@ -30,7 +30,8 @@ Paste this into the batch's `COMMON.md` and fill in the placeholders.
 - **Toolchains.** Node 24.14.0 and the Rust version in `rust-toolchain.toml`, with your worktree's own `./target`.
 - **Claim, then sync.** Confirm your bead is `in_progress`; if the coordinator has not claimed it, claim it and run `scripts/dev/queue sync`.
   If sync reports a conflict, stop and report it.
-- **Check overlap before editing.** List the open PRs and `in_progress` beads that touch the files you will change (`scripts/dev/overlap-check` once it lands; until then `gh pr list --repo rausified/rauser-browser --json number,files`).
+- **Check overlap before editing.** List the open PRs and `in_progress` beads that touch the files you will change (`scripts/dev/overlap-check` once it lands).
+  Until then, check both: open PRs with `gh pr list --repo rausified/rauser-browser --json number,files`, and claimed work that has no PR yet with `bd list --status in_progress` and the batch's `lanes.json`.
   Name every overlap in your report and PR body.
 - **Foreground, bounded waits only.** Run each command in the foreground with an explicit timeout.
   Never arm a monitor or background job and go idle: completion notices are not delivered reliably.
@@ -40,7 +41,8 @@ Paste this into the batch's `COMMON.md` and fill in the placeholders.
 - **Load-aware gates.** Run focused checks locally and leave full suites to CI when the machine is loaded (AGENTS.md "Review and merge cadence").
 - **Synthetic data only.** No real tenant, company or person names, and no private paths, in the repository, commits or PR bodies.
 - **PRs.** Never open a draft.
-  Fill in `.github/pull_request_template.md`, with `Owner: <coordinator session> (lane <id>)`, and check it with `node scripts/pr-owner.mjs --body-file <file>`.
+  Fill in `.github/pull_request_template.md`, with `Owner:` naming the session that will finish the PR (your worker session and `lane <id>`) and `Lane / coordinator:` naming the coordinator, and check it with `node scripts/pr-owner.mjs --body-file <file>`.
+  If the batch's `COMMON.md` names a different owner, follow it.
 - **Do not queue before review.** The coordinator reviews, then queues.
   After the coordinator says "reviewed", do not push again unless asked: a push cancels the queue request.
 - **One Codex pass.** Run `codex exec review --base origin/main` once and fix every P1; file P2 and P3 findings as beads.
