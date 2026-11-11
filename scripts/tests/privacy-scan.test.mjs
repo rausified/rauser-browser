@@ -45,8 +45,12 @@ function denylist(...values) {
   return parseDenylist(text);
 }
 
+// Never read the developer's real local person denylist in a test.
+const NO_LOCAL = join(tmpdir(), "privacy-scan-no-local-denylist.sha256");
+
 function run(args, opts = {}) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8", ...opts });
+  const env = { ...process.env, BRAUSER_PRIVACY_DENYLIST_LOCAL: NO_LOCAL, ...opts.env };
+  return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8", ...opts, env });
 }
 
 function git(cwd, ...args) {
@@ -120,13 +124,13 @@ test("the tree mode scans every tracked file and the staged mode the index", (t)
   assert.equal(fixed.status, 0, fixed.stdout + fixed.stderr);
 });
 
-test("--add stores a salted hash and never the plain value", (t) => {
+test("--add --class org stores a salted hash in the committed list and never the plain value", (t) => {
   const dir = scratch(t);
   const deny = denylistWith(dir);
-  const result = run(["--denylist", deny, "--add", SECRET]);
+  const result = run(["--denylist", deny, "--add", SECRET, "--class", "org"]);
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout + result.stderr, /zephyr|quokka/i);
-  const again = run(["--denylist", deny, "--add", "zephyr.quokka.77"]);
+  const again = run(["--denylist", deny, "--add", "zephyr.quokka.77", "--class", "org"]);
   assert.match(again.stdout, /already/);
   const text = readFileSync(deny, "utf8");
   assert.doesNotMatch(text, /zephyr|quokka/i);
@@ -197,4 +201,29 @@ test("the commit-range and PR-event modes scan commit messages and the PR title 
   assert.equal(pr.status, 1, pr.stderr);
   assert.match(pr.stdout, /PR body:3 denylist/);
   assert.doesNotMatch(pr.stdout, /zephyr|quokka/i);
+});
+
+test("--add defaults to the local person list, which every scan also checks", (t) => {
+  const dir = scratch(t);
+  const deny = denylistWith(dir);
+  const local = join(dir, "config", "brauser", "local.sha256");
+  const env = { BRAUSER_PRIVACY_DENYLIST_LOCAL: local };
+  const added = run(["--denylist", deny, "--add", "Jordan Example"], { env });
+  assert.equal(added.status, 0, added.stderr);
+  assert.match(added.stdout, /local person denylist/);
+  assert.equal(parseDenylist(readFileSync(deny, "utf8")).entries.size, 0, "the committed list is untouched");
+  const localText = readFileSync(local, "utf8");
+  assert.doesNotMatch(localText, /jordan/i);
+  assert.equal(parseDenylist(localText).salt === SALT, false, "the local list has its own salt");
+  assert.equal(run(["--add", "x", "--class", "team"], { env }).status, 2);
+
+  const msg = join(dir, "msg.txt");
+  writeFileSync(msg, "Reviewed with jordan.example today.\n");
+  const hit = run(["--denylist", deny, "--message", msg], { env });
+  assert.equal(hit.status, 1, hit.stderr);
+  assert.match(hit.stdout, /msg\.txt:1 local denylist/);
+  assert.match(hit.stdout, /0 denylist entries, 1 local/);
+  assert.doesNotMatch(hit.stdout, /jordan/i);
+  // Without the local file (as in CI) the committed list alone decides.
+  assert.equal(run(["--denylist", deny, "--message", msg]).status, 0);
 });

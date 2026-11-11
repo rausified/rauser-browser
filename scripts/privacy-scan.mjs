@@ -27,15 +27,27 @@
 // it matters. The same function (`canonical`) normalizes a value when it is
 // added, so an entry matches every spelling above.
 //
-// The denylist (scripts/privacy-denylist.sha256) holds one `salt <hex>` line
-// and lines `<sha256 hex> <word count>`, where the hash is
-// sha256(salt + ":" + canonical value). It never holds a plain value. The
-// salt only defeats precomputed tables: anyone who already suspects a value
-// can confirm it, so the file hides identifiers from casual reading, not from
-// a targeted guess. Add an entry locally with
-//   node scripts/privacy-scan.mjs --add "<value>"
-// and commit the changed file; the command prints neither the value nor the
-// hash.
+// Two denylists, the same format: one `salt <hex>` line and lines
+// `<sha256 hex> <word count>`, where the hash is sha256(salt + ":" +
+// canonical value). Neither holds a plain value.
+//
+// Guess confirmation. The committed list's salt is public, so the salt only
+// defeats precomputed tables: anyone who suspects a value can hash it and
+// confirm that it is on the list, and a slower hash would not stop that
+// targeted guess. The committed list (scripts/privacy-denylist.sha256, which
+// CI enforces) therefore holds only organization, tenant, repository and
+// product-ID classes, where that confirmation reveals little. Person-level
+// identifiers (usernames, personal-site paths, emails, names) would publicly
+// tie a person to this repository, so they go only in the local list: the
+// file $BRAUSER_PRIVACY_DENYLIST_LOCAL names, else
+// ~/.config/brauser/privacy-denylist.local.sha256, outside the repository,
+// with its own private salt, never committed. Every scan (and so both
+// opt-in hooks) checks the local list too when it exists; CI never has it.
+//
+// Add an entry with
+//   node scripts/privacy-scan.mjs --add "<value>"                (person, local; the default)
+//   node scripts/privacy-scan.mjs --add "<value>" --class org    (committed list; commit it)
+// The command prints neither the value nor the hash.
 //
 // --evidence <path> (local only, never in CI, never committed) also matches
 // against a private evidence file such as a browser-history export: host
@@ -46,12 +58,18 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_DENYLIST = join(HERE, "privacy-denylist.sha256");
+
+/** The local person-level denylist's path (outside the repository). */
+export function localDenylistPath(env = process.env) {
+  return env.BRAUSER_PRIVACY_DENYLIST_LOCAL || join(homedir(), ".config", "brauser", "privacy-denylist.local.sha256");
+}
 const MAX_WORDS = 9;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const WORD = /[\p{L}\p{N}]+/gu;
@@ -107,7 +125,10 @@ export function addEntry(path, value) {
   const count = canon ? canon.split("-").length : 0;
   if (count === 0) throw new Error("--add: the value has no letters or digits");
   if (count > MAX_WORDS) throw new Error(`--add: at most ${MAX_WORDS} words`);
-  if (!existsSync(path)) appendFileSync(path, `# Privacy denylist: see scripts/privacy-scan.mjs.\nsalt ${randomBytes(16).toString("hex")}\n`);
+  if (!existsSync(path)) {
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `# Privacy denylist: see scripts/privacy-scan.mjs.\nsalt ${randomBytes(16).toString("hex")}\n`, { mode: 0o600 });
+  }
   const text = readFileSync(path, "utf8");
   const list = parseDenylist(text);
   const hash = hashToken(list.salt, canon);
@@ -157,21 +178,24 @@ export function evidenceTokens(text) {
   return [...out].map(([value, kind]) => ({ value, kind }));
 }
 
-/** A matcher over the denylist and optional evidence tokens. */
-export function matcher(list, evidence = []) {
-  const lengths = new Set(list.lengths);
+/** A matcher over one or more denylists (`[{ list, source }]`, or one list) and optional evidence tokens. */
+export function matcher(lists, evidence = []) {
+  const sources = (Array.isArray(lists) ? lists : [{ list: lists, source: "denylist" }]).filter((l) => l.list.entries.size);
+  const lengths = new Set(sources.flatMap((l) => [...l.list.lengths]));
   const byValue = new Map();
   for (const { value, kind } of evidence) {
     byValue.set(value, kind);
     lengths.add(value.split("-").length);
   }
-  const base = createHash("sha256").update(`${list.salt}:`);
+  const bases = sources.map((l) => ({ ...l, base: createHash("sha256").update(`${l.list.salt}:`) }));
   return {
     lengths: [...lengths].sort((a, b) => a - b),
     match(canon) {
       const kind = byValue.get(canon);
       if (kind) return `evidence:${kind}`;
-      if (list.entries.size && list.entries.has(base.copy().update(canon).digest("hex"))) return "denylist";
+      for (const { list, source, base } of bases) {
+        if (list.entries.has(base.copy().update(canon).digest("hex"))) return source;
+      }
       return null;
     },
   };
@@ -289,7 +313,7 @@ function scanPrEvent(m, report) {
 }
 
 function parseArgs(argv) {
-  const opts = { denylist: DEFAULT_DENYLIST, modes: [] };
+  const opts = { denylist: DEFAULT_DENYLIST, localDenylist: localDenylistPath(), addClass: "person", modes: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const value = () => {
@@ -299,6 +323,10 @@ function parseArgs(argv) {
     };
     if (arg === "--denylist") opts.denylist = value();
     else if (arg === "--add") opts.add = value();
+    else if (arg === "--class") {
+      opts.addClass = value();
+      if (!["person", "org"].includes(opts.addClass)) throw new Error("--class is person or org");
+    } else if (arg === "--local-denylist") opts.localDenylist = value();
     else if (arg === "--evidence") opts.evidence = value();
     else if (arg === "--staged") opts.modes.push(["staged"]);
     else if (arg === "--message") opts.modes.push(["message", value()]);
@@ -314,14 +342,17 @@ function parseArgs(argv) {
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.add !== undefined) {
-    const added = addEntry(opts.denylist, opts.add);
-    console.log(added ? "privacy scan: added one denylist entry; commit the denylist file." : "privacy scan: that value is already listed.");
+    const org = opts.addClass === "org";
+    const added = addEntry(org ? opts.denylist : opts.localDenylist, opts.add);
+    const where = org ? "the committed denylist; commit it" : "the local person denylist (never commit it)";
+    console.log(added ? `privacy scan: added one entry to ${where}.` : "privacy scan: that value is already listed.");
     return;
   }
   if (opts.evidence && process.env.CI) throw new Error("--evidence is a local mode; never run it in CI");
   const list = parseDenylist(readFileSync(opts.denylist, "utf8"));
   const evidence = opts.evidence ? evidenceTokens(readFileSync(opts.evidence, "utf8")) : [];
-  const m = matcher(list, evidence);
+  const local = existsSync(opts.localDenylist) ? parseDenylist(readFileSync(opts.localDenylist, "utf8")) : null;
+  const m = matcher([{ list, source: "denylist" }, ...(local ? [{ list: local, source: "local denylist" }] : [])], evidence);
   const annotate = Boolean(process.env.GITHUB_ACTIONS);
   const hits = [];
   const report = (where, line, source) => {
@@ -343,7 +374,7 @@ function main() {
     else if (mode === "pr-event") counts.push(`${scanPrEvent(m, report)} PR fields`);
   }
   const places = new Set(hits).size;
-  const scope = `${counts.join(", ")}; ${list.entries.size} denylist entries${evidence.length ? `, ${evidence.length} evidence tokens` : ""}`;
+  const scope = `${counts.join(", ")}; ${list.entries.size} denylist entries${local ? `, ${local.entries.size} local` : ""}${evidence.length ? `, ${evidence.length} evidence tokens` : ""}`;
   if (hits.length) {
     console.log(`privacy scan: ${hits.length} hit${hits.length === 1 ? "" : "s"} in ${places} place${places === 1 ? "" : "s"} (${scope}).`);
     console.log("Replace each with a synthetic value (acme-corp, contoso, example.com); the matched text is not printed.");

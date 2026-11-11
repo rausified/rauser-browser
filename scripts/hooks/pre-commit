@@ -1,6 +1,7 @@
 #!/bin/sh
 # Opt-in privacy check (AGENTS.md "Local checks"): refuses a commit whose staged
-# files hold a denylisted real identifier. Install it for one checkout with
+# files hold a denylisted real identifier, from the committed list or the local
+# person list when it exists (scripts/privacy-scan.mjs). Install it for one checkout with
 #   ln -s ../../scripts/hooks/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"
 # or for every hook in this directory with `git config core.hooksPath scripts/hooks`.
 exec node "$(git rev-parse --show-toplevel)/scripts/privacy-scan.mjs" --staged
