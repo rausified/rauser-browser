@@ -111,6 +111,20 @@ DRAIN_TIMEOUT = 600  # default --drain-timeout, seconds
 DRAIN_MAX = 3600  # the service's own cap, and the largest --drain-timeout
 DRAIN_GRACE = 300  # pause kept past the wait for publish, register and hello
 DRAIN_POLL = 5  # seconds between run scans while draining
+DRAIN_TIMEOUT_MAX = DRAIN_MAX - DRAIN_GRACE  # so the pause lasts through the publish
+
+
+def honours_drain(binary: Path) -> bool:
+    """Whether the live binary (the build the service runs) knows the pause
+    marker: a build from before --drain existed ignores it, so a run could
+    still start, and be ended, between the last scan and the restart. No
+    binary means no service to drain."""
+    try:
+        return DRAIN_FILE.encode() in binary.read_bytes()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
 
 
 def check_node(runner: Runner, repo: Path) -> str:
@@ -652,7 +666,8 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
                         help="after the builds, pause new runs and wait for queued and running "
                              "ones to finish before publishing, instead of refusing")
     parser.add_argument("--drain-timeout", metavar="SECONDS", default=str(DRAIN_TIMEOUT),
-                        help=f"how long --drain waits (1 to {DRAIN_MAX}, default {DRAIN_TIMEOUT})")
+                        help=f"how long --drain waits (1 to {DRAIN_TIMEOUT_MAX}, default "
+                             f"{DRAIN_TIMEOUT})")
     parser.add_argument("--dry-run", action="store_true", help="print the steps; change nothing")
     # Set only by deploy-live itself when a pull changed it (step d).
     parser.add_argument("--resumed-from", help=argparse.SUPPRESS)
@@ -684,8 +699,8 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
             drain_timeout = int(args.drain_timeout)
         except ValueError:
             drain_timeout = 0
-        if not 1 <= drain_timeout <= DRAIN_MAX:
-            raise DeployError(f"--drain-timeout needs whole seconds from 1 to {DRAIN_MAX}, "
+        if not 1 <= drain_timeout <= DRAIN_TIMEOUT_MAX:
+            raise DeployError(f"--drain-timeout needs whole seconds from 1 to {DRAIN_TIMEOUT_MAX}, "
                               f"not {args.drain_timeout!r}")
 
         d.step("checkout: main worktree, branch main, no tracked changes")
@@ -706,6 +721,11 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         binary = repo / "target" / "debug" / "brauser"
         staging = repo / STAGING
         staged = staging / "debug" / "brauser"
+        if args.drain and not honours_drain(binary):
+            raise DeployError(f"--drain needs a service that honours the pause, and {binary} "
+                              "predates it, so a run could still start and be ended by the "
+                              "restart. Deploy once without --drain (wait for a quiet moment); "
+                              "later deploys can drain.")
 
         d.step("stale index.lock files (worktree-hygiene --locks-only)")
         hygiene = [sys.executable, str(HYGIENE), "--repo", str(repo), "--locks-only"]
@@ -746,8 +766,11 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
             new = old
             if expected is not None:
                 e = expected[:COMMIT_LENGTH]
-                if old.startswith(expected):
-                    d.say(f"    would deploy {e}: it is already checked out")
+                if old.startswith(expected) and remote == old:
+                    d.say(f"    would deploy {e}: it is checked out and origin main's tip")
+                elif old.startswith(expected):
+                    d.say(f"    would fetch origin main, then would deploy {e} (checked out) "
+                          "only if it is on origin/main; otherwise it refuses")
                 elif remote and remote.startswith(expected):
                     d.say(f"    would fetch origin main and fast-forward {old[:COMMIT_LENGTH]}..{e}; "
                           f"would deploy {e} (origin main's tip)")
@@ -844,8 +867,7 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
             else:
                 now = d.clock()
                 drain_marker = write_drain(support, now + drain_timeout + DRAIN_GRACE, now)
-                d.say(f"    paused new runs ({drain_marker}); a service built before the pause "
-                      "existed ignores it, and the checks below still catch a run it starts")
+                d.say(f"    paused new runs ({drain_marker})")
                 drain_runs(d, support, drain_timeout, args.allow_active_runs, late)
         d.step(f"runs in {support / 'runs'} (again, before the binary is published)")
         # A dry run waits for nothing, so the runs a drain would wait for

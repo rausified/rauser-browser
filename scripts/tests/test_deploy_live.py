@@ -962,6 +962,11 @@ class TruthfulDryRun(Fixture):
         self.assertIn("origin main: unavailable", out)
         self.assertNotIn("up to date", out)
 
+    def test_dry_run_with_head_expected_but_not_origin_tip_is_conditional(self):
+        code, out = self.deploy("--dry-run", "--expected-sha", OLD[:12])
+        self.assertEqual(code, 0, out)
+        self.assertIn("only if it is on origin/main", out)
+
     def test_dry_run_with_expected_sha_names_what_it_would_deploy(self):
         code, out = self.deploy("--dry-run", "--expected-sha", MID[:12])
         self.assertEqual(code, 0, out)
@@ -1029,6 +1034,10 @@ class Drain(Fixture):
     """--drain pauses new runs after the builds, waits (bounded) for the
     admitted ones, publishes, and always lifts the pause."""
 
+    def setUp(self):
+        super().setUp()
+        self.live.write_text("old binary that knows deploy-drain.json")
+
     def marker(self):
         return self.support / "deploy-drain.json"
 
@@ -1069,7 +1078,7 @@ class Drain(Fixture):
         self.assertIn("r-slow", out)
         self.assertIn("60s", out)
         self.assertFalse(self.marker().exists())
-        self.assertEqual(self.live.read_text(), "old binary")
+        self.assertEqual(self.live.read_text(), "old binary that knows deploy-drain.json")
         self.assertNotIn("publish", self.kinds())
         self.assertLessEqual(sum(self.slept), 60 + dl.DRAIN_POLL)
 
@@ -1108,8 +1117,18 @@ class Drain(Fixture):
                       source)
         self.assertIn("until_unix: u64", source)
 
+    def test_a_live_build_that_ignores_the_pause_refuses_drain_before_acting(self):
+        self.live.write_text("old binary from before the pause")
+        code, out = self.deploy("--drain")
+        self.assertEqual(code, 1, out)
+        self.assertIn("predates", out)
+        self.assertEqual(self.runner.acting_calls(), [], out)
+
     def test_drain_timeout_is_bounded(self):
-        for bad in ("0", "-5", "3601", "x"):
+        code, out = self.deploy("--drain", "--drain-timeout", str(dl.DRAIN_TIMEOUT_MAX))
+        self.assertEqual(code, 0, out)
+        self.assertLessEqual(dl.DRAIN_TIMEOUT_MAX + dl.DRAIN_GRACE, dl.DRAIN_MAX)
+        for bad in ("0", "-5", str(dl.DRAIN_TIMEOUT_MAX + 1), "x"):
             code, out = self.deploy("--drain", "--drain-timeout", bad)
             self.assertNotEqual(code, 0, out)
 
