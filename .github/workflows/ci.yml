@@ -158,8 +158,7 @@ jobs:
         run: cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
 
   # The repository is public and its rule is synthetic data only. This scans
-  # every tracked file, the PR's commit messages and its title and body
-  # against scripts/privacy-denylist.sha256, salted hashes of known-real
+  # every tracked file and the change's commit messages against scripts/privacy-denylist.sha256, salted hashes of known-real
   # identifiers (scripts/privacy-scan.mjs). It runs for every change, docs-only
   # included, because plans and fixtures are where real identifiers slipped in
   # (#394, #400).
@@ -173,13 +172,20 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.14.0"
-      - name: Scan the tree, commit messages and PR text for known real identifiers
+      # A PR scans its own commits (the merge commit's second parent, minus
+      # base); a push scans every pushed commit. The PR title and body are
+      # scanned by pr-hygiene.yml's PR owner job, which reruns on an edit.
+      - name: Scan the tree and commit messages for known real identifiers
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
+          range='HEAD^!'
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            node scripts/privacy-scan.mjs --tree --commits 'HEAD^1..HEAD^2' --pr-event
-          else
-            node scripts/privacy-scan.mjs --tree --commits 'HEAD^!'
+            range='HEAD^1..HEAD^2'
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..HEAD"
           fi
+          node scripts/privacy-scan.mjs --tree --commits "$range"
 
   # GitHub's hosted macos-15 pool is sometimes starved: the job is never
   # acquired by a runner and GitHub cancels it with zero steps run. The job

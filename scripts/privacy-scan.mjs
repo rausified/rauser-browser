@@ -11,7 +11,8 @@
 //                      (the opt-in pre-commit hook, scripts/hooks/pre-commit)
 //   --message <f|->    one text file, or stdin: a commit message or PR body
 //   --commits <range>  every commit message in a git range (CI: the PR's commits)
-//   --pr-event         the PR title and body from GITHUB_EVENT_PATH (CI)
+//   --pr-event         the PR title and body from GITHUB_EVENT_PATH (CI:
+//                      pr-hygiene.yml, which reruns when either is edited)
 // Hits print as `<where>:<line> <source>` and never include the matched text.
 //
 // Tokenization. A line is first percent-decoded, up to three times, so
@@ -254,7 +255,7 @@ function scanTree(cwd, m, report) {
 
 function scanStaged(cwd, m, report) {
   const root = git(["rev-parse", "--show-toplevel"], cwd).toString("utf8").trim();
-  const files = git(["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"], root)
+  const files = git(["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRT"], root)
     .toString("utf8")
     .split("\0")
     .filter(Boolean);

@@ -168,8 +168,33 @@ test("the evidence mode reports the class and line, never the value", (t) => {
   writeFileSync(evidence, "https://zephyr-tenant.example.com/a\tZephyr Ops Weekly Review\n");
   const msg = join(dir, "notes.md");
   writeFileSync(msg, "ok\nfrom the Zephyr Ops Weekly Review board\n");
-  const result = run(["--denylist", deny, "--evidence", evidence, "--message", msg]);
+  // Evidence mode refuses to run under CI, so this test runs it as local.
+  const result = run(["--denylist", deny, "--evidence", evidence, "--message", msg], { env: { ...process.env, CI: "" } });
+  assert.equal(run(["--denylist", deny, "--evidence", evidence], { env: { ...process.env, CI: "true" } }).status, 2);
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stdout, /notes\.md:2 evidence:title/);
   assert.doesNotMatch(result.stdout + result.stderr, /zephyr/i);
+});
+
+test("the commit-range and PR-event modes scan commit messages and the PR title and body", (t) => {
+  const dir = scratch(t);
+  const deny = denylistWith(dir, SECRET);
+  const repo = join(dir, "repo");
+  git(dir, "init", "-q", repo);
+  const commit = (msg) => git(repo, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", msg);
+  commit("base");
+  commit("chore: for the Zephyr.Quokka.77 org");
+  commit("fix: clean");
+  const range = run(["--denylist", deny, "--commits", "HEAD~2..HEAD"], { cwd: repo });
+  assert.equal(range.status, 1, range.stderr);
+  assert.match(range.stdout, /commit [0-9a-f]{12}:1 denylist/);
+  assert.match(range.stdout, /2 commit messages/);
+  assert.equal(run(["--denylist", deny, "--commits", "HEAD^!"], { cwd: repo }).status, 0);
+
+  const event = join(dir, "event.json");
+  writeFileSync(event, JSON.stringify({ pull_request: { title: "feat: x", body: "Owner: me\n\nTested on zephyr%2Dquokka%2D77.\n" } }));
+  const pr = run(["--denylist", deny, "--pr-event"], { env: { ...process.env, GITHUB_EVENT_PATH: event } });
+  assert.equal(pr.status, 1, pr.stderr);
+  assert.match(pr.stdout, /PR body:3 denylist/);
+  assert.doesNotMatch(pr.stdout, /zephyr|quokka/i);
 });
