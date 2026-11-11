@@ -199,7 +199,9 @@ export function planQueue(snap, { now = new Date().toISOString(), ready = false,
   if (state === "waiting") {
     const stale = staleConditions(snap);
     const checks = analyzeChecks(snap.checks);
-    const since = statusComment(snap.comments)?.updatedAt ?? null;
+    // Since the status comment was created, not last edited: Mergify edits it after a refresh
+    // that changed nothing, and a refresh before that edit still counts (one per request).
+    const since = statusComment(snap.comments)?.createdAt ?? null;
     const lagging = (stale.length || (!unmet.length && checks.green))
       && checks.greenSince && minutes(checks.greenSince, now) >= graceMinutes;
     if (lagging && !commandSince(snap.comments, REFRESH_COMMENT, since)) {

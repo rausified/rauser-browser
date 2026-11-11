@@ -157,6 +157,13 @@ test("settleSeconds waits for the latest PR due, within the window", () => {
   assert.equal(settleSeconds([99]), KEEPER_GREEN_MINUTES * 60 + 60);
 });
 
+test("mergeTreeClean uses only merge-tree flags git 2.38+ has (no --quiet)", () => {
+  const source = readFileSync(new URL("../pr-keeper.mjs", import.meta.url), "utf8");
+  const call = /git\(\["merge-tree"[^\]]*\]/.exec(source)?.[0] ?? "";
+  assert.match(call, /"--write-tree"/);
+  assert.doesNotMatch(call, /--quiet/);
+});
+
 test("the keeper never merges, pushes or force-pushes (hard denies)", () => {
   const source = readFileSync(new URL("../pr-keeper.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const code = source.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*\*)/.test(line)).join("\n");
@@ -169,6 +176,8 @@ test("the workflow runs the keeper after the doctor, on a schedule and when CI c
   assert.match(yml, /cron: "\*\/15 \* \* \* \*"/);
   assert.match(yml, /keeper:\n\s+name: PR keeper\n\s+needs: doctor/);
   assert.match(yml, /node scripts\/pr-keeper\.mjs/);
+  // merge-tree needs the merge base: the keeper's checkout is a full clone.
+  assert.match(yml.split("keeper:\n")[1], /fetch-depth: 0/);
   // The doctor never runs on workflow_run: only the keeper does.
   assert.match(yml, /github\.event_name != 'workflow_run' &&/);
 });

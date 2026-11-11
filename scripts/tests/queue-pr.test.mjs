@@ -130,6 +130,14 @@ test("#339: refresh once after the grace, then report that the refresh did not h
   assert.equal(again.exitCode, EXIT.PERSON);
 });
 
+test("#339: a refresh counts though Mergify edits its status comment afterwards with the same stale checks", () => {
+  const edited = { ...FX.waiting339, updatedAt: "2026-11-09T10:20:00Z" };
+  const s = snap({ comments: [edited, command(REFRESH_COMMENT, "2026-11-09T10:10:40Z"), FX.refreshed339], contexts: greenChecks(ago(10)) });
+  const plan = planQueue(s, { now: NOW });
+  assert.deepEqual(kinds(plan), []);
+  assert.equal(plan.outcome, "refresh-ignored");
+});
+
 test("a waiting request with nothing left unmet and green checks is stale too (#422 at 17:11:02Z)", () => {
   const body = FX.waiting339.body.replace(/\n- \[ \] `check-success = Build and check`[\s\S]*?(?=\n\n<details>)/, "");
   const plan = planQueue(snap({ comments: [{ ...FX.waiting339, body }], contexts: greenChecks(ago(10)) }), { now: NOW });

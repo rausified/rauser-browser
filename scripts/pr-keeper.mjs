@@ -153,7 +153,7 @@ export function mergeTreeClean(repo, snap) {
     if (git(["fetch", "-q", "--no-tags", "--no-write-fetch-head", "origin", main, snap.headOid], { check: false }).code !== 0) {
       git(["fetch", "-q", "--no-tags", "--no-write-fetch-head", "origin", `+refs/pull/${snap.number}/head`, "+refs/heads/main"]);
     }
-    const result = git(["merge-tree", "--write-tree", "--quiet", main, snap.headOid], { check: false });
+    const result = git(["merge-tree", "--write-tree", main, snap.headOid], { check: false });
     return result.code === 0 ? true : result.code === 1 ? false : null;
   } catch { return null; }
 }
