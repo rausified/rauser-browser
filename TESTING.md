@@ -967,6 +967,10 @@ The scheduled `.github/workflows/queue-check.yml` installs a pinned bd
 `refs/dolt/data` and runs the check; on a PR that changes the queue tooling
 it proves only that bd installs (and checks, once the remote is seeded).
 
+## Privacy scan
+
+The repository is public, so every fixture, vector, plan and example uses synthetic identifiers (`acme-corp`, `contoso`, `example.com`). `scripts/privacy-scan.mjs` enforces what a reviewer cannot see: it matches every tracked file, file path, the PR's commit messages and its title and body against `scripts/privacy-denylist.sha256`, salted hashes of identifiers known to be real, and the `Privacy scan` CI job runs it for every change, docs-only included (AGENTS.md "Local checks"). A hit names the file and line and never the matched text. `scripts/tests/privacy-scan.test.mjs` pins the tokenization on a synthetic token: separator and case variants, single and double URL-encoding, commit-message and staged modes, `--add` writing only a hash, and the committed denylist holding only a salt and hashes. Seeded on 2026-11-11 from the identifier classes #394 and #400 removed, it finds 0 hits in the tree, and it does catch the pre-scrub copies of the files those PRs fixed.
+
 ## Local IPC in sandboxes
 
 Some development sandboxes deny local IPC. Codex's `workspace-write` sandbox
