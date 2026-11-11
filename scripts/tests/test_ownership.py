@@ -202,6 +202,26 @@ class WhoOwnsTests(unittest.TestCase):
         self.assertIn("PR #5 (MERGED)", text)
         self.assertIn("owner: claude session old", text)
 
+    def test_orca_workspaces_of_other_repositories_are_not_reported(self):
+        # Codex P2: Orca lists every repository's worktrees, and many share a branch name like `main`.
+        orca = [{"path": "/elsewhere/other-repo", "branch": "refs/heads/lane/feature", "displayName": "Other repo"},
+                {"path": str(self.path), "branch": "refs/heads/lane/feature", "displayName": "Feature lane"}]
+        _, text = run(ownership.who_owns_main, ["12"], self.sources(orca=orca))
+        self.assertIn("Feature lane", text)
+        self.assertNotIn("Other repo", text)
+
+    def test_a_bead_with_a_worktree_but_no_pr_shows_its_orca_workspace(self):
+        sources = self.sources(prs=[], worktrees=[{"path": str(self.path), "branch": "lane/brwr-q1", "head": "a"}],
+                               orca=[{"path": str(self.path), "branch": "refs/heads/lane/brwr-q1",
+                                      "displayName": "Bead lane", "workspaceStatus": "in-progress"}])
+        _, text = run(ownership.who_owns_main, ["brwr-q1"], sources)
+        self.assertIn(f"worktree: {self.path}", text)
+        self.assertIn("orca: Bead lane (in-progress)", text)
+
+    def test_a_branch_lookup_resolves_the_beads_its_pr_cites(self):
+        _, text = run(ownership.who_owns_main, ["lane/feature"], self.sources())
+        self.assertIn("bead brwr-q1 (in_progress): assignee codex session 9", text)
+
     def test_without_orca_it_degrades_and_says_so(self):
         _, text = run(ownership.who_owns_main, ["12"], self.sources(orca=None))
         self.assertIn("orca: not available", text)

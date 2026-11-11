@@ -285,9 +285,13 @@ def _branch_trees(branch: Optional[str], trees: list[dict]) -> list[dict]:
     return [t for t in trees if branch and t.get("branch") == branch]
 
 
-def _orca_for(branch: Optional[str], path: Optional[str], orca: Optional[list[dict]]) -> list[dict]:
+def _orca_for(branch: Optional[str], path: Optional[str], orca: Optional[list[dict]], ours: list[dict]) -> list[dict]:
+    """Orca workspaces on BRANCH or at PATH, among this repository's worktrees (OURS) only:
+    Orca lists every repository's worktrees, and many share a branch name such as `main`."""
     found = []
     for tree in orca or []:
+        if not any(_same_path(tree.get("path"), mine["path"]) for mine in ours):
+            continue
         same_branch = branch and (tree.get("branch") or "").removeprefix("refs/heads/") == branch
         same_path = path and _same_path(tree.get("path"), path)
         if same_branch or same_path:
@@ -335,7 +339,7 @@ def _describe_place(report: _Report, branch: Optional[str], path: Optional[str],
     if orca is None:
         report.line("  orca: not available")
         return
-    for tree in _orca_for(branch, path, orca):
+    for tree in _orca_for(branch, path, orca, trees):
         status = tree.get("workspaceStatus") or "?"
         report.line(f"  orca: {tree.get('displayName') or '(unnamed)'} ({status}) at {tree.get('path')}", found=True)
         if tree.get("linkedPR"):
@@ -394,9 +398,9 @@ def _who_bead(report: _Report, bead_id: str, sources: Sources) -> None:
         if bead_id in BEAD_ID.findall(_pr_text(pr)):
             _describe_pr(report, pr)
             _describe_place(report, pr.get("headRefName"), None, sources)
-    for tree in sources.worktrees():
-        if tree.get("branch") and bead_id in tree["branch"]:
-            report.line(f"  worktree: {tree['path']} (branch {tree['branch']})")
+    for branch in sorted({t["branch"] for t in sources.worktrees() if t.get("branch") and bead_id in t["branch"]}):
+        report.line(f"  branch: {branch}")
+        _describe_place(report, branch, None, sources)
 
 
 def _who_branch(report: _Report, branch: Optional[str], path: Optional[str], sources: Sources) -> None:
@@ -418,6 +422,9 @@ def _who_branch(report: _Report, branch: Optional[str], path: Optional[str], sou
         prs = []
     for pr in prs:
         _describe_pr(report, pr)
+    ids = sorted({bead_id for pr in prs for bead_id in BEAD_ID.findall(_pr_text(pr))})
+    if ids:
+        _describe_beads(report, ids, _beads_or_none(report, sources))
     if not path:
         report.line(f"branch {branch}")
     _describe_place(report, branch, path, sources)
