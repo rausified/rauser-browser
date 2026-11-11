@@ -5,12 +5,16 @@ The queue is not a file in git. bd keeps it in its Dolt database and syncs it
 through this repository's `refs/dolt/data` (`bd sync`, which merges
 concurrent edits field by field), so pull requests never carry it
 (AGENTS.md "Work queue"; worker-contract.json is the contract every worker
-follows). A fresh clone runs `BD_NON_INTERACTIVE=1 bd bootstrap`. The backlog
+follows). A fresh clone runs `scripts/dev/queue bootstrap`. The backlog
 view, BOSUN_FEATURE_BACKLOG.md, is rendered on demand from
 docs/backlog/frame.md, docs/backlog/notes/ and the beads, and never committed.
 
 Commands (scripts/dev/queue is the entry point):
 
+  bootstrap         `bd bootstrap` (once, in a fresh clone), keeping the
+                    tracked .beads/config.yaml byte for byte: bd also writes
+                    sync.remote there, which left the checkout dirty, but the
+                    remote it needs is in the database (`bd dolt remote list`).
   sync              check this database's queue, pull, check the merged queue,
                     then `bd sync` (pull, conflict check, push). Any failed
                     check, or a remote that was never seeded, pushes nothing.
@@ -222,6 +226,44 @@ def dolt_remote(ws: pathlib.Path) -> Optional[str]:
 
 def seeded(git_url: str, cwd: pathlib.Path) -> bool:
     return bool(git("ls-remote", git_url, DOLT_REF, cwd=cwd).stdout.strip())
+
+
+CONFIG_PATH = ".beads/config.yaml"  # tracked; bd bootstrap rewrites it
+
+
+def bootstrap(repo: pathlib.Path) -> list[str]:
+    """`bd bootstrap` in the workspace, then put back a .beads/config.yaml it
+    changed, byte for byte; return what it says.
+
+    bd bootstrap wires the Dolt remote into the database and also adds
+    sync.remote to config.yaml (dropping a blank line on the way), which made
+    the tracked file dirty and blocked deploy-live's clean-checkout check
+    (2026-11-09). bd sync reads the remote from the database, so the
+    committed file is enough.
+    """
+    ws = workspace(repo)
+    config = ws / CONFIG_PATH
+    try:
+        before: Optional[bytes] = config.read_bytes()
+    except FileNotFoundError:
+        before = None
+    bd("bootstrap", cwd=ws)
+    said = []
+    after = config.read_bytes() if config.exists() else None
+    if after != before:
+        if before is None:
+            config.unlink()
+        else:
+            scratch = config.with_name(f".{config.name}.restore")
+            scratch.write_bytes(before)
+            os.replace(scratch, config)
+        said.append(f"kept {CONFIG_PATH} as committed (bd bootstrap had rewritten it)")
+    remote = dolt_remote(ws)
+    if remote is None:
+        raise QueueError(f"bd bootstrap left no `origin` Dolt remote in {ws}; "
+                         "`bd dolt remote list` shows what it has")
+    said.append(f"Dolt remote origin: {remote}")
+    return said
 
 
 def sync(repo: pathlib.Path) -> None:
@@ -641,6 +683,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="scripts/dev/queue", description=__doc__.splitlines()[0])
     parser.add_argument("--repo", type=pathlib.Path, help="act for this checkout (default: this one)")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("bootstrap", help="bd bootstrap, keeping .beads/config.yaml as committed")
     sub.add_parser("sync", help="check, pull, check, bd sync")
     export_parser = sub.add_parser("export", help="print the queue JSONL on stdout (and write PATH)")
     export_parser.add_argument("path", nargs="?", type=pathlib.Path)
@@ -663,7 +706,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         repo = repo_root(args.repo.resolve() if args.repo else None)
-        if args.command == "sync":
+        if args.command == "bootstrap":
+            for line in bootstrap(repo):
+                print(f"queue: {line}")
+            print("queue: bootstrapped")
+        elif args.command == "sync":
             sync(repo)
             print("queue: synced")
         elif args.command == "export":

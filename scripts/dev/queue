@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Brauser's work queue in bd's Dolt database: sync, export, backlog, check, adopt, seed.
+"""Brauser's work queue in bd's Dolt database: bootstrap, sync, export, backlog, check, adopt, seed.
 
 The implementation and its documentation are in scripts/work_queue.py
 (AGENTS.md "Work queue", worker-contract.json). Typical use:
 
-    BD_NON_INTERACTIVE=1 bd bootstrap     # once, in a fresh clone
+    scripts/dev/queue bootstrap           # once, in a fresh clone
     bd update brwr-xyz --status closed    # edit beads with bd
     scripts/dev/queue sync                # check, then publish
     scripts/dev/queue backlog --print     # read the backlog view
