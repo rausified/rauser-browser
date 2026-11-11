@@ -362,7 +362,16 @@ class HappyPath(Fixture):
     def test_reload_hint_when_the_extension_changed(self):
         code, out = self.deploy()
         self.assertEqual(code, 0, out)
-        self.assertIn("Reload Brauser at chrome://extensions", out)
+        self.assertIn("click Reload Brauser in the side panel", out)
+        # The panel first; chrome://extensions only as the fallback.
+        self.assertLess(out.index("side panel"), out.index("chrome://extensions only if"))
+
+    def test_the_loaded_build_is_said_to_be_undetected_never_guessed(self):
+        for argv in ((), ("--dry-run",)):
+            code, out = self.deploy(*argv)
+            self.assertEqual(code, 0, out)
+            self.assertIn("loaded:    not detected", out)
+            self.assertNotIn("loaded:    yes", out)
 
     def test_a_refused_deploy_keeps_the_reload_hint_until_one_completes(self):
         # The extension is rebuilt, then a late run refuses the deploy; the
@@ -375,7 +384,7 @@ class HappyPath(Fixture):
         code, out = self.deploy()
         self.assertEqual(code, 0, out)
         self.assertIn("already up to date", out)
-        self.assertIn("Reload Brauser at chrome://extensions", out)
+        self.assertIn("click Reload Brauser in the side panel", out)
         code, out = self.deploy()
         self.assertEqual(code, 0, out)
         self.assertNotIn("Reload Brauser", out)

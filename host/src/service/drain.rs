@@ -102,16 +102,28 @@ mod tests {
             .unwrap()
             .modified()
             .unwrap();
-        assert!(paused(&dir.path().join(DRAIN_FILE), written + DRAIN_MAX - Duration::from_secs(1)));
+        assert!(paused(
+            &dir.path().join(DRAIN_FILE),
+            written + DRAIN_MAX - Duration::from_secs(1)
+        ));
         assert!(!paused(&dir.path().join(DRAIN_FILE), written + DRAIN_MAX));
     }
 
     #[test]
     fn a_malformed_or_unreadable_marker_pauses_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        for text in ["", "{", "[]", r#"{"until_unix":"soon"}"#, r#"{"until_unix":-1}"#] {
+        for text in [
+            "",
+            "{",
+            "[]",
+            r#"{"until_unix":"soon"}"#,
+            r#"{"until_unix":-1}"#,
+        ] {
             write(dir.path(), text);
-            assert!(!paused(&dir.path().join(DRAIN_FILE), SystemTime::now()), "{text:?}");
+            assert!(
+                !paused(&dir.path().join(DRAIN_FILE), SystemTime::now()),
+                "{text:?}"
+            );
         }
         fs::remove_file(dir.path().join(DRAIN_FILE)).unwrap();
         fs::create_dir(dir.path().join(DRAIN_FILE)).unwrap();
