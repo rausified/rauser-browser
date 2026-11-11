@@ -130,6 +130,15 @@ class OverlapCheckTests(unittest.TestCase):
         self.assertNotIn("brwr-b2", text)
         self.assertNotIn("brwr-e5", text)  # not in progress
 
+    def test_a_mention_must_end_at_a_path_boundary(self):
+        beads = [bead("brwr-a1", description="see scripts/dev/queue-pr.mjs and scripts/work_queue.py"),
+                 bead("brwr-b2", description="edit scripts/dev/queue."),
+                 bead("brwr-c3", description="under scripts/dev/queue/sub")]
+        _, text = run(ownership.overlap_main, ["scripts/dev/queue", "scripts/work_queue"], FakeSources(beads=beads))
+        self.assertNotIn("brwr-a1", text)
+        self.assertIn("brwr-b2", text)
+        self.assertIn("brwr-c3", text)
+
     def test_branch_mode_uses_changed_files_and_skips_the_branchs_own_pr(self):
         sources = FakeSources(prs=[pr(7, "me/branch", ["a.py"]), pr(9, "other", ["a.py"])], changed=["a.py"])
         _, text = run(ownership.overlap_main, ["--branch"], sources)

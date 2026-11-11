@@ -187,6 +187,13 @@ def touches(path: str, file: str) -> bool:
     return file == path or file.startswith(path.rstrip("/") + "/")
 
 
+def mentions(text: str, path: str) -> bool:
+    """TEXT names PATH as a whole path: `scripts/dev/queue` is not named by `scripts/dev/queue-pr.mjs`
+    or `scripts/work_queue` by `scripts/work_queue.py`, but a sentence's closing period is fine."""
+    path = _norm(path).rstrip("/")
+    return bool(path) and re.search(rf"(?<![\w/.-]){re.escape(path)}(?![\w-]|\.\w)", text) is not None
+
+
 def _bead_text(bead: dict) -> str:
     return "\n".join(str(bead.get(field) or "") for field in BEAD_TEXT_FIELDS)
 
@@ -218,7 +225,7 @@ def overlaps(paths: list[str], prs: list[dict], beads: list[dict], skip_branch: 
         if bead.get("status") != "in_progress":
             continue
         text = _bead_text(bead).replace("\\", "/")
-        why = [f"mentions {_norm(p)}" for p in paths if _norm(p).rstrip("/") and _norm(p).rstrip("/") in text]
+        why = [f"mentions {_norm(p)}" for p in paths if mentions(text, p)]
         why += [f"cited by PR #{n}" for n in cited.get(bead["id"], [])]
         if why:
             hit_beads.append((bead, why))
