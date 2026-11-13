@@ -172,7 +172,7 @@ def export(repo: pathlib.Path, path: Optional[pathlib.Path] = None) -> pathlib.P
         bd("export", "-o", scratch, cwd=workspace(repo))
         if not any(line.strip() for line in pathlib.Path(scratch).read_text(encoding="utf-8").splitlines()):
             raise QueueError(
-                f"bd export in {workspace(repo)} is empty: no queue here (run `BD_NON_INTERACTIVE=1 bd bootstrap`)"
+                f"bd export in {workspace(repo)} is empty: no queue here (run `scripts/dev/queue bootstrap`)"
             )
         os.replace(scratch, target)
     finally:
@@ -240,6 +240,7 @@ def bootstrap(repo: pathlib.Path) -> list[str]:
     """`bd bootstrap` in the workspace, then put back a .beads/config.yaml it
     changed, byte for byte; return what it says.
 
+    The bytes on disk before the run are restored, so a local edit survives.
     bd bootstrap wires the Dolt remote into the database and also adds
     sync.remote to config.yaml (dropping a blank line on the way), which made
     the tracked file dirty and blocked deploy-live's clean-checkout check
@@ -252,17 +253,20 @@ def bootstrap(repo: pathlib.Path) -> list[str]:
         before: Optional[bytes] = config.read_bytes()
     except FileNotFoundError:
         before = None
-    bd("bootstrap", cwd=ws)
     said = []
-    after = config.read_bytes() if config.exists() else None
-    if after != before:
-        if before is None:
-            config.unlink()
-        else:
-            scratch = config.with_name(f".{config.name}.restore")
-            scratch.write_bytes(before)
-            os.replace(scratch, config)
-        said.append(f"kept {CONFIG_PATH} as committed (bd bootstrap had rewritten it)")
+    try:
+        bd("bootstrap", cwd=ws)
+    finally:
+        # Even when bd fails after rewriting it: a dirty file blocks deploy-live.
+        after = config.read_bytes() if config.exists() else None
+        if after != before:
+            if before is None:
+                config.unlink()
+            else:
+                scratch = config.with_name(f".{config.name}.restore")
+                scratch.write_bytes(before)
+                os.replace(scratch, config)
+            said.append(f"kept {CONFIG_PATH} as it was before bootstrap (bd bootstrap had rewritten it)")
     remote = dolt_remote(ws)
     if remote is None:
         raise QueueError(f"bd bootstrap left no `origin` Dolt remote in {ws}; "

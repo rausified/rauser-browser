@@ -57,12 +57,16 @@ jobs:
         with:
           # docs/backlog: the queue tests render the committed backlog frame.
           # docs/improvement-feed: test_improvement_feed.py checks the real
-          # entries and skips itself without them. (Cone mode always brings
-          # the root files: worker-contract*.json, .gitattributes, the feed.)
+          # entries and skips itself without them. .beads: test_work_queue.py
+          # reads the committed README.md and config.yaml. (Cone mode always
+          # brings the root files: worker-contract*.json, .gitattributes, the
+          # feed.) ci-changes.test.mjs fails when a Python test names a path
+          # this list leaves out.
           sparse-checkout: |
             scripts
             docs/backlog
             docs/improvement-feed
+            .beads
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"

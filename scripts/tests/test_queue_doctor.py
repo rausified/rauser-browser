@@ -93,7 +93,7 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("[PROBLEM] identity", text)
         self.assertIn(f"database _project_id {OTHER}", text)
-        self.assertIn("bd bootstrap", text)
+        self.assertIn("scripts/dev/queue bootstrap", text)
         self.assertIn("repair:", text)
 
     def test_a_workspace_metadata_that_differs_from_the_committed_one(self):
