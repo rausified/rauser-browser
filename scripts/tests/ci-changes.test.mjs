@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classify, isDocsOrQueuePath, parseNameList } from "../ci-changes.mjs";
+import { classify, devToolsReasons, isDocsOrQueuePath, parseNameList } from "../ci-changes.mjs";
 
 test("root Markdown, docs/ and .beads/ are docs paths (check_current_state.py refuses a committed queue file)", () => {
   for (const path of [
@@ -72,4 +72,63 @@ test("NUL-separated git output keeps unusual names intact and drops the trailing
 test("a path with a newline in its name is one path, not two", () => {
   // `docs/a\nhost/src/x.rs` is a single file under docs/, not a docs file plus a host file.
   assert.deepEqual(parseNameList("docs/a\nhost/src/x.rs\0"), ["docs/a\nhost/src/x.rs"]);
+});
+
+// The Python dev-tools tests (build-os.yml "Test the queue tools and dev
+// scripts", npm run test:dev-tools) run only when something they read
+// changed (delay-fix rank 12, brwr-f8mm; c0e86b2d F6: 9 minutes locally for
+// a change that touched no Python).
+test("Python dev-tool sources, their tests and the files they read need the dev-tools tests", () => {
+  for (const path of [
+    "scripts/work_queue.py",
+    "scripts/check_current_state.py",
+    "scripts/tests/test_work_queue.py",
+    "scripts/tests/git_test_env.py",
+    "scripts/tests/fixtures/mergify-comments.json",
+    "scripts/dev/queue",
+    "scripts/dev/deploy-live",
+    "scripts/dev/worktree-hygiene",
+    "scripts/dev/queue-seed/brwr-9eio.jsonl",
+    "worker-contract.json",
+    "worker-contract.schema.json",
+    ".gitattributes",
+    "BRAUSER_IMPROVEMENT_FEED.md",
+    "docs/improvement-feed/2026-11-12-some-entry.md",
+    "docs/backlog/frame.md",
+    "docs/backlog/notes/2026-11-12-note.md",
+    ".beads/metadata.json",
+    // The definitions that run them, and this classifier itself.
+    ".github/workflows/ci.yml",
+    ".github/workflows/build-os.yml",
+    ".github/workflows/pr-hygiene.yml",
+    "scripts/ci-changes.mjs",
+    "package.json",
+  ]) {
+    assert.equal(devToolsReasons([path]).length, 1, path);
+  }
+});
+
+test("a change that touches no Python dev tool skips the dev-tools tests", () => {
+  assert.deepEqual(devToolsReasons([
+    "host/src/native.rs",
+    "extension/panel.ts",
+    "scripts/dev/pr-watch.mjs",
+    "scripts/tests/pr-watch.test.mjs",
+    "scripts/ci-macos.mjs",
+    "scripts/smoke-macos.mjs",
+    "docs/history.md",
+    "README.md",
+    "Cargo.lock",
+  ]), []);
+});
+
+test("each dev-tools reason names the path that needs the tests", () => {
+  assert.deepEqual(devToolsReasons(["extension/panel.ts", "scripts/work_queue.py", "worker-contract.json"]), [
+    ["scripts/work_queue.py", "a Python dev tool or its tests"],
+    ["worker-contract.json", "read by the dev-tools tests"],
+  ]);
+});
+
+test("an empty change list runs the dev-tools tests, so a failed diff never skips them", () => {
+  assert.deepEqual(devToolsReasons([]), [["(no changed paths)", "an empty or failed diff runs everything"]]);
 });

@@ -2,6 +2,25 @@ name: Build and check (one OS)
 
 # Reusable per-OS build. ci.yml calls this once per runner (macOS primary,
 # Windows, and the macOS fallback) so every platform runs identical steps.
+#
+# Two jobs per OS run in parallel (delay-fix rank 12, brwr-f8mm): `build`
+# (the Rust workspace, the extension and the adapter diff) and `scripted`
+# (the scripted-dialogs host's tests and lints, and the headless smoke, which
+# needs only that host and the extension build). They used to be one job:
+# measured on main's runs 42766002259, 42773436197, 42791832704, 42862853705
+# and 43018744435 (2026-11-10/11), the macOS job's median was ~800s, of
+# which the scripted-dialogs test (median 183s), its lint (20s) and the smoke
+# (141s) ran after the Rust tests and the extension tests had finished.
+# Each job keeps its own Rust cache (the action keys it by job id), so
+# neither overwrites the other's compiled dependencies. ci.yml's caller job
+# result fails when either job fails, so "Build and check" still requires
+# both.
+#
+# Platform audit (rank 11): only the smoke step is macOS-only (it drives the
+# Unix-only Brauser service over its socket; host/src/service/ is
+# `#[cfg(unix)]`), and only the TMP step is Windows-only (a drive-speed fix).
+# Every other step runs on every OS. The Python dev-tools tests skip their
+# macOS-only cases (deploy-live, index-lock-watch) elsewhere themselves.
 on:
   workflow_call:
     inputs:
@@ -9,6 +28,11 @@ on:
         description: GitHub-hosted runner label, e.g. macos-15 or windows-latest.
         required: true
         type: string
+      dev_tools:
+        description: Run the Python dev-tools tests (scripts/ci-changes.mjs devToolsReasons decides; pushes to main always run them).
+        required: false
+        type: boolean
+        default: true
   # Run one platform by hand, e.g. the macos-15-intel fallback to prove it
   # passes: gh workflow run build-os.yml --ref <branch> -f os=macos-15-intel
   workflow_dispatch:
@@ -18,6 +42,11 @@ on:
         required: true
         type: choice
         options: [macos-15, macos-15-intel, windows-latest]
+      dev_tools:
+        description: Run the Python dev-tools tests.
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -81,7 +110,11 @@ jobs:
         run: python scripts/check_current_state.py
       # The queue itself lives in Dolt (refs/dolt/data) and is checked by
       # queue-check.yml on a schedule; these are the tools' tests.
+      # Only when the change can affect them (ci.yml passes the classifier's
+      # dev_tools); pr-hygiene.yml's ubuntu "Dev tools" job still runs the
+      # whole suite on every pull request.
       - name: Test the queue tools and dev scripts
+        if: inputs.dev_tools
         run: python -m unittest discover -s scripts/tests
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -95,19 +128,6 @@ jobs:
           BRAUSER_GUARD_PROPERTY_SEQUENCES: "2000"
       - name: Check Rust lints
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      # The scripted-dialogs builds keep their own target dir on purpose:
-      # `target/debug/brauser` must stay the production host (the adapter
-      # diff below runs it), and a shared dir would overwrite it with the
-      # scripted binary. A shared Cargo
-      # build-dir (deps compiled once, binaries uplifted apart) is not safe
-      # either: Windows MSVC executables carry no hash in `deps/`, so the two
-      # feature sets would overwrite each other's `deps/brauser.exe`. The
-      # cache above restores this dir's compiled dependencies instead, so
-      # only the `brauser` crate rebuilds here.
-      - name: Test the scripted-dialogs test build
-        run: cargo test --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
-      - name: Lint the scripted-dialogs test build
-        run: cargo clippy --locked -p brauser --all-targets --features scripted-dialogs --target-dir target/scripted-dialogs -- -D warnings
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.14.0"
@@ -137,15 +157,86 @@ jobs:
       # Uses the host built by "Build Rust workspace" and the extension build.
       - name: Compare adapter-template engines on generated cases
         run: npm run test:adapter-diff -- --cases 5000
-      # End-to-end run in headless Chrome (preinstalled on the runner image)
-      # against the scripted-dialogs host; nothing is shown on screen.
-      - name: Build scripted-dialogs host
-        run: cargo build --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
-      - name: Run headless macOS smoke test
-        if: runner.os == 'macOS'
-        run: npm run smoke:macos:headless
       # The fuzz crate's own compile check (brwr-nu0m) moved to ci.yml's
       # "Fuzz targets compile" job, which runs on ubuntu for every code
       # change instead of only here, where most PRs skip macOS entirely.
       - name: Audit npm lockfile
         run: npm audit --audit-level=high
+
+  scripted:
+    name: Scripted dialogs and smoke (${{ inputs.os }})
+    runs-on: ${{ inputs.os }}
+    env:
+      # Unix-socket tests may skip themselves when a local sandbox denies IPC
+      # (EPERM/EACCES on bind) and this flag is unset. CI runners never
+      # sandbox IPC, so a bind failure here is a real failure: never skip.
+      BRAUSER_REQUIRE_IPC_TESTS: "1"
+      # A CI build is never rebuilt in place, so incremental data is dead
+      # weight in the cache. Line tables keep file:line in panics and
+      # backtraces but skip full debuginfo, which made linking the test
+      # binaries (and their PDBs on Windows) most of the cached build's cost.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Swatinem/rust-cache hashes the rustc version of every toolchain
+      # `rustup toolchain list` finds installed, not just the one
+      # rust-toolchain.toml pins, so the runner image's own preinstalled
+      # stable toolchain rides along in the key even though no step ever
+      # runs it. Drop it before the cache step, so the next line's own
+      # rustc probe auto-installs (and the key is keyed on) only the
+      # pinned 1.98.1. A GitHub image bump of its stable Rust then leaves
+      # the cache alone instead of evicting it.
+      - name: Drop the runner image's own stable Rust toolchain
+        shell: bash
+        run: rustup toolchain uninstall stable
+      # This job's own cache (the action adds the job id, `scripted`, to the
+      # key): the scripted-dialogs host's compiled dependencies in
+      # `target/scripted-dialogs`. Like the build job's, only pushes to main
+      # save it.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ inputs.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Tests make their temporary folders under TMP, and the SQLite tests
+      # sync after every commit. A Windows runner's TMP is on C:, whose
+      # flushes are far slower than the D: drive the checkout and `target`
+      # sit on: with TMP on D:, `cargo test --workspace` fell from 257s to
+      # 74s and the scripted-dialogs run from 327s to 99s, running the same
+      # tests. So point TMP and TEMP at the job's temp folder on D:.
+      - name: Put temporary folders on the runner's work drive (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          printf 'TMP=%s\nTEMP=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      # The scripted-dialogs builds keep their own target dir on purpose:
+      # `target/debug/brauser` must stay the production host (the build
+      # job's adapter diff runs it), and a shared dir would overwrite it with the
+      # scripted binary. A shared Cargo
+      # build-dir (deps compiled once, binaries uplifted apart) is not safe
+      # either: Windows MSVC executables carry no hash in `deps/`, so the two
+      # feature sets would overwrite each other's `deps/brauser.exe`. The
+      # cache above restores this dir's compiled dependencies instead, so
+      # only the `brauser` crate rebuilds here.
+      - name: Test the scripted-dialogs test build
+        run: cargo test --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
+      - name: Lint the scripted-dialogs test build
+        run: cargo clippy --locked -p brauser --all-targets --features scripted-dialogs --target-dir target/scripted-dialogs -- -D warnings
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+          cache: npm
+      - name: Install TypeScript tooling
+        run: npm ci --ignore-scripts
+      - name: Build unpacked Chrome extension
+        run: npm run build:extension
+      # End-to-end run in headless Chrome (preinstalled on the runner image)
+      # against the scripted-dialogs host; nothing is shown on screen.
+      - name: Build scripted-dialogs host
+        run: cargo build --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
+      # macOS only: the smoke drives the Brauser service, which is Unix-only
+      # (host/src/service/ is `#[cfg(unix)]`), through a LaunchAgent-free
+      # spawn seam; Windows has no service to drive.
+      - name: Run headless macOS smoke test
+        if: runner.os == 'macOS'
+        run: npm run smoke:macos:headless

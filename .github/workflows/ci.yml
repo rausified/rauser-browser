@@ -33,6 +33,7 @@ jobs:
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       macos: ${{ steps.classify.outputs.macos }}
+      dev_tools: ${{ steps.classify.outputs.dev_tools }}
       base: ${{ steps.base.outputs.base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,6 +63,7 @@ jobs:
             echo "$GITHUB_EVENT_NAME: always build, macOS included"
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             echo "macos=true" >> "$GITHUB_OUTPUT"
+            echo "dev_tools=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           node scripts/ci-changes.mjs "$BASE" HEAD
@@ -98,6 +100,10 @@ jobs:
     uses: ./.github/workflows/build-os.yml
     with:
       os: macos-15
+      # The Python dev-tools tests run only when the change can affect them
+      # (scripts/ci-changes.mjs devToolsReasons); anything but an explicit
+      # false runs them.
+      dev_tools: ${{ needs.changes.outputs.dev_tools != 'false' }}
 
   # The axe and keyboard checks of the built extension pages: platform
   # independent, so they run once on Linux (Chrome is on the runner image)
@@ -133,6 +139,7 @@ jobs:
     uses: ./.github/workflows/build-os.yml
     with:
       os: windows-latest
+      dev_tools: ${{ needs.changes.outputs.dev_tools != 'false' }}
 
   # The fuzz crate (adapter-templates/fuzz) is its own workspace depending
   # only on adapter-templates, so checking it compiles is cheap: no nightly
@@ -164,6 +171,10 @@ jobs:
   # or was interrupted after it started, so this job asks the API whether the
   # macos-15 job ever ran a step; only a zero-step cancellation counts as
   # starvation. A real macos-15 failure (result 'failure') never falls back.
+  # build-os.yml runs two parallel jobs per OS (`build` and `scripted`), so
+  # this looks at every "macOS / ..." job: it is starvation only when no
+  # macos-15 job failed or was cancelled after starting, and at least one
+  # was cancelled with zero steps run.
   # GitHub has no queue timeout for hosted jobs (job timeout-minutes only
   # counts time on a runner), so this waits for GitHub's own cancellation.
   macos-starvation-check:
@@ -184,8 +195,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           JOBS_URL: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs
-          # "<caller job name> / <reusable workflow job name>"
-          JOB_NAME: macOS / Build and check (macos-15)
+          # "<caller job name> / <reusable workflow job name>"; the prefix
+          # matches both build-os.yml jobs, never "macOS fallback / ...".
+          JOB_PREFIX: "macOS / "
           PULLS_URL: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}
           RUN_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -200,22 +212,31 @@ jobs:
               exit 0
             fi
           fi
-          steps=$(gh api --paginate "$JOBS_URL" \
-            --jq '.jobs[] | select(.name == env.JOB_NAME) | .steps | length')
-          echo "$JOB_NAME steps run: ${steps:-not found}"
-          if [ "$steps" = 0 ]; then
-            echo "starved=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "starved=false" >> "$GITHUB_OUTPUT"
+          # One line per macOS job: "<conclusion> <steps run> <name>".
+          jobs=$(gh api --paginate "$JOBS_URL" \
+            --jq '.jobs[] | select(.name | startswith(env.JOB_PREFIX)) | "\(.conclusion // .status) \(.steps | length) \(.name)"')
+          echo "${jobs:-no $JOB_PREFIX jobs found}"
+          starved=false
+          if [ -n "$jobs" ]; then
+            # A failure, or a cancellation after a step ran (a timeout or an
+            # interruption), is never starvation; a zero-step cancellation is.
+            if ! printf '%s\n' "$jobs" | awk '$1 == "failure" || ($1 == "cancelled" && $2 > 0) { bad = 1 } END { exit bad }'; then
+              starved=false
+            elif printf '%s\n' "$jobs" | awk '$1 == "cancelled" && $2 == 0 { found = 1 } END { exit !found }'; then
+              starved=true
+            fi
           fi
+          echo "starved=$starved"
+          echo "starved=$starved" >> "$GITHUB_OUTPUT"
 
   build-macos-fallback:
     name: macOS fallback
-    needs: macos-starvation-check
+    needs: [changes, macos-starvation-check]
     if: always() && needs.macos-starvation-check.outputs.starved == 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: macos-15-intel
+      dev_tools: ${{ needs.changes.outputs.dev_tools != 'false' }}
 
   # Branch protection requires a check named exactly "Build and check"; the
   # per-OS jobs report under their own names, so this job stands for all of

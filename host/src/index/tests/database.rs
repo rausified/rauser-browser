@@ -264,6 +264,7 @@ fn an_oversize_row_is_stored_and_rendered_bounded() {
 #[test]
 fn no_legacy_writer_remains() {
     let modules = [
+        // crlf-ok: each source is only searched for single-line identifiers.
         ("mod.rs", include_str!("../mod.rs")),
         ("catchup.rs", include_str!("../catchup.rs")),
         ("db.rs", include_str!("../db.rs")),
@@ -311,6 +312,7 @@ fn no_legacy_writer_remains() {
             }
         }
     }
+    // crlf-ok: the check drops all whitespace before matching.
     assert_legacy_writes_only_its_marker(include_str!("../legacy.rs"));
 }
 
@@ -338,6 +340,7 @@ fn the_legacy_writer_scan_survives_a_crlf_checkout() {
 #[test]
 #[should_panic(expected = "something other than its import marker")]
 fn the_legacy_writer_scan_still_catches_another_write() {
+    // crlf-ok: the replaced call sits on one line.
     let other = include_str!("../legacy.rs").replace(
         "&self.legacy_file(IMPORTED_MARKER)",
         "&self.legacy_file(STATE_FILE)",

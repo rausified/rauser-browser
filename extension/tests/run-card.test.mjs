@@ -892,7 +892,7 @@ test("panel.css hides a hidden run card despite its display rule", async () => {
   // `.run-card { display: grid }` outranks Chrome's [hidden] style, so the
   // card itself needs its own rule or follow() hides nothing on screen.
   const { readFile } = await import("node:fs/promises");
-  const css = await readFile(new URL("../panel.css", import.meta.url), "utf8");
+  const css = (await readFile(new URL("../panel.css", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
   assert.match(css, /\.run-card\[hidden\][^{]*\{\s*display:\s*none;/);
 });
 
@@ -1508,7 +1508,7 @@ test("TaskDetail hides Agent output until there is a stream, and keeps the user'
 });
 
 test("the Tasks page's task stream uses body type, not monospace", () => {
-  const css = readFileSync(new URL("../dist/panel.css", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../dist/panel.css", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const rule = css.match(/\.tasks-detail \.run-card-stream\s*\{([^}]*)\}/);
   assert.ok(rule, "a Tasks page stream rule");
   assert.doesNotMatch(rule[1], /monospace/);

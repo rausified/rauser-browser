@@ -16,6 +16,7 @@ use serde_json::{Map, Value as Json, json};
 
 const VECTORS: &str = include_str!("../../protocol/adapter-templates/vectors.json");
 const STARTER_VECTORS: &str = include_str!("../../protocol/adapter-templates/starter-vectors.json");
+// crlf-ok: only ever read through str::lines, which strips the \r.
 const DISPUTED: &str = include_str!("disputed.txt");
 /// The host-owned drafting catalog; `draft_rules` cases judge against it.
 const CATALOG: &str = include_str!("../../protocol/capture-site/catalog.json");
