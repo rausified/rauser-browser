@@ -152,7 +152,7 @@ test("--until green finishes on green and says whether Mergify has it", () => {
   assert.match(decide(snap(), { until: "green" }).message, /green; Mergify: checking$/);
   const d = decide(snap({ pr: UNLABELED, comments: [] }), { until: "green" });
   assert.equal(d.exitCode, EXIT.DONE);
-  assert.match(d.message, /not queued: gh pr edit 243 --add-label queue && gh pr comment 243 --body "@Mergifyio queue"/);
+  assert.match(d.message, /not queued: node scripts\/dev\/queue-pr.mjs 243\)/);
 });
 
 test("green needs the gate itself: before it reports, a failed input is a failure (PR #264)", () => {
@@ -216,7 +216,7 @@ test("#339: waiting on Build and check that GitHub reports passed advises refres
   const d = decide(s, { now: NOW, idleSince: ago(ADMIT_GRACE_MINUTES) });
   assert.equal(d.exitCode, EXIT.QUEUE_BLOCKED);
   assert.equal(d.action, "queue-refresh");
-  assert.match(d.message, new RegExp(`gh pr comment 243 --body "${REFRESH_COMMENT}"`));
+  assert.match(d.message, new RegExp(`needs "${REFRESH_COMMENT}": node scripts/dev/queue-pr.mjs 243$`));
   assert.doesNotMatch(d.message, /@Mergifyio queue"/);
 });
 
@@ -244,7 +244,7 @@ test("dequeued for a conflict (#299): merge main in or wait for pr-doctor, push,
   assert.match(d.message, /conflicts with main/);
   assert.match(d.message, /merge main in/i);
   assert.match(d.message, /pr-doctor/);
-  assert.match(d.message, /new head.*gh pr comment 243 --body "@Mergifyio queue"/);
+  assert.match(d.message, /new head.*node scripts\/dev\/queue-pr.mjs 243 --head <new head>/);
 });
 
 test("dequeued for queue conditions (#349): name the condition that failed, then requeue on the new head", () => {
@@ -254,7 +254,7 @@ test("dequeued for queue conditions (#349): name the condition that failed, then
   assert.equal(d.action, "dequeued:conditions");
   assert.match(d.message, /Queue conditions are not satisfied/);
   assert.match(d.message, /`-label = needs-merge`/);
-  assert.match(d.message, /new head.*gh pr comment 243 --body "@Mergifyio queue"/);
+  assert.match(d.message, /new head.*node scripts\/dev\/queue-pr.mjs 243 --head <new head>/);
 });
 
 test("dequeued for another reason keeps the generic advice, including requeue for a flake", () => {
@@ -262,14 +262,14 @@ test("dequeued for another reason keeps the generic advice, including requeue fo
     .replace("The pull request conflicts with main", "Checks failed in the queue");
   const d = decide(snap({ comments: [{ ...FX.dequeued299, body }] }));
   assert.equal(d.action, "dequeued");
-  assert.match(d.message, /Checks failed in the queue.*"@Mergifyio queue".*@mergifyio requeue/);
+  assert.match(d.message, /Checks failed in the queue.*queue-pr.mjs 243 --head <new head>.*@mergifyio requeue/);
 });
 
 test("not queued while checks run: keep waiting, and print the queue commands now", () => {
   const contexts = rollup([run("Build and check", "IN_PROGRESS", null, { required: true })]);
   const d = decide(snap({ pr: UNLABELED, comments: [], contexts }));
   assert.equal(d.done, false);
-  assert.match(d.message, /queue it now: gh pr edit 243 --add-label queue && gh pr comment 243/);
+  assert.match(d.message, /queue it now: node scripts\/dev\/queue-pr.mjs 243$/);
 });
 
 test("the #326 race: green and not yet queued waits out the grace before exit 12", () => {
@@ -284,8 +284,8 @@ test("the #326 race: green and not yet queued waits out the grace before exit 12
 test("labeled but the push cancelled the request: exit 12 asks only for the comment", () => {
   const d = decide(snap({ comments: FX.pr329.slice(0, 2) }), { now: NOW, idleSince: ago(ADMIT_GRACE_MINUTES) });
   assert.equal(d.exitCode, EXIT.ENQUEUE);
-  assert.match(d.message, /a push cancelled its queue request: gh pr comment 243 --body "@Mergifyio queue"$/);
-  assert.equal(enqueueCommand(snapshotFromGraphql(graphql())), `gh pr comment 243 --body "${QUEUE_COMMENT}"`);
+  assert.match(d.message, /a push cancelled its queue request: node scripts\/dev\/queue-pr.mjs 243$/);
+  assert.equal(enqueueCommand(snapshotFromGraphql(graphql())), "node scripts/dev/queue-pr.mjs 243");
 });
 
 test("GitHub auto-merge armed is exit 12: it would merge around the queue", () => {
@@ -322,7 +322,7 @@ test("DIRTY and labeled needs-merge: merge main yourself, listing the doctor's f
   assert.deepEqual(doctorComment([DOCTOR]).files, ["host/src/lib.rs"]);
   const d = decide(dirty({ labels: { nodes: [{ name: "queue" }, { name: "needs-merge" }] } }, [DOCTOR]), { now: NOW });
   assert.equal(d.exitCode, EXIT.CONFLICT);
-  assert.match(d.message, /labeled it needs-merge.*git merge origin\/main, resolve host\/src\/lib\.rs.*"@Mergifyio queue"/);
+  assert.match(d.message, /labeled it needs-merge.*git merge origin\/main, resolve host\/src\/lib\.rs.*queue-pr.mjs 243 --head <new head>/);
 });
 
 test("DIRTY and pr-doctor could only report: act at once", () => {

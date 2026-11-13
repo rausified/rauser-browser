@@ -1,0 +1,195 @@
+{
+ "_source": "PR #384 of this repository, 2026-11-09/10, recorded with the GraphQL comment edit history (userContentEdits; docs/improvement-feed/2026-11-09-read-mergify-history-from-comment-edits.md) and timelineItems. Synthetic-ized: logins renamed, links replaced, <details> lists dropped, pr-doctor file list replaced. heads[].at is the commit date (GitHub has no push date); conflict and heads[].greenAt are synthetic, read from Mergify: main conflicted from the dequeue until the fix push, and each head went green when Mergify stopped waiting on Build and check (the second head was replaced before CI finished). Record a new timeline the same way: gh api graphql with comments{userContentEdits{editedAt diff}} and timelineItems.",
+ "number": 384,
+ "heads": [
+  {
+   "at": "2026-11-09T20:04:50Z",
+   "oid": "1a63e38ae07199452a952ade2e8de9e0c8336a1e",
+   "greenAt": "2026-11-09T20:58:20Z"
+  },
+  {
+   "at": "2026-11-10T03:52:15Z",
+   "oid": "37ef5ec97a3b5e7f353f35e73d6398dc23be6d4f",
+   "greenAt": null
+  },
+  {
+   "at": "2026-11-10T03:52:43Z",
+   "oid": "efd5b240badfb4daa8c5ed4cae68cafb30a40e97",
+   "greenAt": "2026-11-10T04:13:45Z"
+  }
+ ],
+ "labels": [
+  {
+   "at": "2026-11-09T20:44:07Z",
+   "label": "queue",
+   "op": "add"
+  },
+  {
+   "at": "2026-11-09T20:58:28Z",
+   "label": "queued",
+   "op": "add"
+  },
+  {
+   "at": "2026-11-09T21:09:43Z",
+   "label": "needs-merge",
+   "op": "add"
+  },
+  {
+   "at": "2026-11-09T21:09:50Z",
+   "label": "queued",
+   "op": "remove"
+  },
+  {
+   "at": "2026-11-09T21:09:51Z",
+   "label": "dequeued",
+   "op": "add"
+  },
+  {
+   "at": "2026-11-10T04:00:55Z",
+   "label": "dequeued",
+   "op": "remove"
+  },
+  {
+   "at": "2026-11-10T05:02:46Z",
+   "label": "needs-merge",
+   "op": "remove"
+  },
+  {
+   "at": "2026-11-10T05:03:05Z",
+   "label": "queued",
+   "op": "add"
+  },
+  {
+   "at": "2026-11-10T05:06:10Z",
+   "label": "queued",
+   "op": "remove"
+  }
+ ],
+ "comments": [
+  {
+   "author": "dev-session",
+   "createdAt": "2026-11-09T20:44:19Z",
+   "versions": [
+    {
+     "at": "2026-11-09T20:44:19Z",
+     "body": "@Mergifyio queue"
+    }
+   ]
+  },
+  {
+   "author": "mergify",
+   "createdAt": "2026-11-09T20:44:32Z",
+   "versions": [
+    {
+     "at": "2026-11-09T20:44:32Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"waiting\", \"queue_rule_name\": null, \"queued_at\": null, \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": []}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Waiting for queue conditions\n\n**Queue rule `default`** · 2 of 14 left\n\n- [ ] `check-success = Build and check`\n- [ ] any of · required by GitHub branch protection:\n  - [ ] `check-neutral = Build and check`\n  - [ ] `check-skipped = Build and check`\n  - [ ] `check-success = Build and check`\n\n<details>\n<summary>met conditions</summary>\n</details>\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-09T20:58:26Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"waiting\", \"queue_rule_name\": null, \"queued_at\": null, \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": []}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Waiting for queue conditions\n\n**Queue rule `default`** · nothing left\n\n<details>\n<summary>met conditions</summary>\n</details>\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-09T20:58:33Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"checking\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-09T20:58:24.590584+00:00\", \"estimated_time_of_merge\": \"2026-11-09T21:17:00+00:00\", \"speculative_check_pr\": null, \"required_conditions\": [], \"step\": \"waiting_for_batch\", \"batch\": {\"size\": 1, \"target\": 3, \"max\": 3, \"proceeds_at\": \"2026-11-09T21:01:24.590584+00:00\"}}\n-*- Mergify Payload End -*-\n-->\n\n### 🟠 Waiting for a batch · estimated merge 21:17 UTC\n\n**So far**\n\n- ✅ **Entered the queue** Mon 9 Nov, 20:58 · rule `default` · triggered by @dev-session with the [`@mergifyio queue` command](https://example.invalid/pull/384#comment)\n- 🟠 **Waiting for a batch** · 1 of 3 pull requests · proceeds at 21:01\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-09T21:01:35Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"checking\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-09T20:58:24.590584+00:00\", \"estimated_time_of_merge\": \"2026-11-09T21:20:00+00:00\", \"speculative_check_pr\": null, \"required_conditions\": [], \"step\": \"preparing\"}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Queued · estimated merge 21:20 UTC\n\nTested together with #376, on top of #385.\n\n**So far**\n\n- ✅ **Entered the queue** Mon 9 Nov, 20:58 · rule `default` · triggered by @dev-session with the [`@mergifyio queue` command](https://example.invalid/pull/384#comment)\n- 🟠 **Preparing checks**\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-09T21:02:05Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"checking\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-09T20:58:24.590584+00:00\", \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": [], \"step\": \"conflict_deferred\", \"blocked_by\": [385]}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Checks deferred · conflict with a pull request ahead\n\n**So far**\n\n- ✅ **Entered the queue** Mon 9 Nov, 20:58 · rule `default` · triggered by @dev-session with the [`@mergifyio queue` command](https://example.invalid/pull/384#comment)\n- ⏳ **Checks deferred — conflict with a PR ahead in the queue**\n  - Checks resume if the PR ahead doesn't merge\n  - This PR is dequeued if the PR ahead merges\n\n**Reason**\n\nThe pull request conflicts with the pull request ahead in queue: #385\n\nConflicting files: `CookieFeature.md`, `PENDING_AMOS_DOC_UPDATES.md`, `TESTING.md`, `docs/history.md`, `package.json` and 1 more\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-09T21:09:17Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"checking\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-09T20:58:24.590584+00:00\", \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": [], \"step\": \"conflict_deferred\", \"blocked_by\": [376]}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Checks deferred · conflict with `main`\n\n**So far**\n\n- ✅ **Entered the queue** Mon 9 Nov, 20:58 · rule `default` · triggered by @dev-session with the [`@mergifyio queue` command](https://example.invalid/pull/384#comment)\n- ⏳ **Checks deferred — conflict with `main`, held behind PRs ahead**\n  - Update this PR with `main` to resolve the conflict, or it is dequeued\n\n**Reason**\n\nThe pull request conflicts with `main`, not with a pull request ahead in queue\n\nConflicting files: `CookieFeature.md`, `PENDING_AMOS_DOC_UPDATES.md`, `TESTING.md`, `docs/history.md`, `package.json` and 1 more\n\nNone of the pull requests ahead in queue changes the conflicting files. Update the pull request with `main` to resolve the conflict.\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-09T21:09:39Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"dequeued\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-09T20:58:24.590584+00:00\", \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": [], \"left_at\": \"2026-11-09T21:09:38.406770+00:00\", \"dequeue_reason\": {\"code\": \"CONFLICT_WITH_BASE_BRANCH\", \"label\": \"conflict with base branch\", \"message\": \"The pull request conflicts with main\"}}\n-*- Mergify Payload End -*-\n-->\n\n### 🚫 Left the queue · conflict with base branch\n\n11 min in the queue, with no time running CI.\n\n**So far**\n\n- ✅ **Entered the queue** Mon 9 Nov, 20:58 · rule `default` · triggered by @dev-session with the [`@mergifyio queue` command](https://example.invalid/pull/384#comment)\n- 🚫 **Left the queue** 21:09 · `1a63e38`\n\n**Reason**\n\nThe pull request conflicts with `main`\n\nConflicting files: `CookieFeature.md`, `PENDING_AMOS_DOC_UPDATES.md`, `TESTING.md`, `docs/history.md`, `package.json` and 1 more\n\nBefore this, the pull request was held in the queue behind 2 pull requests ahead of it.\n\n**Hint**\n\nYou should update or rebase your pull request. A pull request queued by a rule comes back to the queue once updated, as long as the rule still matches.\n\nIf it was queued with a command, post a new `@mergifyio queue` comment to requeue it.\n\nTick the box to put this pull request back in the merge queue (same as `@mergifyio queue`).\n\n- [ ] Requeue this pull request <!-- mergify:queue-control:requeue -->\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-10T04:00:52Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"dequeued\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-09T20:58:24.590584+00:00\", \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": [], \"left_at\": \"2026-11-09T21:09:38.406770+00:00\", \"dequeue_reason\": {\"code\": \"CONFLICT_WITH_BASE_BRANCH\", \"label\": \"conflict with base branch\", \"message\": \"The pull request conflicts with main\"}}\n-*- Mergify Payload End -*-\n-->\n\n### 🚫 Left the queue · conflict with base branch\n\n11 min in the queue, with no time running CI.\n\n**So far**\n\n- ✅ **Entered the queue** Mon 9 Nov, 20:58 · rule `default` · triggered by @dev-session with the [`@mergifyio queue` command](https://example.invalid/pull/384#comment)\n- 🚫 **Left the queue** 21:09 · `1a63e38`\n\n**Reason**\n\nThe pull request conflicts with `main`\n\nConflicting files: `CookieFeature.md`, `PENDING_AMOS_DOC_UPDATES.md`, `TESTING.md`, `docs/history.md`, `package.json` and 1 more\n\nBefore this, the pull request was held in the queue behind 2 pull requests ahead of it.\n\n**Hint**\n\nYou should update or rebase your pull request. A pull request queued by a rule comes back to the queue once updated, as long as the rule still matches.\n\nIf it was queued with a command, post a new `@mergifyio queue` comment to requeue it.\n\nRequeue requested — the merge queue status continues in [this comment ↓](https://example.invalid/pull/384#comment).\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    }
+   ]
+  },
+  {
+   "author": "doctor-bot",
+   "createdAt": "2026-11-09T21:09:41Z",
+   "versions": [
+    {
+     "at": "2026-11-09T21:09:41Z",
+     "body": "<!-- pr-doctor -->\n<!-- pr-doctor outcome=needs-person -->\n**PR doctor**\n\nThis PR conflicts with `main` in files the doctor does not resolve on its own. The files:\n\n- `extension/panel.ts`\n\nMerge `main` into the branch and resolve these by hand."
+    }
+   ]
+  },
+  {
+   "author": "dev-session",
+   "createdAt": "2026-11-10T04:00:44Z",
+   "versions": [
+    {
+     "at": "2026-11-10T04:00:44Z",
+     "body": "@Mergifyio queue"
+    }
+   ]
+  },
+  {
+   "author": "mergify",
+   "createdAt": "2026-11-10T04:00:51Z",
+   "versions": [
+    {
+     "at": "2026-11-10T04:00:51Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"waiting\", \"queue_rule_name\": null, \"queued_at\": null, \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": []}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Waiting for queue conditions\n\n**Queue rule `default`** · 5 of 14 left\n\n- [ ] `-label = needs-merge`\n- [ ] `check-success = Build and check`\n- [ ] `check-success = Rust dependency policy`\n- [ ] any of · required by GitHub branch protection:\n  - [ ] `check-neutral = Build and check`\n  - [ ] `check-skipped = Build and check`\n  - [ ] `check-success = Build and check`\n- [ ] any of · required by GitHub branch protection:\n  - [ ] `check-neutral = Rust dependency policy`\n  - [ ] `check-skipped = Rust dependency policy`\n  - [ ] `check-success = Rust dependency policy`\n\n<details>\n<summary>met conditions</summary>\n</details>\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-10T04:01:19Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"waiting\", \"queue_rule_name\": null, \"queued_at\": null, \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": []}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Waiting for queue conditions\n\n**Queue rule `default`** · 3 of 14 left\n\n- [ ] `-label = needs-merge`\n- [ ] `check-success = Build and check`\n- [ ] any of · required by GitHub branch protection:\n  - [ ] `check-neutral = Build and check`\n  - [ ] `check-skipped = Build and check`\n  - [ ] `check-success = Build and check`\n\n<details>\n<summary>met conditions</summary>\n</details>\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-10T04:13:51Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"waiting\", \"queue_rule_name\": null, \"queued_at\": null, \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": []}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Waiting for queue conditions\n\n**Queue rule `default`** · 1 of 14 left\n\n- [ ] `-label = needs-merge`\n\n<details>\n<summary>met conditions</summary>\n</details>\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-10T05:03:03Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"waiting\", \"queue_rule_name\": null, \"queued_at\": null, \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": []}\n-*- Mergify Payload End -*-\n-->\n\n### ⏳ Waiting for queue conditions\n\n**Queue rule `default`** · nothing left\n\n<details>\n<summary>met conditions</summary>\n</details>\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-10T05:03:13Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"checking\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-10T05:03:00.836604+00:00\", \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": [], \"step\": \"waiting_for_batch\", \"batch\": {\"size\": 1, \"target\": 3, \"max\": 3, \"proceeds_at\": \"2026-11-10T05:06:00.836604+00:00\"}}\n-*- Mergify Payload End -*-\n-->\n\n### 🟠 Waiting for a batch\n\n**So far**\n\n- ✅ **Entered the queue** Tue 10 Nov, 05:03 · rule `default` · triggered by @dev-session with the [`@mergifyio queue` command](https://example.invalid/pull/384#comment)\n- 🟠 **Waiting for a batch** · 1 of 3 pull requests · proceeds at 05:06\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    },
+    {
+     "at": "2026-11-10T05:06:08Z",
+     "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\": 1, \"state\": \"merged\", \"queue_rule_name\": \"default\", \"queued_at\": \"2026-11-10T05:03:00.836604+00:00\", \"estimated_time_of_merge\": null, \"speculative_check_pr\": null, \"required_conditions\": [], \"left_at\": \"2026-11-10T05:06:07.600924+00:00\"}\n-*- Mergify Payload End -*-\n-->\n\n### ✅ Merged into `main` as `0951d96` at 05:06 UTC\n\n3 min in the queue, with no time running CI.\n\n**So far**\n\n- ✅ **Entered the queue** Tue 10 Nov, 05:03 · rule `default` · triggered by @dev-session with the [`@mergifyio queue` command](https://example.invalid/pull/384#comment)\n- ✅ **Checks skipped** · PR is already up-to-date\n- ✅ **Merged** 05:06 · `0951d96` · merge\n\n<details>\n<summary>met conditions</summary>\n</details>\n\n<sub>Times in UTC · [dashboard](https://example.invalid/dashboard) · [how the merge queue works](https://docs.mergify.com/merge-queue/)</sub>"
+    }
+   ]
+  },
+  {
+   "author": "dev-session",
+   "createdAt": "2026-11-10T05:02:47Z",
+   "versions": [
+    {
+     "at": "2026-11-10T05:02:47Z",
+     "body": "@Mergifyio queue"
+    }
+   ]
+  },
+  {
+   "author": "mergify",
+   "createdAt": "2026-11-10T05:02:56Z",
+   "versions": [
+    {
+     "at": "2026-11-10T05:02:56Z",
+     "body": "> `queue`\n\n#### ☑️ Command `queue` ignored because it is already running from a previous command.\n\n\n\n"
+    }
+   ]
+  }
+ ],
+ "merged": "2026-11-10T05:06:06Z",
+ "conflict": [
+  {
+   "from": "2026-11-09T21:09:30Z",
+   "to": "2026-11-10T03:52:43Z"
+  }
+ ]
+}

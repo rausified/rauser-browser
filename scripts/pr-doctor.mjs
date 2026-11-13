@@ -32,13 +32,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const MARKER = "<!-- pr-doctor -->";
-export const LABEL = "needs-merge";
-export const SKIP_LABEL = "pr-doctor:skip";
-// The Mergify queue label (.mergify.yml): a PR waiting to merge.
-const QUEUE_LABEL = "queue";
+import { DOCTOR_MARKER, DOCTOR_SKIP_LABEL, NEEDS_MERGE_LABEL, QUEUE_COMMENT, QUEUE_LABEL } from "./pr-constants.mjs";
+import { queueAfterPush } from "./dev/queue-pr.mjs";
+
+export const MARKER = DOCTOR_MARKER;
+export const LABEL = NEEDS_MERGE_LABEL;
+export const SKIP_LABEL = DOCTOR_SKIP_LABEL;
 // worker-contract.json merge.comment: what actually queues a labelled PR.
-export const QUEUE_COMMENT = "@Mergifyio queue";
+export { QUEUE_COMMENT };
 export const QUEUE_PATH = ".beads/issues.jsonl";
 export const BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md";
 export const QUEUE_FILES = Object.freeze([QUEUE_PATH, BACKLOG_PATH]);
@@ -135,20 +136,13 @@ export function needsRequeue(pr, outcome) {
   return outcome === "repaired" && (pr.labels ?? []).some((item) => item.name === QUEUE_LABEL);
 }
 
-/** Comment QUEUE_COMMENT once GitHub reports `sha` as the PR's head, polling
- * every `stepMs` for at most `limitMs`: a comment Mergify reads before the
- * push lands is cancelled by it. Past the limit it comments anyway (as the
- * remote-worker driver's contract_requeue_after_push does): a late request
- * beats none. A failed read counts as not yet. */
+/** Comment QUEUE_COMMENT once GitHub reports `sha` as the PR's head (queue-pr's
+ * `queueAfterPush`, shared with scripts/dev/queue-pr.mjs): a comment Mergify reads
+ * before the push lands is cancelled by it. Past the limit it comments anyway (as the
+ * remote-worker driver's contract_requeue_after_push does): a late request beats none. */
 export function requeueAfterPush({ sha, headOf, comment, wait, limitMs = 60000, stepMs = 5000 }) {
-  let seen = null;
-  for (let waited = 0; ; waited += stepMs) {
-    try { seen = headOf(); } catch { seen = null; }
-    if (seen === sha || waited >= limitMs) break;
-    wait(stepMs);
-  }
-  comment(QUEUE_COMMENT);
-  return { settled: seen === sha, seen };
+  const { settled, seen } = queueAfterPush({ sha, headOf, comment, wait, limitMs, stepMs, force: true });
+  return { settled, seen };
 }
 
 // --- I/O ----------------------------------------------------------------------
