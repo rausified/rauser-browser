@@ -61,7 +61,8 @@ Initialize this repository's local database after installing Beads:
 
 ```bash
 # Once per clone: clone the queue from this repository's refs/dolt/data
-BD_NON_INTERACTIVE=1 bd bootstrap
+# (runs bd bootstrap and keeps .beads/config.yaml as it was)
+scripts/dev/queue bootstrap
 
 # Create your first issue
 scripts/dev/create-bead "Try out Beads"
@@ -72,7 +73,7 @@ scripts/dev/create-bead "Try out Beads"
 In this repository the work queue is not a file in git. bd keeps it in its
 Dolt database and syncs it through this repository's `refs/dolt/data`
 (`bd sync` merges concurrent edits field by field). A fresh clone runs
-`BD_NON_INTERACTIVE=1 bd bootstrap`. Edit beads with bd (`bd update`,
+`scripts/dev/queue bootstrap`. Edit beads with bd (`bd update`,
 `bd close`, `scripts/dev/create-bead`), then publish with
 `scripts/dev/queue sync`, which checks the queue before it pushes. Never
 commit `.beads/issues.jsonl` or `BOSUN_FEATURE_BACKLOG.md`; read the backlog
