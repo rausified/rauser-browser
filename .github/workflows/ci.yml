@@ -61,9 +61,7 @@ jobs:
         run: |
           if [ -z "$BASE" ]; then
             echo "$GITHUB_EVENT_NAME: always build, macOS included"
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            echo "macos=true" >> "$GITHUB_OUTPUT"
-            echo "dev_tools=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' docs_only=false macos=true dev_tools=true >> "$GITHUB_OUTPUT"
             exit 0
           fi
           node scripts/ci-changes.mjs "$BASE" HEAD

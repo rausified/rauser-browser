@@ -146,6 +146,34 @@ export function track(state, snap, now) {
   return state;
 }
 
+/** How long this head's CI took and how long the PR then waited in the Mergify
+ * queue, measured apart (delay-fix rank 12): a slow merge is either slow CI or a
+ * long batch wait, and they need different fixes. CI runs from the head's first
+ * check start to the gate's completion (to `now` while it runs). The queue wait
+ * runs from the later of the newest queue request and the gate's completion to
+ * the merge (to `now` while open), so it includes Mergify's own batch run. Minutes. */
+export function timings(snap, now) {
+  const at = (iso) => iso ? Date.parse(iso) : NaN;
+  const starts = snap.checks.map((c) => at(c.startedAt)).filter(Number.isFinite);
+  const gate = snap.checks.find((c) => c.name === GATE);
+  const gateDone = !!gate && (FAILED.has(gate.state) || PASSED.has(gate.state)) && Number.isFinite(at(gate.completedAt));
+  const end = snap.mergedAt ? at(snap.mergedAt) : at(now);
+  const ciMinutes = starts.length ? ((gateDone ? at(gate.completedAt) : at(now)) - Math.min(...starts)) / 60000 : null;
+  const requests = snap.comments.filter((c) => !/^mergify(\[bot\])?$/.test(c.author ?? "") && /^\s*@mergifyio (queue|requeue)\b/i.test(c.body ?? ""))
+    .map((c) => at(c.createdAt)).filter(Number.isFinite);
+  const queueMinutes = gateDone && requests.length ? (end - Math.max(Math.max(...requests), at(gate.completedAt))) / 60000 : null;
+  return { ciMinutes, ciDone: gateDone, queueMinutes, merged: !!snap.mergedAt };
+}
+
+/** One line for `timings`, or null before any check has started. */
+export function formatTimings({ ciMinutes, ciDone, queueMinutes, merged }) {
+  if (ciMinutes == null) return null;
+  const m = (minutes) => `${Math.max(0, Math.round(minutes))}m`;
+  if (!ciDone) return `timing: CI ${m(ciMinutes)} so far`;
+  if (queueMinutes == null) return `timing: CI ${m(ciMinutes)}; not queued`;
+  return `timing: CI ${m(ciMinutes)}, then ${m(queueMinutes)} in the Mergify queue ${merged ? "until the merge" : "so far"}`;
+}
+
 export function statusLine(snap, decision) {
   const counts = { ok: 0, pending: 0, failed: 0 };
   for (const c of snap.checks) if (c.state !== "CANCELLED") counts[FAILED.has(c.state) ? "failed" : PASSED.has(c.state) ? "ok" : "pending"]++;
@@ -199,7 +227,9 @@ async function main() {
     const confirmed = !transient || opts.once || lastAction === decision.action;
     lastAction = decision.action;
     const line = statusLine(snap, decision);
-    if (line !== lastLine) { console.log(`${stamp()} #${snap.number} ${line}`); lastLine = line; }
+    // The timing grows every poll, so it is printed with a changed line, not compared.
+    const timing = formatTimings(timings(snap, new Date().toISOString()));
+    if (line !== lastLine) { console.log(`${stamp()} #${snap.number} ${line}${timing ? `\n  ${timing}` : ""}`); lastLine = line; }
     if (opts.once || (decision.done && confirmed)) return decision.exitCode;
     if (opts.maxMinutes && Date.now() - started >= opts.maxMinutes * 60000) {
       console.log(`${stamp()} stopped after ${opts.maxMinutes} minutes, still waiting: ${decision.message}`);

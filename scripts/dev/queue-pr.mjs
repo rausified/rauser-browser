@@ -57,6 +57,7 @@ export function latestChecks(contexts) {
     const runId = status ? null : node.checkSuite?.workflowRun?.databaseId ?? null;
     const check = { name: status ? node.context : node.name, required: !!node.isRequired, runId,
       state: status ? node.state : node.status === "COMPLETED" ? node.conclusion ?? "NEUTRAL" : node.status ?? "PENDING",
+      startedAt: status ? node.createdAt ?? null : node.startedAt ?? null,
       completedAt: status ? node.createdAt ?? null : node.completedAt ?? null,
       order: `${String(runId ?? 0).padStart(15, "0")}|${node.startedAt ?? ""}` };
     const seen = byName.get(check.name);
@@ -119,7 +120,7 @@ export function snapshotFromGraphql(data) {
   const labels = (pr.labels?.nodes ?? []).map((label) => label.name);
   const comments = (pr.comments?.nodes ?? []).map((c) => ({ author: c.author?.login ?? "", body: c.body ?? "", createdAt: c.createdAt, updatedAt: c.updatedAt }));
   return {
-    number: pr.number, state: pr.state, isDraft: !!pr.isDraft, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus,
+    number: pr.number, state: pr.state, mergedAt: pr.mergedAt ?? null, isDraft: !!pr.isDraft, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus,
     baseRefName: pr.baseRefName ?? "main", headRefName: pr.headRefName ?? "", isCrossRepository: !!pr.isCrossRepository,
     autoMerge: pr.autoMergeRequest != null, labels, labeled: labels.includes(QUEUE_LABEL),
     blockers: labels.filter((name) => QUEUE_EXCLUSION_LABELS.includes(name)),
@@ -235,7 +236,7 @@ export function queueAfterPush({ sha, headOf, comment, wait, text = QUEUE_COMMEN
 // --- I/O ------------------------------------------------------------------------
 
 export const QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
- pullRequest(number:$number){ number state isDraft mergeable mergeStateStatus headRefOid headRefName baseRefName isCrossRepository autoMergeRequest{enabledAt}
+ pullRequest(number:$number){ number state mergedAt isDraft mergeable mergeStateStatus headRefOid headRefName baseRefName isCrossRepository autoMergeRequest{enabledAt}
   labels(first:30){nodes{name}} comments(last:50){nodes{author{login} body createdAt updatedAt}}
   commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{ __typename
    ... on CheckRun{name status conclusion startedAt completedAt isRequired(pullRequestNumber:$number) checkSuite{workflowRun{databaseId}}}

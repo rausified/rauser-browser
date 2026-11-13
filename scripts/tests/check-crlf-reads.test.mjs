@@ -102,7 +102,9 @@ test("structured data, fixtures and vault files are exempt", () => {
 
 test("JavaScript: a text read of the checkout is flagged; normalized, parsed and byte reads pass", () => {
   const file = "extension/tests/options.test.mjs";
+  // crlf-ok: fixture text for the lint itself, not a read.
   assert.deepEqual(lines(scanText('const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");\n', file)), [1]);
+  // crlf-ok: fixture text for the lint itself, not a read.
   assert.deepEqual(lines(scanText('const css = await readFile(path.join(REPO, "panel.css"), { encoding: "utf8" });\n', file)), [1]);
   assert.deepEqual(scanText('const html = readFileSync(new URL("../options.html", import.meta.url), "utf8").replace(/\\r\\n/g, "\\n");\n', file), []);
   assert.deepEqual(scanText('const v = JSON.parse(readFileSync(new URL("../v.json", import.meta.url), "utf8"));\n', file), []);

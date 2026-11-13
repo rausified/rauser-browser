@@ -4,7 +4,7 @@ import test from "node:test";
 
 import {
   ADMIT_GRACE_MINUTES, DOCTOR_GRACE_MINUTES, EXIT, QUEUE_COMMENT, REFRESH_COMMENT,
-  analyzeChecks, decide, decideConflict, doctorComment, enqueueCommand, latestChecks, mergifyStatus, parseArgs, snapshotFromGraphql, statusLine,
+  analyzeChecks, decide, decideConflict, doctorComment, enqueueCommand, formatTimings, latestChecks, mergifyStatus, parseArgs, snapshotFromGraphql, statusLine, timings,
 } from "../dev/pr-watch.mjs";
 
 // Mergify's own comments, recorded from this repository (fixtures/mergify-comments.json `_source`).
@@ -346,4 +346,52 @@ test("a real check failure outranks DIRTY and mentions the conflict", () => {
 test("statusLine summarizes state, checks and Mergify on one line", () => {
   const s = snap({ pr: UNLABELED });
   assert.equal(statusLine(s, decide(s)).split("\n")[0], "OPEN/CLEAN | head 6629a6b3 | checks 9 ok, 0 pending, 0 failed | mergify checking/checks_running, unlabeled");
+});
+
+// --- timings: CI time and queue wait, reported apart (delay-fix rank 12) ----------
+
+const timed = (name, startedAt, completedAt, conclusion = "SUCCESS", more = {}) =>
+  ({ ...done(name, conclusion, { startedAt, ...more }), completedAt });
+const queueComment = (createdAt) => ({ author: { login: "jrausercisco" }, body: "@Mergifyio queue", createdAt, updatedAt: createdAt });
+
+test("timings: CI runs from the first check's start to the gate's completion", () => {
+  const s = snap({ contexts: [
+    timed("Classify changes", ago(50), ago(49)),
+    timed("Windows / Build and check (windows-latest)", ago(49), ago(38)),
+    timed("Build and check", ago(38), ago(36), "SUCCESS", { required: true }),
+  ], comments: [] });
+  assert.deepEqual(timings(s, NOW), { ciMinutes: 14, ciDone: true, queueMinutes: null, merged: false });
+});
+
+test("timings: CI still running counts up to now, and a queue request then waits on CI, not the queue", () => {
+  const s = snap({ contexts: [timed("Classify changes", ago(10), ago(9)), run("Build and check", "QUEUED", null, { required: true, startedAt: ago(9) })],
+    comments: [queueComment(ago(5))] });
+  assert.deepEqual(timings(s, NOW), { ciMinutes: 10, ciDone: false, queueMinutes: null, merged: false });
+});
+
+test("timings: queue wait starts at the later of the queue request and green CI, and ends at the merge", () => {
+  const contexts = [timed("Classify changes", ago(90), ago(89)), timed("Build and check", ago(80), ago(75), "SUCCESS", { required: true })];
+  // Queued before CI went green: the wait starts when the gate passed.
+  const early = snap({ contexts, comments: [queueComment(ago(85))], pr: { state: "MERGED", mergedAt: ago(15) } });
+  assert.deepEqual(timings(early, NOW), { ciMinutes: 15, ciDone: true, queueMinutes: 60, merged: true });
+  // Queued after it went green: the wait starts at the request, and still counts while open.
+  const late = snap({ contexts, comments: [queueComment(ago(30))] });
+  assert.deepEqual(timings(late, NOW), { ciMinutes: 15, ciDone: true, queueMinutes: 30, merged: false });
+});
+
+test("timings: the newest queue request counts (a push cancels the older ones)", () => {
+  const contexts = [timed("Build and check", ago(40), ago(35), "SUCCESS", { required: true })];
+  assert.equal(timings(snap({ contexts, comments: [queueComment(ago(34)), queueComment(ago(12))] }), NOW).queueMinutes, 12);
+});
+
+test("timings: no checks and no queue request report nothing", () => {
+  assert.deepEqual(timings(snap({ contexts: [], comments: [] }), NOW), { ciMinutes: null, ciDone: false, queueMinutes: null, merged: false });
+});
+
+test("formatTimings names CI and the queue wait apart, and says what is still running", () => {
+  assert.equal(formatTimings({ ciMinutes: 14.4, ciDone: true, queueMinutes: 61.6, merged: true }), "timing: CI 14m, then 62m in the Mergify queue until the merge");
+  assert.equal(formatTimings({ ciMinutes: 9.6, ciDone: false, queueMinutes: null, merged: false }), "timing: CI 10m so far");
+  assert.equal(formatTimings({ ciMinutes: 14, ciDone: true, queueMinutes: 3, merged: false }), "timing: CI 14m, then 3m in the Mergify queue so far");
+  assert.equal(formatTimings({ ciMinutes: 14, ciDone: true, queueMinutes: null, merged: false }), "timing: CI 14m; not queued");
+  assert.equal(formatTimings({ ciMinutes: null, ciDone: false, queueMinutes: null, merged: false }), null);
 });
