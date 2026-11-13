@@ -9,6 +9,7 @@ pub mod claude;
 pub mod client;
 pub mod codex;
 pub mod command_runner;
+pub mod drain;
 pub mod finisher;
 pub mod harness_api;
 pub mod maintenance;

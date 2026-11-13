@@ -494,6 +494,11 @@ impl Server {
     /// which no other kind may carry.
     fn start_run(&self, value: StartRunRequest) -> Response {
         let id = value.request_id.clone();
+        // deploy-live --drain: runs already admitted carry on; new ones wait.
+        if super::drain::paused(&self.paths.drain(), std::time::SystemTime::now()) {
+            tracing::info!("start_run refused: deploy pause");
+            return error(&id, ErrorCode::Conflict, super::drain::DRAIN_REFUSAL);
+        }
         let kind = value.kind.unwrap_or(RunKind::Summary);
         let Some(record_key) = value.record_key else {
             return error(&id, ErrorCode::InvalidRequest, "record_key is required");
@@ -1749,6 +1754,33 @@ mod tests {
         let (code, message) = error_of(world.start_run(Some(url_key())));
         assert_eq!(code, ErrorCode::NotConfigured);
         assert_eq!(message, "Choose a notes folder in Brauser settings first.");
+    }
+
+    #[test]
+    fn start_run_is_refused_while_a_deploy_pauses_new_runs() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let world = World::new(&answer());
+        world.start(Duration::from_secs(600));
+        let until = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 600;
+        std::fs::write(
+            world.paths.drain(),
+            format!(r#"{{"version":1,"until_unix":{until}}}"#),
+        )
+        .unwrap();
+        let (code, message) = error_of(world.start_run(Some(url_key())));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert_eq!(message, super::super::drain::DRAIN_REFUSAL);
+        // Lifting the pause admits runs again.
+        std::fs::remove_file(world.paths.drain()).unwrap();
+        let run_id = world.started_run_id();
+        let fetched = world.wait_finished(&run_id);
+        assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
     }
 
     #[test]
