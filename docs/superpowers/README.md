@@ -1,6 +1,6 @@
 # Plans and specs
 
-`specs/` holds design specs (`YYYY-MM-DD-<topic>-design.md`); `plans/` holds implementation plans (`YYYY-MM-DD-<topic>.md`) written for agentic workers. A plan starts with the **Goal**, **Architecture**, **Tech Stack** and **Sources** paragraphs, then the two sections below, then its tasks.
+`specs/` holds design specs (`YYYY-MM-DD-<topic>-design.md`); `plans/` holds implementation plans (`YYYY-MM-DD-<topic>.md`) written for agentic workers. A plan starts with the **Goal**, **Architecture**, **Tech Stack** and **Sources** paragraphs, then the sections below, then its tasks.
 
 ## Design challenge
 
@@ -19,3 +19,13 @@ Every user-facing or policy decision the plan assumes, one line each:
 - **Decision:** the question. **Status:** resolved (by whom, when) or open. **Default if unresolved:** what the plan does.
 
 The coordinator resolves the open ones with John before task 1; no task that depends on an open decision starts.
+
+## Guard invariant
+
+Required for a plan that changes a record-ownership or history guard in `host/src/config.rs` (AGENTS.md "Before building"). Fill it in before task 1, and have the test green before the first review:
+
+- **Invariant:** one sentence the guard protects, for example "an accepted save never changes which type wins an already-recorded URL".
+- **Function:** the one pure function that checks it.
+- **Randomized test:** its name and fixed seed; it saves through `ConfigStore::update` and checks each accepted save against every page recorded so far in the sequence.
+- **Generator coverage:** each kind of change the invariant covers (narrowing, widening, reordering, removal, coverage-changing edits), with an assertion that the generator reaches each.
+- **Mutations caught:** each guard mutation the test was checked against, also listed in the test's doc comment.
