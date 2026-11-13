@@ -158,6 +158,33 @@ test("a conflict in a family file leaves ordinary conflicts, never a side", scra
   assert.ok(left.includes("extension/starter-families.generated.ts"), left.join(","));
 });
 
+test("merged sources the generator rejects stop the merge, even where the text merges", scratch, async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const { root, repo, cleanup } = makeFixture();
+  t.after(cleanup);
+  // Each branch is valid alone; together two families claim one origin. The
+  // PR moving Miro edits the middle of the outputs and the new family their
+  // end, so the outputs text-merge cleanly into a state no generator wrote.
+  git(repo, ["checkout", "-q", "-b", "a", "main"]);
+  const miro = join(repo, "protocol/starters/miro.json");
+  writeFileSync(miro, read(repo, "protocol/starters/miro.json").replaceAll("https://miro.com", "https://shared.example.com"));
+  assert.equal(genStarters(repo).code, 0, genStarters(repo).out);
+  commitAll(repo, "move miro");
+  git(repo, ["checkout", "-q", "-b", "b", "main"]);
+  addFamily(repo, "widgetb");
+  const family = join(repo, "protocol/starters/widgetb.json");
+  writeFileSync(family, read(repo, "protocol/starters/widgetb.json").replaceAll("https://widgetb.example.com", "https://shared.example.com"));
+  assert.equal(genStarters(repo).code, 0, genStarters(repo).out);
+  commitAll(repo, "add widgetb");
+  const plain = cloneAt(root, repo, "plain", "a", { driver: false });
+  git(plain, ["merge", "-q", "--no-commit", "origin/b"], { ok: [0, 1] });
+  assert.ok(!unmerged(plain).includes("extension/starter-families.generated.ts"), "the generated module text-merges cleanly");
+  const dir = cloneAt(root, repo, "rejected", "a");
+  const merge = git(dir, ["merge", "-q", "origin/b"], { ok: [1] });
+  assert.match(merge.out, /generate-starters\.mjs failed on the merged sources/);
+  assert.ok(unmerged(dir).includes("extension/starter-families.generated.ts"), unmerged(dir).join(","));
+});
+
 test("with trusted tools, a merge that changes the generator is refused", scratch, async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const { root, repo, cleanup } = makeFixture();

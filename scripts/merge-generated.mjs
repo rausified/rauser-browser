@@ -286,7 +286,11 @@ export function driver([basePath, oursPath, theirsPath, path, markerSize], env =
     return 0;
   }
   say(path, result.ok ? "the generator no longer writes this file" : result.reason);
-  return textMerge(basePath, oursPath, theirsPath, markerSize);
+  const status = textMerge(basePath, oursPath, theirsPath, markerSize);
+  // Under `git merge` a failed regeneration is a conflict even when the text
+  // merges: the merged sources do not produce that text. Elsewhere this is
+  // git's own text merge, as with no driver.
+  return other ? status || 1 : status;
 }
 
 // --- configuration (scripts/dev/setup-merge-drivers, scripts/pr-doctor.mjs) --
