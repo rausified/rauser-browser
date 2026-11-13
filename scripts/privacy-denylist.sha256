@@ -1,0 +1,26 @@
+# Privacy denylist: salted hashes of known-real identifiers that must never
+# appear in this public repository (scripts/privacy-scan.mjs explains the
+# format and tokenization). Plain values never go in this file, and neither
+# do person-level identifiers (usernames, personal-site paths, emails, names):
+# the salt is public, so anyone can confirm a guessed value is listed, and
+# those go in the local list instead (--add without --class). Add an
+# organization, tenant, repository or product-ID entry with
+#   node scripts/privacy-scan.mjs --add "<value>" --class org
+# Seeded 2026-11-11 from the classes removed in #394 and #400: organization and
+# repository slugs, SharePoint tenant hosts and the tenant's personal-site
+# domain suffix, a document GUID, a worker host name, Miro board, share-link,
+# widget, organization and team IDs, and a board title.
+salt 519e15e3b37aaba1027181d0cea5471d
+0db56691b6b0e0fe560d9823c3c6d2925758224de17aeba004f96172ae3e2f92 2
+875a7100951ae2f6868e583e44e5e65cd8456fd4163a5cc1154783b448e271b1 3
+4509bf5cb3a94b6d2ac16fc5dc409c79fd81ca2f54e2dbc713c71deddc7733e0 4
+d6be789f051564d5124224133eb52d2a12c9c8d1ece2b7d1db7747f8c2d91cd1 3
+3394b65b6409c6c980535a228f3aae85964560ca213e75c40a4e410475af21cb 3
+29c7fa3a80c3d7554e2c4050e8efad31fd2ea0868ea8753cea53b02234c5f15c 5
+55a19b16f324e7ad3af6fe816c0a68430e68347fc5c1598d40df4aa6e0862fa7 2
+81a66d36b98f9de37792c2b9f7525a50b28735a179eda7d8c866274d3566052a 1
+ad488fa863379bf7027b309c295b39764cd6bdb87069ef637a9e26edb0991598 1
+d7ecf0b1656798a20656d5a905be7934d583fce1a6127c9a4c9960b5f27a4488 1
+18369224033d2317217c51f189fa3d783ddf06a3fc02b9ea177d48cf5fa0ba2a 1
+8bb7dcd92dd12173a4b78b9bc6333ec1b9829bc58f0fc402ea39e9573937eb13 1
+c156d2a8a0da13e5b78a53adb84050a3c67125e15a173ec52fbece7d856ab6a1 3
