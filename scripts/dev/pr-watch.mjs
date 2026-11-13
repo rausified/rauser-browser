@@ -151,7 +151,9 @@ export function track(state, snap, now) {
  * long batch wait, and they need different fixes. CI runs from the head's first
  * check start to the gate's completion (to `now` while it runs). The queue wait
  * runs from the later of the newest queue request and the gate's completion to
- * the merge (to `now` while open), so it includes Mergify's own batch run. Minutes. */
+ * the merge (to `now` while open), so it includes Mergify's own batch run. Once
+ * Mergify has dequeued the PR or cancelled the request, the wait ends at Mergify's
+ * newest comment edit after the request (`left`): what follows is not queue time. Minutes. */
 export function timings(snap, now) {
   const at = (iso) => iso ? Date.parse(iso) : NaN;
   const starts = snap.checks.map((c) => at(c.startedAt)).filter(Number.isFinite);
@@ -161,17 +163,22 @@ export function timings(snap, now) {
   const ciMinutes = starts.length ? ((gateDone ? at(gate.completedAt) : at(now)) - Math.min(...starts)) / 60000 : null;
   const requests = snap.comments.filter((c) => !/^mergify(\[bot\])?$/.test(c.author ?? "") && /^\s*@mergifyio (queue|requeue)\b/i.test(c.body ?? ""))
     .map((c) => at(c.createdAt)).filter(Number.isFinite);
-  const queueMinutes = gateDone && requests.length ? (end - Math.max(Math.max(...requests), at(gate.completedAt))) / 60000 : null;
-  return { ciMinutes, ciDone: gateDone, queueMinutes, merged: !!snap.mergedAt };
+  const requested = requests.length ? Math.max(...requests) : NaN;
+  const left = !snap.mergedAt && ["dequeued", "cancelled"].includes(snap.mergify.state);
+  const leftAt = Math.max(...snap.comments.filter((c) => /^mergify(\[bot\])?$/.test(c.author ?? ""))
+    .map((c) => Math.max(at(c.createdAt), at(c.updatedAt) || 0)).filter((t) => t >= requested));
+  const start = Math.max(requested, at(gate?.completedAt));
+  const queueMinutes = gateDone && requests.length ? ((left && Number.isFinite(leftAt) ? Math.max(leftAt, start) : end) - start) / 60000 : null;
+  return { ciMinutes, ciDone: gateDone, queueMinutes, merged: !!snap.mergedAt, left };
 }
 
 /** One line for `timings`, or null before any check has started. */
-export function formatTimings({ ciMinutes, ciDone, queueMinutes, merged }) {
+export function formatTimings({ ciMinutes, ciDone, queueMinutes, merged, left = false }) {
   if (ciMinutes == null) return null;
   const m = (minutes) => `${Math.max(0, Math.round(minutes))}m`;
   if (!ciDone) return `timing: CI ${m(ciMinutes)} so far`;
   if (queueMinutes == null) return `timing: CI ${m(ciMinutes)}; not queued`;
-  return `timing: CI ${m(ciMinutes)}, then ${m(queueMinutes)} in the Mergify queue ${merged ? "until the merge" : "so far"}`;
+  return `timing: CI ${m(ciMinutes)}, then ${m(queueMinutes)} in the Mergify queue ${merged ? "until the merge" : left ? "before it left" : "so far"}`;
 }
 
 export function statusLine(snap, decision) {

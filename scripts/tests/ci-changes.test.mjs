@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { classify, devToolsReasons, isDocsOrQueuePath, parseNameList } from "../ci-changes.mjs";
 
@@ -131,4 +134,28 @@ test("each dev-tools reason names the path that needs the tests", () => {
 
 test("an empty change list runs the dev-tools tests, so a failed diff never skips them", () => {
   assert.deepEqual(devToolsReasons([]), [["(no changed paths)", "an empty or failed diff runs everything"]]);
+});
+
+// Codex review of #431: test_worker_contract.py reads scripts/dev/queue-pr.mjs
+// and scripts/pr-constants.mjs, which the first cut of devToolsReasons missed.
+// Every checkout path a Python test names (`ROOT / "x"`, `SCRIPTS / "dev" /
+// "queue"`, a "scripts/..." literal) must select the dev-tools tests.
+test("every checkout path the Python dev-tools tests name selects them", () => {
+  const repo = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+  const tests = readdirSync(path.join(repo, "scripts", "tests")).filter((name) => name.endsWith(".py"));
+  const named = new Set();
+  for (const name of tests) {
+    const source = readFileSync(path.join(repo, "scripts", "tests", name), "utf8");
+    for (const [, base, chain] of source.matchAll(/\b(ROOT|REPO|SCRIPTS\.parent|SCRIPTS)((?:\s*\/\s*["'][^"']+["'])+)/g)) {
+      const parts = [...chain.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+      named.add([...(base === "SCRIPTS" ? ["scripts"] : []), ...parts].join("/"));
+    }
+    for (const [, literal] of source.matchAll(/["'](scripts\/[^"'\s]+)["']/g)) named.add(literal);
+  }
+  const existing = [...named].filter((file) => existsSync(path.join(repo, file)));
+  assert.ok(existing.includes("worker-contract.json") && existing.includes("scripts/dev/queue-pr.mjs"), [...named].join(", "));
+  for (const file of existing) {
+    const probe = statSync(path.join(repo, file)).isDirectory() ? `${file}/probe.py` : file; // a directory: what a test imports or reads from it
+    assert.notDeepEqual(devToolsReasons([probe]), [], `${file} is read by a Python test but does not select the dev-tools tests`);
+  }
 });
