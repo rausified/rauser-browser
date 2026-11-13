@@ -179,7 +179,8 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -302,22 +303,32 @@ mod tests {
             program,
         };
         let slot = ProcessSlot::default();
-        let watchdog = slot.clone();
+        // A stalled turn never ends by itself, so a watchdog kills it. It is
+        // only a hang guard: whether it fired, not how long the turn took, is
+        // the check, so a loaded runner cannot fail a healthy turn
+        // (brwr-1kgh: 4-8 s under load 200 on 12 cores).
+        let fired = Arc::new(AtomicBool::new(false));
         let (stop, stopped) = mpsc::channel::<()>();
-        thread::spawn(move || {
-            if stopped.recv_timeout(Duration::from_secs(5)).is_err() {
-                watchdog.kill();
-            }
-        });
+        let watchdog = {
+            let slot = slot.clone();
+            let fired = Arc::clone(&fired);
+            thread::spawn(move || {
+                if stopped.recv_timeout(STALL_HANG_GUARD).is_err() {
+                    fired.store(true, Ordering::SeqCst);
+                    slot.kill();
+                }
+            })
+        };
         let mut session = runner.start(&spec, &slot).unwrap();
         let started = Instant::now();
         let outcome = session.turn(&spec.prompt, &mut |_| {});
         let elapsed = started.elapsed();
         let _ = stop.send(());
+        watchdog.join().unwrap();
         session.close();
         assert!(
-            elapsed < Duration::from_secs(4),
-            "the turn took {elapsed:?}"
+            !fired.load(Ordering::SeqCst),
+            "the turn stalled until the watchdog killed it after {elapsed:?}"
         );
         assert_eq!(
             outcome,
@@ -326,6 +337,9 @@ mod tests {
             }
         );
     }
+
+    /// How long a stalled turn may run before the watchdog kills it.
+    const STALL_HANG_GUARD: Duration = Duration::from_secs(120);
 
     #[test]
     fn nonzero_exit_fails_with_last_stderr_line() {

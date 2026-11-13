@@ -1,0 +1,7 @@
+## 2026-11-12 — Work the test-timing baseline down, starting with wall-clock bounds
+
+**What to change.** `scripts/check-test-timing.mjs` now stops new fixed sleeps, wall-clock bounds and date literals in tests, but its baseline (`scripts/test-timing-baseline.json`) still allows 24 `wall-clock-bound` and 79 `fixed-sleep` lines that exist today. File one bead per module for the wall-clock bounds first (`host/src/service/shell_env.rs`, `child.rs`, `supervisor.rs`, `server.rs`, `setup.rs`, `host/src/index/db.rs`, `mp_harness.rs`, `regeneration.rs`, `host/src/markdown.rs`, `host/src/native.rs`, `host/src/dialog.rs`, the three `adapter-templates/src` time checks, and the four `performance.now()`/`Date.now()` bounds in `extension/tests/`). Turn each into a check of work done, or into a hang guard judged by whether it fired.
+
+**Why.** Every flake fixed in delay-fix lane L4 (`brwr-1kgh`, `brwr-3wyt`, `brwr-jzk9`, `brwr-sy7v`, `brwr-w7ma`) and the earlier `brwr-gxag` was one of these shapes. The two `brwr-1kgh` tests asserted `elapsed < 4 s` and a 20 s receive, and failed on a loaded host with no bug. The remaining bounds are the same assertion waiting for a slower runner. Removing one needs no baseline edit, so these can go in small batches without conflicts.
+
+**Where.** `scripts/test-timing-baseline.json` (run `node scripts/check-test-timing.mjs` to list current lines), TESTING.md "Timing in tests".
