@@ -18,6 +18,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const BASELINE = "scripts/test-timing-baseline.json";
+// This check's own tests hold every pattern as sample text.
+const SELF_TEST = "scripts/tests/check-test-timing.test.mjs";
 
 const ISO_DATE = /["'`](?:19|20)\d{2}-\d{2}-\d{2}/;
 
@@ -133,12 +135,13 @@ export function formatBaseline(counts) {
 
 export function scanRepository(root) {
   // Read-only git calls must not take index.lock (AGENTS.md).
-  const listed = execFileSync("git", ["ls-files", "-z"], {
+  // Untracked files too, so a new test file is checked before it is added.
+  const listed = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
     cwd: root, encoding: "utf8", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, maxBuffer: 64 * 1024 * 1024,
   });
   const findingsByFile = {};
   for (const file of listed.split("\0").filter(Boolean)) {
-    if (!languageOf(file) || file.startsWith("target/") || file.includes("node_modules/")) continue;
+    if (!languageOf(file) || file === SELF_TEST || file.startsWith("target/") || file.includes("node_modules/")) continue;
     let text;
     try { text = readFileSync(path.join(root, file), "utf8"); } catch { continue; } // Deleted in the worktree.
     const findings = scan(file, text);

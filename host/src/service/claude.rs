@@ -475,7 +475,7 @@ pwd -P > "$LOG/cwd.log"
     }
 
     /// Only a hang guard: a healthy fake session ends in well under a second,
-    /// but a loaded runner (brwr-1kgh: load 200 on 12 cores) took over 20 s to
+    /// but on a loaded machine (brwr-1kgh) one took over 20 s to
     /// run several fake-harness subprocesses. No test measures time with it.
     const SESSION_HANG_GUARD: Duration = Duration::from_secs(120);
 

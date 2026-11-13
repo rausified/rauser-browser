@@ -180,7 +180,7 @@ mod tests {
     use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Arc};
+    use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -306,7 +306,7 @@ mod tests {
         // A stalled turn never ends by itself, so a watchdog kills it. It is
         // only a hang guard: whether it fired, not how long the turn took, is
         // the check, so a loaded runner cannot fail a healthy turn
-        // (brwr-1kgh: 4-8 s under load 200 on 12 cores).
+        // (brwr-1kgh: the turn took 4-8 s on a loaded machine).
         let fired = Arc::new(AtomicBool::new(false));
         let (stop, stopped) = mpsc::channel::<()>();
         let watchdog = {
