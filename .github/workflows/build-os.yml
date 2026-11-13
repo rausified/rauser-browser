@@ -39,6 +39,11 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A PR checkout is its merge commit; depth 2 brings the base parent,
+          # whose test-timing baseline the timing check compares with
+          # (scripts/check-test-timing.mjs).
+          fetch-depth: 2
       # Swatinem/rust-cache hashes the rustc version of every toolchain
       # `rustup toolchain list` finds installed, not just the one
       # rust-toolchain.toml pins, so the runner image's own preinstalled
