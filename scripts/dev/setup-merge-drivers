@@ -5,6 +5,8 @@
 // .gitattributes names the generated files that use it; scripts/merge-generated.mjs
 // says what it does. Opt in: without this, git merges those files as plain
 // text, as before. The PR doctor configures it itself (scripts/pr-doctor.mjs).
+// A merge runs a generator only when the merged copy is byte-identical to the
+// merge base's, HEAD's or origin/main's (or, with --tools, that directory's).
 //
 // Usage: scripts/dev/setup-merge-drivers [--tools <dir>] [--unset] [--show]
 //   (no flags)   run each worktree's own scripts/merge-generated.mjs
@@ -30,5 +32,7 @@ if (values.unset) {
   console.log(`removed merge.${DRIVER}`);
 } else {
   configure({ tools: values.tools ?? null });
-  console.log(`configured merge.${DRIVER}; the generated files .gitattributes marks merge=${DRIVER} now regenerate on git merge`);
+  console.log(`configured merge.${DRIVER}; the generated files .gitattributes marks merge=${DRIVER} now regenerate on git merge.`);
+  console.log("A generator runs only when the merged copy matches the merge base's, HEAD's or origin/main's;");
+  console.log("a merge that changes one leaves a conflict to resolve by hand, so another branch's generator never runs.");
 }

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { ipcDenied } from "./ipc-guard.mjs";
 import {
-  CATALOG_PATH, LOCK_PATH, configure, driverCommand, generatorFor, otherCommit, unionLock, withBaseGeneratedLines,
+  CATALOG_PATH, LOCK_PATH, configure, driverCommand, generatorEnv, generatorFor, otherCommit, unionLock, withBaseGeneratedLines,
 } from "../merge-generated.mjs";
 import {
   REPO, STARTER_OUTPUTS, addFamily, addRequest, commitAll, genProtocol, genStarters, git, makeFixture, read, unmerged,
@@ -28,7 +28,7 @@ test("the lock union keeps ours' order, then theirs' new keys in theirs' order",
 test("the lock union never drops a key, even one a side deleted", () => {
   const base = lock([["a", "a:{x}"], ["gone", "gone:{x}"]]);
   const result = unionLock(base, lock([["a", "a:{x}"]]), lock([["a", "a:{x}"], ["z", "z:{x}"]]));
-  assert.deepEqual(Object.keys(JSON.parse(result.text)), ["a", "z", "gone"]);
+  assert.deepEqual(Object.keys(JSON.parse(result.text)), ["a", "gone", "z"], "a dropped key keeps its place");
 });
 
 test("a key both sides lock to different ids is a conflict, named", () => {
@@ -63,8 +63,15 @@ test("every file .gitattributes marks brauser-generated has a generator", () => 
 test("the driver command runs the worktree's copy, or a trusted directory's", () => {
   assert.match(driverCommand(), /\$\(git rev-parse --show-toplevel\)\/scripts\/merge-generated\.mjs.*%O %A %B %P %L/);
   assert.match(driverCommand(), /else git merge-file/);
-  assert.equal(driverCommand({ tools: "/t/it's" }), "node '/t/it'\\''s/merge-generated.mjs' %O %A %B %P %L");
-  assert.equal(driverCommand({ tools: "C:\\t\\" }), "node 'C:\\t/merge-generated.mjs' %O %A %B %P %L");
+  const plain = "git merge-file --marker-size=%L -L ours -L base -L theirs %A %O %B";
+  assert.equal(driverCommand({ tools: "/t/it's" }),
+    `f='/t/it'\\''s/merge-generated.mjs'; if [ -f "$f" ] && command -v node >/dev/null 2>&1; then node "$f" %O %A %B %P %L; else ${plain}; fi`);
+  assert.match(driverCommand({ tools: "C:\\t\\" }), /^f='C:\\t\/merge-generated\.mjs';/);
+});
+
+test("generators run with no credentials in their environment", () => {
+  const env = generatorEnv({ PATH: "/bin", HOME: "/h", GH_TOKEN: "x", GITHUB_TOKEN: "x", PR_DOCTOR_TOKEN: "x", BRAUSER_MERGE_TOOLS: "/t", GIT_CONFIG_COUNT: "1" });
+  assert.deepEqual(env, { PATH: "/bin", HOME: "/h" });
 });
 
 // --- real merges in scratch repositories ---------------------------------------
@@ -137,6 +144,30 @@ test("the lock merges as a union in a rebase too, where nothing can regenerate",
   assert.deepEqual(Object.keys(JSON.parse(read(dir, LOCK_PATH))).slice(-2), ["two.thing", "one.thing"]);
 });
 
+test("one lock key both sides set to different ids is a conflict, wherever each side put it", scratch, async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const { root, repo, cleanup } = makeFixture();
+  t.after(cleanup);
+  // The reviewer's case: ours inserts the key after the first entry, theirs
+  // appends it, so the text merges cleanly into a lock with the key twice.
+  const entries = () => Object.entries(JSON.parse(read(repo, LOCK_PATH)));
+  const write = (list) => writeFileSync(join(repo, LOCK_PATH), `${JSON.stringify(Object.fromEntries(list), null, 2)}\n`);
+  git(repo, ["checkout", "-q", "-b", "a", "main"]);
+  const list = entries();
+  write([list[0], ["clash.thing", "clash.thing:{host}/{one}"], ...list.slice(1)]);
+  commitAll(repo, "insert");
+  git(repo, ["checkout", "-q", "-b", "b", "main"]);
+  write([...entries(), ["clash.thing", "clash.thing:{host}/{two}"]]);
+  commitAll(repo, "append");
+  for (const command of [["merge", "-q", "origin/b"], ["rebase", "-q", "origin/b"]]) {
+    const dir = cloneAt(root, repo, `clash-${command[0]}`, "a");
+    const result = git(dir, command, { ok: [1] });
+    assert.match(result.out, /both sides set clash\.thing to different ids/);
+    assert.ok(unmerged(dir).includes(LOCK_PATH), `${command[0]}: ${unmerged(dir).join(",")}`);
+    assert.match(read(dir, LOCK_PATH), /^<{7} ours$/m, `${command[0]} leaves markers`);
+  }
+});
+
 test("a conflict in a family file leaves ordinary conflicts, never a side", scratch, async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const { root, repo, cleanup } = makeFixture();
@@ -183,6 +214,8 @@ test("merged sources the generator rejects stop the merge, even where the text m
   const dir = cloneAt(root, repo, "rejected", "a");
   const merge = git(dir, ["merge", "-q", "origin/b"], { ok: [1] });
   assert.match(merge.out, /generate-starters\.mjs failed on the merged sources/);
+  const cache = join(dir, ".git", "brauser-merge-cache");
+  assert.deepEqual(existsSync(cache) ? readdirSync(cache) : [], [], "a failed regeneration is not cached");
   assert.ok(unmerged(dir).includes("extension/starter-families.generated.ts"), unmerged(dir).join(","));
 });
 
@@ -206,8 +239,36 @@ test("with trusted tools, a merge that changes the generator is refused", scratc
   commitAll(repo, "touch the generator");
   const changed = cloneAt(root, repo, "untrusted", "a", { tools });
   const merge = git(changed, ["merge", "-q", "origin/b"], { ok: [1], env: { BRAUSER_MERGE_TOOLS: tools } });
-  assert.match(merge.out, /the merge changes scripts\/generate-starters\.mjs; only main's copy runs here/);
+  assert.match(merge.out, /the merge changes scripts\/generate-starters\.mjs, which is not main's copy \(BRAUSER_MERGE_TOOLS\)/);
   assert.ok(unmerged(changed).includes("extension/starter-families.generated.ts"));
+});
+
+test("a local merge never runs a generator only the other branch changed", scratch, async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const { root, repo, cleanup } = makeFixture();
+  t.after(cleanup);
+  twoFamilyBranches(repo);
+  const marker = join(root, "ran");
+  const changeGenerator = (branch) => {
+    git(repo, ["checkout", "-q", branch]);
+    // Branch code that would leave a trace if it ran.
+    const source = read(repo, "scripts/generate-starters.mjs");
+    writeFileSync(join(repo, "scripts/generate-starters.mjs"),
+      source.replace('import path from "node:path";', `import path from "node:path";\nimport { writeFileSync as touch } from "node:fs";\ntouch(${JSON.stringify(marker)}, "x");`));
+    commitAll(repo, `touch the generator on ${branch}`);
+  };
+  changeGenerator("b");
+  const theirs = cloneAt(root, repo, "theirs-changed", "a");
+  const merge = git(theirs, ["merge", "-q", "origin/b"], { ok: [1] });
+  assert.match(merge.out, /the merge changes scripts\/generate-starters\.mjs, which is not the merge base's, HEAD's or origin\/main's copy/);
+  assert.ok(unmerged(theirs).includes("extension/starter-families.generated.ts"));
+  assert.equal(existsSync(marker), false, "the other branch's generator never ran");
+
+  // Your own branch's generator (HEAD's copy) is yours to run.
+  const ours = cloneAt(root, repo, "ours-changed", "b");
+  git(ours, ["merge", "-q", "--no-edit", "origin/a"]);
+  assert.equal(existsSync(marker), true);
+  assert.equal(genStarters(ours, "--check").code, 0);
 });
 
 test("two schema PRs regenerate the protocol's generated types on merge", scratch, async (t) => {
@@ -226,10 +287,15 @@ test("two schema PRs regenerate the protocol's generated types on merge", scratc
   }
   const plain = cloneAt(root, repo, "plain", "a", { driver: false });
   assert.equal(git(plain, ["merge", "-q", "origin/b"], { ok: [0, 1] }).code, 1, "without the driver the generated types conflict");
-  const dir = cloneAt(root, repo, "protocol", "a");
-  git(dir, ["merge", "-q", "--no-edit", "origin/b"]);
-  assert.equal(genProtocol(dir, "--check").code, 0);
-  for (const name of ["ZzARequest", "ZzBRequest"]) assert.match(read(dir, "protocol/ts/generated.ts"), new RegExp(`export type Request = [^;]*\\b${name}\\b`));
+  const outputs = {};
+  for (const [ours, theirs] of [["a", "b"], ["b", "a"]]) {
+    const dir = cloneAt(root, repo, `protocol-${ours}`, ours);
+    git(dir, ["merge", "-q", "--no-edit", `origin/${theirs}`]);
+    assert.equal(genProtocol(dir, "--check").code, 0);
+    for (const name of ["ZzARequest", "ZzBRequest"]) assert.match(read(dir, "protocol/ts/generated.ts"), new RegExp(`export type Request = [^;]*\\b${name}\\b`));
+    outputs[ours] = ["protocol/ts/generated.ts", "protocol/src/generated.rs"].map((file) => read(dir, file));
+  }
+  assert.deepEqual(outputs.a, outputs.b, "the merge order does not change the generated types");
 });
 
 test("a checkout that predates the driver script falls back to a plain text merge", scratch, async (t) => {
@@ -243,3 +309,52 @@ test("a checkout that predates the driver script falls back to a plain text merg
   git(dir, ["merge", "-q", "origin/b"], { ok: [1] });
   assert.match(read(dir, "extension/starter-families.generated.ts"), /^<{7} ours$/m);
 });
+
+// --- real conflicts from this repository's history ------------------------------
+// Each is a past merge commit whose parents conflict in generated files; the
+// driver's result must be byte-identical to what a person committed. They
+// need the full history, so a shallow clone (CI's checkout) skips them.
+
+const HISTORY = [
+  {
+    commit: "4ad210a9f6831b3d58add4acd4d92d7177ae51b9",
+    conflicts: [],
+    generated: ["extension/starter-families.generated.ts", "protocol/adapter-templates/starter-vectors.json"],
+  },
+  {
+    commit: "37ef5ec97a3b5e7f353f35e73d6398dc23be6d4f",
+    conflicts: ["TESTING.md", "docs/history.md", "package.json"],
+    generated: ["protocol/src/generated.rs", "protocol/ts/generated.ts"],
+  },
+];
+
+for (const { commit, conflicts, generated } of HISTORY) {
+  test(`re-merging ${commit.slice(0, 8)} regenerates exactly what was committed by hand`, scratch, async (t) => {
+    if (await ipcDenied(t, "child-pipe")) return;
+    const have = git(REPO, ["cat-file", "-e", `${commit}^2^{commit}`], { ok: [0, 1, 128] }).code === 0;
+    if (!have) {
+      t.skip(`needs ${commit.slice(0, 12)} and its parents in this clone (a shallow checkout lacks them); run in a full clone`);
+      return;
+    }
+    const root = mkdtempSync(join(tmpdir(), "merge-history-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const dir = join(root, "clone");
+    git(root, ["clone", "-q", "--shared", "--no-checkout", REPO, dir]);
+    git(dir, ["-c", "advice.detachedHead=false", "checkout", "-q", `${commit}^1`]);
+    // Today's rules and driver, as the PR doctor applies them to an older branch.
+    cpSync(join(REPO, ".gitattributes"), join(git(dir, ["rev-parse", "--absolute-git-dir"]).out.trim(), "info", "attributes"));
+    const tools = join(root, "tools");
+    mkdirSync(tools);
+    cpSync(join(REPO, "scripts/merge-generated.mjs"), join(tools, "merge-generated.mjs"));
+    configure({ cwd: dir, tools });
+    // The second parent is the main these branches merged in: origin/main then.
+    git(dir, ["update-ref", "refs/remotes/origin/main", `${commit}^2`]);
+    const plain = git(dir, ["-c", "merge.brauser-generated.driver=false", "merge-tree", "--write-tree", "--name-only", "--no-messages", "HEAD", `${commit}^2`], { ok: [1] });
+    for (const file of generated) assert.ok(plain.out.split("\n").includes(file), `${file} conflicts without the driver`);
+    git(dir, ["merge", "-q", "--no-edit", `${commit}^2`], { ok: [conflicts.length ? 1 : 0] });
+    assert.deepEqual(unmerged(dir), conflicts);
+    for (const file of generated) {
+      assert.equal(read(dir, file), git(dir, ["show", `${commit}:${file}`]).out, `${file} matches ${commit.slice(0, 8)}`);
+    }
+  });
+}

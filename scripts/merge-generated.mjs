@@ -26,9 +26,12 @@
 // the ordered union of both sides' entries (ours first, then theirs' new ones),
 // and only a key both sides set to different ids is a conflict.
 //
-// With BRAUSER_MERGE_TOOLS=<dir> (the PR doctor: main's tools, never the PR's)
-// a merge that changes a generator, so that the merged tree's copy differs
-// from <dir>'s, is refused instead of run. BRAUSER_MERGE_LOG=<file> gets one
+// A generator runs only when the merged tree's copy is byte-identical to a
+// trusted one, so a merge never executes the other branch's code: with
+// BRAUSER_MERGE_TOOLS=<dir> (the PR doctor) only <dir>'s copy, main's;
+// otherwise the merge base's, HEAD's or origin/main's. A merge that changes a
+// generator any other way is a conflict to resolve by hand. Generators run
+// with no credentials in their environment (`generatorEnv`). BRAUSER_MERGE_LOG=<file> gets one
 // `<path>\t<how>` line per file the driver resolved.
 //
 // Usage (git runs it; scripts/dev/setup-merge-drivers configures it):
@@ -93,9 +96,9 @@ const isInput = (generator, path) =>
 
 // --- Pure parts (scripts/tests/merge-generated.test.mjs) ---------------------
 
-/** The ordered union of three versions of ids.lock.json: ours' keys in order,
- * then each key only theirs has, in theirs' order; a base key a side dropped
- * stays (append-only). `{ ok: false, keys }` names keys both sides set to
+/** The ordered union of three versions of ids.lock.json: base's keys in
+ * order (one a side dropped stays in its place: append-only), then ours' new
+ * keys, then theirs', each in that side's order. `{ ok: false, keys }` names keys both sides set to
  * different ids. */
 export function unionLock(baseText, oursText, theirsText) {
   const parse = (text) => (text.trim() ? JSON.parse(text) : {});
@@ -104,11 +107,11 @@ export function unionLock(baseText, oursText, theirsText) {
   const theirs = parse(theirsText);
   const merged = {};
   const clashes = [];
-  for (const side of [ours, theirs, base]) {
-    for (const [key, value] of Object.entries(side)) {
-      if (!(key in merged)) merged[key] = value;
-      else if (merged[key] !== value && side !== base) clashes.push(key);
-    }
+  // Base keys keep their place (a key a side dropped stays where it was),
+  // then ours' new keys, then theirs'; ours' id wins over base's.
+  for (const key of new Set([...Object.keys(base), ...Object.keys(ours), ...Object.keys(theirs)])) {
+    if (key in ours && key in theirs && ours[key] !== theirs[key]) clashes.push(key);
+    merged[key] = key in ours ? ours[key] : key in theirs ? theirs[key] : base[key];
   }
   if (clashes.length) return { ok: false, keys: clashes };
   return { ok: true, text: `${JSON.stringify(merged, null, 2)}\n` };
@@ -167,22 +170,46 @@ function cacheDir(cwd) {
   return dir;
 }
 
-function trustedTool(tools, generator) {
-  if (!tools) return null;
-  const file = join(tools, basename(generator.tool));
-  return existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
+/** The generator copies allowed to run, as `{ copies, from }`. With `tools`
+ * (the PR doctor) only that directory's copy, an empty one when it is
+ * missing so nothing matches. Otherwise the merge base's, HEAD's and
+ * origin/main's copies: a merge never runs a generator only the other branch
+ * changed, which would execute that branch's code. */
+function trustedCopies(generator, { tools, ours, other, cwd }) {
+  if (tools) {
+    const file = join(tools, basename(generator.tool));
+    return { copies: [existsSync(file) ? readFileSync(file) : Buffer.alloc(0)], from: "main's copy (BRAUSER_MERGE_TOOLS)" };
+  }
+  const base = git(["merge-base", ours, other], { cwd, check: false }).stdout.trim();
+  const copies = [];
+  for (const rev of [base, ours, "refs/remotes/origin/main"]) {
+    if (!rev) continue;
+    const blob = spawnSync("git", ["show", `${rev}:${generator.tool}`], { cwd, maxBuffer: 64 * 1024 * 1024 });
+    if (blob.status === 0) copies.push(blob.stdout);
+  }
+  return { copies, from: "the merge base's, HEAD's or origin/main's copy" };
+}
+
+/** The environment a generator runs in: no credentials, only what node or
+ * python needs to start. */
+export function generatorEnv(env = process.env) {
+  const keep = ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "SYSTEMROOT", "SystemRoot", "WINDIR", "USERPROFILE", "PATHEXT", "COMSPEC"];
+  return Object.fromEntries(keep.filter((name) => env[name] !== undefined).map((name) => [name, env[name]]));
 }
 
 /** Regenerates `generator`'s outputs from the merge of `ours` and `other`:
  * `{ ok: true, files: { path: text } }` or `{ ok: false, reason }`. Cached in
  * the git dir by (ours, other, generator, trusted tool). */
 export function regenerate(generator, { ours, other, cwd = process.cwd(), tools = process.env.BRAUSER_MERGE_TOOLS || null }) {
-  const trusted = trustedTool(tools, generator);
-  const key = createHash("sha256").update([ours, other, generator.name, trusted ? createHash("sha256").update(trusted).digest("hex") : "-"].join("\0")).digest("hex");
+  const trusted = trustedCopies(generator, { tools, ours, other, cwd });
+  const digests = trusted.copies.map((copy) => createHash("sha256").update(copy).digest("hex"));
+  const key = createHash("sha256").update([ours, other, generator.name, ...digests].join("\0")).digest("hex");
   const cached = join(cacheDir(cwd), `${key}.json`);
   if (existsSync(cached)) return JSON.parse(readFileSync(cached, "utf8"));
   const result = regenerateUncached(generator, { ours, other, cwd, trusted });
-  writeFileSync(cached, JSON.stringify(result));
+  // Only successes: a failure may be this machine's (a missing python), and
+  // a retry after fixing it must run again.
+  if (result.ok) writeFileSync(cached, JSON.stringify(result));
   return result;
 }
 
@@ -204,16 +231,14 @@ function regenerateUncached(generator, { ours, other, cwd, trusted }) {
       run("tar", ["-xf", archive, "-C", scratch]);
       rmSync(archive);
     }
-    if (trusted) {
-      const merged = join(scratch, generator.tool);
-      if (!existsSync(merged) || !readFileSync(merged).equals(trusted)) {
-        return { ok: false, reason: `the merge changes ${generator.tool}; only main's copy runs here, so regenerate by hand` };
-      }
+    const merged = join(scratch, generator.tool);
+    if (!existsSync(merged) || !trusted.copies.some((copy) => readFileSync(merged).equals(copy))) {
+      return { ok: false, reason: `the merge changes ${generator.tool}, which is not ${trusted.from}; a merge never runs a generator it has not seen, so resolve it by hand and regenerate` };
     }
     for (const output of generator.outputs) mkdirSync(dirname(join(scratch, output)), { recursive: true });
     for (const check of [false, true]) {
       const [cmd, args] = generator.run(scratch, check);
-      const step = run(cmd, args, { cwd: scratch, check: false });
+      const step = run(cmd, args, { cwd: scratch, env: generatorEnv(), check: false });
       if (step.code !== 0) {
         const detail = (step.stdout + step.stderr).trim().split("\n").slice(0, 3).join("; ");
         return { ok: false, reason: `${generator.tool}${check ? " --check" : ""} failed on the merged sources: ${detail}` };
@@ -236,6 +261,18 @@ function textMerge(base, ours, theirs, markerSize) {
   return git(["merge-file", `--marker-size=${markerSize || 7}`, "-L", "ours", "-L", "base", "-L", "theirs", ours, base, theirs], { check: false }).code;
 }
 
+/** An ordinary conflict, always: the text merge's markers, or, where the text
+ * merges cleanly into something that is still wrong (a lock key set twice),
+ * the whole file as one ours/base/theirs conflict. Never exits 0. */
+function conflict(basePath, oursPath, theirsPath, markerSize) {
+  const ours = readFileSync(oursPath, "utf8");
+  if (textMerge(basePath, oursPath, theirsPath, markerSize) !== 0) return 1;
+  const marks = (char) => char.repeat(Number(markerSize) || 7);
+  const end = (text) => (text.endsWith("\n") ? text : `${text}\n`);
+  writeFileSync(oursPath, `${marks("<")} ours\n${end(ours)}${marks("|")} base\n${end(readFileSync(basePath, "utf8"))}${marks("=")}\n${end(readFileSync(theirsPath, "utf8"))}${marks(">")} theirs\n`);
+  return 1;
+}
+
 function log(path, how) {
   if (process.env.BRAUSER_MERGE_LOG) appendFileSync(process.env.BRAUSER_MERGE_LOG, `${path}\t${how}\n`);
 }
@@ -255,7 +292,7 @@ export function driver([basePath, oursPath, theirsPath, path, markerSize], env =
     lock = unionLock(read(basePath), read(oursPath), read(theirsPath));
     if (!lock.ok) {
       say(path, `both sides set ${lock.keys.join(", ")} to different ids; an id is frozen once locked`);
-      return textMerge(basePath, oursPath, theirsPath, markerSize);
+      return conflict(basePath, oursPath, theirsPath, markerSize);
     }
   }
 
@@ -286,11 +323,10 @@ export function driver([basePath, oursPath, theirsPath, path, markerSize], env =
     return 0;
   }
   say(path, result.ok ? "the generator no longer writes this file" : result.reason);
-  const status = textMerge(basePath, oursPath, theirsPath, markerSize);
   // Under `git merge` a failed regeneration is a conflict even when the text
   // merges: the merged sources do not produce that text. Elsewhere this is
   // git's own text merge, as with no driver.
-  return other ? status || 1 : status;
+  return other ? conflict(basePath, oursPath, theirsPath, markerSize) : textMerge(basePath, oursPath, theirsPath, markerSize);
 }
 
 // --- configuration (scripts/dev/setup-merge-drivers, scripts/pr-doctor.mjs) --
@@ -302,8 +338,10 @@ export function driver([basePath, oursPath, theirsPath, path, markerSize], env =
 export function driverCommand({ tools = null } = {}) {
   const args = "%O %A %B %P %L";
   // Git runs the driver under sh, which takes "/" on every platform.
-  if (tools) return `node ${shellQuote(`${tools.replace(/[\\/]+$/, "")}/merge-generated.mjs`)} ${args}`;
-  return `f="$(git rev-parse --show-toplevel)/scripts/merge-generated.mjs"; if [ -f "$f" ]; then node "$f" ${args}; else git merge-file --marker-size=%L -L ours -L base -L theirs %A %O %B; fi`;
+  // Without node (or the script), git's own text merge, so a conflict always has markers.
+  const plain = "git merge-file --marker-size=%L -L ours -L base -L theirs %A %O %B";
+  const file = tools ? shellQuote(`${tools.replace(/[\\/]+$/, "")}/merge-generated.mjs`) : '"$(git rev-parse --show-toplevel)/scripts/merge-generated.mjs"';
+  return `f=${file}; if [ -f "$f" ] && command -v node >/dev/null 2>&1; then node "$f" ${args}; else ${plain}; fi`;
 }
 
 const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
