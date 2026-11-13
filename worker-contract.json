@@ -4,6 +4,7 @@
     "method": "label",
     "label": "queue",
     "comment": "@Mergifyio queue",
+    "command": "node scripts/dev/queue-pr.mjs <pr> --head <sha>",
     "never": ["gh pr merge"]
   },
   "queue": {

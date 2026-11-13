@@ -19,21 +19,17 @@ import { realpathSync } from "node:fs";
 import { parseArgs as parseCli } from "node:util";
 import { pathToFileURL } from "node:url";
 
-import { LABEL as NEEDS_MERGE_LABEL, MARKER as DOCTOR_MARKER, SKIP_LABEL as DOCTOR_SKIP_LABEL } from "../pr-doctor.mjs";
+import { DOCTOR_MARKER, DOCTOR_SKIP_LABEL, NEEDS_MERGE_LABEL } from "../pr-constants.mjs";
+import {
+  ADMIT_GRACE_MINUTES, FAILED, GATE, PASSED, QUERY, QUEUE_COMMENT, QUEUE_EXCLUSION_LABELS, QUEUE_LABEL, REFRESH_COMMENT,
+  analyzeChecks, latestChecks, mergifyStatus, snapshotFromGraphql, staleConditions,
+} from "./queue-pr.mjs";
 
+// The Mergify client and check reading live in queue-pr.mjs (one copy for pr-watch, pr-doctor and the keeper).
+export { ADMIT_GRACE_MINUTES, QUEUE_COMMENT, QUEUE_EXCLUSION_LABELS, QUEUE_LABEL, REFRESH_COMMENT, analyzeChecks, latestChecks, mergifyStatus, snapshotFromGraphql };
 export const EXIT = Object.freeze({ DONE: 0, ERROR: 1, USAGE: 2, WAITING: 3, CHECK_FAILED: 10, CONFLICT: 11, ENQUEUE: 12, CLOSED: 13, DRAFT: 14, CANCELLED: 15, QUEUE_BLOCKED: 16 });
-export const QUEUE_LABEL = "queue";
-export const QUEUE_COMMENT = "@Mergifyio queue"; // worker-contract.json merge.comment
-export const REFRESH_COMMENT = "@Mergifyio refresh";
-export const QUEUE_EXCLUSION_LABELS = Object.freeze([NEEDS_MERGE_LABEL, DOCTOR_SKIP_LABEL]);
-export const ADMIT_GRACE_MINUTES = 5;
 // pr-doctor runs every 20 minutes and on each push to main; allow a cycle plus the run and cron lateness.
 export const DOCTOR_GRACE_MINUTES = 30;
-
-const FAILED = new Set(["FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "ERROR"]);
-const PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
-const GATE = "Build and check";
-const GATE_INPUT = /^(Classify changes|Docs and queue checks|Accessibility|macOS|Windows)\b/; // feed the gate (ci.yml)
 
 export function parseArgs(argv) {
   const { values, positionals } = parseCli({ args: argv, allowPositionals: true, options: {
@@ -49,90 +45,15 @@ export function parseArgs(argv) {
   return opts;
 }
 
-/** The newest result per check name on the head commit (re-runs leave older entries). */
-export function latestChecks(contexts) {
-  const byName = new Map();
-  for (const node of contexts ?? []) {
-    const status = node.__typename === "StatusContext";
-    const runId = status ? null : node.checkSuite?.workflowRun?.databaseId ?? null;
-    const check = { name: status ? node.context : node.name, required: !!node.isRequired, runId,
-      state: status ? node.state : node.status === "COMPLETED" ? node.conclusion ?? "NEUTRAL" : node.status ?? "PENDING",
-      order: `${String(runId ?? 0).padStart(15, "0")}|${node.startedAt ?? ""}` };
-    const seen = byName.get(check.name);
-    if (!seen || check.order >= seen.order) byName.set(check.name, { ...check, required: check.required || !!seen?.required });
-  }
-  return [...byName.values()];
-}
-
-const PAYLOAD = /-\*- Mergify Payload -\*-\s*(\{[\s\S]*?\})\s*-\*- Mergify Payload End -\*-/;
-const leaves = (nodes) => (nodes ?? []).flatMap((n) => n.match ? [] : n.subconditions?.length ? leaves(n.subconditions) : [n.description]);
-
-/** Mergify's view of the PR, from its comments in creation order: each queue request gets a new
- * status comment, and Mergify rewrites the old one as finished after it (#346), so the
- * newest-created payload is current, unless a later comment says a push cancelled it. A queue
- * command newer than every status comment is `requested` (Mergify answers in seconds), unless
- * Mergify replies that one is already running (#339). `unmet` lists what a waiting request lacks
- * (the payload's tree, else the checklist above <details>: a waiting payload's tree is empty). */
-export function mergifyStatus(comments) {
-  let status = { state: "none", unmet: [] }, live = status;
-  const at = (c) => c.createdAt ?? "";
-  for (const { author, body = "" } of [...(comments ?? [])].sort((a, b) => at(a).localeCompare(at(b)))) {
-    if (!/^mergify(\[bot\])?$/.test(author ?? "")) {
-      if (/^\s*@mergifyio (queue|requeue)\b/i.test(body)) { live = status; status = { state: "requested", unmet: [] }; }
-      continue;
-    }
-    let payload = null;
-    try { payload = JSON.parse(PAYLOAD.exec(body)?.[1] ?? "null"); } catch { /* not a status comment */ }
-    if (payload?.version === 1) {
-      const fromList = [...body.split("<details>")[0].matchAll(/^\s*- \[ \] `([^`]+)`/gm)].map((m) => m[1]);
-      // A dequeue quotes the conditions that failed under **Reason** (#349): "> - [ ] `-label = needs-merge`".
-      const quoted = [...body.matchAll(/^>[\s>]*- \[ \] `([^`]+)`/gm)].map((m) => m[1]);
-      const unmet = payload.state === "waiting" ? [...new Set(leaves(payload.required_conditions).concat(fromList))]
-        : payload.state === "dequeued" ? [...new Set(quoted)] : [];
-      status = { state: payload.state, step: payload.step ?? null, unmet, reason: payload.dequeue_reason?.message ?? null, code: payload.dequeue_reason?.code ?? null };
-    } else if (/request has been cancelled|Queue command cancelled/.test(body)) status = { state: "cancelled", unmet: [] };
-    else if (/already running/.test(body) && status.state === "requested") status = live;
-  }
-  return status;
-}
-
-export function snapshotFromGraphql(data) {
-  const pr = data.repository.pullRequest;
-  const labels = (pr.labels?.nodes ?? []).map((label) => label.name);
-  const comments = (pr.comments?.nodes ?? []).map((c) => ({ author: c.author?.login ?? "", body: c.body ?? "", createdAt: c.createdAt, updatedAt: c.updatedAt }));
-  return {
-    number: pr.number, state: pr.state, isDraft: !!pr.isDraft, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus,
-    autoMerge: pr.autoMergeRequest != null, labels, labeled: labels.includes(QUEUE_LABEL),
-    blockers: labels.filter((name) => QUEUE_EXCLUSION_LABELS.includes(name)),
-    headOid: pr.headRefOid, comments,
-    checks: latestChecks(pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes), mergify: mergifyStatus(comments),
-  };
-}
-
 const short = (names, max = 3) => names.length <= max ? names.join(", ") : `${names.slice(0, max).join(", ")} +${names.length - max}`;
 const minutes = (from, to) => (Date.parse(to) - Date.parse(from)) / 60000;
 const graceOver = (since, now) => !!since && minutes(since, now) >= ADMIT_GRACE_MINUTES;
 const act = (exitCode, action, message) => ({ exitCode, action, message, done: true });
 const wait = (action, message) => ({ exitCode: EXIT.WAITING, action, message, done: false });
-const byGateLast = (a, b) => (a.name === GATE) - (b.name === GATE); // name the job that broke, not the gate
-
-/** Failures, cancellations and waits among the checks that block a merge. Green means
- * the gate itself passed: before it reports, every other check can be green while Windows failed. */
-export function analyzeChecks(checks) {
-  const blocking = checks.filter((c) => c.required || GATE_INPUT.test(c.name));
-  const gate = checks.find((c) => c.name === GATE);
-  const gatePassed = !!gate && PASSED.has(gate.state);
-  const failed = blocking.filter((c) => FAILED.has(c.state)).sort(byGateLast);
-  // Once the gate passes, a cancelled input (a starved macos-15 the fallback replaced) does not matter.
-  const cancelled = gatePassed ? [] : blocking.filter((c) => c.state === "CANCELLED").sort(byGateLast);
-  const pending = blocking.filter((c) => !FAILED.has(c.state) && !PASSED.has(c.state) && c.state !== "CANCELLED");
-  const green = gatePassed && checks.filter((c) => c.required).every((c) => PASSED.has(c.state)) && !failed.length && !pending.length;
-  return { failed, cancelled, pending, green };
-}
-
 /** The pr-doctor sticky comment's outcome and listed files, or null. */
-export function doctorComment(comments) {
-  const comment = [...(comments ?? [])].reverse().find((c) => (c.body ?? "").startsWith(DOCTOR_MARKER));
+export function doctorComment(comments, { trusted = null } = {}) {
+  // `trusted`: only these authors' marker comments count (anyone can post the marker on a public repo).
+  const comment = [...(comments ?? [])].reverse().find((c) => (c.body ?? "").startsWith(DOCTOR_MARKER) && (!trusted || trusted.includes(c.author)));
   if (!comment) return null;
   return { outcome: /pr-doctor outcome=([\w-]+)/.exec(comment.body)?.[1] ?? null, files: [...comment.body.matchAll(/^- `([^`]+)`$/gm)].map((m) => m[1]) };
 }
@@ -142,14 +63,16 @@ export function doctorComment(comments) {
 export function decideConflict(snap, { now, dirtySince = null } = {}) {
   const n = snap.number;
   const doctor = doctorComment(snap.comments);
-  const merge = `merge main yourself: git fetch origin && git merge origin/main, resolve ${doctor?.files.length ? short(doctor.files, 6) : "the conflicts"}, run the focused checks, push, then comment "${QUEUE_COMMENT}"`;
+  const merge = `merge main yourself: git fetch origin && git merge origin/main, resolve ${doctor?.files.length ? short(doctor.files, 6) : "the conflicts"}, run the focused checks, push, then ${queuePrCommand(n, "<new head>")}`;
   if (snap.labels.includes(NEEDS_MERGE_LABEL)) return act(EXIT.CONFLICT, "conflict-labeled", `#${n} conflicts with main and pr-doctor labeled it ${NEEDS_MERGE_LABEL}: ${merge}`);
   if (doctor?.outcome === "report-only") return act(EXIT.CONFLICT, "conflict-report-only", `#${n} conflicts with main and pr-doctor reported without repairing (no push token): ${merge}`);
   if (minutes(dirtySince ?? now, now) >= DOCTOR_GRACE_MINUTES) return act(EXIT.CONFLICT, "conflict-doctor-timeout", `#${n} has conflicted with main for ${DOCTOR_GRACE_MINUTES}+ minutes with no pr-doctor repair: ${merge}`);
   return wait("conflict-wait-doctor", `#${n} conflicts with main; waiting up to ${DOCTOR_GRACE_MINUTES} minutes for pr-doctor (it repairs queue-file and append-only Markdown conflicts and requeues a labeled PR); do not merge main yet`);
 }
 
-export const enqueueCommand = (snap) => `${snap.labeled ? "" : `gh pr edit ${snap.number} --add-label ${QUEUE_LABEL} && `}gh pr comment ${snap.number} --body "${QUEUE_COMMENT}"`;
+/** The one command that queues a PR (idempotent: it labels, comments once per head, refreshes stale Mergify). */
+export const queuePrCommand = (n, head = "") => `node scripts/dev/queue-pr.mjs ${n}${head ? ` --head ${head}` : ""}`;
+export const enqueueCommand = (snap) => queuePrCommand(snap.number);
 const disarmCommand = (snap) => `gh pr merge --disable-auto ${snap.number}`;
 
 /** One snapshot (+ what the shell gathered) -> { action, message, exitCode, done }. `idleSince`:
@@ -181,14 +104,14 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
     return act(EXIT.QUEUE_BLOCKED, `queue-blocked:${snap.blockers[0]}`, `#${n} is queued but Mergify will not take it while it carries ${snap.blockers.join(", ")} (.mergify.yml queue_conditions; pr-doctor clears ${NEEDS_MERGE_LABEL} once the PR merges cleanly): ${snap.blockers.map((l) => `gh pr edit ${n} --remove-label ${l}`).join(" && ")}`);
   }
   if (state === "dequeued") {
-    const requeue = `push it, and once gh pr view ${n} --json headRefOid shows the new head: gh pr comment ${n} --body "${QUEUE_COMMENT}"`;
+    const requeue = `push it, then queue the new head (it waits for GitHub to show it, then comments "${QUEUE_COMMENT}"): ${queuePrCommand(n, "<new head>")}`;
     if (code === "CONFLICT_WITH_BASE_BRANCH") return act(EXIT.CHECK_FAILED, "dequeued:conflict", `#${n} left the Mergify queue: ${reason}. Merge main in yourself, or wait for pr-doctor's merge push if the conflict is in its scope (pr-watch says which once GitHub reports the PR conflicting); then ${requeue}`);
     if (code === "PR_DEQUEUED" && /conditions/i.test(reason ?? "")) {
       const which = unmet.length ? ` Failed: ${short(unmet.map((c) => `\`${c}\``), 6)}.` : " Mergify's comment quotes the condition that failed.";
       return act(EXIT.CHECK_FAILED, "dequeued:conditions", `#${n} left the Mergify queue: ${reason}.${which} Fix that; then ${requeue}`);
     }
   }
-  if (state === "dequeued") return act(EXIT.CHECK_FAILED, "dequeued", `#${n} left the Mergify queue: ${reason ?? "see Mergify's comment"}. Fix and push, then comment "${QUEUE_COMMENT}" (a new head does not requeue it); for a flake comment "@mergifyio requeue".`);
+  if (state === "dequeued") return act(EXIT.CHECK_FAILED, "dequeued", `#${n} left the Mergify queue: ${reason ?? "see Mergify's comment"}. Fix and push, then ${queuePrCommand(n, "<new head>")} (a new head does not requeue it); for a flake comment "@mergifyio requeue".`);
   if (state === "requested") {
     if (graceOver(idleSince, now)) return act(EXIT.QUEUE_BLOCKED, "queue-unanswered", `#${n} has a "${QUEUE_COMMENT}" comment Mergify has not answered for ${ADMIT_GRACE_MINUTES}+ minutes: check https://dashboard.mergify.com and that the Mergify app is installed`);
     return wait("requested", `#${n} has a queue comment; waiting for Mergify to answer it.`);
@@ -200,12 +123,9 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
   if (state === "waiting") {
     const unmetText = unmet.length ? `unmet: ${short(unmet.map((c) => `\`${c}\``), 6)}` : "no unmet condition reported";
     // A check condition Mergify still lacks though GitHub reports it passed: Mergify missed the event (#339).
-    const stale = unmet.length && unmet.every((c) => {
-      const name = /^check-(?:success|neutral|skipped) = (.+)$/.exec(c)?.[1];
-      return name && PASSED.has(snap.checks.find((check) => check.name === name)?.state);
-    });
+    const stale = staleConditions(snap).length > 0;
     // Only after the grace: Mergify normally lags GitHub by up to a minute.
-    if (stuck && (stale || !unmet.length)) return act(EXIT.QUEUE_BLOCKED, "queue-refresh", `#${n} is queued and Mergify is waiting (${unmetText}) though GitHub reports those checks passed; Mergify missed the update (a repeat queue comment is ignored while one runs): gh pr comment ${n} --body "${REFRESH_COMMENT}"`);
+    if (stuck && (stale || !unmet.length)) return act(EXIT.QUEUE_BLOCKED, "queue-refresh", `#${n} is queued and Mergify is waiting (${unmetText}) though GitHub reports those checks passed; Mergify missed the update (a repeat queue comment is ignored while one runs), so it needs "${REFRESH_COMMENT}": ${queuePrCommand(n)}`);
     const fix = snap.labeled ? `fix those, or comment "${REFRESH_COMMENT}" if they already hold` : `gh pr edit ${n} --add-label ${QUEUE_LABEL}`;
     if (stuck) return act(EXIT.QUEUE_BLOCKED, "queue-conditions-unmet", `#${n} is green and queued but Mergify has waited ${ADMIT_GRACE_MINUTES}+ minutes (${unmetText}): ${fix}`);
     return wait(`waiting:${unmet.join(",")}`, `#${n} is queued; Mergify is waiting for its conditions (${pending ?? unmetText}).`);
@@ -216,6 +136,16 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
   return wait("unqueued-green", `#${n} required checks are green but ${why}; waiting ${ADMIT_GRACE_MINUTES} minutes for it to be queued (${enqueueCommand(snap)})`);
 }
 
+/** What the poll loop remembers between snapshots: since when the PR has conflicted
+ * (`dirtySince`) and been green with no queue run (`idleSince`). Mutates and returns `state`. */
+export function track(state, snap, now) {
+  const dirty = snap.mergeStateStatus === "DIRTY" || snap.mergeable === "CONFLICTING";
+  state.dirtySince = dirty ? state.dirtySince ?? now : null;
+  const idle = analyzeChecks(snap.checks).green && !["checking", "merged"].includes(snap.mergify.state);
+  state.idleSince = idle ? state.idleSince ?? now : null;
+  return state;
+}
+
 export function statusLine(snap, decision) {
   const counts = { ok: 0, pending: 0, failed: 0 };
   for (const c of snap.checks) if (c.state !== "CANCELLED") counts[FAILED.has(c.state) ? "failed" : PASSED.has(c.state) ? "ok" : "pending"]++;
@@ -224,13 +154,6 @@ export function statusLine(snap, decision) {
 }
 
 // --- I/O ----------------------------------------------------------------------
-
-const QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
- pullRequest(number:$number){ number state isDraft mergeable mergeStateStatus headRefOid autoMergeRequest{enabledAt}
-  labels(first:30){nodes{name}} comments(last:50){nodes{author{login} body createdAt updatedAt}}
-  commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{ __typename
-   ... on CheckRun{name status conclusion startedAt isRequired(pullRequestNumber:$number) checkSuite{workflowRun{databaseId}}}
-   ... on StatusContext{context state isRequired(pullRequestNumber:$number)}}}}}}}}}}`;
 
 function gh(args) {
   const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -259,10 +182,7 @@ async function main() {
       if (data.errors?.length) throw new Error(data.errors[0].message);
       snap = snapshotFromGraphql(data.data);
       const now = new Date().toISOString();
-      const dirty = snap.mergeStateStatus === "DIRTY" || snap.mergeable === "CONFLICTING";
-      state.dirtySince = dirty ? state.dirtySince ?? now : null;
-      const idle = analyzeChecks(snap.checks).green && !["checking", "merged"].includes(snap.mergify.state);
-      state.idleSince = idle ? state.idleSince ?? now : null;
+      track(state, snap, now);
       decision = decide(snap, { until: opts.until, now, dirtySince: state.dirtySince, idleSince: state.idleSince });
     } catch (error) {
       if (opts.once) { console.error(`pr-watch: ${error.message}`); return EXIT.ERROR; }
