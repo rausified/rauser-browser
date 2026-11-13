@@ -434,6 +434,10 @@ def fast_forward_to(d: "Deploy", runner: Runner, repo: Path, old: str, expected:
         raise DeployError(f"--expected-sha {expected} is not a commit here even after fetching "
                           "origin main; nothing was deployed")
     full = res.text.strip()
+    if not full.startswith(expected):
+        # git prefers a ref with this name (a branch or tag "abcdef0") to a short SHA.
+        raise DeployError(f"--expected-sha {expected} resolves to {full[:COMMIT_LENGTH]}, a ref "
+                          "with that name, not the commit; pass the full 40-character SHA")
     if git(runner, repo, "merge-base", "--is-ancestor", full, "origin/main").returncode != 0:
         raise DeployError(f"--expected-sha {full[:COMMIT_LENGTH]} is not on origin/main; "
                           "nothing was deployed")
@@ -868,6 +872,9 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
                 now = d.clock()
                 drain_marker = write_drain(support, now + drain_timeout + DRAIN_GRACE, now)
                 d.say(f"    paused new runs ({drain_marker})")
+                # A start_run that passed the pause check just before the
+                # marker landed may not have written its status.json yet.
+                d.sleep(DRAIN_POLL)
                 drain_runs(d, support, drain_timeout, args.allow_active_runs, late)
         d.step(f"runs in {support / 'runs'} (again, before the binary is published)")
         # A dry run waits for nothing, so the runs a drain would wait for

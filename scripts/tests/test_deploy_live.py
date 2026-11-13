@@ -68,6 +68,7 @@ class FakeRunner:
         self.node_import_error = None
         self.history = [OLD, MID, NEW]  # origin/main, oldest first
         self.remote_head = NEW  # what git ls-remote reports for origin main
+        self.refs: dict = {}  # ref name -> commit, for names that look like short SHAs
 
     # Calls whose first words match one of these act on the system.
     ACTING = ("pull", "fetch", "merge", "cargo", "npm", "node", "binary", "hygiene-apply",
@@ -107,6 +108,8 @@ class FakeRunner:
             return dl.Result(0, (self.head + "\n").encode())
         if k == "rev-parse" and "--verify" in argv:
             want = argv[-1].removesuffix("^{commit}")
+            if want in self.refs:  # git prefers a ref with this name over a short SHA
+                return dl.Result(0, (self.refs[want] + "\n").encode())
             found = [c for c in self.history if c.startswith(want)]
             if len(found) != 1:
                 return dl.Result(128, b"", b"fatal: Needed a single revision")
@@ -923,6 +926,15 @@ class ExpectedSha(Fixture):
         self.assertNotIn("merge", self.kinds())
         self.assertIn(f"0.1.0+{MID[:12]}", out)
 
+    def test_a_ref_named_like_the_sha_is_refused(self):
+        # A branch or tag called "abcdef0" wins over the short SHA in rev-parse.
+        self.runner.refs = {NEW[:7]: MID}
+        code, out = self.deploy("--expected-sha", NEW[:7])
+        self.assertEqual(code, 1, out)
+        self.assertIn("resolves to", out)
+        self.assertNotIn("merge", self.kinds())
+        self.assertNotIn("cargo", self.kinds())
+
     def test_a_malformed_sha_is_refused_before_acting(self):
         for bad in ("xyz", "abc", "ABCDEF0", NEW + "0"):
             code, out = self.deploy("--expected-sha", bad)
@@ -1092,7 +1104,38 @@ class Drain(Fixture):
         self.add_run("r-dead", "running", service_pid=4242)
         code, out = self.deploy("--drain")
         self.assertEqual(code, 0, out)
-        self.assertEqual(self.slept, [])
+        self.assertEqual(self.slept, [dl.DRAIN_POLL])  # only the settle after pausing
+
+    def test_settles_one_poll_after_pausing_before_the_first_scan(self):
+        # A start_run that passed the pause check just before the marker
+        # landed may still be writing its status.json; wait it out.
+        scans = []
+        real = dl.active_runs
+
+        def scan(*a, **k):
+            scans.append((self.marker().exists(), sum(self.slept)))
+            return real(*a, **k)
+        with mock.patch.object(dl, "active_runs", side_effect=scan):
+            code, out = self.deploy("--drain")
+        self.assertEqual(code, 0, out)
+        paused = [slept for exists, slept in scans if exists]
+        self.assertTrue(paused, scans)
+        self.assertGreaterEqual(paused[0], dl.DRAIN_POLL)
+
+    def test_a_run_admitted_as_the_pause_lands_is_waited_for(self):
+        self.alive = {91}
+        added = []
+
+        def admit():
+            if not added:  # appears during the settle, after the marker
+                added.append(self.add_run("r-race", "running", service_pid=91))
+            else:
+                (self.support / "runs" / "r-race" / "status.json").write_text(
+                    json.dumps({"version": 1, "run_id": "r-race", "state": "succeeded"}))
+        self.on_sleep = admit
+        code, out = self.deploy("--drain")
+        self.assertEqual(code, 0, out)
+        self.assertIn("waiting for: r-race", out)
 
     def test_dry_run_writes_no_marker(self):
         self.alive = {79}

@@ -140,34 +140,83 @@ test("an empty change list runs the dev-tools tests, so a failed diff never skip
 // and scripts/pr-constants.mjs, which the first cut of devToolsReasons missed.
 // Every checkout path a Python test names (`ROOT / "x"`, `SCRIPTS / "dev" /
 // "queue"`, a "scripts/..." literal) must select the dev-tools tests.
+// The checkout paths one Python test file names, relative to the repository
+// root. `base` is ROOT, REPO, SCRIPTS or SCRIPTS.parent, or a local alias of
+// one (`root = SCRIPTS.parent`, then `root / ".beads" / "README.md"`: #443
+// read .beads/README.md that way, and this guard missed it).
+function namedCheckoutPaths(name, source) {
+  const named = new Set();
+  const bases = { ROOT: "", REPO: "", SCRIPTS: "scripts", "SCRIPTS.parent": "" };
+  for (const [, alias, base] of source.matchAll(/^\s*(\w+)\s*=\s*(ROOT|REPO|SCRIPTS\.parent|SCRIPTS)\s*$/gm)) {
+    bases[alias] = bases[base];
+  }
+  const names = Object.keys(bases).sort((a, b) => b.length - a.length).map((b) => b.replace(".", "\\."));
+  const chainRe = new RegExp(`(?<![\\w.])(${names.join("|")})((?:\\s*\\/\\s*["'][^"']+["'])+)`, "g");
+  for (const [, base, chain] of source.matchAll(chainRe)) {
+    const parts = [...chain.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+    named.add([bases[base], ...parts].filter(Boolean).join("/"));
+  }
+  for (const [, literal] of source.matchAll(/["'](scripts\/[^"'\s]+)["']/g)) named.add(literal);
+  // `NAME = Path(__file__).resolve()<up>[ / "a" / "b"]`: resolve it ourselves, and
+  // refuse a base name the extractor above does not follow (#431 review M4), so a
+  // test reading the checkout through, say, REPO_ROOT cannot slip past this guard.
+  for (const [, variable, up, chain] of source.matchAll(/^(\w+)\s*=\s*(?:pathlib\.)?Path\(__file__\)\.resolve\(\)((?:\.parents\[\d\]|\.parent)+)((?:\s*\/\s*["'][^"']+["'])*)/gm)) {
+    const depth = [...up.matchAll(/\.parent(?:s\[(\d)\])?/g)].reduce((sum, m) => sum + (m[1] === undefined ? 1 : Number(m[1]) + 1), 0);
+    const base = ["scripts/tests", "scripts", ""][depth - 1];
+    assert.notEqual(base, undefined, `${name}: ${variable} climbs ${depth} levels above scripts/tests`);
+    const parts = [...chain.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+    if (parts.length) named.add([base, ...parts].filter(Boolean).join("/"));
+    else assert.equal(base, { ROOT: "", REPO: "", SCRIPTS: "scripts" }[variable],
+      `${name}: ${variable} (${base || "the repository root"}) is a checkout base this guard does not follow; name it ROOT or REPO (root) or SCRIPTS (scripts/)`);
+  }
+  return named;
+}
+
+// The Dev tools job's sparse-checkout list in pr-hygiene.yml. Windows
+// checkouts use CRLF, so normalize line endings before matching on "\n".
+function devToolsSparseCheckout(text) {
+  const workflow = text.replace(/\r\n/g, "\n");
+  const job = workflow.slice(workflow.indexOf("\n  dev-tools:"));
+  const block = job.match(/sparse-checkout: \|\n((?:\s{12}\S.*\n)+)/);
+  assert.ok(block, "the Dev tools job has a sparse-checkout list");
+  return block[1].split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+// Whether a cone-mode sparse checkout of `dirs` holds `file`: cone mode
+// always brings the files at the repository root.
+function sparseHolds(dirs, file) {
+  return !file.includes("/") || dirs.some((dir) => file === dir || file.startsWith(`${dir}/`));
+}
+
+test("the checkout path extractor follows local aliases of the repository root", () => {
+  const source = 'class T:\n    def test(self):\n        root = SCRIPTS.parent\n' +
+    '        text = (root / ".beads" / "README.md").read_text()\n        x = (SCRIPTS / "dev" / "queue")\n';
+  assert.deepEqual([...namedCheckoutPaths("t.py", source)].sort(), [".beads/README.md", "scripts/dev/queue"]);
+});
+
+test("a cone-mode sparse checkout holds its directories and the root files only", () => {
+  const dirs = ["scripts", "docs/backlog"];
+  assert.ok(sparseHolds(dirs, "worker-contract.json"));
+  assert.ok(sparseHolds(dirs, "scripts/dev/queue"));
+  assert.ok(sparseHolds(dirs, "docs/backlog/frame.md"));
+  assert.ok(!sparseHolds(dirs, ".beads/README.md"));
+  assert.ok(!sparseHolds(dirs, "docs/backlogs/x.md"));
+});
+
 test("every checkout path the Python dev-tools tests name selects them", () => {
   const repo = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
   const tests = readdirSync(path.join(repo, "scripts", "tests")).filter((name) => name.endsWith(".py"));
   const named = new Set();
   for (const name of tests) {
-    const source = readFileSync(path.join(repo, "scripts", "tests", name), "utf8");
-    for (const [, base, chain] of source.matchAll(/\b(ROOT|REPO|SCRIPTS\.parent|SCRIPTS)((?:\s*\/\s*["'][^"']+["'])+)/g)) {
-      const parts = [...chain.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
-      named.add([...(base === "SCRIPTS" ? ["scripts"] : []), ...parts].join("/"));
-    }
-    for (const [, literal] of source.matchAll(/["'](scripts\/[^"'\s]+)["']/g)) named.add(literal);
-    // `NAME = Path(__file__).resolve()<up>[ / "a" / "b"]`: resolve it ourselves, and
-    // refuse a base name the extractor above does not follow (#431 review M4), so a
-    // test reading the checkout through, say, REPO_ROOT cannot slip past this guard.
-    for (const [, variable, up, chain] of source.matchAll(/^(\w+)\s*=\s*(?:pathlib\.)?Path\(__file__\)\.resolve\(\)((?:\.parents\[\d\]|\.parent)+)((?:\s*\/\s*["'][^"']+["'])*)/gm)) {
-      const depth = [...up.matchAll(/\.parent(?:s\[(\d)\])?/g)].reduce((sum, m) => sum + (m[1] === undefined ? 1 : Number(m[1]) + 1), 0);
-      const base = ["scripts/tests", "scripts", ""][depth - 1];
-      assert.notEqual(base, undefined, `${name}: ${variable} climbs ${depth} levels above scripts/tests`);
-      const parts = [...chain.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
-      if (parts.length) named.add([base, ...parts].filter(Boolean).join("/"));
-      else assert.equal(base, { ROOT: "", REPO: "", SCRIPTS: "scripts" }[variable],
-        `${name}: ${variable} (${base || "the repository root"}) is a checkout base this guard does not follow; name it ROOT or REPO (root) or SCRIPTS (scripts/)`);
-    }
+    for (const file of namedCheckoutPaths(name, readFileSync(path.join(repo, "scripts", "tests", name), "utf8"))) named.add(file);
   }
   const existing = [...named].filter((file) => existsSync(path.join(repo, file)));
   assert.ok(existing.includes("worker-contract.json") && existing.includes("scripts/dev/queue-pr.mjs"), [...named].join(", "));
+  // ...and that the Dev tools job checks it out (#443: .beads/README.md was outside it).
+  const sparse = devToolsSparseCheckout(readFileSync(path.join(repo, ".github", "workflows", "pr-hygiene.yml"), "utf8"));
   for (const file of existing) {
     const probe = statSync(path.join(repo, file)).isDirectory() ? `${file}/probe.py` : file; // a directory: what a test imports or reads from it
     assert.notDeepEqual(devToolsReasons([probe]), [], `${file} is read by a Python test but does not select the dev-tools tests`);
+    assert.ok(sparseHolds(sparse, file), `${file} is read by a Python test but the Dev tools job's sparse checkout (${sparse.join(", ")}) leaves it out`);
   }
 });
