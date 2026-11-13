@@ -119,7 +119,7 @@ test("a change that touches no Python dev tool skips the dev-tools tests", () =>
     "scripts/tests/pr-watch.test.mjs",
     "scripts/ci-macos.mjs",
     "scripts/smoke-macos.mjs",
-    "docs/history.md",
+    "DESIGN.md",
     "README.md",
     "Cargo.lock",
   ]), []);

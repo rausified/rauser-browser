@@ -46,14 +46,23 @@ def check(root: pathlib.Path) -> list[str]:
     if DATED_HEADING.search(text):
         errors.append(f"{ENTRY_POINT}: holds a dated entry; put each entry in its own file under {FEED_DIR}/")
 
-    feed = root / FEED_DIR
+    return errors + check_entries(root, FEED_DIR, "feed entry")
+
+
+def check_entries(root: pathlib.Path, directory: pathlib.PurePosixPath, kind: str) -> list[str]:
+    """Checks a one-file-per-entry directory: each `YYYY-MM-DD-<slug>.md`
+    starts with `## <same date> — <title>`, holds no other `## ` heading and
+    ends with one newline. scripts/check_split_docs.py uses it for
+    docs/history/ and docs/testing-log/."""
+    errors: list[str] = []
+    feed = root / directory
     if not feed.is_dir():
-        return errors + [f"{FEED_DIR}/ is missing"]
+        return [f"{directory}/ is missing"]
     for path in sorted(feed.iterdir()):
-        where = f"{FEED_DIR}/{path.name}"
+        where = f"{directory}/{path.name}"
         name = NAME_PATTERN.match(path.name)
         if not path.is_file() or name is None:
-            errors.append(f"{where}: not a feed entry; name entries YYYY-MM-DD-<slug>.md (lowercase slug)")
+            errors.append(f"{where}: not a {kind}; name entries YYYY-MM-DD-<slug>.md (lowercase slug)")
             continue
         try:
             body = path.read_text(encoding="utf-8")
@@ -71,7 +80,6 @@ def check(root: pathlib.Path) -> list[str]:
         if not body.endswith("\n") or body.endswith("\n\n"):
             errors.append(f"{where}: must end with exactly one newline")
     return errors
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])

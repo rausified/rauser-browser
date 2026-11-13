@@ -43,3 +43,7 @@ protocol/capture-site/starter-shapes.json merge=brauser-generated
 protocol/adapter-templates/starter-vectors.json merge=brauser-generated
 docs/adapters/README.md merge=brauser-generated
 protocol/starters/ids.lock.json merge=brauser-generated
+# AGENTS.md is hand-written around one generated block, the Current state
+# table (scripts/generate-current-state.mjs, from docs/agents/current-state/):
+# the driver merges the hand-written text and regenerates the table.
+AGENTS.md merge=brauser-generated

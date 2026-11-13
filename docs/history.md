@@ -3,6 +3,8 @@
 > This file is the append-only record of how Brauser's design got to where it is: dated decisions, as-built notes, superseded designs, probe and acceptance results, review reproductions, and the build log. It is not the contract. [DESIGN.md](../DESIGN.md) is the contract: what Brauser does and must do now. When a decision or an as-built note changes a rule, append the dated record here, under the section it concerns, and update DESIGN.md only to the resulting current rule. Never edit or delete a record here except to fix a broken link.
 >
 > Records are grouped by the DESIGN.md section they concern and keep their original dates and wording. Records moved here from DESIGN.md and AGENTS.md on 2026-10-28 (`brwr-m68`) are in their original order within each section. Relative links in moved text were written for the repository root; they are rewritten to work from `docs/`.
+>
+> New records go one per file in [docs/history/](history/) (2026-11-13, `brwr-jtd8`): name it `YYYY-MM-DD-<slug>.md`, start it with `## YYYY-MM-DD — Title`, and name the DESIGN.md section it concerns in its first sentence. This file takes no new records after 2026-11-13, so two pull requests never append at the same place; `scripts/check_split_docs.py` checks both. `npm run docs:history` prints this file and then every newer record, in order.
 
 ## §3.2 Native host — history
 

@@ -1252,10 +1252,13 @@ This standard is meant to improve with use. When you change it:
 
 - Update the relevant section directly; don't just append contradictions. If an approach stops working (for example, a Chrome update breaks a workaround), replace it and note what broke.
 - Mark untested claims in *italics* as untested until someone runs them.
-- Add a dated line to the learning log below with what you learned.
+- Add what you learned as its own file in `docs/testing-log/`, named `YYYY-MM-DD-<slug>.md` and starting `## YYYY-MM-DD — Title` (see "Learning log" below).
+- Put a new feature's section beside the section for the closest related feature, not at the end of the file: two pull requests that both append at the end conflict.
 - If a change alters the hard rule, confirm it with the user first.
 
 ## Learning log
+
+New entries go one per file in [docs/testing-log/](docs/testing-log/) (2026-11-13, `brwr-jtd8`), so two pull requests never add lines at the same place; this list takes no entries dated after 2026-11-13 (`scripts/check_split_docs.py`). `npm run docs:testing-log` prints this list and then every newer entry, in order.
 
 - 2026-11-12: Branch `jrausercisco/df-flakes` (delay-fix lane L4; `brwr-1kgh`, `brwr-3wyt`, `brwr-jzk9`, `brwr-sy7v`, `brwr-w7ma`). Five flakes, each a timing assumption: two fake-harness tests used elapsed-time budgets as hang guards (now a watchdog that records whether it fired, and a 120 s guard); a panel test waited on `list_runs` plus 20 ms while startup's stored-notice read came later (now waits for startup's `sync_now`); the smoke killed a host inside the host's own bounds; a smoke click could land on a shifted layout with no trace; and the settings page's deferred background reload overwrote a canceled picker's status. Proven from the code and the CI logs, not under load (the new rule in "Waiting for state, not time"). Added `scripts/check-test-timing.mjs` ("Timing in tests").
 - 2026-11-10: Branch `feat/macos-release-packaging` (`brwr-3ppp`). The macOS

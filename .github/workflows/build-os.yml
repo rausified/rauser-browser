@@ -115,6 +115,11 @@ jobs:
         shell: bash
         run: |
           printf 'TMP=%s\nTEMP=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      # Before the status check, which runs Node checks of AGENTS.md.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+          cache: npm
       - name: Verify generated protocol types
         run: python protocol/generate.py --check
       - name: Check contributor status documentation
@@ -140,10 +145,6 @@ jobs:
           BRAUSER_GUARD_PROPERTY_SEQUENCES: "2000"
       - name: Check Rust lints
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.14.0"
-          cache: npm
       - name: Install TypeScript tooling
         run: npm ci --ignore-scripts
       - name: Check starter family sources are generated

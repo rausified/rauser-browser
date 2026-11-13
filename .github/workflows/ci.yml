@@ -78,6 +78,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+      # check_current_state.py runs the Node checks of AGENTS.md (its
+      # generated Current state table, one sentence per line).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
       - name: Check contributor status documentation
         run: python scripts/check_current_state.py
       # The work queue lives in Dolt (refs/dolt/data), checked on a schedule

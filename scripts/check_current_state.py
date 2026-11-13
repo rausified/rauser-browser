@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Keep the short project-status summaries aligned with shipped M1.5a work.
 
-Also runs scripts/check_improvement_feed.py, so CI checks the feed's layout,
-and fails when the work queue is committed here: `.beads/issues.jsonl` and
+Also runs scripts/check_improvement_feed.py and scripts/check_split_docs.py,
+so CI checks the feed's and the split logs' layout; checks that AGENTS.md's
+Current state table is what docs/agents/current-state/ generates
+(scripts/generate-current-state.mjs --check) and that AGENTS.md stays one
+sentence per line (scripts/sentence-lines.mjs --check); and fails when the work queue is committed here: `.beads/issues.jsonl` and
 `BOSUN_FEATURE_BACKLOG.md` are not in git: the queue lives in bd's Dolt database
 and the backlog is rendered from docs/backlog/ (AGENTS.md "Work queue",
 worker-contract.json `never_commit`). It also checks the backlog frame's
@@ -17,6 +20,7 @@ import subprocess
 import sys
 
 import check_improvement_feed
+import check_split_docs
 import render_backlog
 
 
@@ -33,6 +37,27 @@ def committed_queue_files(root: pathlib.Path) -> list[str]:
     except OSError:
         return []
     return result.stdout.split() if result.returncode == 0 else []
+
+
+def node_checks(root: pathlib.Path) -> list[str]:
+    """The Node checks of AGENTS.md: its generated table and its line layout."""
+    errors: list[str] = []
+    for script, args in (
+        ("scripts/generate-current-state.mjs", ["--check"]),
+        ("scripts/sentence-lines.mjs", ["--check", "AGENTS.md"]),
+    ):
+        try:
+            result = subprocess.run(
+                ["node", script, *args], cwd=root, capture_output=True, text=True, check=False,
+            )
+        except OSError as error:
+            errors.append(f"{script}: cannot run node: {error}")
+            continue
+        if result.returncode != 0:
+            errors.extend(line for line in (result.stderr or result.stdout).splitlines() if line.strip())
+            if not (result.stderr or result.stdout).strip():
+                errors.append(f"{script} {' '.join(args)} failed with exit code {result.returncode}")
+    return errors
 
 
 def normalized(text: str) -> str:
@@ -183,6 +208,8 @@ def main() -> int:
         errors.append("DESIGN.md status no longer records shipped record keys and views")
 
     errors.extend(check_improvement_feed.check(ROOT))
+    errors.extend(check_split_docs.check(ROOT))
+    errors.extend(node_checks(ROOT))
     frame = ROOT / render_backlog.FRAME_PATH
     try:
         text = frame.read_text(encoding="utf-8")

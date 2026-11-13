@@ -20,6 +20,9 @@ export const FIXTURE_PATHS = Object.freeze([
   "extension/starter-families.generated.ts",
   "scripts/generate-starters.mjs",
   "scripts/merge-generated.mjs",
+  "AGENTS.md",
+  "docs/agents/current-state",
+  "scripts/generate-current-state.mjs",
 ]);
 
 export const STARTER_OUTPUTS = Object.freeze([
@@ -84,6 +87,7 @@ export function addFamily(repo, name) {
 }
 
 export const genStarters = (repo, ...flags) => run(process.execPath, [join(repo, "scripts/generate-starters.mjs"), "--root", repo, ...flags], { cwd: repo, ok: [0, 1] });
+export const genCurrentState = (repo, ...flags) => run(process.execPath, [join(repo, "scripts/generate-current-state.mjs"), "--root", repo, ...flags], { cwd: repo, ok: [0, 1] });
 export const genProtocol = (repo, ...flags) => run("python3", [join(repo, "protocol/generate.py"), ...flags], { cwd: repo, ok: [0, 1] });
 
 /** Adds a request message `name` (wire type `type`) to protocol/schema.json,
