@@ -134,6 +134,8 @@ Brauser has two kinds of instruction files. Keep them apart.
 
 Run the commands in [README.md](README.md#development) before proposing a code change. The Rust version is pinned in `rust-toolchain.toml`. `deny.toml` is the Rust dependency policy (license allowlist; no wildcard versions, unknown registries, or unknown git sources) that CI's `cargo-deny` job enforces — run `cargo deny check --all-features --locked` before adding or upgrading a Rust dependency. After changing either adapter-template engine, run `npm run test:adapter-diff` (differential testing against the shared vectors, `adapter-templates.md` §12).
 
+Generated files regenerate on merge when you opt in with `scripts/dev/setup-merge-drivers` (once per clone): the `brauser-generated` driver (`scripts/merge-generated.mjs`, `.gitattributes`) resolves a `git merge` conflict in the protocol's generated types or the starter outputs by rerunning the generator on the merged sources and its `--check`, merges `protocol/starters/ids.lock.json` as the ordered union of both sides, and otherwise leaves an ordinary conflict. The PR doctor always uses main's copy.
+
 Shell traps and local habits (these cost several sessions time in 2026-11):
 
 - zsh does not word-split a variable, so `R="--repo x"; gh pr list $R` passes one argument; write `--repo rausified/rauser-browser` out in each command.

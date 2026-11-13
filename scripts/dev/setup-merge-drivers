@@ -1,0 +1,34 @@
+#!/usr/bin/env node
+
+// Registers (or removes) the `brauser-generated` merge driver in this
+// repository's git config, which every worktree of the clone shares.
+// .gitattributes names the generated files that use it; scripts/merge-generated.mjs
+// says what it does. Opt in: without this, git merges those files as plain
+// text, as before. The PR doctor configures it itself (scripts/pr-doctor.mjs).
+//
+// Usage: scripts/dev/setup-merge-drivers [--tools <dir>] [--unset] [--show]
+//   (no flags)   run each worktree's own scripts/merge-generated.mjs
+//   --tools dir  run <dir>/merge-generated.mjs instead (a trusted copy)
+//   --unset      remove the driver
+//   --show       print the configured driver command and exit
+
+import { spawnSync } from "node:child_process";
+import { parseArgs } from "node:util";
+
+import { DRIVER, configure, unconfigure } from "../merge-generated.mjs";
+
+const { values } = parseArgs({
+  options: { tools: { type: "string" }, unset: { type: "boolean" }, show: { type: "boolean" } },
+});
+if (values.show) {
+  const shown = spawnSync("git", ["config", "--get", `merge.${DRIVER}.driver`], { encoding: "utf8" });
+  process.stdout.write(shown.status === 0 ? shown.stdout : "not configured\n");
+  process.exit(shown.status === 0 ? 0 : 1);
+}
+if (values.unset) {
+  unconfigure();
+  console.log(`removed merge.${DRIVER}`);
+} else {
+  configure({ tools: values.tools ?? null });
+  console.log(`configured merge.${DRIVER}; the generated files .gitattributes marks merge=${DRIVER} now regenerate on git merge`);
+}

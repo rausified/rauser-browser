@@ -256,6 +256,52 @@ async function doctorRepair(t, { conflicting }) {
   }
 }
 
+test("tryRepair regenerates a PR whose only conflicts are generated files", { skip: process.platform === "win32" }, async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const { cpSync, mkdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { ENV, STARTER_OUTPUTS, addFamily, commitAll, genStarters, git, makeFixture } = await import("./generated-fixture.mjs");
+  const { root, repo, cleanup } = makeFixture();
+  const saved = { ...process.env };
+  const cwd = process.cwd();
+  try {
+    // Main gained one family since the PR branched; the PR adds another.
+    for (const [branch, name] of [["main-next", "widgeta"], ["feat/family", "widgetb"]]) {
+      git(repo, ["checkout", "-q", "-b", branch, "main"]);
+      addFamily(repo, name);
+      assert.equal(genStarters(repo).code, 0);
+      commitAll(repo, `add ${name}`);
+    }
+    git(repo, ["checkout", "-q", "main"]);
+    git(repo, ["merge", "-q", "--ff-only", "main-next"]);
+    const origin = join(root, "origin.git");
+    git(root, ["clone", "-q", "--bare", repo, origin]);
+    const clone = join(root, "clone");
+    git(root, ["clone", "-q", origin, clone]);
+    // Main's tools, as the workflow copies them.
+    const tools = join(root, "tools");
+    mkdirSync(tools);
+    for (const [from, to] of [["scripts/merge-generated.mjs", "merge-generated.mjs"], ["scripts/generate-starters.mjs", "generate-starters.mjs"], ["protocol/generate.py", "generate.py"]]) {
+      cpSync(join(repo, from), join(tools, to));
+    }
+    Object.assign(process.env, ENV);
+    process.chdir(clone);
+    const result = tryRepair({ number: 7, headRefName: "feat/family" }, tools, false);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.ok(result.files.includes("extension/starter-families.generated.ts (regenerated from the merged sources)"), result.files.join("\n"));
+    assert.ok(result.files.includes("protocol/starters/ids.lock.json (regenerated from the merged sources)"), result.files.join("\n"));
+    assert.equal(git(clone, ["rev-list", "--parents", "-n", "1", "HEAD"]).out.trim().split(" ").length, 3, "a merge commit");
+    assert.equal(genStarters(clone, "--check").code, 0, genStarters(clone, "--check").out);
+    assert.equal(git(clone, ["status", "--porcelain"]).out, "");
+    for (const file of STARTER_OUTPUTS) assert.doesNotMatch(git(clone, ["show", `HEAD:${file}`]).out, /^<{7} /m, file);
+  } finally {
+    process.chdir(cwd);
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+    cleanup();
+  }
+});
+
 test("scratch-repo git env turns background maintenance off and keeps existing entries", () => {
   const env = quietGitEnv({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "!echo" });
   assert.equal(env.GIT_CONFIG_COUNT, "4");

@@ -10,8 +10,9 @@ name: PR doctor
 # A PR that conflicts with main runs no CI, so auto-merge waits on it forever
 # with nothing failing. This finds those PRs, merges main into the ones whose
 # conflicts are only old work-queue files (their bead edits are applied
-# through bd and synced to refs/dolt/data, AGENTS.md "Work queue") or
-# both-sides-appended Markdown, and labels and comments on the rest
+# through bd and synced to refs/dolt/data, AGENTS.md "Work queue"),
+# both-sides-appended Markdown or generated files (regenerated from the merged
+# sources by scripts/merge-generated.mjs), and labels and comments on the rest
 # (AGENTS.md "PR doctor", scripts/pr-doctor.mjs).
 #
 # Repairs are pushed only with the PR_DOCTOR_TOKEN secret (a fine-grained
@@ -82,7 +83,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/pr-doctor/dev"
           cp scripts/pr-doctor.mjs scripts/pr-constants.mjs scripts/work_queue.py scripts/render_backlog.py \
-            scripts/check_queue_consistency.py "$RUNNER_TEMP/pr-doctor/"
+            scripts/check_queue_consistency.py scripts/merge-generated.mjs scripts/generate-starters.mjs \
+            "$RUNNER_TEMP/pr-doctor/"
+          # The generated-file merge driver runs only these copies of the generators.
+          cp protocol/generate.py "$RUNNER_TEMP/pr-doctor/generate.py"
           # pr-doctor.mjs imports these; keep their relative layout.
           cp scripts/dev/queue-pr.mjs "$RUNNER_TEMP/pr-doctor/dev/"
           git config user.name "PR doctor"

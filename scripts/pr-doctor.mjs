@@ -14,7 +14,13 @@
 //     files from the PR. An edit that conflicts is left to a person, with
 //     instructions;
 //   - Markdown conflicts where both sides only inserted text at the same point
-//     (a diff3 hunk with an empty base), keeping main's text first, then the PR's.
+//     (a diff3 hunk with an empty base), keeping main's text first, then the PR's;
+//   - generated files (.gitattributes `merge=brauser-generated`): main's copy
+//     of scripts/merge-generated.mjs regenerates them from the merged sources
+//     with main's generators and their --check, and after the merge every
+//     output of a generator it ran is rewritten from that same regeneration,
+//     so an output only one side changed cannot stay stale. A merge that
+//     changes a generator, or conflicts in its inputs, is left to a person.
 // Anything else (code, a changed line, a file added on both sides) is left to
 // a person: the PR gets the `needs-merge` label and one sticky comment listing
 // the files. A repair is pushed without force, and only when PR_DOCTOR_PUSH=1
@@ -22,8 +28,9 @@
 // otherwise the doctor reports what it would do.
 //
 // Usage: node scripts/pr-doctor.mjs --tools <dir> [--dry-run]
-//   <dir> holds main's work_queue.py, render_backlog.py and
-//   check_queue_consistency.py. Run from a full clone of the repo whose
+//   <dir> holds main's work_queue.py, render_backlog.py,
+//   check_queue_consistency.py, merge-generated.mjs, generate-starters.mjs
+//   and protocol/generate.py (as generate.py). Run from a full clone of the repo whose
 //   `origin` is GitHub; GH_TOKEN and GITHUB_REPOSITORY must be set.
 
 import { spawnSync } from "node:child_process";
@@ -32,6 +39,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { GENERATORS, configure as configureMergeDrivers, regenerate } from "./merge-generated.mjs";
 import { DOCTOR_MARKER, DOCTOR_SKIP_LABEL, NEEDS_MERGE_LABEL, QUEUE_COMMENT, QUEUE_LABEL } from "./pr-constants.mjs";
 import { queueAfterPush } from "./dev/queue-pr.mjs";
 
@@ -147,8 +155,8 @@ export function requeueAfterPush({ sha, headOf, comment, wait, limitMs = 60000, 
 
 // --- I/O ----------------------------------------------------------------------
 
-function sh(cmd, args, { cwd, check = true, input } = {}) {
-  const result = spawnSync(cmd, args, { cwd, input, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+function sh(cmd, args, { cwd, check = true, input, env } = {}) {
+  const result = spawnSync(cmd, args, { cwd, input, env: env ? { ...process.env, ...env } : process.env, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   if (result.error) throw result.error;
   if (check && result.status !== 0) {
     throw new Error(`${cmd} ${args.join(" ")} exited ${result.status}: ${(result.stderr || result.stdout).trim()}`);
@@ -202,6 +210,32 @@ function stage(number, file) {
 
 const exists = (spec) => git(["cat-file", "-e", spec], { check: false }).code === 0;
 
+/** After a merge, the files the generated-file driver resolved (its log),
+ * each named with how. For every generator it regenerated, all of that
+ * generator's outputs are written from the same regeneration and staged:
+ * git takes an output only one side changed without asking the driver, and
+ * that side's copy can be stale against the merged sources. */
+function regeneratedFiles({ log, ours, other, tools }) {
+  let lines = [];
+  try {
+    lines = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => line.split("\t"));
+  } catch {
+    return [];
+  }
+  const out = lines.map(([path, how]) => `${path} (${how === "union" ? "union of both sides' ids" : "regenerated from the merged sources"})`);
+  for (const generator of GENERATORS) {
+    if (!lines.some(([path, how]) => how === "regenerated" && generator.outputs.includes(path))) continue;
+    const result = regenerate(generator, { ours, other, tools });
+    if (!result.ok) continue;
+    for (const [path, text] of Object.entries(result.files)) {
+      if (lines.some(([logged]) => logged === path)) continue;
+      writeFileSync(path, text);
+      git(["add", "--", path]);
+    }
+  }
+  return out;
+}
+
 /** Merges main into the PR branch in this clone; { ok, files, sha? }.
  * Queue edits are synced to refs/dolt/data only when `canPush`. */
 export function tryRepair(pr, tools, canPush) {
@@ -213,6 +247,8 @@ export function tryRepair(pr, tools, canPush) {
   const gitDir = git(["rev-parse", "--git-common-dir"]).stdout.trim();
   mkdirSync(join(gitDir, "info"), { recursive: true });
   writeFileSync(join(gitDir, "info", "attributes"), git(["show", "origin/main:.gitattributes"], { check: false }).stdout);
+  // Main's generated-file merge driver, running main's generators only.
+  configureMergeDrivers({ tools });
 
   // A PR cut before the queue left git still edits the committed files.
   // Check its edits against the database and main's frame first, then drop
@@ -231,11 +267,15 @@ export function tryRepair(pr, tools, canPush) {
       git(["commit", "-q", "-m", "Drop the work-queue files (PR doctor)\n\nTheir edits are applied through bd in the merge that follows (AGENTS.md \"Work queue\")."]);
     }
 
-    const message = `Merge main into ${branch} (PR doctor)\n\nAutomatic: work-queue and both-sides-appended Markdown conflicts only (scripts/pr-doctor.mjs).`;
+    const message = `Merge main into ${branch} (PR doctor)\n\nAutomatic: work-queue, both-sides-appended Markdown and regenerated generated-file conflicts only (scripts/pr-doctor.mjs).`;
+    const ours = git(["rev-parse", "HEAD"]).stdout.trim();
+    const other = git(["rev-parse", "origin/main"]).stdout.trim();
+    const driverLog = join(tmp, "merge-driver.log");
+    const driverEnv = { BRAUSER_MERGE_TOOLS: tools, BRAUSER_MERGE_LOG: driverLog, BRAUSER_MERGE_PYTHON: process.env.PR_DOCTOR_PYTHON || "python3" };
     // Exact renames only: main's frame is most of the old backlog's text, and
     // git would otherwise pair them and conflict on the frame.
-    const merge = git(["-c", "merge.conflictStyle=diff3", "merge", "-q", "--no-ff", "--no-commit", "-Xfind-renames=100%", "-m", message, "origin/main"], { check: false });
-    const resolved = [];
+    const merge = git(["-c", "merge.conflictStyle=diff3", "merge", "-q", "--no-ff", "--no-commit", "-Xfind-renames=100%", "-m", message, "origin/main"], { check: false, env: driverEnv });
+    const resolved = regeneratedFiles({ log: driverLog, ours, other, tools });
     if (merge.code !== 0) {
       const files = unmerged();
       if (files.length === 0) {
