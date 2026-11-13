@@ -255,15 +255,18 @@ test("a summary that finishes after a tab switch leaves the new tab's line alone
 test("a worker notice for a tab the panel has not followed yet shows once that tab is followed", async () => {
   const session = new Map();
   const page = await summarizePanel({ session, local: new Map([[WARNING_SEEN_KEY, true]]) });
-  // Startup reads (and clears) whatever was stored before the panel loaded.
-  await until(() => page.sent("list_runs").length === 1, "startup's list_runs");
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Startup reads (and clears, whatever tab it names) the notice stored
+  // before the panel loaded, after restoring cards. Its next step is the
+  // sync_now replay, so a notice stored once that is sent cannot be the one
+  // startup drops. (Waiting on list_runs plus a fixed delay raced that read on
+  // a slow Windows runner, brwr-3wyt.)
+  await until(() => page.state.workerRequests.some((request) => request.kind === "sync_now"), "startup replay");
   // The shortcut fired on tab 2 just after it was activated, while the panel
   // still followed tab 1: the live notice is not for the followed tab.
   const notice = { kind: "summarize_failed", message: "Tab two failed early.", tab_id: 2, at: Date.now() };
   session.set(PANEL_NOTICE_KEY, notice);
+  // The live notice is delivered and judged synchronously.
   page.notify(notice);
-  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.doesNotMatch(page.el("run-area").textContent, /Tab two failed early/);
   assert.ok(session.has(PANEL_NOTICE_KEY), "a notice for another tab stays stored");
 

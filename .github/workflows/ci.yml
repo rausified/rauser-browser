@@ -157,6 +157,36 @@ jobs:
       - name: Check adapter-template fuzz targets compile
         run: cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
 
+  # The repository is public and its rule is synthetic data only. This scans
+  # every tracked file and the change's commit messages against scripts/privacy-denylist.sha256, salted hashes of known-real
+  # identifiers (scripts/privacy-scan.mjs). It runs for every change, docs-only
+  # included, because plans and fixtures are where real identifiers slipped in
+  # (#394, #400).
+  privacy-scan:
+    name: Privacy scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+      # A PR scans its own commits (the merge commit's second parent, minus
+      # base); a push scans every pushed commit. The PR title and body are
+      # scanned by pr-hygiene.yml's PR owner job, which reruns on an edit.
+      - name: Scan the tree and commit messages for known real identifiers
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          range='HEAD^!'
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            range='HEAD^1..HEAD^2'
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..HEAD"
+          fi
+          node scripts/privacy-scan.mjs --tree --commits "$range"
+
   # GitHub's hosted macos-15 pool is sometimes starved: the job is never
   # acquired by a runner and GitHub cancels it with zero steps run. The job
   # shows as cancelled, and `needs.<job>.result` reads 'abandoned' (seen live
@@ -224,10 +254,11 @@ jobs:
   # only when that job was starved of a runner, the macos-15-intel (x64)
   # fallback; when it does not, macOS must have been skipped. A docs-only
   # change passes when the classifier ran, both builds were skipped as
-  # intended, and docs-checks passed.
+  # intended, and docs-checks passed. Every change, docs-only included, also
+  # needs the privacy scan.
   build-gate:
     name: Build and check
-    needs: [changes, docs-checks, a11y, fuzz-check, build-macos, build-windows, macos-starvation-check, build-macos-fallback]
+    needs: [changes, docs-checks, a11y, fuzz-check, privacy-scan, build-macos, build-windows, macos-starvation-check, build-macos-fallback]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -239,14 +270,16 @@ jobs:
           DOCS: ${{ needs.docs-checks.result }}
           A11Y: ${{ needs.a11y.result }}
           FUZZ: ${{ needs.fuzz-check.result }}
+          PRIVACY: ${{ needs.privacy-scan.result }}
           MACOS: ${{ needs.build-macos.result }}
           WINDOWS: ${{ needs.build-windows.result }}
           STARVED: ${{ needs.macos-starvation-check.outputs.starved }}
           FALLBACK: ${{ needs.build-macos-fallback.result }}
         run: |
-          echo "classify: $CHANGES (docs only: ${DOCS_ONLY:-n/a}; macOS needed: ${MACOS_NEEDED:-n/a}); docs checks: $DOCS; accessibility: $A11Y; fuzz targets: $FUZZ"
+          echo "classify: $CHANGES (docs only: ${DOCS_ONLY:-n/a}; macOS needed: ${MACOS_NEEDED:-n/a}); docs checks: $DOCS; accessibility: $A11Y; fuzz targets: $FUZZ; privacy scan: $PRIVACY"
           echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-15-intel fallback: $FALLBACK"
           test "$CHANGES" = success
+          test "$PRIVACY" = success
           if [ "$DOCS_ONLY" = true ]; then
             test "$DOCS" = success && test "$MACOS" = skipped && test "$WINDOWS" = skipped && test "$FUZZ" = skipped
             exit 0
