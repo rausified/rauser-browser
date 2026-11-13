@@ -4,7 +4,7 @@
 >
 > Companion specification: [adapter-templates.md](adapter-templates.md), the adapter-template language artifact adapters are written in (§7.2), built in §12.2 step 6.2.
 >
-> History: [docs/history.md](docs/history.md) is the append-only record of dated decisions, as-built notes, probe and acceptance results, review reproductions, and superseded designs. This file is the contract: what Brauser does and must do now. Record a new decision or as-built note in docs/history.md under its section, and change this file only to state the resulting current rule.
+> History: [docs/history.md](docs/history.md) is the append-only record of dated decisions, as-built notes, probe and acceptance results, review reproductions, and superseded designs. This file is the contract: what Brauser does and must do now. Record a new decision or as-built note as its own file in [docs/history/](docs/history/), naming the section it concerns (docs/history.md takes no new records after 2026-11-13), and change this file only to state the resulting current rule.
 
 ## 1. Purpose
 

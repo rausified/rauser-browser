@@ -67,6 +67,8 @@ export function isDocsOrQueuePath(path) {
 const DEV_TOOLS_INPUTS = [
   "worker-contract.json", "worker-contract.schema.json", ".gitattributes", "BRAUSER_IMPROVEMENT_FEED.md",
   "docs/improvement-feed/", "docs/backlog/", ".beads/",
+  // test_split_docs.py checks the real split logs.
+  "docs/history.md", "docs/history/", "TESTING.md", "docs/testing-log/",
   // test_worker_contract.py reads the merge command's tool and its constants;
   // test_deploy_live.py names the dev-host registration script deploy-live runs.
   "scripts/dev/queue-pr.mjs", "scripts/pr-constants.mjs", "scripts/register-dev-host.mjs",

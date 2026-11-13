@@ -31,7 +31,8 @@
 <!-- END GENERATED current-state -->
 
 The as-built notes this section used to hold, with their code pointers, are in [docs/history.md](docs/history.md#agentsmd-current-state--history).
-New dated decisions and as-built notes go to docs/history.md; update DESIGN.md only to the resulting current rule, and this table only when a component's state changes.
+New dated decisions and as-built notes go one per file in `docs/history/` (the opening of docs/history.md says how); update DESIGN.md only to the resulting current rule, and this table only when a component's state changes.
+The table is generated: edit or add its row file in `docs/agents/current-state/` (one row per file, one sentence or clause per line, rows in file-name order), then run `npm run gen:current-state`; `scripts/check_current_state.py` fails a table that does not match its rows.
 
 Invariants to keep while changing these components:
 
@@ -166,9 +167,10 @@ Keep them apart.
   A PR that conflicts with main runs no CI, so a queued PR waits forever with nothing failing.
   The doctor lists open same-repo PRs into main that GitHub reports as conflicting.
   It merges main into each one using main's `.gitattributes` and main's copies of `work_queue.py`, `render_backlog.py` and `check_queue_consistency.py`, never the PR's.
-  It resolves only two kinds of conflict.
+  It resolves only three kinds of conflict.
   One is an old PR that still edits `.beads/issues.jsonl` or `BOSUN_FEATURE_BACKLOG.md`, which left git ("Work queue"): it checks the PR's queue edits against the database and main's frame, drops both files on the PR side, merges main (exact renames only), then applies the bead edits through bd and syncs (`work_queue.py adopt`, in a database the workflow bootstraps from `refs/dolt/data`) and commits the PR's backlog prose into `docs/backlog/frame.md`; a queue edit that conflicts, or a workflow run without a database, is left to a person with instructions.
-  The other is Markdown hunks where both sides only inserted text (a diff3 hunk with an empty base; main's text first).
+  Another is Markdown hunks where both sides only inserted text (a diff3 hunk with an empty base; main's text first).
+  The third is generated files (`.gitattributes` `merge=brauser-generated`: the protocol's generated types, the starter outputs and `ids.lock.json`, and AGENTS.md's Current state table): main's copy of the `brauser-generated` driver (#446, "Local checks") regenerates them from the merged sources with main's generators and their `--check`, and a merge that changes a generator or conflicts in its inputs is left to a person.
   It pushes the merge without force and comments once on the PR (one sticky comment, updated in place, that mentions nobody).
   That push cancels any pending `@Mergifyio queue` request, so on a PR labelled `queue` the doctor then comments `@Mergifyio queue` again, once GitHub reports the pushed head (it polls for up to 60 seconds and comments anyway after that); before this, #318's request was cancelled by the doctor's merge push at 04:43Z on 2026-11-05 and nothing requeued it.
   Any other conflict gets the `needs-merge` label and a comment listing the files; resolve those yourself, and the label clears on the next run.
@@ -189,7 +191,7 @@ The Rust version is pinned in `rust-toolchain.toml`.
 `deny.toml` is the Rust dependency policy (license allowlist; no wildcard versions, unknown registries, or unknown git sources) that CI's `cargo-deny` job enforces — run `cargo deny check --all-features --locked` before adding or upgrading a Rust dependency.
 After changing either adapter-template engine, run `npm run test:adapter-diff` (differential testing against the shared vectors, `adapter-templates.md` §12).
 
-Generated files regenerate on merge when you opt in with `scripts/dev/setup-merge-drivers` (once per clone): the `brauser-generated` driver (`scripts/merge-generated.mjs`, `.gitattributes`) resolves a `git merge` conflict in the protocol's generated types or the starter outputs by rerunning the generator on the merged sources and its `--check`, merges `protocol/starters/ids.lock.json` as the ordered union of both sides, and otherwise leaves an ordinary conflict.
+Generated files regenerate on merge when you opt in with `scripts/dev/setup-merge-drivers` (once per clone): the `brauser-generated` driver (`scripts/merge-generated.mjs`, `.gitattributes`) resolves a `git merge` conflict in the protocol's generated types, the starter outputs or AGENTS.md's Current state table (whose hand-written rest it merges as text first) by rerunning the generator on the merged sources and its `--check`, merges `protocol/starters/ids.lock.json` as the ordered union of both sides, and otherwise leaves an ordinary conflict.
 A merge runs a generator only if it is byte-identical to the merge base's, your checked-out HEAD's or `origin/main`'s copy; any other changed generator is a conflict to resolve by hand.
 Merging into a branch you checked out runs that branch's generator, because you are already running its code.
 The unattended PR doctor path trusts only main's copy.
