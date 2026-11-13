@@ -151,6 +151,18 @@ test("every checkout path the Python dev-tools tests name selects them", () => {
       named.add([...(base === "SCRIPTS" ? ["scripts"] : []), ...parts].join("/"));
     }
     for (const [, literal] of source.matchAll(/["'](scripts\/[^"'\s]+)["']/g)) named.add(literal);
+    // `NAME = Path(__file__).resolve()<up>[ / "a" / "b"]`: resolve it ourselves, and
+    // refuse a base name the extractor above does not follow (#431 review M4), so a
+    // test reading the checkout through, say, REPO_ROOT cannot slip past this guard.
+    for (const [, variable, up, chain] of source.matchAll(/^(\w+)\s*=\s*(?:pathlib\.)?Path\(__file__\)\.resolve\(\)((?:\.parents\[\d\]|\.parent)+)((?:\s*\/\s*["'][^"']+["'])*)/gm)) {
+      const depth = [...up.matchAll(/\.parent(?:s\[(\d)\])?/g)].reduce((sum, m) => sum + (m[1] === undefined ? 1 : Number(m[1]) + 1), 0);
+      const base = ["scripts/tests", "scripts", ""][depth - 1];
+      assert.notEqual(base, undefined, `${name}: ${variable} climbs ${depth} levels above scripts/tests`);
+      const parts = [...chain.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+      if (parts.length) named.add([base, ...parts].filter(Boolean).join("/"));
+      else assert.equal(base, { ROOT: "", REPO: "", SCRIPTS: "scripts" }[variable],
+        `${name}: ${variable} (${base || "the repository root"}) is a checkout base this guard does not follow; name it ROOT or REPO (root) or SCRIPTS (scripts/)`);
+    }
   }
   const existing = [...named].filter((file) => existsSync(path.join(repo, file)));
   assert.ok(existing.includes("worker-contract.json") && existing.includes("scripts/dev/queue-pr.mjs"), [...named].join(", "));

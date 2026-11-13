@@ -8,18 +8,23 @@ name: Build and check (one OS)
 # (the scripted-dialogs host's tests and lints, and the headless smoke, which
 # needs only that host and the extension build). They used to be one job:
 # measured on main's runs 42766002259, 42773436197, 42791832704, 42862853705
-# and 43018744435 (2026-11-10/11), the macOS job's median was ~800s, of
+# and 43018744435 (2026-11-10/11), the macOS job's median was 776s, of
 # which the scripted-dialogs test (median 183s), its lint (20s) and the smoke
-# (141s) ran after the Rust tests and the extension tests had finished.
+# (141s) ran after the Rust tests and the extension tests had finished. The
+# split needs two runners per OS at once, so the end-to-end saving depends on
+# runner availability: on #431's runs macOS took 542s and 690s end to end
+# (the second waited ~298s for its second macos-15 runner).
 # Each job keeps its own Rust cache (the action keys it by job id), so
 # neither overwrites the other's compiled dependencies. ci.yml's caller job
 # result fails when either job fails, so "Build and check" still requires
 # both.
 #
-# Platform audit (rank 11): only the smoke step is macOS-only (it drives the
+# Platform audit (rank 11): the smoke step is macOS-only (it drives the
 # Unix-only Brauser service over its socket; host/src/service/ is
-# `#[cfg(unix)]`), and only the TMP step is Windows-only (a drive-speed fix).
-# Every other step runs on every OS. The Python dev-tools tests skip their
+# `#[cfg(unix)]`), and so are the `scripted` job's Node install, extension
+# build and scripted-host build, which only feed the smoke (the `build` job
+# runs the Node steps on every OS). Only the TMP step is Windows-only (a
+# drive-speed fix). Every other step runs on every OS. The Python dev-tools tests skip their
 # macOS-only cases (deploy-live, index-lock-watch) elsewhere themselves.
 on:
   workflow_call:
@@ -84,10 +89,11 @@ jobs:
       - name: Drop the runner image's own stable Rust toolchain
         shell: bash
         run: rustup toolchain uninstall stable
-      # Caches the Cargo registry and the compiled dependencies in `target`,
-      # including the nested `target/scripted-dialogs` (the action cleans it
-      # as its own target dir and drops workspace crates, which always
-      # rebuild). The key has the runner label, the pinned toolchain and
+      # Caches the Cargo registry and the compiled dependencies in `target`
+      # (the action drops workspace crates, which always rebuild). The
+      # scripted-dialogs dir is the `scripted` job's own cache now; keys saved
+      # before the split still hold one, until Cargo.lock or the toolchain
+      # changes the key. The key has the runner label, the pinned toolchain and
       # Cargo.lock. Only pushes to main save: PR runs and the Mergify queue's
       # draft PRs restore main's cache (a branch may read its base branch's
       # caches) and never write their own, so they cannot evict it.
@@ -115,9 +121,10 @@ jobs:
         run: python scripts/check_current_state.py
       # The queue itself lives in Dolt (refs/dolt/data) and is checked by
       # queue-check.yml on a schedule; these are the tools' tests.
-      # Only when the change can affect them (ci.yml passes the classifier's
-      # dev_tools); pr-hygiene.yml's ubuntu "Dev tools" job still runs the
-      # whole suite on every pull request.
+      # Here only when the change can affect them (ci.yml passes the
+      # classifier's dev_tools), to check them on macOS and Windows too.
+      # pr-hygiene.yml's ubuntu "Dev tools" job runs the whole suite on every
+      # pull request, and .mergify.yml requires it to pass before merging.
       - name: Test the queue tools and dev scripts
         if: inputs.dev_tools
         run: python -m unittest discover -s scripts/tests
@@ -227,17 +234,22 @@ jobs:
         run: cargo test --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
       - name: Lint the scripted-dialogs test build
         run: cargo clippy --locked -p brauser --all-targets --features scripted-dialogs --target-dir target/scripted-dialogs -- -D warnings
+      # The rest of this job feeds only the macOS smoke; Windows has none.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: runner.os == 'macOS'
         with:
           node-version: "24.14.0"
           cache: npm
       - name: Install TypeScript tooling
+        if: runner.os == 'macOS'
         run: npm ci --ignore-scripts
       - name: Build unpacked Chrome extension
+        if: runner.os == 'macOS'
         run: npm run build:extension
       # End-to-end run in headless Chrome (preinstalled on the runner image)
       # against the scripted-dialogs host; nothing is shown on screen.
       - name: Build scripted-dialogs host
+        if: runner.os == 'macOS'
         run: cargo build --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
       # macOS only: the smoke drives the Brauser service, which is Unix-only
       # (host/src/service/ is `#[cfg(unix)]`), through a LaunchAgent-free

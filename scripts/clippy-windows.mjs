@@ -17,6 +17,10 @@
 //   CC_x86_64_pc_windows_gnu).
 // On Windows itself it skips: the README gate's own clippy already lints
 // Windows there.
+// It lints the gnu target because MSVC needs `cl.exe`; CI's Windows job lints
+// MSVC, so code under `cfg(target_env = "msvc")` is checked only there. A skip
+// exits 0, even with --force (as `gate:adapter` runs it): a skip is not a pass,
+// and Windows CI's clippy stays the authority.
 //
 // By default it lints only when the change touches Rust (a .rs file, a
 // Cargo.toml, Cargo.lock or the toolchain) against --base (origin/main),

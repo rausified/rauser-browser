@@ -45,7 +45,9 @@ export const ADMIT_GRACE_MINUTES = 5;
 export const FAILED = new Set(["FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "ERROR"]);
 export const PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 export const GATE = "Build and check";
-const GATE_INPUT = /^(Classify changes|Docs and queue checks|Accessibility|macOS|Windows)\b/; // feed the gate (ci.yml)
+// Checks that block a merge without being branch-protection required: the gate's inputs
+// (ci.yml), and pr-hygiene's "Dev tools", which .mergify.yml's queue_conditions require.
+const GATE_INPUT = /^(Classify changes|Docs and queue checks|Accessibility|macOS|Windows|Dev tools$)/;
 
 // --- Reading PR and Mergify state (pure) ----------------------------------------
 

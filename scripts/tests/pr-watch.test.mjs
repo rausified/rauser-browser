@@ -183,7 +183,15 @@ test("PR owner failure points at the PR template, not a log", () => {
 });
 
 test("a failing check outside the gate does not stop the watch", () => {
-  assert.equal(decide(snap({ contexts: rollup([done("Dev tools", "FAILURE")]) })).done, false);
+  assert.equal(decide(snap({ contexts: rollup([done("Review new dependencies", "FAILURE")]) })).done, false);
+});
+
+test("Dev tools blocks like a required check: .mergify.yml's queue_conditions require it (#431 review I1)", () => {
+  const failed = decide(snap({ contexts: rollup([done("Dev tools", "FAILURE")]) }));
+  assert.equal(failed.exitCode, EXIT.CHECK_FAILED);
+  assert.match(failed.message, /Dev tools/);
+  assert.equal(analyzeChecks(snap({ contexts: rollup([run("Dev tools", "IN_PROGRESS", null)]) }).checks).green, false);
+  assert.equal(analyzeChecks(snap({ contexts: rollup([done("Dev tools", "SKIPPED")]) }).checks).green, true);
 });
 
 test("a cancelled input with nothing replacing it says rerun; the gate failing only from it is a cancellation", () => {
