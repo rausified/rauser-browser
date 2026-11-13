@@ -15,7 +15,7 @@
 //       Mergify ignored: one sticky comment per PR that mentions nobody, one
 //       tracking issue (label `pr-keeper`) listing every open alert, and the job
 //       summary;
-//   (e) for pr-doctor's needs-person verdict, starts the unattended repair path:
+//   (e) for pr-doctor's needs-person verdict, files a bead for the repair path:
 //       a P1 bead (external ref gh-pr-<n>-<head>) filed through the queue
 //       tooling, once per head, plus an alert.
 // Every action is idempotent and logged. It never merges, never pushes, never
@@ -32,7 +32,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { DOCTOR_SKIP_LABEL, KEEPER_MARKER, NEEDS_MERGE_LABEL } from "./pr-constants.mjs";
+import { DOCTOR_SKIP_LABEL, HELD_LABEL, KEEPER_MARKER, NEEDS_MERGE_LABEL } from "./pr-constants.mjs";
 import { analyzeChecks, describe, fetchSnapshot, planQueue, QUEUE_COMMENT, REFRESH_COMMENT } from "./dev/queue-pr.mjs";
 import { doctorComment } from "./dev/pr-watch.mjs";
 
@@ -43,6 +43,20 @@ export const repairRef = (n, head) => `gh-pr-${n}-${String(head ?? "").slice(0, 
 
 const minutes = (from, to) => (Date.parse(to) - Date.parse(from)) / 60000;
 
+/** Whose marker comments the keeper believes: the workflow's own bot. keep() adds the
+ * PR_DOCTOR_TOKEN owner. Anyone can post `<!-- pr-doctor -->` on a public repository. */
+export const TRUSTED_AUTHORS = Object.freeze(["github-actions[bot]", "github-actions"]);
+const authorOf = (c) => c.author ?? c.user?.login ?? "";
+
+/** The newest comment starting with `marker` from a trusted author, or null (GraphQL or REST shape). */
+export function trustedComment(comments, marker, trusted = TRUSTED_AUTHORS) {
+  return [...(comments ?? [])].sort((a, b) => String(a.createdAt ?? a.created_at ?? "").localeCompare(String(b.createdAt ?? b.created_at ?? "")))
+    .reverse().find((c) => (c.body ?? "").startsWith(marker) && trusted.includes(authorOf(c))) ?? null;
+}
+
+/** A file name from a comment, safe to quote: in a code span, with no backtick or "@". */
+const safeName = (file) => `\`${String(file).replace(/[`@]/g, "_")}\``;
+
 // --- Decisions (pure; scripts/tests/pr-keeper.test.mjs) -------------------------
 
 /** Why the keeper leaves a PR alone, or null. */
@@ -52,13 +66,15 @@ export function skipReason(snap) {
   if (snap.isCrossRepository) return "fork";
   if (/^mergify\//.test(snap.headRefName ?? "")) return "Mergify batch draft";
   if (snap.labels.includes(DOCTOR_SKIP_LABEL)) return DOCTOR_SKIP_LABEL;
+  // Cookie's driver holds it (a follow-on of a dequeued PR, or red past its repair budget).
+  if (snap.labels.includes(HELD_LABEL)) return HELD_LABEL;
   return null;
 }
 
 /** One PR -> { skip, actions, alerts, notes, retryInMinutes }. `mergeTreeClean`: true when `git merge-tree`
  * against main is clean, false when it conflicts, null when not checked. Actions are in the
  * order to run them: { kind: "unlabel" | "queue" | "refresh" | "repair" }. */
-export function decideKeeper(snap, { now = new Date().toISOString(), mergeTreeClean = null, greenMinutes = KEEPER_GREEN_MINUTES } = {}) {
+export function decideKeeper(snap, { now = new Date().toISOString(), mergeTreeClean = null, greenMinutes = KEEPER_GREEN_MINUTES, trusted = TRUSTED_AUTHORS } = {}) {
   const skip = skipReason(snap);
   const actions = [], alerts = [], notes = [];
   let retryInMinutes = null;
@@ -71,15 +87,17 @@ export function decideKeeper(snap, { now = new Date().toISOString(), mergeTreeCl
   let unlabeled = false;
 
   // (c) needs-merge with no conflict left: Mergify waits on the label alone (#384 waited an hour).
-  if (needsMerge && mergeTreeClean === true) {
+  // Not while GitHub still reports a conflict: pr-doctor would label it again every run.
+  if (needsMerge && mergeTreeClean === true && snap.mergeable !== "CONFLICTING") {
     actions.push({ kind: "unlabel", label: NEEDS_MERGE_LABEL });
     unlabeled = true;
   }
-  // (e) the doctor gave up: start the unattended repair path once per head.
-  const doctor = doctorComment(snap.comments);
+  // (e) the doctor gave up: file a repair bead (once per PR; see repairsToFile).
+  const doctor = doctorComment(snap.comments, { trusted });
   if (needsMerge && mergeTreeClean !== true && doctor?.outcome === "needs-person") {
-    actions.push({ kind: "repair", head: snap.headOid, files: doctor.files, ref: repairRef(n, snap.headOid) });
-    alerts.push({ kind: "needs-person", text: `conflicts with main in files pr-doctor does not resolve${doctor.files.length ? ` (${doctor.files.join(", ")})` : ""}; a repair bead ${repairRef(n, snap.headOid)} is filed. Merge main into the branch by hand` });
+    const files = doctor.files.map(safeName);
+    actions.push({ kind: "repair", head: snap.headOid, files, ref: repairRef(n, snap.headOid) });
+    alerts.push({ kind: "needs-person", text: `conflicts with main in files pr-doctor does not resolve${files.length ? ` (${files.join(", ")})` : ""}; a repair bead ${repairRef(n, snap.headOid)} is filed. Merge main into the branch by hand` });
   }
   // (d) states only a person can clear.
   if (snap.isDraft && snap.labeled) alerts.push({ kind: "draft-queued", text: `is labelled \`queue\` but is a draft, which Mergify never takes: \`gh pr ready ${n}\` when it is done` });
@@ -106,8 +124,6 @@ export function decideKeeper(snap, { now = new Date().toISOString(), mergeTreeCl
     notes.push(plan.message.replace(/^#\d+ /, ""));
   } else if (!snap.labeled) {
     notes.push(state === "dequeued" ? `dequeued (${reason ?? "no reason"}) and not labelled queue: left to its owner` : "not labelled queue: left to its owner");
-  } else if (state === "dequeued" && !snap.labeled) {
-    notes.push(`dequeued (${reason ?? "no reason"}) and unlabelled: left alone`);
   }
   return { skip: null, actions, alerts, notes, retryInMinutes };
 }
@@ -119,6 +135,9 @@ export function alertBody(alerts, { hadComment = false } = {}) {
   return `${KEEPER_MARKER}\n**PR keeper**\n\nThis PR needs a person:\n\n${alerts.map((a) => `- **${a.kind}**: this PR ${a.text}`).join("\n")}\n\nThe keeper updates this comment on each run (scripts/pr-keeper.mjs).`;
 }
 
+/** An issue body without its timestamp: rewrite the issue only when this changes. */
+export const alertTable = (text) => (text ?? "").replace(/as of \d{4}-\d\d-\d\dT[\d:.]+Z/, "as of");
+
 /** The tracking issue body for every open alert across PRs ({ number, alerts }[]). */
 export function issueBody(rows, now) {
   const open = rows.filter((r) => r.alerts.length);
@@ -129,7 +148,7 @@ export function issueBody(rows, now) {
 /** The bd create arguments for one repair request: P1, external ref per head (idempotent). */
 export function repairBeadArgs(repo, { number, head, files, ref }) {
   const title = `Merge main into PR #${number} by hand: pr-doctor could not resolve the conflict`;
-  const description = `The PR keeper filed this for the unattended repair path (scripts/pr-keeper.mjs). PR https://github.com/${repo}/pull/${number} at head ${String(head).slice(0, 12)} conflicts with main in files pr-doctor does not resolve${files?.length ? `: ${files.join(", ")}` : ""}. Merge origin/main into the branch, resolve, run the focused checks, push, then run node scripts/dev/queue-pr.mjs ${number} --head <new head>.`;
+  const description = `The PR keeper filed this for whoever picks up repair beads (scripts/pr-keeper.mjs). PR https://github.com/${repo}/pull/${number} at head ${String(head).slice(0, 12)} conflicts with main in files pr-doctor does not resolve${files?.length ? `: ${files.join(", ")}` : ""}. Merge origin/main into the branch, resolve, run the focused checks, push, then run node scripts/dev/queue-pr.mjs ${number} --head <new head>.`;
   return [title, "-t", "bug", "-p", "1", "-l", ISSUE_LABEL, "--external-ref", ref, "-d", description,
     "--acceptance", `PR #${number} merges cleanly with main and pr-doctor or the keeper clears ${NEEDS_MERGE_LABEL}.`];
 }
@@ -158,13 +177,13 @@ export function mergeTreeClean(repo, snap) {
   } catch { return null; }
 }
 
-function stickyComment(repo, n) {
+function stickyComment(repo, n, trusted) {
   const comments = JSON.parse(gh(["api", "--paginate", "--slurp", `repos/${repo}/issues/${n}/comments`])).flat();
-  return comments.find((c) => (c.body ?? "").startsWith(KEEPER_MARKER)) ?? null;
+  return trustedComment(comments, KEEPER_MARKER, trusted);
 }
 
-function upsertComment(repo, n, alerts, dryRun) {
-  const existing = stickyComment(repo, n);
+function upsertComment(repo, n, alerts, dryRun, trusted) {
+  const existing = stickyComment(repo, n, trusted);
   const body = alertBody(alerts, { hadComment: !!existing });
   if (!body || existing?.body === body) return "unchanged";
   if (dryRun) return existing ? "would update alert comment" : "would post alert comment";
@@ -179,8 +198,6 @@ function upsertIssue(repo, rows, now, dryRun) {
   const issue = issues[0] ?? null;
   const anyOpen = rows.some((r) => r.alerts.length);
   const body = issueBody(rows, now);
-  // The timestamp changes every run: rewrite the body only when the alert table changes.
-  const table = (text) => (text ?? "").replace(/as of [^ ]+ /, "");
   if (!issue && !anyOpen) return "no issue needed";
   if (dryRun) return `would ${!issue ? "open" : anyOpen && issue.state !== "OPEN" ? "reopen" : !anyOpen && issue.state === "OPEN" ? "close" : "keep"} the tracking issue`;
   if (!issue) {
@@ -188,7 +205,7 @@ function upsertIssue(repo, rows, now, dryRun) {
     const url = gh(["issue", "create", "--repo", repo, "--title", ISSUE_TITLE, "--label", ISSUE_LABEL, "--body", body]).trim();
     return `opened ${url}`;
   }
-  if (table(issue.body) !== table(body)) gh(["issue", "edit", String(issue.number), "--repo", repo, "--body", body]);
+  if (alertTable(issue.body) !== alertTable(body)) gh(["issue", "edit", String(issue.number), "--repo", repo, "--body", body]);
   if (anyOpen && issue.state !== "OPEN") gh(["issue", "reopen", String(issue.number), "--repo", repo]);
   if (!anyOpen && issue.state === "OPEN") gh(["issue", "close", String(issue.number), "--repo", repo, "--reason", "completed"]);
   return `issue #${issue.number} ${anyOpen ? "open" : "closed"}`;
@@ -214,7 +231,14 @@ export function settleSeconds(retries, greenMinutes = KEEPER_GREEN_MINUTES) {
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-function keep({ repo, dryRun, settle = false }) {
+/** The workflow's bot plus the token's owner (PR_DOCTOR_TOKEN posts as a user). */
+function trustedAuthors() {
+  let owner = null;
+  try { owner = gh(["api", "user", "--jq", ".login"]).trim() || null; } catch { /* an installation token has no user */ }
+  return [...TRUSTED_AUTHORS, ...(owner ? [owner] : [])];
+}
+
+function keep({ repo, dryRun, settle = false, trusted = trustedAuthors() }) {
   const now = new Date().toISOString();
   const list = JSON.parse(gh(["pr", "list", "--repo", repo, "--base", "main", "--state", "open", "--limit", "100", "--json", "number"]));
   const rows = [], repairs = [];
@@ -222,11 +246,11 @@ function keep({ repo, dryRun, settle = false }) {
     try {
       const snap = fetchSnapshot(repo, number);
       const clean = snap.labels.includes(NEEDS_MERGE_LABEL) && !skipReason(snap) ? mergeTreeClean(repo, snap) : null;
-      const decision = decideKeeper(snap, { now, mergeTreeClean: clean });
+      const decision = decideKeeper(snap, { now, mergeTreeClean: clean, trusted });
       if (decision.skip) { rows.push({ number, alerts: [], log: [`skip: ${decision.skip}`] }); continue; }
       const log = decision.actions.map((a) => runAction(repo, number, a, dryRun));
       for (const a of decision.actions.filter((x) => x.kind === "repair")) repairs.push({ number, head: a.head, files: a.files, ref: a.ref });
-      log.push(upsertComment(repo, number, decision.alerts, dryRun), ...decision.notes);
+      log.push(upsertComment(repo, number, decision.alerts, dryRun, trusted), ...decision.notes);
       rows.push({ number, alerts: decision.alerts, log, retry: decision.retryInMinutes });
     } catch (error) {
       console.log(`::warning title=PR keeper #${number}::${String(error.message).split("\n")[0]}`);
@@ -242,7 +266,7 @@ function keep({ repo, dryRun, settle = false }) {
   if (wait !== null) {
     console.log(`waiting ${wait}s for PRs that just turned green, then one more pass`);
     sleep(wait * 1000);
-    return [...repairs, ...keep({ repo, dryRun, settle: false })];
+    return [...repairs, ...keep({ repo, dryRun, settle: false, trusted })];
   }
   return repairs;
 }

@@ -51,8 +51,9 @@ const graceOver = (since, now) => !!since && minutes(since, now) >= ADMIT_GRACE_
 const act = (exitCode, action, message) => ({ exitCode, action, message, done: true });
 const wait = (action, message) => ({ exitCode: EXIT.WAITING, action, message, done: false });
 /** The pr-doctor sticky comment's outcome and listed files, or null. */
-export function doctorComment(comments) {
-  const comment = [...(comments ?? [])].reverse().find((c) => (c.body ?? "").startsWith(DOCTOR_MARKER));
+export function doctorComment(comments, { trusted = null } = {}) {
+  // `trusted`: only these authors' marker comments count (anyone can post the marker on a public repo).
+  const comment = [...(comments ?? [])].reverse().find((c) => (c.body ?? "").startsWith(DOCTOR_MARKER) && (!trusted || trusted.includes(c.author)));
   if (!comment) return null;
   return { outcome: /pr-doctor outcome=([\w-]+)/.exec(comment.body)?.[1] ?? null, files: [...comment.body.matchAll(/^- `([^`]+)`$/gm)].map((m) => m[1]) };
 }

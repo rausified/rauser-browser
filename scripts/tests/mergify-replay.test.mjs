@@ -120,7 +120,7 @@ test("replay keeper: one repair bead per head while it conflicts, and needs-merg
   const repairs = new Set(), beads = [];
   for (const t of POLLS) {
     const snap = snapshotAt(t, { removedLabels: removedAt ? [{ label: "needs-merge", at: removedAt }] : [] });
-    const d = decideKeeper(snap, { now: t, mergeTreeClean: !inConflict(t) });
+    const d = decideKeeper(snap, { now: t, mergeTreeClean: !inConflict(t), trusted: ["doctor-bot"] });
     for (const a of d.actions) {
       if (a.kind === "repair") {
         repairs.add(a.ref);

@@ -15,4 +15,6 @@ export const QUEUE_LABEL = "queue";
 /** What actually queues a labelled PR (worker-contract.json merge.comment). */
 export const QUEUE_COMMENT = "@Mergifyio queue";
 export const REFRESH_COMMENT = "@Mergifyio refresh";
+/** Cookie's driver holds a PR it must not merge yet (a follow-on, or red past its repair budget). */
+export const HELD_LABEL = "held";
 export const QUEUE_EXCLUSION_LABELS = Object.freeze([NEEDS_MERGE_LABEL, DOCTOR_SKIP_LABEL]);

@@ -136,7 +136,9 @@ jobs:
           ref: main
           # Full history: git merge-tree needs the merge base of main and each PR.
           fetch-depth: 0
-          token: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          # The keeper step only fetches a public repo: keep the token out of .git/config.
+          # The bead step below gets a credential through gh for its own pushes.
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.14.0"
@@ -160,6 +162,7 @@ jobs:
           BD_NON_INTERACTIVE: "1"
           GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
         run: |
+          gh auth setup-git
           sh scripts/install-bd.sh "$RUNNER_TEMP/bin"
           export PATH="$RUNNER_TEMP/bin:$PATH"
           git config user.name "PR keeper"

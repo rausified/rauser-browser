@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { KEEPER_MARKER } from "../pr-constants.mjs";
 import {
-  KEEPER_GREEN_MINUTES, alertBody, decideKeeper, issueBody, repairBeadArgs, repairRef, repairsToFile, settleSeconds, skipReason,
+  KEEPER_GREEN_MINUTES, TRUSTED_AUTHORS, alertBody, alertTable, trustedComment, decideKeeper, issueBody, repairBeadArgs, repairRef, repairsToFile, settleSeconds, skipReason,
 } from "../pr-keeper.mjs";
 import { QUEUE_COMMENT, REFRESH_COMMENT } from "../dev/queue-pr.mjs";
 import { FX, NOW, ago, command, done, greenChecks, rollup, run, snap } from "./pr-fixtures.mjs";
@@ -107,11 +107,11 @@ test("(d) dequeued on the current head alerts with Mergify's reason; a new head 
 
 test("(e) pr-doctor's needs-person verdict with a real conflict: request a repair bead and alert", () => {
   const s = snap({ labels: ["queue", "needs-merge"], comments: [DOCTOR], pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } });
-  const d = decideKeeper(s, { now: NOW, mergeTreeClean: false });
+  const d = decideKeeper(s, { now: NOW, mergeTreeClean: false, trusted: ["doctor-bot"] });
   assert.deepEqual(kinds(d), ["repair"]);
   assert.deepEqual(alertKinds(d), ["needs-person"]);
   assert.equal(d.actions[0].ref, repairRef(243, s.headOid));
-  assert.deepEqual(d.actions[0].files, ["host/src/lib.rs"]);
+  assert.deepEqual(d.actions[0].files, ["`host/src/lib.rs`"]);
   assert.match(d.alerts[0].text, /host\/src\/lib\.rs/);
 });
 
@@ -131,6 +131,58 @@ test("repairsToFile: one open repair bead per PR; never twice for one head", () 
   assert.deepEqual(repairsToFile([req(1, "aaaa"), req(1, "cccc")], []).map((r) => r.ref), ["gh-pr-1-aaaa"]);
   // gh-pr-1- must not match PR 12's beads.
   assert.equal(repairsToFile([req(1, "aaaa")], [{ external_ref: "gh-pr-12-aaaa", status: "open" }]).length, 1);
+});
+
+// Review of #427: spoofed markers, Cookie's held label, fighting pr-doctor.
+
+test("I1: a needs-person comment from an untrusted author is ignored: no bead, no alert", () => {
+  const s = snap({ labels: ["queue", "needs-merge"], comments: [DOCTOR], pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } });
+  const d = decideKeeper(s, { now: NOW, mergeTreeClean: false });
+  assert.deepEqual([kinds(d), alertKinds(d)], [[], []]);
+  assert.ok(TRUSTED_AUTHORS.includes("github-actions[bot]"));
+  // Only the trusted author's marker comment counts, even when a newer spoof follows it.
+  const spoof = { author: "outsider", createdAt: ago(1), body: "<!-- pr-keeper -->\nfake" };
+  const mine = { author: "doctor-bot", createdAt: ago(5), body: "<!-- pr-keeper -->\nreal" };
+  assert.equal(trustedComment([spoof, mine], "<!-- pr-keeper -->", ["doctor-bot"]).body, "<!-- pr-keeper -->\nreal");
+  assert.equal(trustedComment([spoof], "<!-- pr-keeper -->", ["doctor-bot"]), null);
+});
+
+test("I1: file names from the doctor comment cannot mention anyone in alerts or beads", () => {
+  const body = DOCTOR.body.replace("- `host/src/lib.rs`", "- `@someone please run this`");
+  const s = snap({ labels: ["queue", "needs-merge"], comments: [{ ...DOCTOR, body }], pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } });
+  const d = decideKeeper(s, { now: NOW, mergeTreeClean: false, trusted: ["doctor-bot"] });
+  const outside = (text) => text.replace(/`[^`]*`/g, "");
+  assert.doesNotMatch(d.alerts[0].text, /@someone/);
+  assert.doesNotMatch(outside(alertBody(d.alerts)), /@/);
+  assert.doesNotMatch(repairBeadArgs("o/r", { number: 243, head: "abc", files: d.actions[0].files, ref: "gh-pr-243-abc" }).join(" "), /@someone/);
+});
+
+test("I2: Cookie's held label: the keeper never queues or refreshes it", () => {
+  assert.equal(skipReason(snap({ labels: ["queue", "held"] })), "held");
+  const d = decideKeeper(snap({ labels: ["queue", "held"], comments: FX.pr329.slice(0, 2) }), { now: NOW });
+  assert.deepEqual(kinds(d), []);
+  assert.deepEqual(kinds(decideKeeper(snap({ labels: ["queue", "held"], comments: [FX.waiting339] }), { now: NOW })), []);
+});
+
+test("I3: needs-merge stays while GitHub still reports a conflict, though merge-tree is clean", () => {
+  const s = snap({ labels: ["queue", "needs-merge"], pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } });
+  assert.ok(!kinds(decideKeeper(s, { now: NOW, mergeTreeClean: true })).includes("unlabel"));
+  const unknown = snap({ labels: ["queue", "needs-merge"], pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } });
+  assert.ok(kinds(decideKeeper(unknown, { now: NOW, mergeTreeClean: true })).includes("unlabel"));
+});
+
+test("Minor 3: the tracking issue's table ignores the timestamp, with or without alerts", () => {
+  assert.equal(alertTable(issueBody([], "2026-11-12T01:00:00Z")), alertTable(issueBody([], "2026-11-12T02:00:00Z")));
+  const rows = [{ number: 1, alerts: [{ kind: "draft-queued", text: "x" }] }];
+  assert.equal(alertTable(issueBody(rows, "2026-11-12T01:00:00Z")), alertTable(issueBody(rows, "2026-11-12T02:00:00Z")));
+  assert.notEqual(alertTable(issueBody(rows, "2026-11-12T01:00:00Z")), alertTable(issueBody([], "2026-11-12T01:00:00Z")));
+});
+
+test("Minor 5: the keeper checkout keeps no credential; only the bead step gets one", () => {
+  const yml = readFileSync(new URL("../../.github/workflows/pr-doctor.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const keeper = yml.split("\n  keeper:\n")[1];
+  assert.match(keeper, /persist-credentials: false/);
+  assert.match(keeper.split("- name: File repair beads")[1], /gh auth setup-git/);
 });
 
 // Output.
