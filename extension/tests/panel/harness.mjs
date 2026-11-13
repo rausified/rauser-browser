@@ -20,9 +20,9 @@ export const { REUSE_KEY } = await import("../../dist/task-handoff.js");
 // against a fake DOM built from the shipped panel.html, a scripted native
 // host, a stub worker, and a fake Chrome whose site access can be withdrawn
 // and restored as the user would in chrome://extensions.
-export const PANEL_HTML = readFileSync(new URL("../../dist/panel.html", import.meta.url), "utf8");
+export const PANEL_HTML = readFileSync(new URL("../../dist/panel.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 // The Tasks page, for tests that load tasks.js against its own markup.
-export const TASKS_HTML = readFileSync(new URL("../../dist/tasks.html", import.meta.url), "utf8");
+export const TASKS_HTML = readFileSync(new URL("../../dist/tasks.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const SITE_ACCESS = ["http://*/*", "https://*/*"];
 
 export class FakeElement {

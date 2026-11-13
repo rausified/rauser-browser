@@ -43,6 +43,9 @@ jobs:
         if: github.event_name == 'pull_request'
         run: node scripts/privacy-scan.mjs --pr-event
 
+  # Required through .mergify.yml's queue_conditions (not branch protection):
+  # since #431 the platform builds run these tests only for changes that can
+  # affect them, so this unconditional run is the one every PR must pass.
   dev-tools:
     name: Dev tools
     # A body edit can cancel the previous run through workflow concurrency.
@@ -53,9 +56,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # docs/backlog: the queue tests render the committed backlog frame.
+          # docs/improvement-feed: test_improvement_feed.py checks the real
+          # entries and skips itself without them. (Cone mode always brings
+          # the root files: worker-contract*.json, .gitattributes, the feed.)
           sparse-checkout: |
             scripts
             docs/backlog
+            docs/improvement-feed
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"

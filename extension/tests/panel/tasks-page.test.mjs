@@ -761,7 +761,7 @@ test("panel.css hides a hidden .tasks-controls despite its display rule", async 
   // [hidden] style, so the controls need their own rule or the Windows
   // hide above hides nothing on screen.
   const { readFile } = await import("node:fs/promises");
-  const css = await readFile(new URL("../../panel.css", import.meta.url), "utf8");
+  const css = (await readFile(new URL("../../panel.css", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
   assert.match(css, /\.tasks-page \.tasks-controls\[hidden\][^{]*\{\s*display:\s*none;/);
 });
 

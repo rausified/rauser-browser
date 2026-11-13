@@ -28,11 +28,13 @@
 // builds.
 //
 // It also decides, through scripts/ci-macos.mjs, whether a code change needs
-// the macOS build.
+// the macOS build, and (devToolsReasons) whether it needs the Python
+// dev-tools tests in the platform builds.
 //
 // Usage: node scripts/ci-changes.mjs <base> <head>
-// Prints the changed paths, `docs_only=true|false` and `macos=true|false`,
-// and appends both to $GITHUB_OUTPUT when it is set. Exits 1 if git fails.
+// Prints the changed paths, `docs_only=true|false`, `macos=true|false` and
+// `dev_tools=true|false`, and appends them to $GITHUB_OUTPUT when it is set.
+// Exits 1 if git fails.
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, realpathSync } from "node:fs";
@@ -57,6 +59,42 @@ export function isDocsOrQueuePath(path) {
   if (DOCS_DIRS.some((dir) => path.startsWith(dir) && path.length > dir.length)) return true;
   if (BUILT_ROOT_MARKDOWN.includes(path)) return false;
   return !path.includes("/") && path.endsWith(".md") && path.length > ".md".length;
+}
+
+/** Files outside scripts/ that the Python dev-tools tests read, and the
+ * definitions that run them (a change to the classifier or the workflows
+ * must prove the step still runs). */
+const DEV_TOOLS_INPUTS = [
+  "worker-contract.json", "worker-contract.schema.json", ".gitattributes", "BRAUSER_IMPROVEMENT_FEED.md",
+  "docs/improvement-feed/", "docs/backlog/", ".beads/",
+  // test_worker_contract.py reads the merge command's tool and its constants;
+  // test_deploy_live.py names the dev-host registration script deploy-live runs.
+  "scripts/dev/queue-pr.mjs", "scripts/pr-constants.mjs", "scripts/register-dev-host.mjs",
+  ".github/workflows/ci.yml", ".github/workflows/build-os.yml", ".github/workflows/pr-hygiene.yml",
+  "scripts/ci-changes.mjs", "package.json",
+];
+
+/**
+ * Why a change needs the Python dev-tools tests (`python -m unittest discover
+ * -s scripts/tests`, npm run test:dev-tools): `[path, reason]` pairs, empty
+ * when none does. A Python dev tool is any .py file under scripts/, anything
+ * under scripts/dev/ except its .mjs files (the extensionless tools such as
+ * `queue`, `deploy-live` and `worktree-hygiene` are Python), and the test
+ * fixtures under scripts/tests/fixtures/. Those tests fake every cargo, npm
+ * and node call, so JavaScript, Rust and extension changes never reach them.
+ * An empty change list (a diff that found nothing or failed) runs them.
+ */
+export function devToolsReasons(paths) {
+  if (paths.length === 0) return [["(no changed paths)", "an empty or failed diff runs everything"]];
+  const reasons = [];
+  for (const path of paths) {
+    const python = path.startsWith("scripts/") && (path.endsWith(".py")
+      || (path.startsWith("scripts/dev/") && !path.endsWith(".mjs"))
+      || path.startsWith("scripts/tests/fixtures/"));
+    if (python) reasons.push([path, "a Python dev tool or its tests"]);
+    else if (DEV_TOOLS_INPUTS.some((input) => input.endsWith("/") ? path.startsWith(input) : path === input)) reasons.push([path, "read by the dev-tools tests"]);
+  }
+  return reasons;
 }
 
 /** True when every changed path is a docs or queue file and there is at least one. */
@@ -101,9 +139,12 @@ function main(argv) {
     for (const [path, why] of reasons) console.log(`macos ${JSON.stringify(path)}: ${why}`);
     macos = reasons.length > 0;
   }
+  const devTools = devToolsReasons(paths);
+  for (const [path, why] of devTools) console.log(`dev-tools ${JSON.stringify(path)}: ${why}`);
   console.log(`docs_only=${docsOnly}`);
   console.log(`macos=${macos}`);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `docs_only=${docsOnly}\nmacos=${macos}\n`);
+  console.log(`dev_tools=${devTools.length > 0}`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `docs_only=${docsOnly}\nmacos=${macos}\ndev_tools=${devTools.length > 0}\n`);
 }
 
 // Compare real paths: argv[1] may go through a symlink or contain characters

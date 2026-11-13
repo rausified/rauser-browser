@@ -46,7 +46,8 @@
 #
 # Main's branch protection (required checks today: Build and check, PR owner,
 # Rust dependency policy) is also injected by Mergify as queue and merge
-# conditions; the list below names the same checks explicitly.
+# conditions; the list below names the same checks explicitly, plus
+# pr-hygiene's "Dev tools", which Mergify alone requires.
 
 merge_queue:
   max_parallel_checks: 2
@@ -66,6 +67,15 @@ queue_rules:
       - check-success = Build and check
       - check-success = Rust dependency policy
       - check-success = PR owner
+      # pr-hygiene.yml's "Dev tools" runs the whole Python dev-tools suite on
+      # every PR (Mergify's queue drafts included). The platform builds run
+      # that suite only when scripts/ci-changes.mjs's devToolsReasons says a
+      # change can affect it (#431), so this job is what makes it required for
+      # every change. Branch protection does not list it (only John edits
+      # that); check-skipped keeps a run that never needed it from blocking.
+      - or:
+          - check-success = Dev tools
+          - check-skipped = Dev tools
 
 # The `queue` label makes a PR eligible (queue_conditions above); it does not
 # queue it. Queue with an `@Mergifyio queue` comment, posted after the PR's

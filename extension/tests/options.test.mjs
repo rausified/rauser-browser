@@ -1799,7 +1799,7 @@ test("choosing a home folder saves the fixed layout, never an older one", async 
     root: "/vault", profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later",
     artifacts_dir: "artifacts", summaries_dir: "summaries", knowledge_base_dir: "/kb",
   });
-  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   for (const folder of ["notes/", "logs/", "artifacts/", "summaries/", "later/"]) {
     assert.ok(html.includes(`<code>${folder}</code>`), folder);
   }
@@ -2198,7 +2198,7 @@ test("settings shows the exact setup warning", async () => {
   await openSettings();
   const { SETUP_WARNING } = await import("../dist/agent.js");
   assert.equal(env.elements.get("harness-warning").textContent, SETUP_WARNING);
-  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.ok(html.includes(`<p id="harness-warning">${SETUP_WARNING}</p>`));
   assert.ok(html.includes(">Test and use</button>"));
   assert.ok(html.includes(">Reveal agent.env in Finder</button>"));
@@ -2571,7 +2571,7 @@ test("forgetting recorded adapters asks in the page first, then sends the shown 
   el("forget-adopted").click();
   assert.equal(el("forget-adopted-confirm").hidden, false);
   // The confirmation is in the page (no native dialog) and says what is lost.
-  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const confirmation = html.slice(html.indexOf('id="forget-adopted-confirm"'), html.indexOf('id="forget-adopted-yes"'));
   assert.match(confirmation, /back the record up/);
   assert.match(confirmation, /removed from config\.toml by hand/);
@@ -2922,7 +2922,7 @@ test("diagnostics show their count, copy as JSON lines with a header, and clear"
 test("the run time limit hint says tasks get at least 30 minutes", () => {
   // The service runs a task with the larger of this limit and 30 minutes
   // (TASK_MIN_TIMEOUT_SECS), so the hint must not claim every run stops here.
-  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../options.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const field = html.slice(html.indexOf('for="harness-timeout"'), html.indexOf("</small>", html.indexOf('for="harness-timeout"')));
   assert.match(field, /A summary run that takes longer is stopped/);
   assert.match(field, /task bar runs for at least 30 minutes/);
