@@ -1,0 +1,5 @@
+#!/bin/sh
+# Opt-in privacy check for the commit message (AGENTS.md "Local checks"); see
+# scripts/hooks/pre-commit for how to install it. Checks the local person
+# denylist too when it exists (scripts/privacy-scan.mjs).
+exec node "$(git rev-parse --show-toplevel)/scripts/privacy-scan.mjs" --message "$1"

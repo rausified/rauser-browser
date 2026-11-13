@@ -25,3 +25,6 @@ protocol/starters/*.json text eol=lf
 protocol/capture-site/starter-shapes.json text eol=lf
 protocol/adapter-templates/starter-vectors.json text eol=lf
 docs/adapters/README.md text eol=lf
+
+# Opt-in git hooks run under sh; keep them LF on every checkout.
+scripts/hooks/* text eol=lf
