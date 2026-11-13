@@ -93,6 +93,16 @@ class WorkerContractTests(unittest.TestCase):
         del contract["merge"]["comment"]
         self.assertEqual(errors(contract, self.schema), [])
 
+    def test_the_merge_command_is_the_queue_pr_tool(self) -> None:
+        command = self.contract["merge"]["command"].split()
+        self.assertEqual(command[:2], ["node", "scripts/dev/queue-pr.mjs"])
+        self.assertTrue((ROOT / command[1]).is_file())
+        self.assertIn("--head", command)
+        self.assertNotIn("command", self.schema["properties"]["merge"]["required"])
+        source = (ROOT / command[1]).read_text(encoding="utf-8")
+        self.assertIn(self.contract["merge"]["comment"], (ROOT / "scripts/pr-constants.mjs").read_text(encoding="utf-8"))
+        self.assertIn("--head", source)
+
     def test_never_commit_is_what_ci_enforces(self) -> None:
         self.assertEqual(tuple(self.contract["never_commit"]), check_current_state.QUEUE_FILES)
 
