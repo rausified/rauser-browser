@@ -954,7 +954,7 @@ test("the harness hint text is shared with Summarize", async () => {
   }
   assert.equal(harnessReady({ agentStatus: { state: "ready" } }), true);
   // The panel takes both from summarize.js and keeps no copy of its own.
-  const panel = await readFile(new URL("../dist/panel.js", import.meta.url), "utf8");
+  const panel = (await readFile(new URL("../dist/panel.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
   assert.ok(!panel.includes(NEEDS_HARNESS_MESSAGE));
   assert.match(panel, /import \{[^}]*\bNEEDS_HARNESS_MESSAGE\b[^}]*\} from "\.\/summarize\.js"/);
   assert.match(panel, /import \{[^}]*\bharnessReady\b[^}]*\} from "\.\/summarize\.js"/);

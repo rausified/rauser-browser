@@ -128,9 +128,17 @@ test("the Confluence change runs every extension, engine and host check plus a11
     "cargo fmt",
     "adapter-templates tests",
     "adapter-templates clippy",
+    "windows clippy",
     "adapter-templates fuzz targets compile",
     "host capture_site tests",
   ]);
+});
+
+test("Rust under adapter-templates/ or host/ also runs the Windows-target clippy; fixtures do not", () => {
+  assert.ok(names(["adapter-templates/tests/shapes.rs"]).includes("windows clippy"));
+  assert.ok(names(["host/src/capture_site.rs"]).includes("windows clippy"));
+  assert.ok(!names(["host/tests/fixtures/capture-site-structural-response.json"]).includes("windows clippy"));
+  assert.ok(!names(["protocol/adapter-templates/vectors.json"]).includes("windows clippy"));
 });
 
 test("the Miro change skips a11y (no page markup changed)", () => {

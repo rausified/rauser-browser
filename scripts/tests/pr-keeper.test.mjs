@@ -210,7 +210,7 @@ test("settleSeconds waits for the latest PR due, within the window", () => {
 });
 
 test("mergeTreeClean uses only merge-tree flags git 2.38+ has (no --quiet)", () => {
-  const source = readFileSync(new URL("../pr-keeper.mjs", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../pr-keeper.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const call = /git\(\["merge-tree"[^\]]*\]/.exec(source)?.[0] ?? "";
   assert.match(call, /"--write-tree"/);
   assert.doesNotMatch(call, /--quiet/);
@@ -251,7 +251,7 @@ test("the doctor's copied tools include every module pr-doctor.mjs imports, tran
     if (seen.has(rel)) return;
     seen.add(rel);
     assert.ok(copied.has(rel), `the workflow does not copy ${rel}`);
-    const source = readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
+    const source = readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
     for (const [, spec] of source.matchAll(/^import [^;]*? from "(\.{1,2}\/[^"]+)";/gms)) {
       const next = new URL(spec, new URL(`../${rel}`, import.meta.url)).pathname.split("/scripts/").pop();
       visit(next);

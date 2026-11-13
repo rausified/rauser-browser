@@ -1423,6 +1423,7 @@ mod tests {
                 .unwrap() as usize;
             assert!(limit * 4 <= MAX_BODY_BYTES, "{name}.body maxLength");
         }
+        // crlf-ok: the textarea's id and maxlength sit in one tag on one line.
         let panel = include_str!("../../extension/panel.html");
         let textarea = &panel[panel.find("id=\"note-body\"").unwrap()..];
         let textarea = &textarea[..textarea.find('>').unwrap()];

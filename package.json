@@ -9,6 +9,7 @@
     "test:markdown-neutralizer": "node scripts/check-markdown-neutralizer.mjs",
     "test:scripts": "node --test scripts/tests/*.test.mjs",
     "test:dev-tools": "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
+    "test:dev-tools:changed": "node scripts/dev-tools-if-changed.mjs",
     "gate:adapter": "node scripts/gate-adapter.mjs",
     "gen:starters": "node scripts/generate-starters.mjs",
     "new:starter": "node scripts/new-starter.mjs",
@@ -20,6 +21,7 @@
     "test:queue": "python3 -m unittest discover -s scripts/tests && python3 scripts/check_queue_consistency.py",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
+    "lint:windows": "node scripts/clippy-windows.mjs",
     "test:a11y": "node --test --test-isolation=none extension/tests/a11y/fixture.test.mjs extension/tests/a11y/pages.test.mjs extension/tests/a11y/keyboard.test.mjs"
   },
   "devDependencies": {

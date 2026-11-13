@@ -4,7 +4,7 @@ import test from "node:test";
 
 import {
   ADMIT_GRACE_MINUTES, DOCTOR_GRACE_MINUTES, EXIT, QUEUE_COMMENT, REFRESH_COMMENT,
-  analyzeChecks, decide, decideConflict, doctorComment, enqueueCommand, latestChecks, mergifyStatus, parseArgs, snapshotFromGraphql, statusLine,
+  analyzeChecks, decide, decideConflict, doctorComment, enqueueCommand, formatTimings, latestChecks, mergifyStatus, parseArgs, snapshotFromGraphql, statusLine, timings,
 } from "../dev/pr-watch.mjs";
 
 // Mergify's own comments, recorded from this repository (fixtures/mergify-comments.json `_source`).
@@ -183,7 +183,15 @@ test("PR owner failure points at the PR template, not a log", () => {
 });
 
 test("a failing check outside the gate does not stop the watch", () => {
-  assert.equal(decide(snap({ contexts: rollup([done("Dev tools", "FAILURE")]) })).done, false);
+  assert.equal(decide(snap({ contexts: rollup([done("Review new dependencies", "FAILURE")]) })).done, false);
+});
+
+test("Dev tools blocks like a required check: .mergify.yml's queue_conditions require it (#431 review I1)", () => {
+  const failed = decide(snap({ contexts: rollup([done("Dev tools", "FAILURE")]) }));
+  assert.equal(failed.exitCode, EXIT.CHECK_FAILED);
+  assert.match(failed.message, /Dev tools/);
+  assert.equal(analyzeChecks(snap({ contexts: rollup([run("Dev tools", "IN_PROGRESS", null)]) }).checks).green, false);
+  assert.equal(analyzeChecks(snap({ contexts: rollup([done("Dev tools", "SKIPPED")]) }).checks).green, true);
 });
 
 test("a cancelled input with nothing replacing it says rerun; the gate failing only from it is a cancellation", () => {
@@ -346,4 +354,68 @@ test("a real check failure outranks DIRTY and mentions the conflict", () => {
 test("statusLine summarizes state, checks and Mergify on one line", () => {
   const s = snap({ pr: UNLABELED });
   assert.equal(statusLine(s, decide(s)).split("\n")[0], "OPEN/CLEAN | head 6629a6b3 | checks 9 ok, 0 pending, 0 failed | mergify checking/checks_running, unlabeled");
+});
+
+// --- timings: CI time and queue wait, reported apart (delay-fix rank 12) ----------
+
+const timed = (name, startedAt, completedAt, conclusion = "SUCCESS", more = {}) =>
+  ({ ...done(name, conclusion, { startedAt, ...more }), completedAt });
+const queueComment = (createdAt) => ({ author: "jrausercisco", body: "@Mergifyio queue", createdAt, updatedAt: createdAt });
+
+test("timings: CI runs from the first check's start to the gate's completion", () => {
+  const s = snap({ contexts: [
+    timed("Classify changes", ago(50), ago(49)),
+    timed("Windows / Build and check (windows-latest)", ago(49), ago(38)),
+    timed("Build and check", ago(38), ago(36), "SUCCESS", { required: true }),
+  ], comments: [] });
+  assert.deepEqual(timings(s, NOW), { ciMinutes: 14, ciDone: true, queueMinutes: null, merged: false, left: false });
+});
+
+test("timings: CI still running counts up to now, and a queue request then waits on CI, not the queue", () => {
+  const s = snap({ contexts: [timed("Classify changes", ago(10), ago(9)), run("Build and check", "QUEUED", null, { required: true, startedAt: ago(9) })],
+    comments: [queueComment(ago(5))] });
+  assert.deepEqual(timings(s, NOW), { ciMinutes: 10, ciDone: false, queueMinutes: null, merged: false, left: false });
+});
+
+test("timings: queue wait starts at the later of the queue request and green CI, and ends at the merge", () => {
+  const contexts = [timed("Classify changes", ago(90), ago(89)), timed("Build and check", ago(80), ago(75), "SUCCESS", { required: true })];
+  // Queued before CI went green: the wait starts when the gate passed.
+  const early = snap({ contexts, comments: [queueComment(ago(85))], pr: { state: "MERGED", mergedAt: ago(15) } });
+  assert.deepEqual(timings(early, NOW), { ciMinutes: 15, ciDone: true, queueMinutes: 60, merged: true, left: false });
+  // Queued after it went green: the wait starts at the request, and still counts while open.
+  const late = snap({ contexts, comments: [queueComment(ago(30))] });
+  assert.deepEqual(timings(late, NOW), { ciMinutes: 15, ciDone: true, queueMinutes: 30, merged: false, left: false });
+});
+
+test("timings: the newest queue request counts (a push cancels the older ones)", () => {
+  const contexts = [timed("Build and check", ago(40), ago(35), "SUCCESS", { required: true })];
+  assert.equal(timings(snap({ contexts, comments: [queueComment(ago(34)), queueComment(ago(12))] }), NOW).queueMinutes, 12);
+});
+
+test("timings: no checks and no queue request report nothing", () => {
+  assert.deepEqual(timings(snap({ contexts: [], comments: [] }), NOW), { ciMinutes: null, ciDone: false, queueMinutes: null, merged: false, left: false });
+});
+
+test("formatTimings names CI and the queue wait apart, and says what is still running", () => {
+  assert.equal(formatTimings({ ciMinutes: 14.4, ciDone: true, queueMinutes: 61.6, merged: true, left: false }), "timing: CI 14m, then 62m in the Mergify queue until the merge");
+  assert.equal(formatTimings({ ciMinutes: 9.6, ciDone: false, queueMinutes: null, merged: false, left: false }), "timing: CI 10m so far");
+  assert.equal(formatTimings({ ciMinutes: 14, ciDone: true, queueMinutes: 3, merged: false, left: false }), "timing: CI 14m, then 3m in the Mergify queue so far");
+  assert.equal(formatTimings({ ciMinutes: 14, ciDone: true, queueMinutes: null, merged: false, left: false }), "timing: CI 14m; not queued");
+  assert.equal(formatTimings({ ciMinutes: null, ciDone: false, queueMinutes: null, merged: false, left: false }), null);
+  assert.equal(formatTimings({ ciMinutes: 14, ciDone: true, queueMinutes: 15, merged: false, left: true }), "timing: CI 14m, then 15m in the Mergify queue before it left");
+});
+
+// Codex review of #431: after a dequeue, the time since is not queue time.
+test("timings: a dequeue or a cancelled request ends the queue wait when Mergify said so", () => {
+  const contexts = [timed("Build and check", ago(50), ago(45), "SUCCESS", { required: true })];
+  const at = (fixture, createdAt) => ({ author: fixture.author, body: fixture.body, createdAt, updatedAt: createdAt });
+  const dequeued = snap({ contexts, comments: [queueComment(ago(40)), at(FX.dequeued299, ago(25))] });
+  assert.equal(dequeued.mergify.state, "dequeued");
+  assert.deepEqual(timings(dequeued, NOW), { ciMinutes: 5, ciDone: true, queueMinutes: 15, merged: false, left: true });
+  // Mergify rewrites its status comment in place: the edit time is when it left.
+  const edited = snap({ contexts, comments: [queueComment(ago(40)), { ...at(FX.dequeued299, ago(39)), updatedAt: ago(10) }] });
+  assert.equal(timings(edited, NOW).queueMinutes, 30);
+  // A requeue after the dequeue starts a new wait that is still running.
+  const requeued = snap({ contexts, comments: [queueComment(ago(40)), at(FX.dequeued299, ago(25)), queueComment(ago(8))] });
+  assert.deepEqual(timings(requeued, NOW), { ciMinutes: 5, ciDone: true, queueMinutes: 8, merged: false, left: false });
 });

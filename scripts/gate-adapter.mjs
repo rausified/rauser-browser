@@ -183,6 +183,14 @@ export const STEPS = [
     cmd: ["cargo", "clippy", "--locked", "-p", "adapter-templates", "--all-targets", "--", "-D", "warnings"],
     when: (files) => files.some((file) => file.startsWith("adapter-templates/") && RUST.test(file)),
   },
+  // Windows-only lints (`#[cfg(windows)]` code, #392) for the same Rust,
+  // through scripts/clippy-windows.mjs: it skips with the install command
+  // when the x86_64-pc-windows-gnu target or a MinGW C compiler is missing.
+  {
+    name: "windows clippy",
+    cmd: ["node", "scripts/clippy-windows.mjs", "--force"],
+    when: (files) => files.some((file) => /^(host|adapter-templates)\//.test(file) && RUST.test(file)),
+  },
   // The fuzz crate is its own workspace (adapter-templates/fuzz/Cargo.toml)
   // depending only on adapter-templates, so a cheap `cargo check` here
   // catches an engine/fuzz-target mismatch locally instead of waiting on

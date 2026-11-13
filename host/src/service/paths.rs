@@ -202,6 +202,7 @@ mod tests {
     fn label_is_reverse_dns_and_matches_brand_ts() {
         assert_eq!(SERVICE_LABEL, "com.rauser.brauser.service");
         assert!(
+            // crlf-ok: a single-line contains check.
             include_str!("../../../extension/brand.ts")
                 .contains(r#"SERVICE_LABEL = "com.rauser.brauser.service""#)
         );
