@@ -28,3 +28,18 @@ docs/adapters/README.md text eol=lf
 
 # Opt-in git hooks run under sh; keep them LF on every checkout.
 scripts/hooks/* text eol=lf
+
+# Generated files regenerate on merge instead of conflicting: the
+# brauser-generated driver (scripts/merge-generated.mjs) rebuilds the merge,
+# reruns the generator on the merged sources and its --check, and leaves an
+# ordinary conflict when it cannot. ids.lock.json merges as the ordered union
+# of both sides' entries. Opt in with scripts/dev/setup-merge-drivers; an
+# unconfigured driver means git's plain text merge, and GitHub ignores it.
+protocol/src/generated.rs merge=brauser-generated
+protocol/ts/generated.ts merge=brauser-generated
+extension/starter-families.generated.ts merge=brauser-generated
+protocol/capture-site/catalog.json merge=brauser-generated
+protocol/capture-site/starter-shapes.json merge=brauser-generated
+protocol/adapter-templates/starter-vectors.json merge=brauser-generated
+docs/adapters/README.md merge=brauser-generated
+protocol/starters/ids.lock.json merge=brauser-generated
