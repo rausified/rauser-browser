@@ -44,6 +44,53 @@ def rows(text: str) -> dict[str, dict]:
     return {json.loads(line)["id"]: json.loads(line) for line in text.splitlines() if line.strip()}
 
 
+class BootstrapRestoreTests(unittest.TestCase):
+    """queue bootstrap puts .beads/config.yaml back however bd bootstrap ends."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = pathlib.Path(tmp.name)
+        (self.repo / ".beads").mkdir()
+        self.config = self.repo / ".beads" / "config.yaml"
+        self.config.write_bytes(b"issue-prefix: \"brwr\"\n\n# local edit kept\nsync.remote: mine\n")
+        environ = unittest.mock.patch.dict(os.environ)
+        environ.start()
+        self.addCleanup(environ.stop)
+        for name in (work_queue.WORKSPACE_ENV, work_queue.BOSUN_WORKSPACE_ENV, work_queue.BEADS_DIR_ENV):
+            os.environ.pop(name, None)
+
+    def rewriting_bd(self, fail: bool):
+        def bd(*args, cwd, check=True):
+            if args[0] == "bootstrap":
+                self.config.write_bytes(b"issue-prefix: \"brwr\"\nsync.remote: rewritten\n")
+                if fail:
+                    raise work_queue.QueueError("bd bootstrap failed (1): boom")
+            return subprocess.CompletedProcess(["bd", *args], 0, "origin git+https://example.invalid/r.git\n", "")
+        return bd
+
+    def test_a_failed_bootstrap_still_restores_the_file(self) -> None:
+        before = self.config.read_bytes()
+        with unittest.mock.patch.object(work_queue, "bd", self.rewriting_bd(fail=True)):
+            with self.assertRaises(work_queue.QueueError):
+                work_queue.bootstrap(self.repo)
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_restores_the_bytes_from_before_bootstrap_and_says_so(self) -> None:
+        before = self.config.read_bytes()
+        with unittest.mock.patch.object(work_queue, "bd", self.rewriting_bd(fail=False)):
+            said = work_queue.bootstrap(self.repo)
+        self.assertEqual(self.config.read_bytes(), before)  # the local sync.remote edit survives
+        self.assertIn("kept .beads/config.yaml as it was before bootstrap", " ".join(said))
+
+    def test_no_text_still_says_to_run_bd_bootstrap_directly(self) -> None:
+        root = SCRIPTS.parent
+        for path in (root / "scripts" / "work_queue.py", root / "scripts" / "queue_doctor.py",
+                     root / ".beads" / "README.md"):
+            text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+            self.assertNotIn("BD_NON_INTERACTIVE=1 bd bootstrap", text, path)
+
+
 class PlanAdoptionTests(unittest.TestCase):
     """Field-level application of a branch's committed edits (no bd needed)."""
 
@@ -312,7 +359,7 @@ class DoltIntegrationTests(unittest.TestCase):
         self.git(self.a, "push", "-q", self.url, "main")
         b = self.clone("b")
         out = self.ok(b, "bootstrap")
-        self.assertIn("kept .beads/config.yaml as committed", out)  # bd did rewrite it
+        self.assertIn("kept .beads/config.yaml as it was before bootstrap", out)  # bd did rewrite it
         self.assertEqual((b / ".beads" / "config.yaml").read_bytes(), committed)
         self.assertEqual(self.git(b, "status", "--porcelain", "--untracked-files=no"), "", out)
         self.assertIn("brwr-a1", self.exported(b))
