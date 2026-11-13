@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Brauser's work queue in bd's Dolt database: sync, export, backlog, check, adopt, seed.
+"""Brauser's work queue in bd's Dolt database: sync, export, backlog, check, doctor, adopt, seed.
 
 The implementation and its documentation are in scripts/work_queue.py
 (AGENTS.md "Work queue", worker-contract.json). Typical use:
