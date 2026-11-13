@@ -5,8 +5,11 @@
 // .gitattributes names the generated files that use it; scripts/merge-generated.mjs
 // says what it does. Opt in: without this, git merges those files as plain
 // text, as before. The PR doctor configures it itself (scripts/pr-doctor.mjs).
-// A merge runs a generator only when the merged copy is byte-identical to the
-// merge base's, HEAD's or origin/main's (or, with --tools, that directory's).
+// A merge runs a generator only if it is byte-identical to the merge base's,
+// your checked-out HEAD's or origin/main's copy (with --tools, only that
+// directory's). Merging into a branch you checked out runs that branch's
+// generator, because you are already running its code. The unattended PR
+// doctor path trusts only main's copy.
 //
 // Usage: scripts/dev/setup-merge-drivers [--tools <dir>] [--unset] [--show]
 //   (no flags)   run each worktree's own scripts/merge-generated.mjs
@@ -33,6 +36,8 @@ if (values.unset) {
 } else {
   configure({ tools: values.tools ?? null });
   console.log(`configured merge.${DRIVER}; the generated files .gitattributes marks merge=${DRIVER} now regenerate on git merge.`);
-  console.log("A generator runs only when the merged copy matches the merge base's, HEAD's or origin/main's;");
-  console.log("a merge that changes one leaves a conflict to resolve by hand, so another branch's generator never runs.");
+  console.log("A merge runs a generator only if it matches the merge base's, your checked-out HEAD's or origin/main's copy;");
+  console.log("any other changed generator is a conflict to resolve by hand. Merging into a branch you checked out runs");
+  console.log("that branch's generator, because you are already running its code. The unattended PR doctor path trusts");
+  console.log("only main's copy (--tools).");
 }

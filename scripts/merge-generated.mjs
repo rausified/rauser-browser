@@ -23,15 +23,18 @@
 // failing generator or --check), it leaves an ordinary conflict with markers
 // and says why on stderr; it never picks a side silently. The one exception is
 // protocol/starters/ids.lock.json, which is append-only: its merge is always
-// the ordered union of both sides' entries (ours first, then theirs' new ones),
-// and only a key both sides set to different ids is a conflict.
+// the ordered union of both sides' entries (base's in place, then ours' new
+// ones, then theirs'), and only a key both sides set to different ids is a
+// conflict.
 //
 // A generator runs only when the merged tree's copy is byte-identical to a
-// trusted one, so a merge never executes the other branch's code: with
-// BRAUSER_MERGE_TOOLS=<dir> (the PR doctor) only <dir>'s copy, main's;
-// otherwise the merge base's, HEAD's or origin/main's. A merge that changes a
-// generator any other way is a conflict to resolve by hand. Generators run
-// with no credentials in their environment (`generatorEnv`). BRAUSER_MERGE_LOG=<file> gets one
+// trusted one: with BRAUSER_MERGE_TOOLS=<dir> (the unattended PR doctor) only
+// <dir>'s copy, main's; otherwise the merge base's, your checked-out HEAD's or
+// origin/main's. Merging into a branch you checked out therefore runs that
+// branch's generator, because you are already running its code. A merge that
+// changes a generator any other way is a conflict to resolve by hand.
+// Generators run with no credentials in their environment (`generatorEnv`).
+// BRAUSER_MERGE_LOG=<file> gets one
 // `<path>\t<how>` line per file the driver resolved.
 //
 // Usage (git runs it; scripts/dev/setup-merge-drivers configures it):
@@ -173,8 +176,9 @@ function cacheDir(cwd) {
 /** The generator copies allowed to run, as `{ copies, from }`. With `tools`
  * (the PR doctor) only that directory's copy, an empty one when it is
  * missing so nothing matches. Otherwise the merge base's, HEAD's and
- * origin/main's copies: a merge never runs a generator only the other branch
- * changed, which would execute that branch's code. */
+ * origin/main's copies. A generator only the merged-in branch changed is
+ * refused; HEAD's copy is trusted because checking a branch out already runs
+ * its code. */
 function trustedCopies(generator, { tools, ours, other, cwd }) {
   if (tools) {
     const file = join(tools, basename(generator.tool));
@@ -233,7 +237,7 @@ function regenerateUncached(generator, { ours, other, cwd, trusted }) {
     }
     const merged = join(scratch, generator.tool);
     if (!existsSync(merged) || !trusted.copies.some((copy) => readFileSync(merged).equals(copy))) {
-      return { ok: false, reason: `the merge changes ${generator.tool}, which is not ${trusted.from}; a merge never runs a generator it has not seen, so resolve it by hand and regenerate` };
+      return { ok: false, reason: `the merge changes ${generator.tool}, which is not ${trusted.from}; a merge runs only a generator it already trusts, so resolve it by hand and regenerate` };
     }
     for (const output of generator.outputs) mkdirSync(dirname(join(scratch, output)), { recursive: true });
     for (const check of [false, true]) {
