@@ -11,8 +11,10 @@
 //      `git merge-tree --write-tree HEAD <other>`. That inner merge runs this
 //      driver again in inner mode (BRAUSER_MERGE_INNER=1), which only makes
 //      the scratch tree usable: a pure output keeps ours (regeneration
-//      overwrites it), catalog.json's generated lines take the merge base's
-//      text before an ordinary text merge, and ids.lock.json takes the union.
+//      overwrites it), the generated parts of a mixed file (catalog.json's
+//      generated lines, AGENTS.md's Current state table) take the merge
+//      base's text before an ordinary text merge of the hand-written rest,
+//      and ids.lock.json takes the union.
 //   2. A conflict in any of the generator's other inputs (family files,
 //      schema.json, shapes, docs, the generator itself) stops here.
 //   3. Otherwise it extracts the generator's inputs from the merged tree into
@@ -53,6 +55,7 @@ export const DRIVER = "brauser-generated";
 
 export const LOCK_PATH = "protocol/starters/ids.lock.json";
 export const CATALOG_PATH = "protocol/capture-site/catalog.json";
+export const AGENTS_PATH = "AGENTS.md";
 
 /** Each generator: the outputs it owns, the input paths a conflict in which
  * stops regeneration, what to extract from the merged tree, and how to run
@@ -83,6 +86,14 @@ export const GENERATORS = Object.freeze([
     ]),
     extract: Object.freeze(["protocol", "docs/adapters", "scripts/generate-starters.mjs"]),
     run: (dir, check) => [process.execPath, [join(dir, "scripts/generate-starters.mjs"), "--root", dir, ...(check ? ["--check"] : [])]],
+  }),
+  Object.freeze({
+    name: "current-state",
+    tool: "scripts/generate-current-state.mjs",
+    outputs: Object.freeze([AGENTS_PATH]),
+    inputs: Object.freeze(["docs/agents/current-state/", "scripts/generate-current-state.mjs"]),
+    extract: Object.freeze([AGENTS_PATH, "docs/agents/current-state", "scripts/generate-current-state.mjs"]),
+    run: (dir, check) => [process.execPath, [join(dir, "scripts/generate-current-state.mjs"), "--root", dir, ...(check ? ["--check"] : [])]],
   }),
 ]);
 
@@ -140,6 +151,39 @@ export function withBaseGeneratedLines(text, base) {
     })
     .join("\n");
 }
+
+// AGENTS.md's generated block (scripts/generate-current-state.mjs BEGIN/END;
+// its tests check these match).
+export const AGENTS_BLOCK = Object.freeze({
+  begin: /^<!-- BEGIN GENERATED current-state\b.*-->\r?$/,
+  end: /^<!-- END GENERATED current-state -->\r?$/,
+});
+
+/** `text` with the lines inside its GENERATED block replaced by `base`'s
+ * (none when `base` has no block), so a text merge sees only the
+ * hand-written changes; the generator then rewrites the block from the
+ * merged rows. `text` without one well-formed block is returned unchanged. */
+export function withBaseGeneratedBlock(text, base, { begin, end } = AGENTS_BLOCK) {
+  const bounds = (lines) => {
+    const from = lines.findIndex((line) => begin.test(line));
+    const to = lines.findIndex((line) => end.test(line));
+    return from >= 0 && to > from ? [from, to] : null;
+  };
+  const lines = text.split("\n");
+  const own = bounds(lines);
+  if (!own) return text;
+  const baseLines = base.split("\n");
+  const theirs = bounds(baseLines);
+  const inside = theirs ? baseLines.slice(theirs[0] + 1, theirs[1]) : [];
+  return [...lines.slice(0, own[0] + 1), ...inside, ...lines.slice(own[1])].join("\n");
+}
+
+/** Mixed files: hand-written text around generated parts, and how to give a
+ * side's generated parts the merge base's text. */
+const MIXED = Object.freeze({
+  [CATALOG_PATH]: withBaseGeneratedLines,
+  [AGENTS_PATH]: (text, base) => withBaseGeneratedBlock(text, base),
+});
 
 /** The other commit of a running `git merge` (GITHEAD_<sha>), or null. */
 export function otherCommit(env = process.env) {
@@ -290,6 +334,11 @@ export function driver([basePath, oursPath, theirsPath, path, markerSize], env =
   const generator = generatorFor(path);
   const read = (file) => readFileSync(file, "utf8");
   if (!generator) return textMerge(basePath, oursPath, theirsPath, markerSize);
+  // An AGENTS.md from before its table was generated, on every side, has
+  // nothing to regenerate: merge it as text, as before.
+  if (path === AGENTS_PATH && ![basePath, oursPath, theirsPath].some((file) => read(file).split("\n").some((line) => AGENTS_BLOCK.begin.test(line)))) {
+    return textMerge(basePath, oursPath, theirsPath, markerSize);
+  }
 
   let lock = null;
   if (path === LOCK_PATH) {
@@ -303,10 +352,11 @@ export function driver([basePath, oursPath, theirsPath, path, markerSize], env =
   if (env.BRAUSER_MERGE_INNER === "1") {
     // Scratch-tree only: regeneration overwrites every output it touches.
     if (lock) writeFileSync(oursPath, lock.text);
-    if (path !== CATALOG_PATH) return 0;
+    const strip = MIXED[path];
+    if (!strip) return 0;
     const base = read(basePath);
-    writeFileSync(oursPath, withBaseGeneratedLines(read(oursPath), base));
-    writeFileSync(theirsPath, withBaseGeneratedLines(read(theirsPath), base));
+    writeFileSync(oursPath, strip(read(oursPath), base));
+    writeFileSync(theirsPath, strip(read(theirsPath), base));
     return textMerge(basePath, oursPath, theirsPath, markerSize);
   }
 

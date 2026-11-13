@@ -2,6 +2,7 @@
 
 ## Current state
 
+<!-- BEGIN GENERATED current-state: edit the row files in docs/agents/current-state/, then run npm run gen:current-state -->
 | Component | State | Pointer |
 |---|---|---|
 | M0 foundation | Merged | DESIGN.md §12 |
@@ -27,6 +28,7 @@
 | macOS release packaging | Built, unsigned path only (brwr-3ppp): `packaging/macos/` builds `Brauser.app` (universal host, `LSUIElement`, macOS 15+) in a drag-to-Applications `.dmg` with SBOMs and checksums; `.github/workflows/release-macos.yml` (tag or dispatch) adds Developer ID signing, notarization, stapling, SLSA provenance and a draft release only when the signing secrets exist, and none are set yet, so no build has been signed or notarized | DESIGN.md §11, TESTING.md "macOS release packaging" |
 | Not built | Re-learning apply and panel Re-learn (`brwr-dbp`, `brwr-6x2`), Omnibar built-in actions and richer custom commands, Related and Read later, the search index, self-registration when the app is opened (opening `Brauser.app` today runs the native host with no arguments), a Developer ID signed and notarized app, the Chrome Web Store listing, and a public release; starter live-tool certification is [human] work | DESIGN.md §12.2 |
 | Platforms | macOS is primary; Windows was reinstated on 2026-10-16 | DESIGN.md §13 |
+<!-- END GENERATED current-state -->
 
 The as-built notes this section used to hold, with their code pointers, are in [docs/history.md](docs/history.md#agentsmd-current-state--history).
 New dated decisions and as-built notes go to docs/history.md; update DESIGN.md only to the resulting current rule, and this table only when a component's state changes.

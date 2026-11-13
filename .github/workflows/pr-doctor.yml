@@ -84,6 +84,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pr-doctor/dev"
           cp scripts/pr-doctor.mjs scripts/pr-constants.mjs scripts/work_queue.py scripts/render_backlog.py \
             scripts/check_queue_consistency.py scripts/merge-generated.mjs scripts/generate-starters.mjs \
+            scripts/generate-current-state.mjs \
             "$RUNNER_TEMP/pr-doctor/"
           # The generated-file merge driver runs only these copies of the generators.
           cp protocol/generate.py "$RUNNER_TEMP/pr-doctor/generate.py"

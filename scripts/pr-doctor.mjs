@@ -15,7 +15,8 @@
 //     instructions;
 //   - Markdown conflicts where both sides only inserted text at the same point
 //     (a diff3 hunk with an empty base), keeping main's text first, then the PR's;
-//   - generated files (.gitattributes `merge=brauser-generated`): main's copy
+//   - generated files (.gitattributes `merge=brauser-generated`, including
+//     AGENTS.md's Current state table, generated from one file per row): main's copy
 //     of scripts/merge-generated.mjs regenerates them from the merged sources
 //     with main's generators and their --check, and after the merge every
 //     output of a generator it ran is rewritten from that same regeneration,
@@ -29,8 +30,8 @@
 //
 // Usage: node scripts/pr-doctor.mjs --tools <dir> [--dry-run]
 //   <dir> holds main's work_queue.py, render_backlog.py,
-//   check_queue_consistency.py, merge-generated.mjs, generate-starters.mjs
-//   and protocol/generate.py (as generate.py). Run from a full clone of the repo whose
+//   check_queue_consistency.py, merge-generated.mjs, generate-starters.mjs,
+//   generate-current-state.mjs and protocol/generate.py (as generate.py). Run from a full clone of the repo whose
 //   `origin` is GitHub; GH_TOKEN and GITHUB_REPOSITORY must be set.
 
 import { spawnSync } from "node:child_process";

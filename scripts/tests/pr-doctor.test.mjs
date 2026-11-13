@@ -281,7 +281,7 @@ test("tryRepair regenerates a PR whose only conflicts are generated files", { sk
     // Main's tools, as the workflow copies them.
     const tools = join(root, "tools");
     mkdirSync(tools);
-    for (const [from, to] of [["scripts/merge-generated.mjs", "merge-generated.mjs"], ["scripts/generate-starters.mjs", "generate-starters.mjs"], ["protocol/generate.py", "generate.py"]]) {
+    for (const [from, to] of [["scripts/merge-generated.mjs", "merge-generated.mjs"], ["scripts/generate-starters.mjs", "generate-starters.mjs"], ["scripts/generate-current-state.mjs", "generate-current-state.mjs"], ["protocol/generate.py", "generate.py"]]) {
       cpSync(join(repo, from), join(tools, to));
     }
     Object.assign(process.env, ENV);
