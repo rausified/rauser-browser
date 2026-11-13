@@ -21,6 +21,11 @@ Commands (scripts/dev/queue is the entry point):
                     render BOSUN_FEATURE_BACKLOG.md, default
                     target/queue/BOSUN_FEATURE_BACKLOG.md (git-ignored)
   check             export, render and run the queue consistency check
+  doctor            read-only diagnosis (scripts/queue_doctor.py): workspace
+                    identity, bead ids docs/backlog cites that the queue lacks,
+                    this database against the remote's refs/dolt/data, and
+                    unpublished edits; prints the safe repair for each and
+                    performs none. Exits 1 when it finds a problem.
   adopt --from REF [--base REV] [--dry-run]
                     apply the bead edits a branch committed in the old
                     .beads/issues.jsonl (REF's file against BASE's, default the
@@ -649,6 +654,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     where.add_argument("--print", action="store_true")
     where.add_argument("--out", type=pathlib.Path)
     sub.add_parser("check", help="run the queue consistency check on this database")
+    sub.add_parser("doctor", help="read-only: diagnose the queue and print safe repairs")
     adopt_parser = sub.add_parser("adopt", help="apply a branch's committed queue edits through bd")
     adopt_parser.add_argument("--from", dest="source", required=True)
     adopt_parser.add_argument("--base")
@@ -680,6 +686,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(f"  {line}")
             print("queue consistency check " + ("FAILED" if found else "passed"))
             return 1 if found else 0
+        elif args.command == "doctor":
+            import queue_doctor  # noqa: PLC0415 (it imports this module)
+
+            return queue_doctor.doctor(repo)
         elif args.command == "adopt":
             adopt(repo, args.source, args.base, dry_run=args.dry_run,
                   frame_path=args.frame.resolve() if args.frame else None)
