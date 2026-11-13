@@ -26,6 +26,7 @@ cargo build --locked --workspace --all-targets
 cargo test --locked --workspace
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+npm run lint:windows     # Rust changes: the same clippy for x86_64-pc-windows-gnu; skips, naming what to install, without that target or mingw-w64
 cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
 npm ci --ignore-scripts
 npm run typecheck
@@ -36,8 +37,10 @@ npm run test:a11y        # real headless Chrome; see TESTING.md for sandbox skip
 npm run test:markdown-neutralizer
 npm run test:scripts
 npm run test:queue       # also checks this clone's bd queue (scripts/dev/queue bootstrap first)
-npm run test:dev-tools   # macOS/Linux only: scripts/dev tooling
+npm run test:dev-tools:changed   # macOS/Linux only: the scripts/dev Python tests, only when the change can affect them (npm run test:dev-tools runs them all)
 ```
+
+`npm run lint:windows` catches Windows-only lints (`#[cfg(windows)]` code) before Windows CI does. It needs `rustup target add x86_64-pc-windows-gnu` and a MinGW C compiler for the bundled SQLite (`brew install mingw-w64`). `npm run test:scripts` includes `scripts/check-crlf-reads.mjs`, which fails a test that reads checkout text without normalizing `\r\n`. Windows CI checks the repository out with CRLF line endings, so normalize the read (`.replace(/\r\n/g, "\n")`) or mark it `crlf-ok: <reason>`.
 
 For a change that only adds or changes adapter templates or starters (the starter table, Capture Site, the vectors/catalog/shapes files, the engine's tests, the capture-site host fixtures and docs), run `npm run gate:adapter` instead of the full list above. It runs only the checks that read those files, prints PASS/FAIL per step and the total time, and refuses with exit 2 if the change touches anything else; then run the full list. `--dry-run` shows the scope decision and step plan.
 

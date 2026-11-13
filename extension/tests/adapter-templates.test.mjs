@@ -31,7 +31,7 @@ const vectors = mergeVectors(
   readJson("../../protocol/adapter-templates/starter-vectors.json"),
 );
 const disputed = new Set(readJson("./adapter-templates-disputed.json"));
-const engineSource = readFileSync(new URL("../adapter-templates.ts", import.meta.url), "utf8");
+const engineSource = readFileSync(new URL("../adapter-templates.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 function resolveDoc(doc) {
   if (doc && typeof doc === "object" && "$fixture" in doc) {
@@ -228,7 +228,7 @@ test("adapter_templates_regex_guard_flags_every_regex_form", () => {
 
 test("adapter_templates_engine_uses_no_regular_expressions", () => {
   assert.deepEqual(regexUses(engineSource, "adapter-templates.ts"), []);
-  const evalSource = readFileSync(new URL("../../scripts/adapter-templates-eval.mjs", import.meta.url), "utf8");
+  const evalSource = readFileSync(new URL("../../scripts/adapter-templates-eval.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.deepEqual(regexUses(evalSource, "adapter-templates-eval.mjs"), []);
 });
 

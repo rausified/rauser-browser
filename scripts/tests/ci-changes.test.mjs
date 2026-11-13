@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-import { classify, isDocsOrQueuePath, parseNameList } from "../ci-changes.mjs";
+import { classify, devToolsReasons, isDocsOrQueuePath, parseNameList } from "../ci-changes.mjs";
 
 test("root Markdown, docs/ and .beads/ are docs paths (check_current_state.py refuses a committed queue file)", () => {
   for (const path of [
@@ -72,4 +75,99 @@ test("NUL-separated git output keeps unusual names intact and drops the trailing
 test("a path with a newline in its name is one path, not two", () => {
   // `docs/a\nhost/src/x.rs` is a single file under docs/, not a docs file plus a host file.
   assert.deepEqual(parseNameList("docs/a\nhost/src/x.rs\0"), ["docs/a\nhost/src/x.rs"]);
+});
+
+// The Python dev-tools tests (build-os.yml "Test the queue tools and dev
+// scripts", npm run test:dev-tools) run only when something they read
+// changed (delay-fix rank 12, brwr-f8mm; c0e86b2d F6: 9 minutes locally for
+// a change that touched no Python).
+test("Python dev-tool sources, their tests and the files they read need the dev-tools tests", () => {
+  for (const path of [
+    "scripts/work_queue.py",
+    "scripts/check_current_state.py",
+    "scripts/tests/test_work_queue.py",
+    "scripts/tests/git_test_env.py",
+    "scripts/tests/fixtures/mergify-comments.json",
+    "scripts/dev/queue",
+    "scripts/dev/deploy-live",
+    "scripts/dev/worktree-hygiene",
+    "scripts/dev/queue-seed/brwr-9eio.jsonl",
+    "worker-contract.json",
+    "worker-contract.schema.json",
+    ".gitattributes",
+    "BRAUSER_IMPROVEMENT_FEED.md",
+    "docs/improvement-feed/2026-11-12-some-entry.md",
+    "docs/backlog/frame.md",
+    "docs/backlog/notes/2026-11-12-note.md",
+    ".beads/metadata.json",
+    // The definitions that run them, and this classifier itself.
+    ".github/workflows/ci.yml",
+    ".github/workflows/build-os.yml",
+    ".github/workflows/pr-hygiene.yml",
+    "scripts/ci-changes.mjs",
+    "package.json",
+  ]) {
+    assert.equal(devToolsReasons([path]).length, 1, path);
+  }
+});
+
+test("a change that touches no Python dev tool skips the dev-tools tests", () => {
+  assert.deepEqual(devToolsReasons([
+    "host/src/native.rs",
+    "extension/panel.ts",
+    "scripts/dev/pr-watch.mjs",
+    "scripts/tests/pr-watch.test.mjs",
+    "scripts/ci-macos.mjs",
+    "scripts/smoke-macos.mjs",
+    "docs/history.md",
+    "README.md",
+    "Cargo.lock",
+  ]), []);
+});
+
+test("each dev-tools reason names the path that needs the tests", () => {
+  assert.deepEqual(devToolsReasons(["extension/panel.ts", "scripts/work_queue.py", "worker-contract.json"]), [
+    ["scripts/work_queue.py", "a Python dev tool or its tests"],
+    ["worker-contract.json", "read by the dev-tools tests"],
+  ]);
+});
+
+test("an empty change list runs the dev-tools tests, so a failed diff never skips them", () => {
+  assert.deepEqual(devToolsReasons([]), [["(no changed paths)", "an empty or failed diff runs everything"]]);
+});
+
+// Codex review of #431: test_worker_contract.py reads scripts/dev/queue-pr.mjs
+// and scripts/pr-constants.mjs, which the first cut of devToolsReasons missed.
+// Every checkout path a Python test names (`ROOT / "x"`, `SCRIPTS / "dev" /
+// "queue"`, a "scripts/..." literal) must select the dev-tools tests.
+test("every checkout path the Python dev-tools tests name selects them", () => {
+  const repo = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+  const tests = readdirSync(path.join(repo, "scripts", "tests")).filter((name) => name.endsWith(".py"));
+  const named = new Set();
+  for (const name of tests) {
+    const source = readFileSync(path.join(repo, "scripts", "tests", name), "utf8");
+    for (const [, base, chain] of source.matchAll(/\b(ROOT|REPO|SCRIPTS\.parent|SCRIPTS)((?:\s*\/\s*["'][^"']+["'])+)/g)) {
+      const parts = [...chain.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+      named.add([...(base === "SCRIPTS" ? ["scripts"] : []), ...parts].join("/"));
+    }
+    for (const [, literal] of source.matchAll(/["'](scripts\/[^"'\s]+)["']/g)) named.add(literal);
+    // `NAME = Path(__file__).resolve()<up>[ / "a" / "b"]`: resolve it ourselves, and
+    // refuse a base name the extractor above does not follow (#431 review M4), so a
+    // test reading the checkout through, say, REPO_ROOT cannot slip past this guard.
+    for (const [, variable, up, chain] of source.matchAll(/^(\w+)\s*=\s*(?:pathlib\.)?Path\(__file__\)\.resolve\(\)((?:\.parents\[\d\]|\.parent)+)((?:\s*\/\s*["'][^"']+["'])*)/gm)) {
+      const depth = [...up.matchAll(/\.parent(?:s\[(\d)\])?/g)].reduce((sum, m) => sum + (m[1] === undefined ? 1 : Number(m[1]) + 1), 0);
+      const base = ["scripts/tests", "scripts", ""][depth - 1];
+      assert.notEqual(base, undefined, `${name}: ${variable} climbs ${depth} levels above scripts/tests`);
+      const parts = [...chain.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+      if (parts.length) named.add([base, ...parts].filter(Boolean).join("/"));
+      else assert.equal(base, { ROOT: "", REPO: "", SCRIPTS: "scripts" }[variable],
+        `${name}: ${variable} (${base || "the repository root"}) is a checkout base this guard does not follow; name it ROOT or REPO (root) or SCRIPTS (scripts/)`);
+    }
+  }
+  const existing = [...named].filter((file) => existsSync(path.join(repo, file)));
+  assert.ok(existing.includes("worker-contract.json") && existing.includes("scripts/dev/queue-pr.mjs"), [...named].join(", "));
+  for (const file of existing) {
+    const probe = statSync(path.join(repo, file)).isDirectory() ? `${file}/probe.py` : file; // a directory: what a test imports or reads from it
+    assert.notDeepEqual(devToolsReasons([probe]), [], `${file} is read by a Python test but does not select the dev-tools tests`);
+  }
 });
