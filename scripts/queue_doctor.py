@@ -169,7 +169,7 @@ def _identity(probe: Probe) -> tuple[Finding, Optional[dict]]:
             f"bd refuses this workspace: metadata.json project_id {file_id}, database _project_id {db_id} "
             f"(committed: {committed or 'none'})",
             "if the committed id is right, the database was built from another seed: move the workspace's "
-            ".beads/embeddeddolt aside (do not delete it) and run `BD_NON_INTERACTIVE=1 bd bootstrap`, which "
+            ".beads/embeddeddolt aside (do not delete it) and run `scripts/dev/queue bootstrap`, which "
             "clones the published queue; first run `scripts/dev/queue doctor` elsewhere to confirm the remote "
             "is healthy, and ask the coordinator before changing the committed .beads/metadata.json",
         ), None
@@ -214,7 +214,7 @@ def _remote(probe: Probe, context: Optional[dict]) -> Finding:
                        "seeding is a one-time coordinated step (`scripts/dev/queue seed`); ask the coordinator")
     if cached is None:
         return Finding("remote", "unknown", f"this database has no cached copy of the remote (remote at {remote[:12]})",
-                       "`scripts/dev/queue sync` pulls it; a fresh clone runs `BD_NON_INTERACTIVE=1 bd bootstrap`")
+                       "`scripts/dev/queue sync` pulls it; a fresh clone runs `scripts/dev/queue bootstrap`")
     if cached != remote:
         return Finding("remote", "problem",
                        f"the remote moved since this database last pulled ({cached[:12]} -> {remote[:12]})",

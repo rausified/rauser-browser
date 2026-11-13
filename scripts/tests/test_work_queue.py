@@ -85,7 +85,8 @@ class BootstrapRestoreTests(unittest.TestCase):
 
     def test_no_text_still_says_to_run_bd_bootstrap_directly(self) -> None:
         root = SCRIPTS.parent
-        for path in (root / "scripts" / "work_queue.py", root / ".beads" / "README.md"):
+        for path in (root / "scripts" / "work_queue.py", root / "scripts" / "queue_doctor.py",
+                     root / ".beads" / "README.md"):
             text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
             self.assertNotIn("BD_NON_INTERACTIVE=1 bd bootstrap", text, path)
 
