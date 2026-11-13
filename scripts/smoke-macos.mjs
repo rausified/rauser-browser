@@ -492,6 +492,11 @@ const isProbe = (run) => run.stdin?.trim() === PROBE_PROMPT ||
 // Spawn a short-lived host process for one framed request, independent of
 // whatever host process is serving the live panel or settings connection.
 // The host's config-file lock (§7) serializes these against each other.
+// Longer than the host's slowest bounded answer: a 5 s service start, a 2 s
+// stop of a stale service and another 5 s start, then the 30 s run exchange
+// (DEFAULT_WAIT, STOP_WAIT and EXCHANGE_TIMEOUT in host/src/service/client.rs).
+const HOST_HANG_GUARD_MS = 120_000;
+
 function hostRequest(wrapper, request) {
   const body = Buffer.from(JSON.stringify(request));
   const length = Buffer.alloc(4);
@@ -501,10 +506,16 @@ function hostRequest(wrapper, request) {
     const output = [];
     const errors = [];
     let settled = false;
+    // The host always answers by itself: it bounds its own service start,
+    // stale-service restart and exchange (host/src/service/client.rs) and
+    // answers service_unavailable when one runs out, then exits on stdin's
+    // end. So its exit is the wait's signal; this only catches a host that
+    // never exits. A fixed 10 s here killed a slow but healthy get_run
+    // (brwr-jzk9), well inside the host's own bounds.
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      finish(new Error(`Native host ${request.type} timed out`));
-    }, 10_000);
+      finish(new Error(`Native host ${request.type} did not exit within ${HOST_HANG_GUARD_MS / 1000}s`));
+    }, HOST_HANG_GUARD_MS);
     function finish(error, value) {
       if (settled) return;
       settled = true;
@@ -660,19 +671,54 @@ class PageDriver {
     return reply.result?.value;
   }
 
-  async click(selector) {
-    const point = await this.evaluate(`(() => {
-      const element = document.querySelector(${JSON.stringify(selector)});
-      if (!element) throw new Error("Missing ${selector.replaceAll('"', "'")}");
-      if (element.disabled) throw new Error("${selector.replaceAll('"', "'")} is disabled");
-      element.scrollIntoView({ block: "center" });
-      const box = element.getBoundingClientRect();
-      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
-    })()`);
-    for (const type of ["mousePressed", "mouseReleased"]) {
-      await this.cdp.send("Input.dispatchMouseEvent", {
-        type, x: point.x, y: point.y, button: "left", clickCount: 1,
-      }, this.sessionId);
+  // A click is measured, then dispatched as separate input events, so the
+  // page can move or disable the element in between: content loading above
+  // a button shifts it, and the press lands elsewhere and does nothing
+  // (brwr-sy7v: a Summarize & log click that started no run). Each attempt
+  // hit-tests its point and records whether the element itself received the
+  // click; a miss is measured and dispatched again, never assumed.
+  async click(selector, { timeout = 10_000 } = {}) {
+    const name = selector.replaceAll('"', "'");
+    const deadline = Date.now() + timeout;
+    for (let attempt = 1; ; attempt += 1) {
+      const token = `${Date.now()}-${attempt}-${Math.random()}`;
+      const point = await this.evaluate(`(() => {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!element) throw new Error("Missing ${name}");
+        // A retry waits out a control the page disabled after the last
+        // measurement, as a busy panel does; the first attempt reports it.
+        if (element.disabled) {
+          if (${attempt} === 1) throw new Error("${name} is disabled");
+          return { disabled: true };
+        }
+        element.scrollIntoView({ block: "center" });
+        const box = element.getBoundingClientRect();
+        const x = box.left + box.width / 2, y = box.top + box.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        if (window.smokeClickListener) {
+          window.smokeClickListener.element.removeEventListener("click", window.smokeClickListener.listener, true);
+        }
+        const listener = () => { window.smokeClicked = ${JSON.stringify(token)}; };
+        element.addEventListener("click", listener, { capture: true, once: true });
+        window.smokeClickListener = { element, listener };
+        return { x, y, hits: hit !== null && (hit === element || element.contains(hit)) };
+      })()`);
+      if (point.hits && !point.disabled) {
+        for (const type of ["mousePressed", "mouseReleased"]) {
+          await this.cdp.send("Input.dispatchMouseEvent", {
+            type, x: point.x, y: point.y, button: "left", clickCount: 1,
+          }, this.sessionId);
+        }
+        // Chrome acknowledges input only after the page handled it. A click
+        // that closed or navigated its page leaves nothing to ask: it landed.
+        const landed = await this.evaluate(`window.smokeClicked === ${JSON.stringify(token)}`).catch(() => true);
+        if (landed) return;
+      }
+      if (Date.now() >= deadline) {
+        const why = point.disabled ? " (it is disabled)" : point.hits ? "" : " (another element covers it)";
+        throw new Error(`A click on ${name} did not reach it after ${attempt} attempts${why}`);
+      }
+      await delay(100);
     }
   }
 

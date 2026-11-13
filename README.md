@@ -36,7 +36,7 @@ npm run test:extension
 npm run test:a11y        # real headless Chrome; see TESTING.md for sandbox skips
 npm run test:markdown-neutralizer
 npm run test:scripts
-npm run test:queue       # also checks this clone's bd queue (BD_NON_INTERACTIVE=1 bd bootstrap first)
+npm run test:queue       # also checks this clone's bd queue (scripts/dev/queue bootstrap first)
 npm run test:dev-tools:changed   # macOS/Linux only: the scripts/dev Python tests, only when the change can affect them (npm run test:dev-tools runs them all)
 ```
 
@@ -44,7 +44,11 @@ npm run test:dev-tools:changed   # macOS/Linux only: the scripts/dev Python test
 
 For a change that only adds or changes adapter templates or starters (the starter table, Capture Site, the vectors/catalog/shapes files, the engine's tests, the capture-site host fixtures and docs), run `npm run gate:adapter` instead of the full list above. It runs only the checks that read those files, prints PASS/FAIL per step and the total time, and refuses with exit 2 if the change touches anything else; then run the full list. `--dry-run` shows the scope decision and step plan.
 
-To deploy the live install (the main checkout Chrome and the native host run from), select Node 24.14.0 (`nvm install 24.14.0 && nvm use 24.14.0`), then use `scripts/dev/deploy-live` (`--dry-run` first). The deploy checks that Node can import `extension/brand.ts` before building the host or extension. AGENTS.md "PR ownership and handoff" has the details and `scripts/dev/index-lock-watch` for stale `.git/index.lock` files.
+To deploy the live install (the main checkout Chrome and the native host run from), select Node 24.14.0 (`nvm install 24.14.0 && nvm use 24.14.0`), then use `scripts/dev/deploy-live` (`--dry-run` first). The deploy checks that Node can import `extension/brand.ts` before building the host or extension. The runbook:
+
+1. Pick one CI-green commit of main and deploy exactly it: `scripts/dev/deploy-live --dry-run --expected-sha <sha>`, then the same without `--dry-run`. The dry run reads origin main with `git ls-remote` and says what the deploy would bring; `--expected-sha` refuses any other commit.
+2. When runs keep arriving (auto-summary, tasks), add `--drain`: after the builds it pauses new runs, waits up to `--drain-timeout` (default 600 s) for the admitted ones, publishes, and lifts the pause. A run whose service has already gone is reported as stale and does not block. `--drain` refuses while the live binary predates the pause (so the first deploy of it runs without `--drain`).
+3. When the summary says to reload, click **Reload Brauser** in the side panel (its "Brauser was updated" banner), then check that the panel's extension and host IDs match. Use `chrome://extensions` only when the panel cannot reload. deploy-live cannot yet see which build Chrome has loaded (`brwr-x622`), so that check is the panel's. AGENTS.md "PR ownership and handoff" has the details and `scripts/dev/index-lock-watch` for stale `.git/index.lock` files.
 
 To rehearse artifact identity changes offline, use
 `target/debug/brauser adapters aliases-preview < requests.jsonl`.

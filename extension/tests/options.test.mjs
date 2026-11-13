@@ -1758,6 +1758,28 @@ test("choosing a folder saves it at once, leaving adapters and capture as they w
   assert.match(statusText(), /^No site has an adapter yet\./);
 });
 
+test("a policy change while the picker is open does not overwrite its canceled outcome", async () => {
+  // brwr-w7ma: the worker rewrites the policy lease while the native picker
+  // is open; the settings page defers that reload until the picker returns,
+  // and the reload must not replace the canceled message when nothing changed.
+  const state = install({
+    host: {
+      choose_folder: (_request, state) => {
+        for (const listener of state.storageChanged) listener({ [POLICY_STORAGE_KEY]: { newValue: undefined } }, "local");
+        return { type: "error", code: "cancelled", message: "canceled" };
+      },
+    },
+  });
+  state.config = { ...state.config, storage: null, capture_enabled: false };
+  await openSettings();
+  const reads = () => state.requests.filter((request) => request.type === "get_config").length;
+  const before = reads();
+  env.elements.get("choose-folder").click();
+  await until(() => reads() > before && idle(), "the deferred background reload");
+  assert.equal(statusText(), "Folder selection was canceled. No settings were changed.");
+  assert.equal(env.elements.get("folder-path").textContent, "None selected");
+});
+
 test("choosing a home folder saves the fixed layout, never an older one", async () => {
   const saves = [];
   const state = install({

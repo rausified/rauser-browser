@@ -98,6 +98,11 @@ impl ServicePaths {
     pub fn pid(&self) -> PathBuf {
         self.support.join("service.pid")
     }
+
+    /// The deploy pause marker (`super::drain`).
+    pub fn drain(&self) -> PathBuf {
+        self.support.join(super::drain::DRAIN_FILE)
+    }
 }
 
 /// `"<build label>:<dev>:<ino>:<mtime_ns>"` of the canonical running

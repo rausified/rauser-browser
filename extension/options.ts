@@ -1502,10 +1502,20 @@ function renderConfig(): void {
   else refreshAdapterEditor();
 }
 
-async function reloadConfig(): Promise<void> {
+/** What the status line's setup message is derived from. */
+function shownConfigState(): string {
+  return JSON.stringify([session.revision, session.configIssue, session.adapterIssue]);
+}
+
+/** Read the host again. A background reload (`keepStatus`) that finds the
+ * same revision and issues leaves the status line alone, so the outcome of
+ * this page's own action, such as a canceled folder picker, is not replaced
+ * by an unchanged setup message (brwr-w7ma). */
+async function reloadConfig({ keepStatus = false } = {}): Promise<void> {
+  const before = shownConfigState();
   await session.reload();
   void refreshTaskFolders();
-  showConfigState();
+  if (!keepStatus || shownConfigState() !== before) showConfigState();
   if (session.status?.pause_pending && session.config?.capture_enabled && !session.configIssue) {
     show("Capture is paused locally. Use Pause capture to finish saving this setting in the host.", true);
   }
@@ -1523,7 +1533,7 @@ function scheduleReload(): void {
     }
     busy = true;
     updateControls();
-    void reloadConfig()
+    void reloadConfig({ keepStatus: true })
       .catch((error: unknown) => show(`Could not refresh settings: ${describe(error)}`, true))
       .finally(() => {
         busy = false;
