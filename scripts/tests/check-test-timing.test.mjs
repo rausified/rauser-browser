@@ -48,9 +48,12 @@ test("fixed sleeps, wall-clock bounds and date literals are found", () => {
     "const at = Date.parse(\"2026-11-09T10:00:00Z\");",
     "await until(() => ready(), \"ready\");",
     "setTimeout(() => listener(reply), 0);",
+    "await new Promise((resolve) => setTimeout(resolve, DIAG_FLUSH_MS + 200));",
+    "await new Promise((resolve) => setTimeout(() => resolve(), 20));",
+    "await delay(SETTLE_MS);",
   ].join("\n");
-  assert.deepEqual(rules("extension/tests/x.test.mjs", js),
-    [["fixed-sleep", 1], ["fixed-sleep", 2], ["wall-clock-bound", 3], ["date-literal", 4]]);
+  assert.deepEqual(rules("extension/tests/x.test.mjs", js), [["fixed-sleep", 1], ["fixed-sleep", 2],
+    ["wall-clock-bound", 3], ["date-literal", 4], ["fixed-sleep", 7], ["fixed-sleep", 8], ["fixed-sleep", 9]]);
   const rust = [
     "#[cfg(test)]", "mod tests {",
     "    assert!(started.elapsed() < Duration::from_secs(4));",

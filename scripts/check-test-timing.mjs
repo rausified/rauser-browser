@@ -29,8 +29,10 @@ export const RULES = {
     why: "a fixed sleep assumes how long the other side takes; wait until the condition holds",
     rust: [/\bthread::sleep\s*\(/],
     js: [
-      /setTimeout\(\s*\(?\s*\)?\s*(?:=>\s*)?[A-Za-z_$][\w$]*\s*\)?\s*,\s*\d/,
-      /\b(?:delay|sleep|wait)\(\s*\d[\d_]*\s*\)/,
+      // A promise settled by a timer, whatever the delay expression:
+      // setTimeout(resolve, 20), setTimeout(() => resolve(), WAIT_MS + 200).
+      /\bsetTimeout\(\s*(?:resolve|res|r|done|\(\)\s*=>\s*(?:resolve|res|r|done)\(\s*\))\s*,/,
+      /\b(?:delay|sleep)\(\s*[\w.$]+(?:\s*[-+*]\s*[\w.$]+)*\s*\)/,
     ],
     py: [/\btime\.sleep\s*\(/],
   },
