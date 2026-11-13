@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -45,21 +45,59 @@ test("this repository's AGENTS.md table is what its row files generate", () => {
   assert.deepEqual(run({ root: REPO, check: true }), { code: 0, messages: [] });
 });
 
-test("--check reports a stale table and a bad row, and writing fixes only the table", (t) => {
+/** A scratch root holding this repository's AGENTS.md and row files, every
+ * line ending `eol`, the way a checkout with that line ending has them. */
+function fixture(t, eol) {
   const root = mkdtempSync(join(tmpdir(), "current-state-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  cpSync(join(REPO, "AGENTS.md"), join(root, "AGENTS.md"));
+  const withEol = (text) => text.replace(/\r\n/g, "\n").replace(/\n/g, eol);
+  writeFileSync(join(root, "AGENTS.md"), withEol(readFileSync(join(REPO, "AGENTS.md"), "utf8"))); // crlf-ok: withEol drops every \r\n before writing the chosen line ending
   cpSync(join(REPO, ROWS_DIR), join(root, ROWS_DIR), { recursive: true });
-  writeFileSync(join(root, ROWS_DIR, "999-widget.md"), ROW);
-  const stale = run({ root, check: true });
-  assert.equal(stale.code, 1);
-  assert.match(stale.messages[0], /not what docs\/agents\/current-state\/ generates/);
-  const before = readFileSync(join(root, "AGENTS.md"), "utf8");
-  assert.equal(run({ root, check: false }).code, 0);
-  const after = readFileSync(join(root, "AGENTS.md"), "utf8");
-  assert.match(after, /^\| Widget \| Built: one; two\. \| DESIGN\.md §1 \|\n<!-- END GENERATED current-state -->$/m);
-  assert.equal(after.replace("| Widget | Built: one; two. | DESIGN.md §1 |\n", ""), before);
+  for (const name of readdirSync(join(root, ROWS_DIR))) {
+    const file = join(root, ROWS_DIR, name);
+    writeFileSync(file, withEol(readFileSync(file, "utf8")));
+  }
+  return root;
+}
 
+const lf = (text) => text.replace(/\r\n/g, "\n");
+const agents = (root) => readFileSync(join(root, "AGENTS.md"), "utf8");
+
+for (const [label, eol] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
+  test(`--check passes a correct ${label} checkout, and writing a new row keeps every line ${label}`, (t) => {
+    const root = fixture(t, eol);
+    assert.deepEqual(run({ root, check: true }), { code: 0, messages: [] });
+    const before = agents(root);
+
+    writeFileSync(join(root, ROWS_DIR, "999-widget.md"), ROW.replace(/\n/g, eol));
+    const stale = run({ root, check: true });
+    assert.equal(stale.code, 1);
+    assert.match(stale.messages[0], /not what docs\/agents\/current-state\/ generates/);
+    assert.equal(agents(root), before, "--check writes nothing");
+
+    assert.equal(run({ root, check: false }).code, 0);
+    const after = agents(root);
+    assert.equal(after.split(eol).join("").includes("\n"), false, `no line ending other than ${label}`);
+    assert.equal(eol === "\n" && after.includes("\r"), false, "no CR in an LF checkout");
+    assert.match(lf(after), /^\| Widget \| Built: one; two\. \| DESIGN\.md §1 \|\n<!-- END GENERATED current-state -->$/m);
+    assert.equal(lf(after).replace("| Widget | Built: one; two. | DESIGN.md §1 |\n", ""), lf(before), "only the table changed");
+    assert.deepEqual(run({ root, check: true }), { code: 0, messages: [] });
+  });
+}
+
+test("--check compares with line endings normalized, and a correct table is never rewritten", (t) => {
+  // A checkout whose table lines alone are CRLF: the text is right, so
+  // neither --check nor a write touches it.
+  const root = fixture(t, "\n");
+  const mixed = agents(root).replace(/^(\|.*)$/gm, "$1\r");
+  writeFileSync(join(root, "AGENTS.md"), mixed);
+  assert.deepEqual(run({ root, check: true }), { code: 0, messages: [] });
+  assert.deepEqual(run({ root, check: false }), { code: 0, messages: [] });
+  assert.equal(agents(root), mixed);
+});
+
+test("--check reports a bad row", (t) => {
+  const root = fixture(t, "\n");
   mkdirSync(join(root, ROWS_DIR, "nested"));
   writeFileSync(join(root, ROWS_DIR, "998-bad.md"), "no heading\n");
   const bad = run({ root, check: true });

@@ -142,7 +142,8 @@ if (isEntryPoint()) {
       const text = read(file);
       const flowed = reflow(text);
       if (normalize(flowed) !== normalize(text)) throw new Error(`${file}: reflow would change the text; this is a bug in sentence-lines.mjs`);
-      if (flowed === text) continue;
+      // Line endings normalized: a CRLF checkout of a reflowed file passes.
+      if (flowed.replace(/\r\n/g, "\n") === text.replace(/\r\n/g, "\n")) continue;
       if (mode === "--write") {
         writeFileSync(file, flowed);
         console.log(`reflowed ${file}`);

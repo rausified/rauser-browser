@@ -64,13 +64,25 @@ class CheckTests(unittest.TestCase):
         self.assertTrue(any("docs/history/notes.md: not a history entry" in e for e in errors), errors)
         self.assertTrue(any("docs/testing-log/2026-11-14-bad.md: heading date 2026-11-15" in e for e in errors), errors)
 
+    def test_crlf_checkouts_pass_the_same_checks(self) -> None:
+        # Windows CI checks out with CRLF; a frozen record still counts and entries still pass.
+        for path, text in (("docs/history.md", HISTORY + "\n## 2026-11-14 — Appended\n"), ("TESTING.md", TESTING)):
+            (self.root / path).write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+        (self.root / "docs/history/2026-11-14-a.md").write_bytes("## 2026-11-14 — A\r\n\r\nText.\r\n".encode("utf-8"))
+        errors = check_split_docs.check(self.root)
+        self.assertEqual(errors, [
+            "docs/history.md: holds a history entry dated 2026-11-14; the history is frozen, "
+            "so put each new entry in its own file under docs/history/",
+        ])
+
     def test_missing_learning_log_is_reported(self) -> None:
         self.write("TESTING.md", "# Testing Strategy\n")
         self.assertTrue(any("no '## Learning log' section" in e for e in check_split_docs.check(self.root)))
 
     def test_print_puts_the_frozen_text_first_then_entries_in_order(self) -> None:
         self.write("docs/testing-log/2026-11-15-b.md", "## 2026-11-15 — B\n")
-        self.write("docs/testing-log/2026-11-14-a.md", "## 2026-11-14 — A\r\n")
+        # Bytes, so a CRLF entry stays exactly CRLF on Windows too (text mode would add a CR).
+        (self.root / "docs/testing-log/2026-11-14-a.md").write_bytes("## 2026-11-14 — A\r\n".encode("utf-8"))
         self.assertEqual(
             check_split_docs.render(self.root, "testing-log"),
             "## Learning log\n\n- 2026-11-12: An old line.\n\n## 2026-11-14 — A\n\n## 2026-11-15 — B\n",

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -9,6 +11,19 @@ import { REPO } from "./generated-fixture.mjs";
 test("AGENTS.md is one sentence per line", () => {
   const text = readFileSync(join(REPO, "AGENTS.md"), "utf8").replace(/\r\n/g, "\n");
   assert.equal(reflow(text), text, "run node scripts/sentence-lines.mjs --write AGENTS.md");
+});
+
+test("--check passes a CRLF checkout of a reflowed file, and --write keeps it CRLF", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "sentence-lines-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, "doc.md");
+  const script = join(REPO, "scripts/sentence-lines.mjs");
+  writeFileSync(file, "# T\r\n\r\n- One.\r\n  Two.\r\n");
+  assert.equal(spawnSync(process.execPath, [script, "--check", file], { stdio: "ignore" }).status, 0);
+  writeFileSync(file, "# T\r\n\r\n- One. Two.\r\n");
+  assert.equal(spawnSync(process.execPath, [script, "--check", file], { stdio: "ignore" }).status, 1);
+  assert.equal(spawnSync(process.execPath, [script, "--write", file], { stdio: "ignore" }).status, 0);
+  assert.equal(readFileSync(file, "utf8"), "# T\r\n\r\n- One.\r\n  Two.\r\n");
 });
 
 test("reflowing changes only whitespace, on every root Markdown file", () => {

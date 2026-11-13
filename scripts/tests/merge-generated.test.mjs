@@ -56,6 +56,11 @@ test("AGENTS.md's table block takes the base's rows and keeps hand-written edits
   assert.equal(withBaseGeneratedBlock(ours, "intro\n| a |\noutro\n"), `intro, edited\n${BEGIN}\n${END}\noutro\n`);
   // A side without a block is left alone.
   assert.equal(withBaseGeneratedBlock("intro\n| a |\n", base), "intro\n| a |\n");
+  // A CRLF side keeps CRLF, even for the base's rows taken from an LF base:
+  // never mixed endings.
+  const crlf = (text) => text.replace(/\n/g, "\r\n");
+  assert.equal(withBaseGeneratedBlock(crlf(ours), base), crlf(doc("intro, edited", ["| a |"], "outro")));
+  assert.equal(withBaseGeneratedBlock(ours, crlf(base)), doc("intro, edited", ["| a |"], "outro"));
   // CRLF checkouts keep their line endings.
   assert.equal(withBaseGeneratedBlock(ours.replace(/\n/g, "\r\n"), base.replace(/\n/g, "\r\n")), doc("intro, edited", ["| a |"], "outro").replace(/\n/g, "\r\n"));
 });

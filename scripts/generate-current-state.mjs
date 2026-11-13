@@ -76,7 +76,9 @@ export function generateTable(root) {
 }
 
 /** `agents` with its GENERATED block replaced by `table`, or null when the
- * markers are missing or out of order. */
+ * markers are missing or out of order. The result uses `agents`' line
+ * ending throughout (CRLF when it has any CRLF, as a Windows checkout does),
+ * so a write never leaves mixed endings. */
 export function withTable(agents, table) {
   const eol = agents.includes("\r\n") ? "\r\n" : "\n";
   const lines = agents.replace(/\r\n/g, "\n").split("\n");
@@ -105,7 +107,11 @@ export function run({ root, check }) {
   const next = withTable(agents, table);
   if (next === null) errors.push(`${AGENTS_PATH}: needs exactly one '${BEGIN}' line followed by one '${END}' line`);
   if (errors.length) return { code: 1, messages: errors };
-  if (next === agents) return { code: 0, messages: [] };
+  // Compared with line endings normalized: a CRLF checkout of a correct
+  // table passes, and a table that differs only in its line endings is
+  // never rewritten. A write keeps the file's own line ending (withTable).
+  const lf = (text) => text.replace(/\r\n/g, "\n");
+  if (lf(next) === lf(agents)) return { code: 0, messages: [] };
   if (check) return { code: 1, messages: [`${AGENTS_PATH}: the Current state table is not what ${ROWS_DIR}/ generates; run npm run gen:current-state`] };
   writeFileSync(path, next);
   return { code: 0, messages: [`wrote ${AGENTS_PATH}`] };

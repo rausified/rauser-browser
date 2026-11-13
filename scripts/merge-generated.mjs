@@ -162,7 +162,8 @@ export const AGENTS_BLOCK = Object.freeze({
 /** `text` with the lines inside its GENERATED block replaced by `base`'s
  * (none when `base` has no block), so a text merge sees only the
  * hand-written changes; the generator then rewrites the block from the
- * merged rows. `text` without one well-formed block is returned unchanged. */
+ * merged rows, in `text`'s own line ending. `text` without one well-formed
+ * block is returned unchanged. */
 export function withBaseGeneratedBlock(text, base, { begin, end } = AGENTS_BLOCK) {
   const bounds = (lines) => {
     const from = lines.findIndex((line) => begin.test(line));
@@ -174,7 +175,10 @@ export function withBaseGeneratedBlock(text, base, { begin, end } = AGENTS_BLOCK
   if (!own) return text;
   const baseLines = base.split("\n");
   const theirs = bounds(baseLines);
-  const inside = theirs ? baseLines.slice(theirs[0] + 1, theirs[1]) : [];
+  // The base's rows take this side's line ending, so a CRLF side merged
+  // against an LF base (or the reverse) never ends up with mixed endings.
+  const cr = text.includes("\r\n") ? "\r" : "";
+  const inside = theirs ? baseLines.slice(theirs[0] + 1, theirs[1]).map((line) => line.replace(/\r$/, "") + cr) : [];
   return [...lines.slice(0, own[0] + 1), ...inside, ...lines.slice(own[1])].join("\n");
 }
 
