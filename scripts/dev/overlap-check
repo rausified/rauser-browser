@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""scripts/dev/overlap-check: see scripts/ownership.py (AGENTS.md "PR ownership and handoff")."""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from ownership import overlap_main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(overlap_main())
