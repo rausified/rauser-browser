@@ -300,6 +300,28 @@ class DoltIntegrationTests(unittest.TestCase):
         self.assertEqual(committed["project_id"], COMMITTED_METADATA["project_id"])
         self.assertEqual(self.git(b, "status", "--porcelain", "--", ".beads/metadata.json"), "")
 
+    def test_queue_bootstrap_leaves_the_committed_config_yaml_untouched(self) -> None:
+        # bd bootstrap wires the Dolt remote and also rewrote the tracked
+        # .beads/config.yaml (a blank line dropped, sync.remote added), which
+        # left the live checkout dirty and blocked deploy-live (2026-11-09).
+        self.seed(bead("brwr-a1"))
+        committed = (SCRIPTS.parent / ".beads" / "config.yaml").read_bytes()
+        (self.a / ".beads" / "config.yaml").write_bytes(committed)
+        self.git(self.a, "add", ".beads/config.yaml")
+        self.git(self.a, "commit", "-qm", "config")
+        self.git(self.a, "push", "-q", self.url, "main")
+        b = self.clone("b")
+        out = self.ok(b, "bootstrap")
+        self.assertIn("kept .beads/config.yaml as committed", out)  # bd did rewrite it
+        self.assertEqual((b / ".beads" / "config.yaml").read_bytes(), committed)
+        self.assertEqual(self.git(b, "status", "--porcelain", "--untracked-files=no"), "", out)
+        self.assertIn("brwr-a1", self.exported(b))
+        # The remote lives in the database, so sync still works afterwards.
+        self.bd(b, "update", "brwr-a1", "--title", "After bootstrap")
+        before = self.dolt_head()
+        self.ok(b, "sync")
+        self.assertNotEqual(self.dolt_head(), before)
+
     def test_seed_without_a_committed_metadata_json_says_which_id_to_commit(self) -> None:
         self.git(self.a, "rm", "-q", ".beads/metadata.json")
         out = self.seed(bead("brwr-a1"))

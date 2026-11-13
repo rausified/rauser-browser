@@ -9,7 +9,7 @@
   },
   "queue": {
     "transport": "bd-dolt",
-    "bootstrap": "BD_NON_INTERACTIVE=1 bd bootstrap",
+    "bootstrap": "scripts/dev/queue bootstrap",
     "sync": "scripts/dev/queue sync",
     "export": "scripts/dev/queue export",
     "backlog": "scripts/dev/queue backlog --print",
