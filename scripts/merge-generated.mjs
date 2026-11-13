@@ -301,7 +301,8 @@ export function driver([basePath, oursPath, theirsPath, path, markerSize], env =
  * predates it. */
 export function driverCommand({ tools = null } = {}) {
   const args = "%O %A %B %P %L";
-  if (tools) return `node ${shellQuote(join(tools, "merge-generated.mjs"))} ${args}`;
+  // Git runs the driver under sh, which takes "/" on every platform.
+  if (tools) return `node ${shellQuote(`${tools.replace(/[\\/]+$/, "")}/merge-generated.mjs`)} ${args}`;
   return `f="$(git rev-parse --show-toplevel)/scripts/merge-generated.mjs"; if [ -f "$f" ]; then node "$f" ${args}; else git merge-file --marker-size=%L -L ours -L base -L theirs %A %O %B; fi`;
 }
 

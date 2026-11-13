@@ -64,6 +64,7 @@ test("the driver command runs the worktree's copy, or a trusted directory's", ()
   assert.match(driverCommand(), /\$\(git rev-parse --show-toplevel\)\/scripts\/merge-generated\.mjs.*%O %A %B %P %L/);
   assert.match(driverCommand(), /else git merge-file/);
   assert.equal(driverCommand({ tools: "/t/it's" }), "node '/t/it'\\''s/merge-generated.mjs' %O %A %B %P %L");
+  assert.equal(driverCommand({ tools: "C:\\t\\" }), "node 'C:\\t/merge-generated.mjs' %O %A %B %P %L");
 });
 
 // --- real merges in scratch repositories ---------------------------------------
