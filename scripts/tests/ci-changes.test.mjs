@@ -172,8 +172,10 @@ function namedCheckoutPaths(name, source) {
   return named;
 }
 
-// The Dev tools job's sparse-checkout list in pr-hygiene.yml.
-function devToolsSparseCheckout(workflow) {
+// The Dev tools job's sparse-checkout list in pr-hygiene.yml. Windows
+// checkouts use CRLF, so normalize line endings before matching on "\n".
+function devToolsSparseCheckout(text) {
+  const workflow = text.replace(/\r\n/g, "\n");
   const job = workflow.slice(workflow.indexOf("\n  dev-tools:"));
   const block = job.match(/sparse-checkout: \|\n((?:\s{12}\S.*\n)+)/);
   assert.ok(block, "the Dev tools job has a sparse-checkout list");
