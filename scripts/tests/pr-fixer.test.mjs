@@ -12,7 +12,7 @@ import test from "node:test";
 
 import {
   EXHAUSTED_LABEL, FIXER_ACTOR, NOTE_END, NOTE_MARKER, agentEnv, attemptsOf, conflictMarkers, decideBead,
-  SANDBOX_ARGS, maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
+  SANDBOX_ARGS, defaultSecretPaths, maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
 } from "../dev/pr-fixer.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
 
@@ -83,6 +83,14 @@ test("decideBead retries the queue request for its own pushed head until queue-p
 test("the sandbox has its own PID namespace and procfs, so the runner's environ is out of reach", () => {
   for (const flag of ["--unshare-pid", "--proc", "--die-with-parent"]) assert.ok(SANDBOX_ARGS.includes(flag), flag);
   assert.equal(SANDBOX_ARGS[SANDBOX_ARGS.indexOf("--proc") + 1], "/proc");
+});
+
+test("defaultSecretPaths hides the whole config directory, not a list of known tools", () => {
+  // Other tools' tokens live there too (a worker's GitHub token, a beacon's keys): mask it all.
+  const paths = defaultSecretPaths("/h");
+  for (const p of ["/h/.config", "/h/.ssh", "/h/.git-credentials", "/h/.netrc"]) assert.ok(paths.includes(p), p);
+  assert.ok(defaultSecretPaths("/h", { XDG_CONFIG_HOME: "/x/conf" }).includes("/x/conf"));
+  assert.ok(defaultSecretPaths("/h", {}, ["/opt/w/token"]).includes("/opt/w/token"), "--secret-path adds a host-specific path");
 });
 
 test("maskArgs hides secret directories and files from the agent's sandbox", () => {

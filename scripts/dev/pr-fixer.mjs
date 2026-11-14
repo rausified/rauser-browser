@@ -33,7 +33,7 @@
 //
 // Usage: node scripts/dev/pr-fixer.mjs [--repo owner/name] [--dry-run]
 //          [--agent codex|claude] [--max-attempts 2] [--timeout-minutes 50]
-//          [--work-root DIR]
+//          [--work-root DIR] [--secret-path PATH]...
 // Environment: BRAUSER_QUEUE_WORKSPACE (the bootstrapped bd workspace), and
 // for gh and git push whatever credential the host provides (GH_TOKEN, a git
 // credential helper); docs/agents/pr-fixer.md lists the names, never values.
@@ -122,10 +122,16 @@ export function agentEnv(env) {
   return out;
 }
 
-/** Where the host keeps credentials the agent must never read: the fixer's env file, gh's
- * login, git's credential stores, SSH keys and netrc. The agent runs as the same user, so
- * stripping its environment is not enough; the sandbox hides these paths. */
-export const defaultSecretPaths = (home) => [".config/brauser-pr-fixer", ".config/gh", ".git-credentials", ".config/git/credentials", ".ssh", ".netrc"].map((p) => join(home, p));
+/** Where the host keeps credentials the agent must never read. The agent runs as the same
+ * user, so stripping its environment is not enough; the sandbox hides these paths. The whole
+ * config directory goes, not a list of known tools: on a shared VM it also holds other tools'
+ * tokens (a worker's GitHub token, a beacon's keys), and the agent needs nothing there (its
+ * own login is ~/.codex or ~/.claude). `extra` adds host-specific paths (--secret-path). */
+export const defaultSecretPaths = (home, env = {}, extra = []) => [
+  ...[".config", ".ssh", ".git-credentials", ".netrc"].map((p) => join(home, p)),
+  ...(env.XDG_CONFIG_HOME ? [env.XDG_CONFIG_HOME] : []),
+  ...extra,
+];
 
 /** bubblewrap mounts that hide each existing secret: an empty tmpfs over a directory,
  * an empty file over a file. `kindOf(path)` -> "dir" | "file" | null (absent). */
@@ -253,7 +259,7 @@ export async function runPass(opts) {
     sandbox: ["bwrap", [...SANDBOX_ARGS]],
     ...opts.commands,
   };
-  const secretPaths = opts.secretPaths ?? defaultSecretPaths(env.HOME || homedir());
+  const secretPaths = opts.secretPaths ?? defaultSecretPaths(env.HOME || homedir(), env, opts.extraSecretPaths ?? []);
   const masks = maskArgs(secretPaths, kindOfPath);
   // What the probe must find unreadable besides the secret paths: the runner's own environment.
   const procProbe = opts.procProbe ?? [`/proc/${process.pid}/environ`];
@@ -444,7 +450,7 @@ async function main(argv) {
     options: {
       repo: { type: "string" }, "dry-run": { type: "boolean" }, agent: { type: "string", default: "codex" },
       "max-attempts": { type: "string", default: String(MAX_ATTEMPTS) }, "timeout-minutes": { type: "string", default: "50" },
-      "work-root": { type: "string" },
+      "work-root": { type: "string" }, "secret-path": { type: "string", multiple: true },
     },
   });
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
@@ -455,7 +461,7 @@ async function main(argv) {
   }
   const toolsRoot = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim();
   const result = await runPass({
-    repo, toolsRoot, queueWorkspace, dryRun: values["dry-run"], agent: values.agent, workRoot: values["work-root"],
+    repo, toolsRoot, queueWorkspace, dryRun: values["dry-run"], agent: values.agent, workRoot: values["work-root"], extraSecretPaths: values["secret-path"] ?? [],
     maxAttempts: Number(values["max-attempts"]), timeoutMs: Number(values["timeout-minutes"]) * 60_000,
   });
   console.log(`pr-fixer: ${result.outcome}${result.reason ? `: ${result.reason}` : ""}`);
