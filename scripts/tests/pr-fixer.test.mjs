@@ -12,7 +12,7 @@ import test from "node:test";
 
 import {
   EXHAUSTED_LABEL, FIXER_ACTOR, NOTE_END, NOTE_MARKER, agentEnv, attemptsOf, conflictMarkers, decideBead,
-  parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
+  maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
 } from "../dev/pr-fixer.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
 
@@ -63,7 +63,22 @@ test("decideBead repairs only a conflicting PR it may own", () => {
     assert.match(d.reason, why);
   }
   assert.equal(decideBead(bead(), pr({ mergeable: "MERGEABLE" })).action, "wait");
+  // The owner took the PR out of the queue: the fixer leaves it alone (AGENTS.md "Remove the `queue` label ... to take a PR out").
+  assert.match(decideBead(bead(), pr({ labels: ["needs-merge"] })).reason, /not queued/);
   assert.equal(decideBead(bead(), pr({ mergeable: "UNKNOWN" })).action, "wait");
+});
+
+test("decideBead retries the queue request for its own pushed head until queue-pr succeeded", () => {
+  const mine = (meta) => bead({ status: "in_progress", assignee: FIXER_ACTOR, metadata: { fixer_attempts: "1", fixer_pushed_sha: HEAD, ...meta } });
+  assert.equal(decideBead(mine({ fixer_queue_status: "3" }), pr({ mergeable: "MERGEABLE" })).action, "queue");
+  assert.equal(decideBead(mine({ fixer_queue_status: "0" }), pr({ mergeable: "MERGEABLE" })).action, "wait");
+  assert.equal(decideBead(mine({ fixer_queue_status: "3" }), pr({ mergeable: "MERGEABLE", headRefOid: "f".repeat(40) })).action, "wait");
+  assert.equal(decideBead(mine({ fixer_queue_status: "3" }), pr({ mergeable: "MERGEABLE", labels: [] })).action, "skip");
+});
+
+test("maskArgs hides secret directories and files from the agent's sandbox", () => {
+  const kinds = { "/h/.config/gh": "dir", "/h/.git-credentials": "file", "/h/.ssh": null };
+  assert.deepEqual(maskArgs(Object.keys(kinds), (p) => kinds[p]), ["--tmpfs", "/h/.config/gh", "--ro-bind", "/dev/null", "/h/.git-credentials"]);
 });
 
 test("agentEnv removes every GitHub credential and credential helper", () => {
@@ -186,6 +201,7 @@ wr("beads",beads);`);
   script(bin, "gh", `${common}log("gh",...A);
 const s=rd("pr");
 if(A[0]==="pr"&&A[1]==="view"){process.stdout.write(JSON.stringify({...s,labels:s.labels.map(name=>({name}))}));process.exit(0)}
+if(A[0]==="pr"&&A[1]==="edit"&&A.includes("--remove-label")){s.labels=s.labels.filter(l=>l!==A[A.indexOf("--remove-label")+1]);wr("pr",s);process.exit(0)}
 if(A[0]==="pr"&&A[1]==="edit"){s.body=fs.readFileSync(A[A.indexOf("--body-file")+1],"utf8");wr("pr",s);process.exit(0)}
 process.exit(1);`);
   // The agent and the review are one fake `codex`: `codex exec review ...` and `codex exec ... -`.
@@ -198,7 +214,10 @@ fs.writeFileSync("a.txt","pr side\\nmain side\\n");
 cp.execFileSync("git",["add","a.txt"]);cp.execFileSync("git",["commit","-q","--no-edit"]);
 fs.writeFileSync(report,JSON.stringify({resolved:true,checks:[{command:"node --test a",passed:true}],summary:"kept both lines"}));`);
   const ok = (name) => [process.execPath, [script(bin, `fake-${name}`, `${common}log("${name}",...A);`)]];
-  const commands = { sync: ok("sync"), privacy: ok("privacy"), queuePr: ok("queuePr"), mergeDrivers: ok("mergeDrivers") };
+  // A pass-through sandbox: it runs what follows "--" in --chdir's directory and masks nothing.
+  const sandbox = script(bin, "fake-sandbox", `${common}log("sandbox");const i=A.indexOf("--"),c=A.indexOf("--chdir");
+const r=require("child_process").spawnSync(A[i+1],A.slice(i+2),{cwd:A[c+1],stdio:"inherit"});process.exit(r.status??1);`);
+  const commands = { sync: ok("sync"), privacy: ok("privacy"), queuePr: ok("queuePr"), mergeDrivers: ok("mergeDrivers"), sandbox: [sandbox, []] };
   env.PATH = `${bin}:${env.PATH}`;
   const read = (name) => JSON.parse(readFileSync(join(root, `${name}.json`), "utf8"));
   const originHead = () => git(tools, "ls-remote", "origin", "refs/heads/feature").split(/\s/)[0];
@@ -208,7 +227,7 @@ fs.writeFileSync(report,JSON.stringify({resolved:true,checks:[{command:"node --t
 const pass = (w, over = {}) => runPass({
   repo: "owner/name", toolsRoot: w.tools, workRoot: join(w.root, "work"), queueWorkspace: w.root, env: w.env,
   // timing-ok: the injected clock only names run folders and stamps notes; nothing compares it with the real time
-  commands: w.commands, log: () => {}, now: () => "2026-11-13T00:00:00Z", ...over,
+  commands: w.commands, secretPaths: [], log: () => {}, now: () => "2026-11-13T00:00:00Z", ...over,
 });
 
 test("a pass repairs a conflicting PR, pushes a merge and records it on the bead", POSIX, async (t) => {
@@ -229,8 +248,13 @@ test("a pass repairs a conflicting PR, pushes a merge and records it on the bead
   const calls = w.read("calls");
   assert.deepEqual(calls.find((c) => c[0] === "agent"), ["agent", "no-token"], "the agent never sees GH_TOKEN");
   assert.ok(calls.some((c) => c[0] === "review"), "codex review ran");
+  const kinds = calls.map((c) => c[0]).filter((k) => ["sandbox", "agent", "review"].includes(k));
+  assert.deepEqual(kinds, ["sandbox", "sandbox", "agent", "sandbox", "review"], "probe, agent and review each run in the sandbox");
   assert.deepEqual(calls.find((c) => c[0] === "queuePr").slice(1), ["7", "--head", pushed, "--repo", "owner/name"]);
   const body = w.read("pr").body;
+  assert.ok(!w.read("pr").labels.includes("needs-merge"), "needs-merge removed after the push");
+  const order = calls.map((c) => (c[0] === "gh" && c.includes("--remove-label") ? "unlabel" : c[0])).filter((k) => k === "unlabel" || k === "queuePr");
+  assert.deepEqual(order, ["unlabel", "queuePr"], "unlabelled before queueing");
   assert.match(body, /^Owner: claude session abc/);
   assert.match(body, new RegExp(pushed.slice(0, 12)));
   assert.equal(spawnSync("git", ["worktree", "list"], { cwd: w.tools, encoding: "utf8" }).stdout.trim().split("\n").length, 1, "worktree removed");
@@ -291,4 +315,42 @@ test("dry run decides without claiming, and a second runner waits on the lock", 
   mkdirSync(join(w.root, "work"), { recursive: true });
   writeFileSync(join(w.root, "work", "pr-fixer.lock"), String(process.pid));
   assert.equal((await pass(w)).outcome, "locked");
+});
+
+test("a sandbox that lets the agent read a secret refuses the pass before any claim", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  const secrets = join(w.root, "secrets");
+  mkdirSync(secrets);
+  writeFileSync(join(secrets, "env"), "GH_TOKEN=not-a-real-token\n");
+  const result = await pass(w, { secretPaths: [secrets] });
+  assert.equal(result.outcome, "refused");
+  assert.match(result.reason, /sandbox/);
+  assert.ok(!w.read("calls").some((c) => c[0] === "bd" && c[1] === "update"), "nothing claimed");
+  assert.equal(w.originHead(), w.prHead);
+});
+
+test("an owner who takes the PR out of the queue mid-repair keeps it out", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  w.commands.privacy = [process.execPath, ["-e", `const fs=require("fs"),p=require("path");const f=p.join(process.env.FAKE_ROOT,"pr.json");const s=JSON.parse(fs.readFileSync(f,"utf8"));s.labels=s.labels.filter(l=>l!=="queue");fs.writeFileSync(f,JSON.stringify(s));`]];
+  const result = await pass(w);
+  assert.equal(result.outcome, "failed");
+  assert.match(result.reason, /queue/);
+  assert.equal(w.originHead(), w.prHead);
+  assert.ok(!w.read("calls").some((c) => c[0] === "queuePr"));
+});
+
+test("a queue request that failed after the push is retried on the next pass", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  const good = w.commands.queuePr;
+  w.commands.queuePr = [process.execPath, ["-e", "process.exit(3)"]];
+  assert.equal((await pass(w)).outcome, "pushed");
+  assert.equal(w.read("beads")[0].metadata.fixer_queue_status, "3");
+  w.commands.queuePr = good;
+  w.state("pr", { ...w.read("pr"), headRefOid: w.originHead(), mergeable: "MERGEABLE", labels: ["queue"] });
+  assert.equal((await pass(w)).outcome, "queued");
+  assert.equal(w.read("beads")[0].metadata.fixer_queue_status, "0");
+  assert.equal(w.read("calls").filter((c) => c[0] === "queuePr").length, 1);
 });
