@@ -1208,7 +1208,7 @@ class RemoteMain(Fixture):
         self.assertEqual(code, 0, out)
         call = self.call("ls-remote")
         self.assertEqual(call["timeout"], dl.LS_REMOTE_TIMEOUT)
-        self.assertEqual(call["env"], {"GIT_TERMINAL_PROMPT": "0"})
+        self.assertEqual(call["env"]["GIT_TERMINAL_PROMPT"], "0")
 
     def test_a_timed_out_ls_remote_is_unavailable_not_a_hang(self):
         self.runner.ls_remote_result = dl.Result(124, b"", b"timed out after 30.0s")
@@ -1289,6 +1289,113 @@ class DrainSignals(Fixture):
         code, out = self.deploy()
         self.assertEqual(code, 0, out)
         self.assertEqual({sig: signal.getsignal(sig) for sig in dl.TRAPPED_SIGNALS}, before)
+
+
+class TrapHardening(Fixture):
+    """The trap's edges: a signal while the marker is written, a second
+    signal or a dead terminal during cleanup, and nohup's SIG_IGN."""
+
+    def setUp(self):
+        super().setUp()
+        self.live.write_text("old binary that knows deploy-drain.json")
+        self.marker = self.support / "deploy-drain.json"
+        self.before = {sig: signal.getsignal(sig) for sig in dl.TRAPPED_SIGNALS}
+        self.addCleanup(lambda: [signal.signal(sig, h) for sig, h in self.before.items()])
+
+    def leftovers(self):
+        return sorted(p.name for p in self.support.iterdir() if "drain" in p.name)
+
+    def test_a_signal_just_after_the_marker_lands_still_lifts_it(self):
+        real = os.replace
+
+        def replace(src, dst):
+            real(src, dst)
+            if str(dst).endswith("deploy-drain.json"):
+                raise dl.Signalled(signal.SIGTERM)
+        with mock.patch.object(dl.os, "replace", side_effect=replace):
+            code, out = self.deploy("--drain")
+        self.assertEqual(code, 128 + signal.SIGTERM, out)
+        self.assertEqual(self.leftovers(), [], out)
+
+    def test_a_signal_while_the_marker_is_written_leaves_no_temporary(self):
+        def replace(src, dst):
+            raise dl.Signalled(signal.SIGHUP)
+        with mock.patch.object(dl.os, "replace", side_effect=replace):
+            with self.assertRaises(dl.Signalled):
+                dl.write_drain(self.support, self.now + 60, self.now)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_once_stopping_further_signals_are_ignored(self):
+        dl.trap_signals()
+        with self.assertRaises(dl.Signalled):
+            dl._raise_signalled(signal.SIGTERM, None)
+        for sig in dl.TRAPPED_SIGNALS:
+            self.assertEqual(signal.getsignal(sig), signal.SIG_IGN)
+
+    def test_a_dead_terminal_during_cleanup_still_lifts_the_pause_and_exits_129(self):
+        class DeadTerminal(io.StringIO):
+            dead = False
+
+            def write(self, text):
+                if self.dead:
+                    raise OSError(5, "Input/output error")
+                return super().write(text)
+
+        out = DeadTerminal()
+
+        def hang_up():
+            out.dead = True
+            raise dl.Signalled(signal.SIGHUP)
+        self.alive = {4321}
+        self.add_run("r-hold", "running", service_pid=4321)
+        self.on_sleep = hang_up
+        self.slept = []
+        code = dl.main(["--repo", str(self.repo), "--support-dir", str(self.support),
+                        "--native-host-manifest", str(self.manifest), "--drain"],
+                       runner=self.runner, out=out, home=self.home,
+                       running_script=self.running_script, reexec=self.reexecs.append,
+                       pid_alive=lambda pid: pid in self.alive, clock=lambda: self.now,
+                       sleep=self.sleep)
+        self.assertEqual(code, 128 + signal.SIGHUP)
+        self.assertFalse(self.marker.exists())
+
+    def test_an_inherited_sig_ign_is_kept_so_nohup_still_works(self):
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        seen = []
+        self.runner.on_cargo = lambda: seen.append(
+            (signal.getsignal(signal.SIGHUP), signal.getsignal(signal.SIGTERM)))
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(seen[0][0], signal.SIG_IGN)
+        self.assertIs(seen[0][1], dl._raise_signalled)
+        self.assertEqual(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+
+
+class NetworkGit(Fixture):
+    """Every git call that reaches the remote is bounded and never prompts,
+    over HTTPS or ssh."""
+
+    def assert_bounded(self, kind):
+        call = self.call(kind)
+        self.assertIsNotNone(call["timeout"], kind)
+        self.assertEqual(call["env"]["GIT_TERMINAL_PROMPT"], "0", kind)
+        self.assertIn("BatchMode=yes", call["env"]["GIT_SSH_COMMAND"], kind)
+
+    def test_pull_ls_remote_and_fetch_are_bounded_and_non_interactive(self):
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assert_bounded("pull")
+        self.assert_bounded("ls-remote")
+        self.runner.calls.clear()
+        self.runner.head = OLD
+        code, out = self.deploy("--expected-sha", MID)
+        self.assertEqual(code, 0, out)
+        self.assert_bounded("fetch")
+
+    def test_a_configured_ssh_command_is_kept_and_made_batch(self):
+        with mock.patch.dict(os.environ, {"GIT_SSH_COMMAND": "ssh -i /k"}):
+            env = dl.network_env()
+        self.assertEqual(env["GIT_SSH_COMMAND"], "ssh -i /k -o BatchMode=yes")
 
 
 def _drain_child() -> None:
