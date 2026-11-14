@@ -226,7 +226,7 @@ test("the keeper never merges, pushes or force-pushes (hard denies)", () => {
 test("the workflow runs the keeper after the doctor, on a schedule and when CI completes", () => {
   const yml = readFileSync(new URL("../../.github/workflows/pr-doctor.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(yml, /workflow_run:\n\s+workflows: \[CI\]\n\s+types: \[completed\]/);
-  assert.match(yml, /cron: "\*\/15 \* \* \* \*"/);
+  assert.match(yml, /cron: "7 \* \* \* \*"/);
   assert.match(yml, /keeper:\n\s+name: PR keeper\n\s+needs: doctor/);
   assert.match(yml, /node scripts\/pr-keeper\.mjs/);
   // merge-tree needs the merge base: the keeper's checkout is a full clone.
