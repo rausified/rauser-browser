@@ -10,8 +10,11 @@
 //      for it at all (a Mergify merge commit carries the PR title, and
 //      `[skip actions]` titles are used here, review I1);
 //   4. a CI push run for the tip exists, or appears within the wait, and is
-//      queued, running or finished, not cancelled or skipped (a cancelled
-//      replacement would leave both pushes unbuilt).
+//      queued, running or green. Any other conclusion builds nothing for the
+//      tip: cancelled or skipped leaves both pushes unbuilt, and a run that
+//      already failed this soon after the push (no build finishes in 60-120
+//      s) is a 0-step billing refusal or a crashed classify job (review N2).
+//      A tip run that fails later, after building, still counts.
 // Writes `superseded=true` to $GITHUB_OUTPUT when it is superseded.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -22,8 +25,8 @@ const SKIP = /\[(skip ci|ci skip|no ci|skip actions|actions skip)\]/i;
 
 export const hasSkipMarker = (message) => SKIP.test(message);
 
-// Run conclusions that build nothing for the tip.
-const DEAD = new Set(["cancelled", "skipped", "stale", "startup_failure"]);
+// Tip run states that will build it: not yet concluded ("pending") or green.
+const LIVE = new Set(["pending", "success"]);
 
 const build = (reason) => ({ superseded: false, reason });
 
@@ -51,9 +54,9 @@ export function decideSuperseded({ sha, repo, run, sleep, waitSeconds = 60, poll
   for (let waited = 0; ; waited += pollSeconds) {
     const runs = ask("gh", query);
     if (runs.err) return build(`cannot list ${tip}'s runs (${runs.err}): building`);
-    const live = runs.out.trim().split(/\s+/).filter((c) => c && !DEAD.has(c));
+    const live = runs.out.trim().split(/\s+/).filter((c) => LIVE.has(c));
     if (live.length > 0) return { superseded: true, reason: `superseded: main is now ${tip}, which contains ${sha} and has its own CI push run` };
-    if (waited >= waitSeconds) return build(`main's tip ${tip} has no CI push run after ${waitSeconds}s: building`);
+    if (waited >= waitSeconds) return build(`main's tip ${tip} has no queued, running or green CI push run after ${waitSeconds}s: building`);
     sleep(pollSeconds);
   }
 }
