@@ -14,7 +14,7 @@ import { fateOfPush, parseReceipts, parseSince, percentile, pruneRuns, summarize
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "dev", "pr-fixer-report.mjs");
 const DAY = 86_400_000;
-const NOW = Date.parse("2026-11-14T12:00:00Z");
+const NOW = Date.parse("2026-11-14T12:00:00Z"); // timing-ok: a fixed "now" injected into pure functions, never compared with the real clock
 const at = (hoursAgo) => new Date(NOW - hoursAgo * 3_600_000).toISOString();
 const repair = (over = {}) => ({
   v: 2, kind: "repair", at: at(10), bead: "brwr-a", pr: 7, attempt: 1, maxAttempts: 2, outcome: "pushed", code: "ok", reason: "",
@@ -131,7 +131,7 @@ test("since limits passes and repairs but reads a push's fate from every outcome
   assert.deepEqual(r.failures, []);
   assert.equal(r.success.rate, 1);
   assert.equal(summarizeReceipts(entries, { since: "all" }).repairs.attempted, 2);
-  assert.equal(summarizeReceipts(entries, { since: "2026-11-01T00:00:00Z" }).repairs.attempted, 1);
+  assert.equal(summarizeReceipts(entries, { since: "2026-11-01T00:00:00Z" }).repairs.attempted, 1); // timing-ok: an absolute since, compared with fixture timestamps only
   assert.equal(parseSince("12h", NOW), NOW - DAY / 2);
   assert.throws(() => parseSince("soon"), /bad --since/);
 });
