@@ -91,6 +91,7 @@ The worktree itself is always removed.
 - `~/.local/state/brauser-pr-fixer/runs/<bead>-<attempt>-<time>/`: `run.log` (agent and review output), `report.json` (the agent's focused checks), `body.md`.
   Each pass that is not a dry run first deletes run folders older than `--keep-days` (default 30) with `pruneRuns`, and logs how many it removed.
   It never touches `receipts.jsonl`, and refuses symlinks and anything that resolves outside `runs/`.
+  `--keep-days` must be at least 1, because pruning runs before the lock and a shorter window could remove a pass that is still running.
 - The bead's notes and `fixer_*` metadata (`bd show <id>`).
 - `journalctl --user -u brauser-pr-fixer.service` on the host.
 

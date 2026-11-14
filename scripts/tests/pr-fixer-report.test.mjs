@@ -165,7 +165,8 @@ test("pruneRuns removes old run folders only, keeps receipts and refuses symlink
     assert.ok(existsSync(join(outside, "precious")));
     assert.ok(existsSync(join(root, "receipts.jsonl")));
     assert.deepEqual(pruneRuns(root, { keepDays: 30, now: NOW }).removed, []);
-    assert.throws(() => pruneRuns(root, { keepDays: -1 }), /bad keepDays/);
+    // Under a day could remove a pass that is still running (pruning precedes the lock).
+    for (const keepDays of [-1, 0, 0.5, Number.NaN]) assert.throws(() => pruneRuns(root, { keepDays }), /bad keepDays/);
     assert.deepEqual(pruneRuns(join(root, "missing")), { removed: [], refused: [] });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
