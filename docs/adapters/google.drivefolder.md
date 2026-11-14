@@ -56,6 +56,21 @@ Sheets, Slides and Forms types on Drive, where none of their paths exist. A
 plain exact-origin family with no scope, the shape Miro uses for its one
 origin shared by every account, needs no engine change.
 
+**Scope.** drive.google.com serves every Google account, work and personal,
+from one origin, and a folder URL names neither the account nor the
+organization (the `/drive/u/<n>/` slot is a per-profile index, not an
+account value). The adapter therefore records folders from every Google
+account signed in to the Chrome profile, and the type's description, which
+the Capture Site review shows, says so. This follows the Miro decision of
+2026-11-01 (`docs/adapters/miro.board.md` "Scope"): drive.google.com is not on
+the shared-origin list (`adapter-templates.md` §6), so the adapter needs
+neither `scope` nor `unscoped`, and the family shows no separate `unscoped`
+notice. Listing it as shared would change both engines and the host catalog
+and would require an acknowledgment on every existing Drive adapter, for a
+disclosure the description already makes. A folder's own sharing settings
+control who can see it. Use a separate Chrome profile for personal Drive work
+if you do not want it recorded.
+
 ## What each rule covers
 
 1. **Folder view**, `/drive/folders/<id>`: a folder opened from Drive's own
@@ -65,6 +80,9 @@ origin shared by every account, needs no engine change.
 2. **Folder view in another signed-in account**, `/drive/u/<n>/folders/<id>`.
    The account index `<n>` is matched but not used, so the same folder
    opened from two account slots stays one artifact.
+   No real visit has used this route yet (History check above); it is kept
+   because Drive opens every page of a second signed-in account under
+   `/drive/u/<n>/`, and live-check step 2 confirms it.
 
 ## Titles
 
@@ -113,8 +131,13 @@ Synthetic equivalents of the recorded shapes (shared vectors
 - The type records folders from every Google account signed in to this
   Chrome profile; there is no account value in the URL to scope by.
 - `{_}` accepts any account-slot segment, not only digits.
-- An error page on a folder's URL is recorded as a visit to that folder with
-  the error page's title.
+- An error or sign-in page on a folder's URL is recorded as a visit to that
+  folder with no title, because its title is in `generic_titles` (above). A
+  folder tab Chrome never finished loading, whose title is the raw URL, also
+  records no title, but through the browser-placeholder rule
+  (`adapter-templates.md` §9.4), not the list. A new interstitial title Drive
+  starts using would be recorded as the folder's name until it is added to
+  `generic_titles`.
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).
 
 ## Live check still needed
