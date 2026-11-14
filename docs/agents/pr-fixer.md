@@ -78,6 +78,19 @@ The worktree itself is always removed.
 - The fixer never merges, never force-pushes and never runs `gh pr merge`; Mergify keeps merge authority.
 - Text from the agent's report goes into bead notes and the PR body only through `clean`: one line, no `@` mentions or code-span breaks, capped.
 
+## Reviewing its activity
+
+- `~/.local/state/brauser-pr-fixer/receipts.jsonl`: one line per pass (`at`, `outcome`, and for a repair `bead`, `pr`, `sha` or the free-text `reason`).
+- `~/.local/state/brauser-pr-fixer/runs/<bead>-<attempt>-<time>/`: `run.log` (agent and review output), `report.json` (the agent's focused checks), `body.md`.
+- The bead's notes and `fixer_*` metadata (`bd show <id>`).
+- `journalctl --user -u brauser-pr-fixer.service` on the host.
+
+These record what each run did, but not yet enough to calibrate the fixer.
+Nothing ties a pushed repair to whether its PR then merged, failed CI or conflicted again.
+Durations, token use, conflicted-file lists and failure codes are not structured.
+Nothing summarizes the receipts, and `runs/` is never pruned.
+The next work item, `brwr-lkdz`, covers these.
+
 ## Running it
 
 ```sh
@@ -91,17 +104,31 @@ It runs real git on temporary repositories, with fake `bd`, `gh`, `codex`, queue
 
 ## Activation
 
-Nothing is installed or enabled anywhere.
-Turning the fixer on is an activation and needs John's yes.
-The intended host is a VM (the Fleet Keeper design prefers a dedicated fixer VM, so the agent never competes with a worker for CPU), never John's Mac.
-On that host:
+**Active since 2026-11-14 on the `constitution` VM** (John's yes, 2026-11-13 23:14 MST).
+It runs as the `ubuntu` user, with the timer `brauser-pr-fixer.timer` enabled and linger on.
+Its clones are `~/brauser-pr-fixer/main` (tools) and `~/brauser-pr-fixer/queue` (bd workspace), and its env file is `~/.config/brauser-pr-fixer/env`, which holds `GH_TOKEN`, `BRAUSER_QUEUE_WORKSPACE` and `PATH`. codex uses the host's existing login.
+The first real pass (2026-11-14T06:55Z) closed two stale repair beads, `brwr-5d5n` (#428) and `brwr-zjwi` (#431), whose PRs had already merged; the next pass was `idle`.
+No conflict has been repaired yet.
+`constitution` was chosen over a new fixer VM because it is Brauser's dev box with no production service, already has bubblewrap's user-namespace exception, and Cookie is paused.
+It has only 2 CPUs, so when Cookie resumes the two share them (the unit caps the fixer at `CPUQuota=150%` and `Nice=19`); move the fixer to its own VM if Cookie's cycles slow down.
+
+The token is a webRauser token for this repository.
+The runbook asks for Contents and Pull requests write only; the installed token also has Administration, which John accepted on 2026-11-14.
+Replacing it with a narrower one needs only a new env file and no other change.
+
+To set it up again on another host:
 
 1. Clone the repository to `~/brauser-pr-fixer/main` (main checked out) and bootstrap a queue workspace: a separate clone, `scripts/dev/queue bootstrap`.
 2. Install git, gh, bd, bubblewrap (`bwrap`; Ubuntu also needs its AppArmor profile for unprivileged user namespaces), Node 24, and codex (and claude, if used) with its provider login.
+   Create the directory first (`install -d -m 700 ~/.config/brauser-pr-fixer`): nothing else makes it, and writing the file into a missing directory fails.
    Write `~/.config/brauser-pr-fixer/env` (mode 0600).
-   It names `GH_TOKEN`: a fine-grained token with Contents and Pull requests write on this repository only.
-   It also names `BRAUSER_QUEUE_WORKSPACE`, `PATH`, and the agent's provider variables.
-   Configure git to push with that token (a credential helper that reads `GH_TOKEN`).
+   It names `GH_TOKEN`: a fine-grained token, resource owner `webRauser`, with Contents and Pull requests write on this repository only.
+   Enter the token at a hidden prompt on the host, never in a chat or a command line: `ssh -t <host> 'read -rs -p "GH_TOKEN: " t; echo; printf "GH_TOKEN=%s\n" "$t" > ~/.config/brauser-pr-fixer/env; chmod 600 ~/.config/brauser-pr-fixer/env'` (without `-t` the prompt is invisible and the command only seems to hang).
+   It also names `BRAUSER_QUEUE_WORKSPACE`, `PATH` (include `~/.cargo/bin` when codex lives there), and the agent's provider variables.
+   Configure git to push with that token in **each clone's own config**, not globally.
+   First reset the inherited helpers with an empty `credential.helper` entry, then add one that prints `username=x-access-token` and `password=$GH_TOKEN` for `get`.
+   A worker host already has a global GitHub helper for its own token, which would otherwise answer first.
+   Cookie's, for example, cannot read this repository since it moved from `rausified`.
 3. Run one `--dry-run` pass by hand and read its decisions.
 4. Copy `scripts/dev/pr-fixer/brauser-pr-fixer.{service,timer}` to `~/.config/systemd/user/`.
    Then `systemctl --user daemon-reload && systemctl --user enable --now brauser-pr-fixer.timer`, with `loginctl enable-linger` for the user.
