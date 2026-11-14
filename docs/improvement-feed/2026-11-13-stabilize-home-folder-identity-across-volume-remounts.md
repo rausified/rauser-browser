@@ -1,0 +1,7 @@
+## 2026-11-13 — Stabilize home folder identity across volume remounts
+
+Change: Investigate a persistent macOS volume identifier plus file ID for selected-folder identity, with an explicit migration from the existing device-and-inode format. Retain replacement-folder rejection and fail-closed behavior. Distinguish a folder identity mismatch from a folder that cannot be opened in diagnostics and repair messaging.
+
+Why: A live diagnosis found an accessible home folder on the internal disk with the same inode as its saved selection but a different filesystem device number (`0x100000e` saved, `0x1000012` current). The independently configured knowledge base also retained the old device number. Brauser therefore displayed “isn't set up yet” and refused note reads despite the home folder being present and openable. The evidence establishes a changed device number; it does not establish which reboot or mount event changed it. The current configuration reader also discards underlying folder-open errors, presenting them as the same repair warning.
+
+Where: `host/src/vault.rs` (`directory_identity`, `open_selected_root`), `host/src/config.rs` (`read_disk_state` and selected-folder migration), knowledge-base and task-folder identity checks, and `DESIGN.md` §6.1. Validate persistence across remounts/reboots and rejection of a different folder at the same path before changing the identity contract.
