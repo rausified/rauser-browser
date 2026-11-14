@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/rausified/rauser-browser/worker-contract.schema.json",
+  "$id": "https://github.com/webRauser/rauser-browser/worker-contract.schema.json",
   "title": "Brauser worker contract",
   "description": "How every worker (the shared worker driver, Cookie, any session) merges pull requests and moves the work queue in this repository. AGENTS.md \"Worker contract\" explains each field. A new field or meaning bumps version.",
   "type": "object",

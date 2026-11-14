@@ -708,7 +708,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     adopt_parser.add_argument("--dry-run", action="store_true")
     adopt_parser.add_argument("--frame", type=pathlib.Path, help="the frame to carry backlog prose into (default: the checkout's)")
     seed_parser = sub.add_parser("seed", help="one-shot: seed an empty Dolt remote")
-    seed_parser.add_argument("--remote", required=True, help="git URL, e.g. https://github.com/rausified/rauser-browser.git")
+    seed_parser.add_argument("--remote", required=True, help="git URL, e.g. https://github.com/webRauser/rauser-browser.git")
     seed_parser.add_argument("--from", dest="source", type=pathlib.Path, required=True)
     seed_parser.add_argument("--extra", type=pathlib.Path, action="append", default=[])
     seed_parser.add_argument("--yes", action="store_true", help="really push")

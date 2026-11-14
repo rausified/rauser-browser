@@ -31,7 +31,7 @@ Paste this into the batch's `COMMON.md` and fill in the placeholders.
 - **Claim, then sync.** Confirm your bead is `in_progress`; if the coordinator has not claimed it, claim it and run `scripts/dev/queue sync`.
   If sync reports a conflict, stop and report it.
 - **Check overlap before editing.** List the open PRs and `in_progress` beads that touch the files you will change (`scripts/dev/overlap-check` once it lands).
-  Until then, check both: open PRs with `gh pr list --repo rausified/rauser-browser --json number,files`, and claimed work that has no PR yet with `bd list --status in_progress` and the batch's `lanes.json`.
+  Until then, check both: open PRs with `gh pr list --repo webRauser/rauser-browser --json number,files`, and claimed work that has no PR yet with `bd list --status in_progress` and the batch's `lanes.json`.
   Name every overlap in your report and PR body.
 - **Foreground, bounded waits only.** Run each command in the foreground with an explicit timeout.
   Never arm a monitor or background job and go idle: completion notices are not delivered reliably.
