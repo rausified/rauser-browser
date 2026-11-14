@@ -37,6 +37,8 @@ use crate::frame::{FrameError, read_frame, write_frame};
 use crate::harness::HarnessEnv;
 use crate::native::{error, parse_envelope};
 use crate::open::Opener;
+use crate::vault::open_selected_root;
+#[cfg(test)]
 use crate::vault::selected_root_identity;
 
 /// How often the accept loop checks for a connection and for idle exit.
@@ -868,9 +870,9 @@ pub(crate) fn checked_knowledge_base(
         Some(folder) if config.configured() => folder,
         _ => return Err((ErrorCode::NotConfigured, NOT_CONFIGURED)),
     };
-    // `selected_root_identity` fails on anything but a folder.
-    let unchanged = selected_root_identity(&knowledge_base)
-        .is_ok_and(|actual| Some(actual.as_str()) == config.knowledge_base_identity());
+    let unchanged = config
+        .knowledge_base_identity()
+        .is_some_and(|expected| open_selected_root(&knowledge_base, Some(expected)).is_ok());
     if !unchanged {
         return Err((ErrorCode::NotConfigured, KNOWLEDGE_BASE_CHANGED));
     }

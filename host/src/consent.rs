@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::brand::APP_NAME;
 use crate::config;
 use crate::dialog;
-use crate::vault::selected_root_identity;
+use crate::vault::{open_selected_root, selected_root_identity};
 
 const TOKEN_LIFETIME: Duration = Duration::from_secs(5 * 60);
 const MAX_PENDING_GRANTS: usize = 32;
@@ -199,9 +199,9 @@ impl ConsentAuthority {
         if grant.expires_at <= Instant::now() || grant.revision != revision || grant.root != path {
             bail!("folder selection is stale or does not match the proposed {noun}");
         }
-        if selected_root_identity(Path::new(path))? != grant.identity {
-            bail!("selected {noun} changed; choose it again");
-        }
+        open_selected_root(Path::new(path), Some(&grant.identity)).with_context(|| {
+            format!("The selected {noun} could not be verified; choose it again.")
+        })?;
         Ok(grant.identity.clone())
     }
 

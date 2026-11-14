@@ -528,7 +528,10 @@ These rules make every PR findable and finishable.
   An unrelated or unowned file at any of these paths is a conflict, never adopted or overwritten; summary files are never adopted.
   Every other content location (log, later) stays create-only.
 - Keep capture off until a home folder is chosen and the host has a valid adapter document; automatic capture runs only on the exact origins of that document's adapters (`ConfigStore::capture_origins` in host/src/config.rs, `is_authorized` in host/src/capture.rs).
-  Any stored config whose home folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity (unmounted or remounted drive), must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path).
+  Any stored config whose home folder was never confirmed through the native picker, or whose folder no longer matches its recorded identity, must block capture and require reselection through the native picker before it can be used again (host/src/config.rs, `DiskState` load path).
+  New macOS selections use a persistent volume UUID plus directory ID; a device-number change alone does not invalidate them.
+  Legacy device-and-inode identities require their full exact match until a native reselection upgrades the folder.
+  Never upgrade an already-mismatched legacy identity using inode alone, or rewrite immutable recovery records to pretend they named a different identity.
   The knowledge base folder is set only through its own purpose-bound picker token; a picker token is valid only for the `FolderPurpose` it was minted for (host/src/consent.rs).
   Its identity is checked against the folder when it is chosen and recorded at save time (`update_with_grants` in host/src/config.rs); later saves that leave it unchanged carry the recorded identity without touching the folder, so a missing knowledge base never blocks capture or unrelated settings.
   The service re-checks that identity before every run and refuses a missing or replaced knowledge base folder (`not_configured`, host/src/service/server.rs), and checks it again under the config lock when a queued or resumed run leaves the queue, failing that run before its harness starts (`cwd_check`, `ServiceOptions::run_cwd`).
