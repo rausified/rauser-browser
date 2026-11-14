@@ -261,13 +261,18 @@ async function doctorRepair(t, { conflicting }) {
       git(clone, "commit", "-qam", "forged frame");
       const forged = git(clone, "rev-parse", "HEAD");
       git(clone, "checkout", "-q", "-f", "--detach", "origin/main");
-      process.env.BRAUSER_QUEUE_WORKSPACE = fresh("ws-forged");
+      // One workspace for the whole publish job, as the workflow has; each
+      // PR's edits go into a fresh copy of it (#463 re-review M-new-1), so a
+      // PR whose adopt fails partway leaves nothing for the next PR's sync.
+      const shared = fresh("ws-publish");
+      process.env.BRAUSER_QUEUE_WORKSPACE = shared;
+      const sharedBefore = run("bd", shared, "export");
       const beforeForged = dolt();
       const refused = adoptAndSync({ tools: scripts, head: prHead, base, commit: forged });
       assert.equal(refused.ok, false);
       assert.match(refused.detail, /is not what main's adopt computes/);
       assert.equal(dolt(), beforeForged, "nothing synced");
-      process.env.BRAUSER_QUEUE_WORKSPACE = fresh("ws-publish");
+      assert.equal(run("bd", shared, "export"), sharedBefore, "the refused PR's applied edits never reach the shared workspace");
       const published = adoptAndSync({ tools: scripts, head: prHead, base, commit: head });
       assert.equal(published.ok, true, JSON.stringify(published));
       assert.equal(git(clone, "status", "--porcelain").split("\n").filter((line) => line && line !== "?? target/").join("\n"), "", "nothing checked out in the main tree");
@@ -354,7 +359,7 @@ test("tryRepair regenerates a PR whose only conflicts are generated files", { sk
 // the repair job's state or bundle it can check against the API and main.
 test("repair runs from a bundle with no remote; publish checks the repaired commit before pushing", { skip: process.platform === "win32" }, async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
-  const { chmodSync, cpSync, mkdirSync, readFileSync, writeFileSync } = await import("node:fs");
+  const { chmodSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { spawnSync } = await import("node:child_process");
   const { fileURLToPath } = await import("node:url");
@@ -417,11 +422,25 @@ case "$*" in
 esac
 `);
   chmodSync(join(bin, "gh"), 0o755);
-  const publish = (bundle, headRef = "feat/family") => {
+  const publish = (bundle, headRef = "feat/family", { repairState = state } = {}) => {
     const dir = join(root, `publish-${Math.random().toString(36).slice(2)}`);
     git(root, ["clone", "-q", origin, dir]);
     return doctor(dir, "publish", { PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "example/repo", GH_TOKEN: "not-a-real-token", PR_DOCTOR_PUSH: "1", FAKE_HEAD_REF: headRef },
-      ["--state", state, "--bundle", bundle]);
+      ["--prs", "7", "--state", repairState ?? join(root, "no-repair-state.json"), ...(bundle ? ["--bundle", bundle] : [])]);
+  };
+  /** A merge of (the PR head, main) whose tree is the honest repair's, edited. */
+  const forgeTree = (name, edit) => forge(name, () => {
+    git(work, ["checkout", "-q", "-f", "--detach", commit]);
+    edit();
+    git(work, ["add", "-A"]);
+    const forgedTree = git(work, ["write-tree"]).out.trim();
+    git(work, ["checkout", "-q", "-f", "--detach", "origin/main"]);
+    return git(work, ["commit-tree", forgedTree, "-p", before, "-p", mainSha, "-m", "Merge main into feat/family (PR doctor)"]).out.trim();
+  });
+  const needsPerson = (result, file) => {
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, new RegExp(`\\| #7 \\| needs-person \\| [^\\n]*${file.replace(/[.*/]/g, "\\$&")}`), result.stdout);
+    assert.equal(branchTip(), before, "nothing pushed");
   };
   const branchTip = () => git(origin, ["rev-parse", "refs/heads/feat/family"]).out.trim();
   const forge = (name, makeCommit) => {
@@ -445,22 +464,27 @@ esac
     const stranger = git(work, ["commit-tree", tree, "-m", "not on main"]).out.trim();
     return git(work, ["commit-tree", tree, "-p", before, "-p", stranger, "-m", "forged"]).out.trim();
   });
-  const parents = publish(wrongParents);
-  assert.match(parents.stdout, /\| #7 \| skipped \| the repaired commit's second parent is not a commit of main \|/);
-  assert.equal(branchTip(), before);
+  needsPerson(publish(wrongParents), "second parent is not a commit of main");
 
   // A file outside what the doctor resolves, changed from both parents.
-  const extra = forge("extra", () => {
-    git(work, ["checkout", "-q", "-f", "--detach", commit]);
+  const extra = forgeTree("extra", () => {
     writeFileSync(join(work, "scripts/merge-generated.mjs"), `${readFileSync(join(work, "scripts/merge-generated.mjs"), "utf8")}// forged\n`);
-    git(work, ["add", "scripts/merge-generated.mjs"]);
-    const forgedTree = git(work, ["write-tree"]).out.trim();
-    git(work, ["checkout", "-q", "-f", "--detach", "origin/main"]);
-    return git(work, ["commit-tree", forgedTree, "-p", before, "-p", mainSha, "-m", "forged"]).out.trim();
   });
-  const beyond = publish(extra);
-  assert.match(beyond.stdout, /\| #7 \| skipped \| the repaired commit changes scripts\/merge-generated\.mjs beyond what the doctor resolves \|/);
-  assert.equal(branchTip(), before);
+  needsPerson(publish(extra), "scripts/merge-generated.mjs");
+
+  // #463 re-review I-new-1: a repair that quietly reverts main's change (it
+  // keeps the PR side's copy, so it differs from main's side only) ...
+  const revert = forgeTree("revert", () => rmSync(join(work, "protocol/starters/widgeta.json")));
+  needsPerson(publish(revert), "protocol/starters/widgeta.json");
+  // ... or that writes into a generated output nothing regenerated.
+  const generated = forgeTree("generated", () => {
+    writeFileSync(join(work, "protocol/src/generated.rs"), `${readFileSync(join(work, "protocol/src/generated.rs"), "utf8")}// forged\n`);
+  });
+  needsPerson(publish(generated), "protocol/src/generated.rs");
+
+  // #463 re-review M-new-2: the repair job left nothing: each PR it should
+  // have repaired is told so, from the plan job's list (a job output).
+  needsPerson(publish(null, "feat/family", { repairState: null }), "the repair job");
 
   // The real repair passes the checks and is pushed.
   const published = publish(outBundle);
@@ -496,6 +520,13 @@ test("the merge runs in its own job with no permissions and no secret; publish i
   // Publish runs its own checkout's copies of the tools, never the artifact's.
   assert.match(publish, /cp scripts\/pr-doctor\.mjs [^\n]*"\$RUNNER_TEMP\/pr-doctor\/"|cp scripts\/pr-doctor\.mjs/);
   assert.doesNotMatch(publish, /doctor-input/);
+  // The PR list is the plan job's output, never an artifact the repair job could replace.
+  assert.match(publish, /PR_DOCTOR_PRS: \$\{\{ needs\.doctor-plan\.outputs\.prs \}\}/);
+  assert.match(publish, /--prs "\$PR_DOCTOR_PRS"/);
+  // Publish runs when the repair job failed too, to label those PRs.
+  assert.match(publish, /always\(\) && needs\.doctor-plan\.result == 'success'/);
+  // The queue copy for the repair job carries data only.
+  assert.match(plan, /--exclude='git-remote-cache' --exclude='\.beads-credential-key'/);
   // No credential is ever written to a .git/config.
   assert.doesNotMatch(yml.split("\n  keeper:\n")[0], /git (-C \S+ )?config [^\n]*extraheader/);
   for (const name of ["doctor-plan", "doctor"]) {
