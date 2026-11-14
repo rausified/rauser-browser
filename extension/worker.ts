@@ -1044,11 +1044,7 @@ async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
     const hour = [...activity.totals].reverse().find((total) =>
       total.artifact_id === mapped.artifact_id);
     if (hour) {
-      // The raw tab title, as navigation and seeding record it: the host
-      // evaluates the event's title as a tab title (generic check, refs,
-      // §9.1 extraction), so an already-extracted title would be judged
-      // a second time.
-      hour.title = title;
+      hour.title = titleMatch.title ?? title;
       hour.url = mapped.url;
       hour.refs = [];
       for (const ref of titleMatch.refs ?? []) {

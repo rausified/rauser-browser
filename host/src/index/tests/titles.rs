@@ -185,23 +185,18 @@ fn summary(title: &str, at: &str) -> EventData {
     EventData::Summary(event)
 }
 
-/// The host extracts the §9.1 title from the raw tab title the extension
-/// sends, so the name never depends on which extension path wrote it last.
+/// A stored title is kept as sent, never extracted again. The journal holds
+/// titles the worker already extracted (`Roadmap - Acme` from the tab
+/// `Roadmap - Acme - Acme`) beside raw ones, and the adapter fingerprint
+/// change refolds them all: extracting again would cut the real name short.
 #[test]
-fn a_raw_tab_title_records_its_extracted_name() {
-    assert_eq!(
-        folded_title(vec![EventData::Activity(titled(
-            1,
-            Some("Plan - Acme"),
-            FIRST
-        ))]),
-        "Plan"
-    );
-    // A title the template does not match keeps the whole title (fallback).
-    assert_eq!(
-        folded_title(vec![EventData::Activity(titled(1, Some("Plan"), FIRST))]),
-        "Plan"
-    );
+fn a_replayed_title_is_never_extracted_again() {
+    for title in ["Roadmap - Acme", "Plan - Acme", "Plan"] {
+        assert_eq!(
+            folded_title(vec![EventData::Activity(titled(1, Some(title), FIRST))]),
+            title
+        );
+    }
 }
 
 /// An M1 visit stored with a gate title never renames an artifact (brwr-yf13),
@@ -213,7 +208,7 @@ fn a_generic_legacy_visit_title_never_replaces_the_artifact_name() {
             EventData::Activity(titled(1, Some("Plan - Acme"), FIRST)),
             legacy(2, "Sign in - Acme", LATER),
         ]),
-        "Plan"
+        "Plan - Acme"
     );
     assert_eq!(
         folded_title(vec![legacy(2, "Sign in - Acme", LATER)]),
@@ -221,13 +216,13 @@ fn a_generic_legacy_visit_title_never_replaces_the_artifact_name() {
     );
     assert_eq!(
         folded_title(vec![legacy(2, "Plan v2 - Acme", LATER)]),
-        "Plan v2"
+        "Plan v2 - Acme"
     );
 }
 
 /// A summary's title is the page title when it ran (extension/summarize.ts),
 /// not agent text, so a summary taken on a gate page never renames an
-/// artifact either, and a real one is extracted like any tab title.
+/// artifact either, and a real one still does, as sent.
 #[test]
 fn a_generic_summary_title_never_replaces_the_artifact_name() {
     assert_eq!(
@@ -235,7 +230,7 @@ fn a_generic_summary_title_never_replaces_the_artifact_name() {
             EventData::Activity(titled(1, Some("Plan - Acme"), FIRST)),
             summary("Sign in - Acme", LATER),
         ]),
-        "Plan"
+        "Plan - Acme"
     );
     assert_eq!(
         folded_title(vec![summary("Sign in - Acme", LATER)]),
@@ -246,6 +241,6 @@ fn a_generic_summary_title_never_replaces_the_artifact_name() {
             EventData::Activity(titled(1, Some("Plan - Acme"), FIRST)),
             summary("Plan v2 - Acme", LATER),
         ]),
-        "Plan v2"
+        "Plan v2 - Acme"
     );
 }

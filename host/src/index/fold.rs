@@ -533,39 +533,35 @@ pub(super) fn container_for(
     Some((within.artifact_type, container_id, origin))
 }
 
-/// The name an event's tab title gives its artifact, or `None` for no
-/// title. Activity, M1 visit and summary titles all come from the page (a
-/// summary's is the page title when it ran, not agent text), so all three
-/// pass through here:
+/// The title an event records for its artifact: its own, unless the
+/// adapter that matches its URL finds that title generic
+/// (adapter-templates.md §9.4), as a sign-in, password or loading page's
+/// is. The extension already omits such a title; this keeps an older or
+/// buggy one, or a title recorded before the rule, from replacing an
+/// artifact's real name. Activity, M1 visit and summary titles all pass
+/// through here: a summary's title is the page's title when it ran
+/// (extension/summarize.ts), not agent text.
 ///
-/// - When the adapter that matches the URL finds the title generic
-///   (adapter-templates.md §9.4), as a sign-in, password or loading page's
-///   is, it is no title. The extension already omits such a title; this
-///   keeps an older or buggy one, or a title recorded before the rule, from
-///   replacing an artifact's real name.
-/// - Otherwise it is the §9.1 output: the template's `{title}`, or the
-///   whole prepared title for the fallback. The extension always sends the
-///   raw tab title, so this is the one place a title is extracted, and an
-///   artifact's name no longer depends on which path wrote it last.
-/// - With no adapter for the URL (or no document) the title is kept as sent.
+/// A title that is not generic is kept exactly as sent, never re-extracted
+/// (§9.1). The journal holds raw tab titles and titles the worker already
+/// extracted, with nothing to tell them apart, and extracting again would
+/// cut a real name short (`Team plan - Q4` under `{title} - {~}`).
 ///
 /// The adapter judging the title is the one that matches the URL in the
-/// current document, which may not be the type that recorded the event
-/// (after an adapter swap): titles are per site and display-only (§8.2),
-/// so the current site's list is the right judge.
+/// current document, which after an adapter swap may not be the type that
+/// recorded the event: titles are per site and display data (§8.2), so the
+/// current site's list is the right judge.
 pub(super) fn recorded_title(
     adapters: Option<&Document>,
     url: &str,
     title: Option<&String>,
 ) -> Option<String> {
     let title = title?;
-    match adapters
+    let generic = adapters
         .and_then(|document| document.evaluate(url, Some(title)).ok())
         .and_then(|found| found.title)
-    {
-        Some(found) => found.title,
-        None => Some(title.clone()),
-    }
+        .is_some_and(|found| found.title.is_none());
+    (!generic).then(|| title.clone())
 }
 
 /// A container ID's native part, after `<scheme>:<host>/`: for GitHub,

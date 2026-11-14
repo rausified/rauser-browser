@@ -951,9 +951,7 @@ test("a generic title never replaces the live hour's title", async () => {
   onTabUpdated(9, { title: "Plan - Acme" }, { id: 9, url: `${origin}/items/a`, incognito: false });
   await flush();
   [live] = await send({ kind: "get_activity" });
-  // The raw tab title: the host evaluates it as one (generic check, refs,
-  // §9.1 extraction), so the worker never sends an already-extracted title.
-  assert.equal(live.title, "Plan - Acme");
+  assert.equal(live.title, "Plan");
 
   // A later sign-in page, the browser's host placeholder, or an empty title
   // keeps the real name.
@@ -961,7 +959,7 @@ test("a generic title never replaces the live hour's title", async () => {
     onTabUpdated(9, { title }, { id: 9, url: `${origin}/items/a`, incognito: false });
     await flush();
     [live] = await send({ kind: "get_activity" });
-    assert.equal(live.title, "Plan - Acme", title);
+    assert.equal(live.title, "Plan", title);
   }
 
   // A same-document navigation within the same artifact whose current title
@@ -973,7 +971,7 @@ test("a generic title never replaces the live hour's title", async () => {
   });
   await flush();
   [live] = await send({ kind: "get_activity" });
-  assert.equal(live.title, "Plan - Acme");
+  assert.equal(live.title, "Plan");
 });
 
 test("a stored visit without a dispatch flag is never patched", async () => {
@@ -1591,12 +1589,11 @@ test("a tab restored on a gate page never records the gate's generic title", asy
     sessionValues.clear();
     tabs.get(30).title = "Sign in - Acme";
     await rebuildActivityMap();
-    // The hour holds the raw tab title the update read (the host extracts).
-    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan v2 - Acme");
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan v2");
     Date.now = () => start + 7_200_000;
     await send({ kind: "get_activity" });
-    assert.ok(titles().every((title) => title === "Plan" || title === "Plan v2 - Acme"), JSON.stringify(titles()));
-    assert.ok(titles().includes("Plan v2 - Acme"), JSON.stringify(titles()));
+    assert.ok(titles().every((title) => title === "Plan" || title === "Plan v2"), JSON.stringify(titles()));
+    assert.ok(titles().includes("Plan v2"), JSON.stringify(titles()));
   } finally {
     Date.now = realNow;
   }
