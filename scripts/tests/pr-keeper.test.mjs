@@ -47,7 +47,8 @@ test("(a) never labels: an unlabelled PR is its owner's to queue", () => {
 
 test("(a) already requested, waiting or checking: nothing; idempotent after its own comment", () => {
   for (const comments of [[command(QUEUE_COMMENT, ago(1))], [FX.checking339], FX.pr329]) {
-    assert.deepEqual(kinds(decideKeeper(snap({ comments }), { now: NOW })), []);
+    // The command's author is the keeper's own token owner, which keep() trusts.
+    assert.deepEqual(kinds(decideKeeper(snap({ comments }), { now: NOW, trusted: ["dev-session"] })), []);
   }
 });
 
@@ -268,19 +269,26 @@ const AT = (hhmmss) => `2026-11-09T${hhmmss}Z`;
 const pushed = greenChecks(AT("10:31:00")).map((c) => ({ ...c, startedAt: AT("10:30:25") }));
 
 test("Minor 2: a queue request Mergify never answers is an alert after the grace, and never a second comment", () => {
-  const s = snap({ comments: [command(QUEUE_COMMENT, AT("10:40:00"), "github-actions[bot]")], contexts: pushed, committedDate: AT("10:30:00") });
-  const soon = decideKeeper(s, { now: AT("10:42:00") });
+  const trusted = ["keeper-bot"];
+  const s = snap({ comments: [command(QUEUE_COMMENT, AT("10:40:00"), "keeper-bot")], contexts: pushed, checkSuites: [AT("10:30:10")] });
+  const soon = decideKeeper(s, { now: AT("10:42:00"), trusted });
   assert.deepEqual([kinds(soon), alertKinds(soon)], [[], []]);
-  const late = decideKeeper(s, { now: AT("11:30:00") });
+  const late = decideKeeper(s, { now: AT("11:30:00"), trusted });
   assert.deepEqual([kinds(late), alertKinds(late)], [[], ["queue-unanswered"]]);
-  assert.match(late.alerts[0].text, /github-actions\[bot\]/);
+  assert.match(late.alerts[0].text, /keeper-bot/);
   assert.doesNotMatch(alertBody(late.alerts).replace(/`[^`]*`/g, ""), /@/);
+  // Review I2: two runs minutes apart write the same sticky comment, so the keeper edits nothing.
+  const later = decideKeeper(s, { now: AT("11:47:00"), trusted });
+  assert.equal(alertBody(later.alerts, { hadComment: true }), alertBody(late.alerts, { hadComment: true }));
+  // Review M2: a github-actions[bot] command (Mergify ignores it) is no ask: the keeper queues as itself.
+  const bot = snap({ comments: [command(QUEUE_COMMENT, AT("10:40:00"), "github-actions[bot]")], contexts: pushed, checkSuites: [AT("10:30:10")] });
+  assert.deepEqual(kinds(decideKeeper(bot, { now: AT("11:30:00"), trusted: ["github-actions[bot]", "keeper-bot"] })), ["queue"]);
 });
 
 test("Minor 1: 'already running' with no live request: the keeper does not comment again on this head", () => {
   const ignored = { ...FX.ignored339, createdAt: AT("10:40:10"), updatedAt: AT("10:40:10") };
-  const s = snap({ comments: [command(QUEUE_COMMENT, AT("10:40:00"), "keeper-bot"), ignored], contexts: pushed, committedDate: AT("10:30:00") });
-  assert.deepEqual(kinds(decideKeeper(s, { now: AT("11:30:00") })), []);
+  const s = snap({ comments: [command(QUEUE_COMMENT, AT("10:40:00"), "keeper-bot"), ignored], contexts: pushed, checkSuites: [AT("10:30:10")] });
+  assert.deepEqual(kinds(decideKeeper(s, { now: AT("11:30:00"), trusted: ["keeper-bot"] })), []);
 });
 
 test("Minor 6 (Codex P2): the keeper's own alert naming the bead does not stop the request; the queue's beads decide", () => {

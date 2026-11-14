@@ -44,8 +44,8 @@ function snapshotAt(t, { extraComments = [], removedLabels = [] } = {}) {
     mergeable: conflicting ? "CONFLICTING" : "MERGEABLE", mergeStateStatus: conflicting ? "DIRTY" : "CLEAN",
     headRefOid: head.oid, headRefName: "feat/example", baseRefName: "main", isCrossRepository: false, autoMergeRequest: null,
     labels: { nodes: [...labels].map((name) => ({ name })) }, comments: { nodes: comments },
-    // The fixture's head time is its push: a lower bound for the committer date, as in GitHub.
-    commits: { nodes: [{ commit: { committedDate: head.at, statusCheckRollup: { contexts: { nodes: contexts } } } }] },
+    // The fixture's head time is its push: its first check suite, and an upper bound for the committer date.
+    commits: { nodes: [{ commit: { committedDate: head.at, checkSuites: { nodes: [{ createdAt: head.at }] }, statusCheckRollup: { contexts: { nodes: contexts } } } }] },
   } } });
 }
 
@@ -59,6 +59,8 @@ function pollTimes() {
   return [...times].filter((t) => t >= start && t <= end).sort((a, b) => a - b).map(iso);
 }
 const POLLS = pollTimes();
+/** The replay's trusted authors: the doctor, the session and the keeper (keep()'s trustedAuthors in production). */
+const REPLAY_TRUSTED = ["doctor-bot", "dev-session", "keeper-bot"];
 
 /** pr-watch's decisions over the timeline, with its own between-poll memory. */
 function watchReplay() {
@@ -66,7 +68,7 @@ function watchReplay() {
   return POLLS.map((t) => {
     const snap = snapshotAt(t);
     track(state, snap, t);
-    return { t, snap, d: decide(snap, { now: t, dirtySince: state.dirtySince, idleSince: state.idleSince, trusted: ["doctor-bot"] }) };
+    return { t, snap, d: decide(snap, { now: t, dirtySince: state.dirtySince, idleSince: state.idleSince, trusted: REPLAY_TRUSTED }) };
   });
 }
 const firstAt = (rows, pred) => rows.find(pred)?.t ?? null;
@@ -121,7 +123,7 @@ test("replay keeper: one repair bead per head while it conflicts, and needs-merg
   const repairs = new Set(), beads = [];
   for (const t of POLLS) {
     const snap = snapshotAt(t, { removedLabels: removedAt ? [{ label: "needs-merge", at: removedAt }] : [] });
-    const d = decideKeeper(snap, { now: t, mergeTreeClean: !inConflict(t), trusted: ["doctor-bot"] });
+    const d = decideKeeper(snap, { now: t, mergeTreeClean: !inConflict(t), trusted: REPLAY_TRUSTED });
     for (const a of d.actions) {
       if (a.kind === "repair") {
         repairs.add(a.ref);
@@ -145,7 +147,7 @@ test("replay keeper (brwr-mva0 8): its own comments fed back into later polls dr
   const perHead = new Map();
   for (const t of POLLS) {
     const snap = snapshotAt(t, { extraComments: posted });
-    const d = decideKeeper(snap, { now: t, mergeTreeClean: !inConflict(t), trusted: ["doctor-bot"] });
+    const d = decideKeeper(snap, { now: t, mergeTreeClean: !inConflict(t), trusted: REPLAY_TRUSTED });
     for (const a of d.actions) {
       if (a.kind !== "queue" && a.kind !== "refresh") continue;
       const key = `${snap.headOid}:${a.kind}`;

@@ -80,26 +80,36 @@ const later = (a, b) => (Date.parse(a) > Date.parse(b));
 /** Mergify's states that hold a request for the PR's head; a push ends each of them. */
 const LIVE = new Set(["requested", "waiting", "checking"]);
 
-/** The earliest time the head can have reached GitHub: its committer date (GitHub no longer
- * reports push times: `pushedDate` is deprecated and null), but never after the head's first
- * check started, which bounds a committer clock running ahead. Null without a committer date:
- * check starts alone are no head time, since a rerun (after a PR body edit, say) starts long
- * after the push (#421, 2026-11-13). */
-export function headTime(committedDate, checks) {
+/** When the head reached GitHub: the earliest of its check suites' creation times, which GitHub
+ * sets at the push (a rerun reuses its suite, so a rerun after a body edit does not move it, #421).
+ * GitHub no longer reports push times (`pushedDate` is deprecated and null). Before any suite
+ * exists, the committer date, a lower bound that misses "commit, run gates, push" (review I1),
+ * capped at `now` so a committer clock running ahead never dates the head in the future (M3).
+ * Null when neither is known. */
+export function headTime(committedDate, suiteTimes, now = null) {
+  const suites = (suiteTimes ?? []).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b));
+  if (suites.length) return suites[0];
   if (!committedDate) return null;
-  const starts = (checks ?? []).map((c) => c.startedAt).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b));
-  return starts.length && Date.parse(starts[0]) < Date.parse(committedDate) ? starts[0] : committedDate;
+  return now && later(committedDate, now) ? now : committedDate;
 }
+
+/** Whether a queue command counts as an ask: Mergify ignores bots (github-actions[bot]), and with a
+ * `trusted` list only those authors' commands count (review M2). */
+const canCommand = (c, trusted) => isQueueCommand(c) && !/\[bot\]$|^github-actions$/.test(c.author ?? "") && (!trusted || trusted.includes(c.author));
 
 /** The newest queue command asked for the head at `headAt` that Mergify has not since cancelled,
  * or null: the "once per head" key (brwr-mva0 1). Mergify cancels a command whose push event it
- * processed late (#456 at 12:54:04Z), and that one may be asked again. Null without `headAt`. */
-export function askedOnHead(comments, headAt) {
+ * processed late (#456 at 12:54:04Z), and that one may be asked again; but only a cancel after
+ * Mergify acknowledged the ask voids it, since a cancel reply to the old request can arrive after
+ * the new head's ask (review M1). Null without `headAt`. */
+export function askedOnHead(comments, headAt, trusted = null) {
   if (!headAt) return null;
   const sorted = byCreated(comments);
-  const ask = sorted.filter((c) => isQueueCommand(c) && !later(headAt, at(c))).at(-1);
+  const ask = sorted.filter((c) => canCommand(c, trusted) && !later(headAt, at(c))).at(-1);
   if (!ask) return null;
-  return sorted.some((c) => isMergify(c.author) && later(at(c), at(ask)) && CANCELLED.test(c.body ?? "")) ? null : ask;
+  const replies = sorted.filter((c) => isMergify(c.author) && later(at(c), at(ask)));
+  const acked = replies.findIndex((c) => !CANCELLED.test(c.body ?? ""));
+  return acked >= 0 && replies.slice(acked + 1).some((c) => CANCELLED.test(c.body ?? "")) ? null : ask;
 }
 
 /** Mergify's view of the PR, from its comments in creation order: each queue request gets a new
@@ -151,13 +161,13 @@ export function commandSince(comments, command, since) {
   return (comments ?? []).some((c) => !isMergify(c.author) && re.test(c.body ?? "") && (!since || at(c) > since));
 }
 
-export function snapshotFromGraphql(data) {
+export function snapshotFromGraphql(data, { now = new Date().toISOString() } = {}) {
   const pr = data.repository.pullRequest;
   const labels = (pr.labels?.nodes ?? []).map((label) => label.name);
   const comments = (pr.comments?.nodes ?? []).map((c) => ({ author: c.author?.login ?? "", body: c.body ?? "", createdAt: c.createdAt, updatedAt: c.updatedAt }));
   const head = pr.commits?.nodes?.[0]?.commit;
   const checks = latestChecks(head?.statusCheckRollup?.contexts?.nodes);
-  const headAt = headTime(head?.committedDate ?? null, checks);
+  const headAt = headTime(head?.committedDate ?? null, (head?.checkSuites?.nodes ?? []).map((n) => n.createdAt), now);
   return {
     number: pr.number, state: pr.state, mergedAt: pr.mergedAt ?? null, isDraft: !!pr.isDraft, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus,
     baseRefName: pr.baseRefName ?? "main", headRefName: pr.headRefName ?? "", isCrossRepository: !!pr.isCrossRepository,
@@ -202,7 +212,7 @@ const QUEUED = new Set(["requested", "waiting", "checking", "merged"]);
 /** What queue-pr would do for one snapshot: { outcome, exitCode, actions, message }.
  * `actions` are in order, each { kind: "ready" | "label" | "queue" | "refresh" }. Pure:
  * running it again on the snapshot after the actions land yields no actions. */
-export function planQueue(snap, { now = new Date().toISOString(), ready = false, graceMinutes = ADMIT_GRACE_MINUTES } = {}) {
+export function planQueue(snap, { now = new Date().toISOString(), ready = false, graceMinutes = ADMIT_GRACE_MINUTES, trusted = null } = {}) {
   const n = snap.number;
   const actions = [];
   let blocked = "";
@@ -253,10 +263,13 @@ export function planQueue(snap, { now = new Date().toISOString(), ready = false,
   if (state === "checking" || state === "merged") return result(state, EXIT.OK, state === "checking" ? `is in the Mergify queue (${step ?? "checking"})` : "is merged by Mergify; GitHub will show it shortly");
   // One queue command per head (brwr-mva0 1): Mergify answering "already running" with no live
   // request, or never answering at all (brwr-mva0 2), must not draw a comment on every run.
-  const ask = state === "requested" ? byCreated(snap.comments).filter(isQueueCommand).at(-1) : askedOnHead(snap.comments, snap.headAt);
+  // `trusted`: whose commands count as an ask (the keeper's and queue-pr's trustedAuthors).
+  const ask = snap.headAt ? askedOnHead(snap.comments, snap.headAt, trusted)
+    : state === "requested" ? byCreated(snap.comments).filter((c) => canCommand(c, trusted)).at(-1) ?? null : null;
   if (ask) {
+    // The ask's own time, not "N minutes ago": the keeper's alert must read the same on every run (review I2).
     if (minutes(at(ask), now) >= graceMinutes) {
-      return result("queue-unanswered", EXIT.PERSON, `asked Mergify to queue this head ${Math.round(minutes(at(ask), now))} minutes ago (${ask.author || "unknown author"}) and Mergify holds no request for it: check https://dashboard.mergify.com, and that the comment's author can command Mergify (it ignores github-actions[bot])`);
+      return result("queue-unanswered", EXIT.PERSON, `asked Mergify to queue this head at ${at(ask)} (${ask.author || "unknown author"}) and Mergify holds no request for it: check https://dashboard.mergify.com, and that the comment's author can command Mergify (it ignores github-actions[bot])`);
     }
     return result("requested", EXIT.OK, "has a queue request for this head Mergify has not taken yet");
   }
@@ -294,7 +307,7 @@ export function trustedComment(comments, marker, trusted = TRUSTED_AUTHORS) {
 export const QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
  pullRequest(number:$number){ number state mergedAt isDraft mergeable mergeStateStatus headRefOid headRefName baseRefName isCrossRepository autoMergeRequest{enabledAt}
   labels(first:30){nodes{name}} comments(last:50){nodes{author{login} body createdAt updatedAt}}
-  commits(last:1){nodes{commit{committedDate statusCheckRollup{contexts(first:100){nodes{ __typename
+  commits(last:1){nodes{commit{committedDate checkSuites(first:50){nodes{createdAt}} statusCheckRollup{contexts(first:100){nodes{ __typename
    ... on CheckRun{name status conclusion startedAt completedAt isRequired(pullRequestNumber:$number) checkSuite{workflowRun{databaseId}}}
    ... on StatusContext{context state createdAt isRequired(pullRequestNumber:$number)}}}}}}}}}}`;
 
@@ -364,7 +377,7 @@ function main() {
       headOf: () => { snap = fetchSnapshot(repo, opts.pr); return snap.headOid.startsWith(want) ? want : snap.headOid; } });
     if (!settled) { console.log(`#${opts.pr} GitHub still shows head ${String(snap.headOid).slice(0, 12)}, not ${want}, after ${opts.waitSeconds}s; nothing posted. Rerun once it does.`); return EXIT.HEAD_TIMEOUT; }
   }
-  const plan = planQueue(snap, { ready: opts.ready });
+  const plan = planQueue(snap, { ready: opts.ready, trusted: trustedAuthors(repo) });
   console.log(`${plan.message}${opts.dryRun && plan.actions.length ? ` (dry run; would: ${plan.actions.map((a) => describe(a.kind)).join(", ")})` : ""}`);
   if (!opts.dryRun) applyActions(repo, opts.pr, plan.actions);
   return plan.exitCode;

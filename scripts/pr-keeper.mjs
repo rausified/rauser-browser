@@ -101,7 +101,7 @@ export function decideKeeper(snap, { now = new Date().toISOString(), mergeTreeCl
   // (a) and (b) through queue-pr's plan, only for labelled, ready, unfailed PRs.
   if (snap.labeled && !snap.isDraft && !checks.failed.length) {
     const view = unlabeled ? { ...snap, labels: snap.labels.filter((l) => l !== NEEDS_MERGE_LABEL), blockers: snap.blockers.filter((l) => l !== NEEDS_MERGE_LABEL) } : snap;
-    const plan = planQueue(view, { now });
+    const plan = planQueue(view, { now, trusted });
     const greenLong = checks.green && checks.greenSince && minutes(checks.greenSince, now) >= greenMinutes;
     for (const action of plan.actions) {
       if (action.kind === "refresh") actions.push({ kind: "refresh" });
