@@ -26,6 +26,7 @@ export interface HelloRequest {
   type: "hello";
   protocol_version: 8;
   request_id: string;
+  extension_build?: string;
 }
 
 export interface GetConfigRequest {
