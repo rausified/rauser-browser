@@ -299,6 +299,13 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "extension_build": {
+          "description": "The build of the extension Chrome has loaded (its manifest's version_name), so the host can record it for scripts/dev/deploy-live. Optional and additive within version 8: an older host refuses it, and the extension then says hello without it.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[0-9A-Za-z .+()_-]{1,128}$"
         }
       }
     },
