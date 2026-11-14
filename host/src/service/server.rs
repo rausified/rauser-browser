@@ -1786,6 +1786,45 @@ mod tests {
     }
 
     #[test]
+    fn a_run_admitted_before_a_deploy_pause_finishes_while_paused() {
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        // The harness waits for a gate file, so the run is still running
+        // when the marker lands.
+        let temp = tempfile::tempdir().unwrap();
+        let gate = temp.path().join("go");
+        let world = World::new(&format!(
+            "while [ ! -e '{}' ]; do /bin/sleep 0.02; done\n{}",
+            gate.display(),
+            answer()
+        ));
+        world.start(Duration::from_secs(600));
+        let run_id = world.started_run_id();
+        let until = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 600;
+        std::fs::write(
+            world.paths.drain(),
+            format!(r#"{{"version":1,"until_unix":{until}}}"#),
+        )
+        .unwrap();
+        // New runs wait; the admitted one is untouched.
+        let (code, _) = error_of(world.start_run(Some(url_key())));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(matches!(
+            world.get_run(&run_id).run.state,
+            RunState::Queued | RunState::Running
+        ));
+        std::fs::write(&gate, "").unwrap();
+        let fetched = world.wait_finished(&run_id);
+        assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
+        assert!(world.paths.drain().exists(), "the pause still holds");
+    }
+
+    #[test]
     fn start_run_uses_the_knowledge_base_folder_as_cwd() {
         if crate::ipc_test_guard::ipc_denied() {
             return;
