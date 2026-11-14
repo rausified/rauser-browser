@@ -106,6 +106,7 @@ mod tests {
         Request::Hello(HelloRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: "hello-1".into(),
+            extension_build: None,
         })
     }
 
@@ -165,6 +166,7 @@ mod tests {
         let request = Request::Hello(HelloRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: "r".repeat(MAX_INBOUND_BYTES + 1),
+            extension_build: None,
         });
         let mut wire = Vec::new();
         assert!(write_request(&mut wire, &request).is_err());
@@ -178,6 +180,7 @@ mod tests {
             let mut value = HelloRequest {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: String::new(),
+                extension_build: None,
             };
             let base = serde_json::to_vec(&Request::Hello(value.clone()))
                 .unwrap()

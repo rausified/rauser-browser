@@ -18,7 +18,8 @@ import {
   type WorkerStatus,
 } from "./model.js";
 import { finishHostPause, withLatestHostState } from "./coordination.js";
-import { HostClient, HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
+import { HostClient, HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId } from "./native.js";
+import { manifestBuild } from "./build-update.js";
 import { BINARY_NAME } from "./brand.js";
 
 const CONFIG_MUTATION_LOCK = `${BINARY_NAME}-config-permissions`;
@@ -121,10 +122,23 @@ export class ConfigSession {
     return this.config !== null && this.revision !== null && this.host.connected;
   }
 
-  hello() {
-    return this.host.call({
+  /** Says hello with the build Chrome has loaded (`extension_build`, which
+   * the host records for scripts/dev/deploy-live). A host from before that
+   * field refuses it as unsupported JSON, so this asks once more without. */
+  async hello() {
+    const ask = (build: string | null) => this.host.call({
       type: "hello", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      ...(build === null ? {} : { extension_build: build }),
     }, "hello_result");
+    const build = loadedBuild();
+    if (build === null) return ask(null);
+    try {
+      return await ask(build);
+    } catch (error) {
+      if (error instanceof HostError && error.code === "invalid_request" &&
+        error.message === UNSUPPORTED_REQUEST_TEXT) return ask(null);
+      throw error;
+    }
   }
 
   readHostConfig() {
@@ -567,4 +581,21 @@ export class ConfigSession {
       this.adapterIssue === null &&
       (this.config.storage !== null || !this.config.capture_enabled);
   }
+}
+
+/** The hello schema's `extension_build` pattern (host/src/loaded_extension.rs
+ * `valid_build`): the version_name alphabet, so no bidi, zero-width or
+ * control characters reach the host's record or deploy-live's terminal. */
+const BUILD_PATTERN = /^[0-9A-Za-z .+()_-]{1,128}$/;
+
+/** The build Chrome has loaded (the running manifest's `version_name`),
+ * when it matches the hello schema; null otherwise. */
+function loadedBuild(): string | null {
+  let build: string | null;
+  try {
+    build = manifestBuild(chrome.runtime.getManifest?.());
+  } catch {
+    return null;
+  }
+  return build !== null && BUILD_PATTERN.test(build) ? build : null;
 }
