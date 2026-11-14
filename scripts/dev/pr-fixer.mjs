@@ -351,14 +351,18 @@ export async function runPass(opts) {
       bd("update", d.bead.id, "--set-metadata", `fixer_queue_status=${q.status}`, ...marker, "--append-notes", `${now()} ${FIXER_ACTOR}: queue-pr retried for ${d.pr.headRefOid.slice(0, 12)}, exited ${q.status}.`);
       if (q.status === 0) queued++;
     }
-    if (closed || decisions.some((x) => x.action === "queue")) sync();
+    // Main conflicts again with a head the fixer pushed: the earlier repair did not hold. That
+    // includes a bead whose budget the successful push used up (decideBead skips it as exhausted).
+    let reconflicted = 0;
+    for (const d of decisions) {
+      if (metadataOf(d.bead).fixer_last_outcome !== "pushed" || d.pr?.mergeable !== "CONFLICTING") continue;
+      if (!(d.action === "repair" || (d.action === "skip" && /^exhausted/.test(d.reason)))) continue;
+      const marker = outcome(d.bead, d.pr.number, "reconflicted");
+      if (marker.length && bd("update", d.bead.id, ...marker).status === 0) reconflicted++;
+    }
+    if (closed || reconflicted || decisions.some((x) => x.action === "queue")) sync();
     const target = decisions.find((d) => d.action === "repair");
     if (!target) return receipt({ outcome: queued ? "queued" : closed ? "closed" : "idle", closed, queued });
-    // Main conflicts again with a head the fixer pushed: the earlier repair did not hold.
-    if (metadataOf(target.bead).fixer_last_outcome === "pushed") {
-      const marker = outcome(target.bead, target.pr.number, "reconflicted");
-      if (marker.length) bd("update", target.bead.id, ...marker);
-    }
 
     // Fail closed before claiming: the agent must not be able to read the host's credentials.
     const probeDir = join(workRoot, "probe");

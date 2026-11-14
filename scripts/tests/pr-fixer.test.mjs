@@ -543,6 +543,16 @@ test("a pushed bead chosen for repair again writes one reconflicted outcome", PO
   // The second attempt has nothing to merge, so the agent commits nothing and writes no report.
   assert.equal(ofKind(w, "repair")[1].code, "agent-no-report");
   assert.equal(ofKind(w, "outcome").length, 1);
+
+  // A push on the last allowed attempt leaves the bead exhausted: its reconflict is still recorded, once.
+  const last = world();
+  t.after(last.cleanup);
+  await pass(last, { maxAttempts: 1 });
+  last.state("pr", { ...last.read("pr"), headRefOid: last.originHead(), mergeable: "CONFLICTING" });
+  await pass(last, { maxAttempts: 1 });
+  await pass(last, { maxAttempts: 1 });
+  assert.deepEqual(ofKind(last, "outcome").map((o) => o.result), ["reconflicted"]);
+  assert.deepEqual(ofKind(last, "pass").map((p) => p.outcome), ["pushed", "idle", "idle"]);
 });
 
 test("a queue retry that fails writes one requeue-failed outcome per pushed head", POSIX, async (t) => {
