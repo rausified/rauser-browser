@@ -12,7 +12,7 @@ import test from "node:test";
 
 import {
   EXHAUSTED_LABEL, FIXER_ACTOR, NOTE_END, NOTE_MARKER, agentEnv, attemptsOf, conflictMarkers, decideBead,
-  SANDBOX_ARGS, maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
+  SANDBOX_ARGS, defaultSecretPaths, maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
 } from "../dev/pr-fixer.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
 import { parseReceipts, summarizeReceipts } from "../dev/pr-fixer-report.mjs";
@@ -88,9 +88,21 @@ test("the sandbox has its own PID namespace and procfs, so the runner's environ 
   assert.equal(SANDBOX_ARGS[SANDBOX_ARGS.indexOf("--proc") + 1], "/proc");
 });
 
+test("defaultSecretPaths hides the whole config directory, not a list of known tools", () => {
+  // Other tools' tokens live there too (a worker's GitHub token, a beacon's keys): mask it all.
+  const paths = defaultSecretPaths("/h");
+  // path.join, as the code uses: "\\h\\.config" on Windows, "/h/.config" elsewhere.
+  for (const p of [".config", ".ssh", ".git-credentials", ".netrc"].map((f) => join("/h", f))) assert.ok(paths.includes(p), p);
+  assert.ok(defaultSecretPaths("/h", { XDG_CONFIG_HOME: "/x/conf" }).includes("/x/conf"));
+  assert.ok(defaultSecretPaths("/h", {}, ["/opt/w/token"]).includes("/opt/w/token"), "--secret-path adds a host-specific path");
+});
+
 test("maskArgs hides secret directories and files from the agent's sandbox", () => {
   const kinds = { "/h/.config/gh": "dir", "/h/.git-credentials": "file", "/h/.ssh": null };
   assert.deepEqual(maskArgs(Object.keys(kinds), (p) => kinds[p]), ["--tmpfs", "/h/.config/gh", "--ro-bind", "/dev/null", "/h/.git-credentials"]);
+  // A path inside a masked directory is already hidden: mounting it again would fail under the tmpfs.
+  const nested = { "/h/.config": "dir", "/h/.config/xdg": "dir", "/h/.config-other": "dir", "/h/.config/tok": "file" };
+  assert.deepEqual(maskArgs(Object.keys(nested), (p) => nested[p]), ["--tmpfs", "/h/.config", "--tmpfs", "/h/.config-other"]);
 });
 
 test("agentEnv removes every GitHub credential and credential helper", () => {
