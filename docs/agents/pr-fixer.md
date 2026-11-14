@@ -89,9 +89,10 @@ The worktree itself is always removed.
     It has `bead`, `pr`, `result` (merged; closed-unmerged; reconflicted, when the pushed PR conflicts with main again; requeue-failed, when a queue-pr retry failed), `pushedSha`, `mergeCommit` for a merge, `attemptsUsed` and `hoursSincePush`.
   - The failure codes are fixed: sandbox-refused, claim-refused, unsafe-branch, head-moved, merge-failed, agent-timeout, agent-no-report, agent-unresolved, checks-failed, unmerged-paths, uncommitted-merge, dirty-tree, no-commit, history-rewritten, conflict-markers, main-moved, privacy-failed, review-incomplete, review-p1, pr-moved, pr-labelled, pr-left-queue, owner-check, push-failed, exception and ok.
 - `~/.local/state/brauser-pr-fixer/runs/<bead>-<attempt>-<time>/`: `run.log` (agent and review output), `report.json` (the agent's focused checks), `body.md`.
-  Each pass that is not a dry run first deletes run folders older than `--keep-days` (default 30) with `pruneRuns`, and logs how many it removed.
+  Each pass that is not a dry run, once it holds the lock, deletes run folders older than `--keep-days` (default 30) with `pruneRuns`, and logs how many it removed.
   It never touches `receipts.jsonl`, and refuses symlinks and anything that resolves outside `runs/`.
-  `--keep-days` must be at least 1, because pruning runs before the lock and a shorter window could remove a pass that is still running.
+  `--keep-days` must be at least 1.
+  Pruning runs only under the lock, so it never removes a running pass's folder; the floor guards manual runs.
 - The bead's notes and `fixer_*` metadata (`bd show <id>`).
 - `journalctl --user -u brauser-pr-fixer.service` on the host.
 
