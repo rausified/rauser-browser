@@ -1674,7 +1674,7 @@ impl CaptureStore {
             Err(error) => return Err(error.into()),
         };
         for relocation in read_log_relocations(&self.journal_dir)?.relocations {
-            if !root_identities_match(root, &relocation.root_identity, root_identity)? {
+            if !root_identities_match(root, root_identity, &relocation.root_identity)? {
                 continue;
             }
             let Ok(rest) = relative_log.strip_prefix(&relocation.from) else {

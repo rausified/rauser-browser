@@ -1072,9 +1072,10 @@ pub(crate) fn selected_root_identity(chosen: &Path) -> Result<String> {
 }
 
 /// Compare recovery records only after the caller has checked this opened
-/// root. Different identity formats agree only when both independently name
-/// this very directory; an inode match alone never bridges a legacy device
-/// mismatch. Keep immutable recovery records in their original format.
+/// root against `left`. Different identity formats agree only when both
+/// independently name this directory. An unsupported foreign `right` is a
+/// non-match, while failure to verify `left` still fails closed. Keep
+/// immutable recovery records in their original format.
 pub(crate) fn root_identities_match(root: &Dir, left: &str, right: &str) -> Result<bool> {
     if left == right {
         return Ok(true);
@@ -1086,7 +1087,8 @@ pub(crate) fn root_identities_match(root: &Dir, left: &str, right: &str) -> Resu
     }
     Ok(
         crate::folder_identity::directory_identity(root, Some(left))? == left
-            && crate::folder_identity::directory_identity(root, Some(right))? == right,
+            && crate::folder_identity::directory_identity(root, Some(right))
+                .is_ok_and(|actual| actual == right),
     )
 }
 
