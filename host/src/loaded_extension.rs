@@ -83,7 +83,9 @@ mod tests {
         assert_eq!(value["version"], 1);
         assert_eq!(value["extension_build"], "0.1.0+abcdef012345");
         assert_eq!(value["said_hello_unix"], 1_800_000_000);
-        assert_eq!(value["said_hello_at"], "2027-01-15T08:00:00Z");
+        // RFC 3339 for the same instant as the fixed test clock.
+        let said = OffsetDateTime::parse(value["said_hello_at"].as_str().unwrap(), &Rfc3339);
+        assert_eq!(said.unwrap(), at(1_800_000_000));
     }
 
     #[test]
