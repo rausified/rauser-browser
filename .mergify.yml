@@ -14,9 +14,10 @@
 # How PRs are tested: Mergify builds a batch draft PR on a
 # `mergify/merge-queue/<hex>` branch (main plus up to 3 queued PRs), CI runs on
 # it through ordinary pull_request events, and every PR in the batch merges
-# (each with its own merge commit) once the checks below pass on that draft.
-# Mergify never pushes to a PR's own branch. A PR alone at the front of the
-# queue that already contains main's tip merges at once, with no extra CI run.
+# (each with its own merge commit) once merge_conditions pass on that draft.
+# queue_conditions are checked on each PR itself, before it enters. Mergify
+# never pushes to a PR's own branch. The draft is the only run of Windows
+# before a merge (ci.yml build-windows), so this rule never checks in place.
 #
 # Throughput (2026-11-03: 7 PRs open, ~60 min per PR one at a time):
 # - `batch_size: 3`: one CI run (~40 min with macOS) validates up to 3 PRs.
@@ -80,6 +81,20 @@ queue_rules:
       - or:
           - check-success = Dev tools
           - check-skipped = Dev tools
+    # Checked on the queue draft (main plus the batch), not on the PRs:
+    # Mergify evaluates merge_conditions' check conditions against the draft
+    # ("two-step CI"), and holds the batch until they pass. Without them the
+    # rule had "No extra conditions" for merge: on 2026-11-14 draft #483 was
+    # opened at 08:11:38Z and closed at 08:11:58Z with #479 and #480 merged,
+    # while its CI ran on to fail at 08:20Z, and main's own runs failed too.
+    # The draft's Build and check requires Windows (ci.yml build-windows),
+    # which a plain PR push no longer runs, so this is what keeps Windows a
+    # gate for every merge. Mergify checks a PR in place, without a draft,
+    # only with batch_size 1, max_parallel_checks 1, max_checks_retries 0 and
+    # no separate merge_conditions; this rule meets none of the four.
+    merge_conditions:
+      - check-success = Build and check
+      - check-success = Rust dependency policy
 
 # The `queue` label makes a PR eligible (queue_conditions above); it does not
 # queue it. Queue with an `@Mergifyio queue` comment, posted after the PR's

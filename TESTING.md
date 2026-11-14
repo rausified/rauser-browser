@@ -1732,6 +1732,10 @@ POSIX mode-bit denial, Unix symlinks/device-inode identity, /bin/sh process
 tools, or the Unix-only service. The plist lint test states its macOS plutil
 requirement in its skip reason. CI still runs the shared build on Windows and
 macOS; a Linux-only run supplies no current platform-green evidence.
+Since 2026-11-14 (brwr-3zqd) Windows runs on Mergify's queue drafts and pushes
+to main, not on a PR's own pushes, and macOS only on pushes to main: Windows
+evidence for a change is its queue draft's or main's run, or a manual
+`gh workflow run build-os.yml --ref <branch> -f os=windows-latest`.
 
 The composed panel tests dynamically import the built panel for each case.
 Finish `build:extension` before starting them and do not rebuild `dist` until
