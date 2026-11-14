@@ -63,6 +63,13 @@ queue_rules:
     batch_size: 3
     batch_max_wait_time: 3 min
     max_checks_retries: 1
+    # Explicit, not `auto` (review N1): `auto` sets the timeout from this
+    # queue's recent CI runtimes, and the recent drafts (#464 to #485) met
+    # their empty merge conditions in under a minute. A gated draft needs
+    # about 10-20 min (Windows), so `auto` could time it out, and a timeout
+    # is handled like a failure (retry, then split). 60 min is longer than
+    # any healthy draft and shorter than a hung one.
+    checks_timeout: 60 min
     queue_conditions:
       - base = main
       - label = queue
