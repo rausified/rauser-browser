@@ -319,13 +319,15 @@ impl<'a> Fold<'a> {
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_default();
+                let recorded = recorded_title(title_adapters, &event.url, Some(&event.title));
+                let title = recorded.clone().unwrap_or_else(|| "Untitled".into());
                 let row = artifacts
                     .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
                         artifact_id: artifact_id.clone(),
                         artifact_type: "web.page".into(),
                         site,
-                        title: event.title.clone(),
+                        title: title.clone(),
                         url: event.url.clone(),
                         first_seen: day.clone(),
                         last_seen: day.clone(),
@@ -354,7 +356,9 @@ impl<'a> Fold<'a> {
                 }
                 if at >= row.latest_at {
                     row.latest_at = at;
-                    row.title = event.title.clone();
+                    if let Some(title) = &recorded {
+                        row.title = title.clone();
+                    }
                     row.url = event.url.clone();
                 }
                 visits.push(VisitRow {
@@ -366,7 +370,7 @@ impl<'a> Fold<'a> {
                     background_secs: 0,
                     opens: 1,
                     mode: None,
-                    title: event.title.clone(),
+                    title,
                     url: event.url.clone(),
                     summary: None,
                     contained: false,
@@ -398,13 +402,15 @@ impl<'a> Fold<'a> {
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_default();
+                let recorded = recorded_title(title_adapters, &event.url, Some(&event.title));
+                let title = recorded.clone().unwrap_or_else(|| "Untitled".into());
                 let row = artifacts
                     .entry(artifact_id.clone())
                     .or_insert_with(|| ArtifactRow {
                         artifact_id: artifact_id.clone(),
                         artifact_type: event.artifact_type.clone(),
                         site,
-                        title: event.title.clone(),
+                        title: title.clone(),
                         url: event.url.clone(),
                         first_seen: day.clone(),
                         last_seen: day.clone(),
@@ -430,7 +436,9 @@ impl<'a> Fold<'a> {
                 }
                 if at >= row.latest_at {
                     row.latest_at = at;
-                    row.title = event.title.clone();
+                    if let Some(title) = &recorded {
+                        row.title = title.clone();
+                    }
                     row.url = event.url.clone();
                 }
                 row.summaries.push(event.clone());
@@ -443,7 +451,7 @@ impl<'a> Fold<'a> {
                     background_secs: 0,
                     opens: 0,
                     mode: None,
-                    title: event.title.clone(),
+                    title,
                     url: event.url.clone(),
                     summary: Some(event.clone()),
                     contained: false,
@@ -525,13 +533,24 @@ pub(super) fn container_for(
     Some((within.artifact_type, container_id, origin))
 }
 
-/// A container ID's native part, after `<scheme>:<host>/`: for GitHub,
-/// `owner/repo`.
-/// The title an activity event records: its own, unless the adapter that
-/// matches its URL finds that title generic (adapter-templates.md §9.4), as
-/// a sign-in, password or loading page's is. The extension already omits
-/// such a title; this keeps an older or buggy one, or a title recorded
-/// before the rule, from replacing an artifact's real name.
+/// The title an event records for its artifact: its own, unless the
+/// adapter that matches its URL finds that title generic
+/// (adapter-templates.md §9.4), as a sign-in, password or loading page's
+/// is. The extension already omits such a title; this keeps an older or
+/// buggy one, or a title recorded before the rule, from replacing an
+/// artifact's real name. Activity, M1 visit and summary titles all pass
+/// through here: a summary's title is the page's title when it ran
+/// (extension/summarize.ts), not agent text.
+///
+/// A title that is not generic is kept exactly as sent, never re-extracted
+/// (§9.1). The journal holds raw tab titles and titles the worker already
+/// extracted, with nothing to tell them apart, and extracting again would
+/// cut a real name short (`Team plan - Q4` under `{title} - {~}`).
+///
+/// The adapter judging the title is the one that matches the URL in the
+/// current document, which after an adapter swap may not be the type that
+/// recorded the event: titles are per site and display data (§8.2), so the
+/// current site's list is the right judge.
 pub(super) fn recorded_title(
     adapters: Option<&Document>,
     url: &str,
@@ -545,6 +564,8 @@ pub(super) fn recorded_title(
     (!generic).then(|| title.clone())
 }
 
+/// A container ID's native part, after `<scheme>:<host>/`: for GitHub,
+/// `owner/repo`.
 pub(super) fn container_title(id: &str) -> String {
     let native = id.split_once(':').map_or(id, |(_, rest)| rest);
     native

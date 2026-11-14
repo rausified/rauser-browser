@@ -187,6 +187,47 @@ export function statusLine(snap, decision) {
   return `${snap.state}/${snap.mergeStateStatus} | head ${String(snap.headOid ?? "").slice(0, 8)} | checks ${counts.ok} ok, ${counts.pending} pending, ${counts.failed} failed | mergify ${mergify}${snap.labeled ? "" : ", unlabeled"}\n  -> ${decision.message}`;
 }
 
+/** Run `fn` (sync or async) until it returns, waiting delayMs, 2*delayMs, ... between
+ * failed attempts; after `attempts` failures, throw the last error. pr-watch's poll
+ * loop already retries; this covers the one-off startup lookups, where a single
+ * network blip (e.g. "TLS handshake timeout", 2026-11-14) used to end the watch. */
+/** A network-type failure worth retrying, as opposed to a permanent one (auth, 404, 403). */
+export function isTransient(error) {
+  return /timeout|timed out|connection reset|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|error connecting|HTTP 5\d\d|Bad Gateway|Service Unavailable|Gateway Time-?out/i.test(String(error?.message ?? error));
+}
+
+export async function withRetry(fn, { attempts = 5, delayMs = 15000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = (line) => console.error(line), what = "gh", retryIf = isTransient } = {}) {
+  let last;
+  for (let i = 1; i <= attempts; i++) {
+    try { return await fn(); } catch (error) {
+      last = error;
+      if (i === attempts || !retryIf(error)) break;
+      log(`pr-watch: ${what} failed (${error.message}); retry ${i} of ${attempts - 1}`);
+      await sleep(delayMs * i);
+    }
+  }
+  throw last;
+}
+
+/** trustedAuthors, but a failed user lookup is retried and then fails loudly:
+ * trustedAuthors alone swallows it and silently drops the token's own login, so
+ * pr-watch would ignore that user's queue comments. */
+export async function startupTrusted(repo, { run = gh, log = (line) => console.error(line), ...retry } = {}) {
+  try {
+    return await withRetry(() => {
+      let failed = null;
+      const trusted = trustedAuthors(repo, { run: (args) => { try { return run(args); } catch (error) { failed = error; throw error; } } });
+      // Only a transient failure is retried; a permanent one (an installation token has no
+      // user) keeps trustedAuthors' owner-and-bot fallback, as before.
+      if (failed && isTransient(failed)) throw failed;
+      return trusted;
+    }, { what: "the trusted-author lookup", log, ...retry });
+  } catch (error) {
+    log(`pr-watch: the trusted-author lookup kept failing (${error.message}); trusting the repo owner and bots only`);
+    return trustedAuthors(repo, { run: () => { throw error; } });
+  }
+}
+
 // --- I/O ----------------------------------------------------------------------
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -197,8 +238,9 @@ async function main() {
   let opts;
   try { opts = parseArgs(process.argv.slice(2)); } catch (error) { console.error(`${error.message}\n${USAGE}`); return EXIT.USAGE; }
   if (opts.help) { console.log(USAGE); return EXIT.DONE; }
-  const repo = opts.repo ?? gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
-  const trusted = trustedAuthors(repo);
+  const startupRetry = opts.once ? { attempts: 1 } : {};
+  const repo = opts.repo ?? await withRetry(() => gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim(), { what: "gh repo view", ...startupRetry });
+  const trusted = await startupTrusted(repo, startupRetry);
   const started = Date.now();
   const state = { dirtySince: null, idleSince: null };
   let lastLine = null, lastHead = null, lastAction = null;

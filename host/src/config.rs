@@ -34,8 +34,10 @@ thread_local! {
 use crate::brand::APP_NAME;
 use crate::index::ArtifactIndex;
 use crate::layout;
+#[cfg(test)]
+use crate::vault::selected_root_identity;
 use crate::vault::{
-    STALE_TEMPORARY_AGE, Vault, is_generated_temporary, open_selected_root, selected_root_identity,
+    STALE_TEMPORARY_AGE, SelectedRootChanged, Vault, is_generated_temporary, open_selected_root,
 };
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
@@ -1480,10 +1482,7 @@ impl ConfigStore {
                             .flatten()
                     })
                     .context("a fresh native folder selection is required")?;
-                let actual = selected_root_identity(Path::new(&storage.root))?;
-                if actual != expected {
-                    bail!("selected home folder changed; choose it again");
-                }
+                let (_, actual) = open_selected_root(Path::new(&storage.root), Some(expected))?;
                 Some(actual)
             }
         };
@@ -1504,10 +1503,9 @@ impl ConfigStore {
                     // A fresh picker selection: the folder must still be the
                     // one the user chose.
                     Some(expected) => {
-                        let actual = selected_root_identity(Path::new(knowledge_base))?;
-                        if actual != expected {
-                            bail!("selected knowledge base folder changed; choose it again");
-                        }
+                        let (_, actual) =
+                            open_selected_root(Path::new(knowledge_base), Some(expected))
+                                .context("The selected knowledge base folder could not be verified; choose it again.")?;
                         Some(actual)
                     }
                     // Unchanged: carry the recorded identity without touching
@@ -1967,23 +1965,28 @@ fn read_disk_state(path: &Path) -> Result<DiskState> {
                     retired_adapter_contracts,
                 });
             }
-            // The settings themselves are valid. A folder that is missing or
-            // no longer matches its stored identity (an unmounted drive, or a
-            // remount with a new device number) blocks vault I/O and needs
-            // reselection, but it must not discard the allowlist: keep every
-            // setting for the repair, which rewrites the file with a fresh
-            // identity, so there is nothing to back up.
-            let folder_changed = config.storage.as_ref().is_some_and(|storage| {
-                match selected_root_identity(Path::new(&storage.root)) {
-                    Ok(actual) => Some(actual.as_str()) != root_identity.as_deref(),
-                    Err(_) => true,
+            // Keep valid settings while the selected folder cannot be used.
+            // Legacy identities still require their full device-and-inode
+            // match; only a new native selection upgrades their format.
+            let issue = config.storage.as_ref().and_then(|storage| {
+                match open_selected_root(Path::new(&storage.root), root_identity.as_deref()) {
+                    Ok(_) => layout_issue(storage),
+                    Err(error) => {
+                        let changed = error.downcast_ref::<SelectedRootChanged>().is_some();
+                        tracing::warn!(
+                            root = %storage.root,
+                            changed,
+                            error = %format!("{error:#}"),
+                            "selected home folder check failed"
+                        );
+                        Some(if changed {
+                            "The selected home folder no longer matches its saved identity. Choose it again in settings; your other settings are kept."
+                        } else {
+                            "The selected home folder could not be opened or verified. Reconnect it or check its permissions, then try again; your other settings are kept."
+                        }.to_owned())
+                    }
                 }
             });
-            let issue = if folder_changed {
-                Some("The selected home folder is unavailable or changed. Reconnect it, or choose it again to repair this configuration; your other settings are kept.".to_owned())
-            } else {
-                config.storage.as_ref().and_then(layout_issue)
-            };
             Ok(DiskState {
                 config,
                 revision,
@@ -9593,6 +9596,77 @@ threshold = nan
         assert_eq!(backup_count(base.path()), 0);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_folder_identity_stays_exact_until_native_reselection() {
+        use std::os::unix::fs::MetadataExt;
+
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("selected");
+        fs::create_dir(&root).unwrap();
+        let path = base.path().join("config.toml");
+        let mut store = ConfigStore::for_test(path.clone());
+        let config = ConfigSnapshot {
+            storage: Some(StorageConfig {
+                root: root.to_string_lossy().into_owned(),
+                profile: "neutral".into(),
+                log_dir: "logs".into(),
+                pages_dir: "notes".into(),
+                later_dir: "later".into(),
+                artifacts_dir: "artifacts".into(),
+                summaries_dir: Some("summaries".into()),
+                knowledge_base_dir: None,
+            }),
+            ..empty_config()
+        };
+        let metadata = fs::metadata(&root).unwrap();
+        let legacy = format!("unix:{:016x}:{:016x}", metadata.dev(), metadata.ino());
+        store
+            .update_with_root_identity(config.clone(), MISSING_REVISION, Some(&legacy))
+            .unwrap()
+            .unwrap();
+        store.refresh().unwrap();
+        assert!(store.configured());
+        assert_eq!(store.root_identity(), Some(legacy.as_str()));
+        // An unrelated save preserves the recorded legacy identity. Pending
+        // capture records can still refer to it without any journal rewrite.
+        let mut paused = config.clone();
+        paused.capture_enabled = false;
+        let revision = store.revision().to_owned();
+        store.update(paused.clone(), &revision).unwrap().unwrap();
+        assert_eq!(store.root_identity(), Some(legacy.as_str()));
+
+        // An old record cannot identify its original volume once st_dev
+        // changes. An inode match alone must never silently authorize it.
+        let stale = format!("unix:{:016x}:{:016x}", metadata.dev() ^ 1, metadata.ino());
+        let mut table: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        table["root_identity"] = toml::Value::String(stale);
+        fs::write(&path, toml::to_string_pretty(&table).unwrap()).unwrap();
+        store.refresh().unwrap();
+        assert!(!store.configured());
+        assert!(store.config_issue().unwrap().contains("no longer matches"));
+        assert_eq!(store.snapshot(), &paused);
+        let revision = store.revision().to_owned();
+        assert!(store.update(paused.clone(), &revision).is_err());
+
+        // A fresh native-picker identity repairs the same configured folder
+        // once, preserving all other settings and requiring no backup.
+        let stable = selected_root_identity(&root).unwrap();
+        assert!(
+            stable.starts_with("macos:"),
+            "expected an APFS volume UUID: {stable}"
+        );
+        store
+            .update_with_root_identity(paused.clone(), &revision, Some(&stable))
+            .unwrap()
+            .unwrap();
+        store.refresh().unwrap();
+        assert!(store.configured());
+        assert_eq!(store.root_identity(), Some(stable.as_str()));
+        assert_eq!(store.snapshot(), &paused);
+        assert_eq!(backup_count(base.path()), 0);
+    }
+
     #[test]
     fn remounted_or_missing_folder_keeps_settings_without_a_backup() {
         // An external or network volume can disappear, or come back with a
@@ -9628,6 +9702,12 @@ threshold = nan
         fs::rename(&root, &away).unwrap();
         store.refresh().unwrap();
         assert!(store.config_issue().is_some());
+        assert!(
+            store
+                .config_issue()
+                .unwrap()
+                .contains("could not be opened")
+        );
         assert!(!store.configured());
         assert_eq!(store.snapshot(), &config);
         assert_eq!(store.root_identity(), Some(identity.as_str()));

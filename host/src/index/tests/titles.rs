@@ -147,3 +147,100 @@ fn a_replayed_generic_title_adds_no_mention() {
         "Untitled"
     );
 }
+
+// timing-ok: fixed event instants that order two events, never the clock.
+const FIRST: &str = "2026-10-15T09:00:00Z";
+// timing-ok: fixed event instants that order two events, never the clock.
+const LATER: &str = "2026-10-15T10:00:00Z";
+
+/// The title an artifact takes from its events, folded straight from
+/// `events` under `work_document`.
+fn folded_title(events: Vec<EventData>) -> String {
+    let document = work_document();
+    let mut fold = Fold::new(Some(&document));
+    for data in events {
+        fold.apply(&data.into());
+    }
+    fold.finish().artifacts["work:example.com/A1"].title.clone()
+}
+
+fn legacy(n: u32, title: &str, at: &str) -> EventData {
+    EventData::Legacy(LegacyVisit {
+        marker_id: format!("00000000-0000-4000-8000-{n:012}"),
+        artifact_id: "work:example.com/A1".into(),
+        occurred_at: at.into(),
+        url: "https://example.com/items/A1".into(),
+        title: title.into(),
+    })
+}
+
+fn summary(title: &str, at: &str) -> EventData {
+    let mut event = adapter_summary(
+        "work:example.com/A1",
+        "work.item",
+        "https://example.com/items/A1",
+        at,
+    );
+    event.title = title.into();
+    EventData::Summary(event)
+}
+
+/// A stored title is kept as sent, never extracted again. The journal holds
+/// titles the worker already extracted (`Roadmap - Acme` from the tab
+/// `Roadmap - Acme - Acme`) beside raw ones, and the adapter fingerprint
+/// change refolds them all: extracting again would cut the real name short.
+#[test]
+fn a_replayed_title_is_never_extracted_again() {
+    for title in ["Roadmap - Acme", "Plan - Acme", "Plan"] {
+        assert_eq!(
+            folded_title(vec![EventData::Activity(titled(1, Some(title), FIRST))]),
+            title
+        );
+    }
+}
+
+/// An M1 visit stored with a gate title never renames an artifact (brwr-yf13),
+/// and one seen only behind a gate is "Untitled", as for activity.
+#[test]
+fn a_generic_legacy_visit_title_never_replaces_the_artifact_name() {
+    assert_eq!(
+        folded_title(vec![
+            EventData::Activity(titled(1, Some("Plan - Acme"), FIRST)),
+            legacy(2, "Sign in - Acme", LATER),
+        ]),
+        "Plan - Acme"
+    );
+    assert_eq!(
+        folded_title(vec![legacy(2, "Sign in - Acme", LATER)]),
+        "Untitled"
+    );
+    assert_eq!(
+        folded_title(vec![legacy(2, "Plan v2 - Acme", LATER)]),
+        "Plan v2 - Acme"
+    );
+}
+
+/// A summary's title is the page title when it ran (extension/summarize.ts),
+/// not agent text, so a summary taken on a gate page never renames an
+/// artifact either, and a real one still does, as sent.
+#[test]
+fn a_generic_summary_title_never_replaces_the_artifact_name() {
+    assert_eq!(
+        folded_title(vec![
+            EventData::Activity(titled(1, Some("Plan - Acme"), FIRST)),
+            summary("Sign in - Acme", LATER),
+        ]),
+        "Plan - Acme"
+    );
+    assert_eq!(
+        folded_title(vec![summary("Sign in - Acme", LATER)]),
+        "Untitled"
+    );
+    assert_eq!(
+        folded_title(vec![
+            EventData::Activity(titled(1, Some("Plan - Acme"), FIRST)),
+            summary("Plan v2 - Acme", LATER),
+        ]),
+        "Plan v2 - Acme"
+    );
+}

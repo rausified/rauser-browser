@@ -299,7 +299,7 @@ impl Container {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Adapter {
     pub(crate) artifact_type: String,
     pub(crate) origin: String,
@@ -317,34 +317,6 @@ pub struct Adapter {
     pub(crate) scope: Option<Vec<(String, Vec<String>)>>,
     pub(crate) fields: Vec<(String, String)>,
     pub(crate) within: Option<Container>,
-}
-
-/// Written out so an adapter without `generic_titles` prints exactly as the
-/// derived form did before the field existed: the host fingerprints a
-/// document by its `Debug` text (`index::adapters_fingerprint`), and a new
-/// optional key must not mark every existing user's index as built under
-/// another document.
-impl std::fmt::Debug for Adapter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = f.debug_struct("Adapter");
-        s.field("artifact_type", &self.artifact_type)
-            .field("origin", &self.origin)
-            .field("host", &self.host)
-            .field("insensitive", &self.insensitive)
-            .field("rules", &self.rules)
-            .field("id", &self.id)
-            .field("titles", &self.titles);
-        if !self.generic_titles.is_empty() {
-            s.field("generic_titles", &self.generic_titles);
-        }
-        s.field("alias", &self.alias)
-            .field("refs", &self.refs)
-            .field("modes", &self.modes)
-            .field("scope", &self.scope)
-            .field("fields", &self.fields)
-            .field("within", &self.within)
-            .finish()
-    }
 }
 
 impl Adapter {
@@ -381,9 +353,34 @@ impl Adapter {
 }
 
 /// A validated adapter document.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct Document {
     pub(crate) adapters: Vec<Adapter>,
+    /// The source value's [`Value::canonical_json`], kept for
+    /// [`Document::canonical_json`].
+    canonical: String,
+}
+
+/// The canonical text of a document with no adapters, so the empty default
+/// fingerprints as `{"format": 1, "artifacts": []}` does.
+const EMPTY_CANONICAL: &str = r#"{"artifacts":[],"format":1}"#;
+
+impl Default for Document {
+    fn default() -> Self {
+        Document {
+            adapters: Vec::new(),
+            canonical: EMPTY_CANONICAL.to_owned(),
+        }
+    }
+}
+
+/// The adapters only: the canonical text repeats them.
+impl std::fmt::Debug for Document {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Document")
+            .field("adapters", &self.adapters)
+            .finish()
+    }
 }
 
 impl Document {
@@ -394,6 +391,16 @@ impl Document {
 
     pub fn adapters(&self) -> &[Adapter] {
         &self.adapters
+    }
+
+    /// The document as it was given, as canonical JSON (sorted keys, no white
+    /// space): the content the host fingerprints its index by
+    /// (`index::adapters_fingerprint`). It changes exactly when the source
+    /// content does, never with key order or with how a Rust type prints,
+    /// so a new optional adapter key does not change it for a document that
+    /// does not use the key.
+    pub fn canonical_json(&self) -> &str {
+        &self.canonical
     }
 }
 
@@ -519,7 +526,10 @@ fn validate_document(doc: &Value) -> VResult<Document> {
         .enumerate()
         .map(|(i, a)| validate_adapter(a, At::adapter(i)))
         .collect::<VResult<Vec<_>>>()?;
-    Ok(Document { adapters })
+    Ok(Document {
+        adapters,
+        canonical: doc.canonical_json(),
+    })
 }
 
 fn is_adapter_type(s: &str) -> bool {
@@ -1215,20 +1225,32 @@ mod tests {
         Document::from_value(&serde_json::from_str(json).unwrap())
     }
 
-    /// The host fingerprints a document by its `Debug` text, so an adapter
-    /// without `generic_titles` must print as it did before the key existed,
-    /// and one with it must print differently.
+    /// The canonical text is the source content: key order does not change
+    /// it, content does, and an adapter that omits an optional key (here
+    /// `generic_titles`) gives the same text it did before the key existed.
     #[test]
-    fn generic_titles_change_the_debug_text_only_when_present() {
+    fn canonical_json_follows_the_source_content() {
         let base = r#"{"format": 1, "artifacts": [{"type": "a.item", "origin": "https://a.example.com", "match": [{"path": "/i/{id:int}"}], "id": "a:{host}/{id}"#;
-        let without = format!("{:?}", doc(&format!("{base}\"}}]}}")).unwrap());
-        assert!(!without.contains("generic_titles"));
-        assert!(without.contains("titles: [], alias: None,"));
-        let with = format!(
-            "{:?}",
-            doc(&format!("{base}\", \"generic_titles\": [\"Sign in\"]}}]}}")).unwrap()
+        let without = doc(&format!("{base}\"}}]}}")).unwrap();
+        assert_eq!(
+            without.canonical_json(),
+            r#"{"artifacts":[{"id":"a:{host}/{id}","match":[{"path":"/i/{id:int}"}],"origin":"https://a.example.com","type":"a.item"}],"format":1}"#
         );
-        assert!(with.contains("generic_titles: [\"sign in\"]"));
+        let reordered = doc(r#"{"artifacts": [{"id": "a:{host}/{id}", "origin": "https://a.example.com", "type": "a.item", "match": [{"path": "/i/{id:int}"}]}], "format": 1}"#).unwrap();
+        assert_eq!(reordered.canonical_json(), without.canonical_json());
+        let with = doc(&format!("{base}\", \"generic_titles\": [\"Sign in\"]}}]}}")).unwrap();
+        assert_ne!(with.canonical_json(), without.canonical_json());
+        // The source spelling is kept, not the folded comparison form.
+        assert!(
+            with.canonical_json()
+                .contains(r#""generic_titles":["Sign in"]"#)
+        );
+    }
+
+    #[test]
+    fn the_default_document_is_canonically_the_empty_document() {
+        let empty = doc(r#"{"format": 1, "artifacts": []}"#).unwrap();
+        assert_eq!(Document::default().canonical_json(), empty.canonical_json());
     }
 
     #[test]

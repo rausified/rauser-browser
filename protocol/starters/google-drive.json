@@ -176,6 +176,32 @@
           "url": "https://drive.google.com/drive/u/1/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
         },
         {
+          "id": "eval.google.drivefolder.account_title",
+          "kind": "evaluate",
+          "why": "account-slot route with share params and the en dash title: same ID, folder name",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 1, "type": "google.drivefolder", "captures": {"id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"}, "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345", "mode": null, "title": "Team Templates", "title_entry": 1, "alias_id": null, "refs": []},
+          "url": "https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345?usp=sharing",
+          "title": "Team Templates – Google Drive"
+        },
+        {
+          "id": "eval.google.drivefolder.account_error_title",
+          "kind": "evaluate",
+          "why": "account-slot route on an access-denied page: generic title, no title",
+          "impls": ["rust", "ts"],
+          "expect": {"match": true, "adapter": 0, "rule": 1, "type": "google.drivefolder", "captures": {"id": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"}, "artifact_id": "google.drivefolder:drive.google.com/1AbCdEfGhIjKlMnOpQrStUvWxYz012345", "mode": null, "title": null, "title_entry": null, "alias_id": null, "refs": []},
+          "url": "https://drive.google.com/drive/u/2/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+          "title": "Login"
+        },
+        {
+          "id": "eval.google.drivefolder.account_nested",
+          "kind": "evaluate",
+          "why": "account-slot route with an extra segment after the folder ID",
+          "impls": ["rust", "ts"],
+          "expect": {"match": false, "reason": "no_rule"},
+          "url": "https://drive.google.com/drive/u/1/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/extra"
+        },
+        {
           "id": "eval.google.drivefolder.legacy_id",
           "kind": "evaluate",
           "why": "older shorter folder ID",

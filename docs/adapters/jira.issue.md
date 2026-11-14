@@ -53,6 +53,10 @@ and account pages and the app shell instead of the item's own name
 aside, or is empty or the bare host, records no title, so the artifact keeps
 the title it already has ("Untitled" for a new one).
 
+One list covers both the title the template extracts and the whole-title
+fallback (§9.4), so an issue whose own summary is `Jira` also records no
+title. No recorded title had such a name when the list was set.
+
 Known limits: the board-modal rule accepts `selectedIssue` on any `/jira/`
 route, and its tab title does not update to the issue at all (the sample
 above records `title: null` for it), so that visit's title is always the

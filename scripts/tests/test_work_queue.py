@@ -352,7 +352,10 @@ class DoltIntegrationTests(unittest.TestCase):
         # .beads/config.yaml (a blank line dropped, sync.remote added), which
         # left the live checkout dirty and blocked deploy-live (2026-11-09).
         self.seed(bead("brwr-a1"))
-        committed = (SCRIPTS.parent / ".beads" / "config.yaml").read_bytes()
+        # Never inherit a configured production sync.remote from the checkout.
+        # The missing remote and blank line exercise bootstrap's rewrite and
+        # byte-for-byte restoration against this test's scratch Git remote.
+        committed = b'issue-prefix: "brwr"\n\nexport:\n    auto: false\n'
         (self.a / ".beads" / "config.yaml").write_bytes(committed)
         self.git(self.a, "add", ".beads/config.yaml")
         self.git(self.a, "commit", "-qm", "config")
@@ -360,6 +363,7 @@ class DoltIntegrationTests(unittest.TestCase):
         b = self.clone("b")
         out = self.ok(b, "bootstrap")
         self.assertIn("kept .beads/config.yaml as it was before bootstrap", out)  # bd did rewrite it
+        self.assertIn(f"Dolt remote origin: {self.url}", out)
         self.assertEqual((b / ".beads" / "config.yaml").read_bytes(), committed)
         self.assertEqual(self.git(b, "status", "--porcelain", "--untracked-files=no"), "", out)
         self.assertIn("brwr-a1", self.exported(b))

@@ -2224,6 +2224,28 @@ cancellation, explicit choice/default, and removed-folder Reuse;
 older hosts. The a11y fixture includes the new list reply. Real native-picker,
 Chrome selector and platform acceptance remain separate human checks.
 
+## Selected-folder identity
+
+New macOS native-picker selections use a persistent filesystem volume UUID
+and directory ID. `folder_identity::tests` exercises simulated device-number
+changes, different volumes/directories, legacy exact matching and unavailable
+UUIDs; its macOS integration check reads a real local volume through the native
+reader. Configuration tests also cover a stale legacy identity, preserving all
+settings and upgrading it through a fresh selection.
+
+Run `cargo test --locked -p brauser --lib folder_identity::` and
+`cargo test --locked -p brauser --lib legacy_folder_identity_stays_exact_until_native_reselection`.
+The capture suite covers interrupted legacy single-event and batch records
+after a stable reselection of the same folder. Legacy identities remain valid
+only while both their original device number and inode match; a matching inode
+on a different device is not evidence of the original volume.
+
+These checks do not reboot or unmount the user's disks. A physical reboot or
+remount is separate acceptance evidence. An already-stale legacy selection
+requires one native-picker reselection for each affected home, knowledge-base
+or task folder. Downgrading to an older host requires reselection with that
+host; it cannot verify persistent identities in newer recovery records.
+
 ## macOS release packaging
 
 `packaging/macos/` builds the macOS release (DESIGN.md §11 "macOS app" and

@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,6 +15,9 @@ import {
   SANDBOX_ARGS, defaultSecretPaths, maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
 } from "../dev/pr-fixer.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
+import { parseReceipts, summarizeReceipts } from "../dev/pr-fixer-report.mjs";
+// Receipts, format v2 (a separate import so it does not collide with other changes to the list above).
+import { hoursBetween, loggedOutcomesOf, parseTokens } from "../dev/pr-fixer.mjs";
 
 const HEAD = "0123456789abcdef0123456789abcdef01234567";
 const bead = (over = {}) => ({ id: "brwr-x1", status: "open", assignee: "", labels: ["pr-keeper"], external_ref: `gh-pr-7-${HEAD.slice(0, 12)}`, ...over });
@@ -88,7 +91,8 @@ test("the sandbox has its own PID namespace and procfs, so the runner's environ 
 test("defaultSecretPaths hides the whole config directory, not a list of known tools", () => {
   // Other tools' tokens live there too (a worker's GitHub token, a beacon's keys): mask it all.
   const paths = defaultSecretPaths("/h");
-  for (const p of ["/h/.config", "/h/.ssh", "/h/.git-credentials", "/h/.netrc"]) assert.ok(paths.includes(p), p);
+  // path.join, as the code uses: "\\h\\.config" on Windows, "/h/.config" elsewhere.
+  for (const p of [".config", ".ssh", ".git-credentials", ".netrc"].map((f) => join("/h", f))) assert.ok(paths.includes(p), p);
   assert.ok(defaultSecretPaths("/h", { XDG_CONFIG_HOME: "/x/conf" }).includes("/x/conf"));
   assert.ok(defaultSecretPaths("/h", {}, ["/opt/w/token"]).includes("/opt/w/token"), "--secret-path adds a host-specific path");
 });
@@ -122,11 +126,14 @@ test("conflictMarkers finds leftover markers, not ordinary rules", () => {
 });
 
 test("reviewVerdict fails on a P1 and on an empty review", () => {
-  assert.deepEqual(reviewVerdict("- [P2] Nit — a.js:3\n"), { ok: true, p1: [] });
+  assert.deepEqual(reviewVerdict("- [P2] Nit — a.js:3\n"), { ok: true, p1: [], counts: { p1: 0, p2: 1, p3: 0 } });
   const bad = reviewVerdict("Findings:\n- [P1] Drops main's guard — a.js:9\n- [P3] x\n");
   assert.equal(bad.ok, false);
+  assert.equal(bad.code, "review-p1");
   assert.deepEqual(bad.p1, ["- [P1] Drops main's guard — a.js:9"]);
+  assert.deepEqual(bad.counts, { p1: 1, p2: 0, p3: 1 });
   assert.equal(reviewVerdict("   ").ok, false);
+  assert.equal(reviewVerdict("   ").code, "review-incomplete");
 });
 
 test("reportVerdict needs resolved true and every listed check passed", () => {
@@ -135,6 +142,30 @@ test("reportVerdict needs resolved true and every listed check passed", () => {
   assert.match(reportVerdict({ resolved: false, reason: "needs the author" }).reason, /needs the author/);
   assert.match(reportVerdict({ resolved: true, checks: [] }).reason, /no focused check/);
   assert.match(reportVerdict({ resolved: true, checks: [{ command: "cargo test", passed: false }] }).reason, /cargo test/);
+  // Each failure carries its fixed receipt code.
+  assert.equal(reportVerdict(null).code, "agent-no-report");
+  assert.equal(reportVerdict({ resolved: false }).code, "agent-unresolved");
+  assert.equal(reportVerdict({ resolved: true, checks: [] }).code, "checks-failed");
+  assert.equal(reportVerdict({ resolved: true, checks: [{ command: "x", passed: false }] }).code, "checks-failed");
+});
+
+test("parseTokens reads the agent's last token count, or null", () => {
+  assert.equal(parseTokens("working...\ntokens used\n12,345\n"), 12345);
+  assert.equal(parseTokens("tokens used: 10\nmore\nTokens used 2,000"), 2000);
+  assert.equal(parseTokens("no count here"), null);
+  assert.equal(parseTokens(undefined), null);
+});
+
+test("hoursBetween measures from the push time, or null without one", () => {
+  // timing-ok: fixture timestamps compared with each other, never with the real clock
+  assert.equal(hoursBetween("2026-11-13T00:00:00Z", "2026-11-13T03:30:00Z"), 3.5);
+  assert.equal(hoursBetween(undefined, "2026-11-13T03:30:00Z"), null); // timing-ok: fixture timestamp
+  assert.equal(hoursBetween("not a date", "2026-11-13T03:30:00Z"), null); // timing-ok: fixture timestamp
+});
+
+test("loggedOutcomesOf reads the outcome markers from metadata", () => {
+  assert.deepEqual(loggedOutcomesOf(bead()), []);
+  assert.deepEqual(loggedOutcomesOf(bead({ metadata: { fixer_outcome_logged: "abc:merged,def:reconflicted" } })), ["abc:merged", "def:reconflicted"]);
 });
 
 test("upsertFixerNote adds one marked block, replaces it, and keeps the Owner line", () => {
@@ -226,8 +257,9 @@ if(A[0]==="pr"&&A[1]==="edit"){s.body=fs.readFileSync(A[A.indexOf("--body-file")
 process.exit(1);`);
   // The agent and the review are one fake `codex`: `codex exec review ...` and `codex exec ... -`.
   script(bin, "codex", `${common}const cp=require("child_process");
+if(A[0]==="--version"){process.stdout.write("codex-cli 0.0.0-test\\n");process.exit(0)}
 if(A[1]==="review"){log("review",...A);process.stdout.write(process.env.FAKE_REVIEW);process.exit(0)}
-log("agent",process.env.GH_TOKEN?"token-leaked":"no-token");
+log("agent",process.env.GH_TOKEN?"token-leaked":"no-token");process.stderr.write("tokens used\\n1,234\\n");
 const prompt=fs.readFileSync(0,"utf8");const report=process.env.PR_FIXER_REPORT;if(!prompt.includes(report))process.exit(3);
 if(process.env.FAKE_RESOLVES!=="1"){fs.writeFileSync(report,JSON.stringify({resolved:false,checks:[],reason:"needs the PR author's judgment"}));process.exit(0)}
 fs.writeFileSync("a.txt","pr side\\nmain side\\n");
@@ -243,6 +275,9 @@ const r=require("child_process").spawnSync(A[i+1],A.slice(i+2),{cwd:A[c+1],stdio
   const originHead = () => git(tools, "ls-remote", "origin", "refs/heads/feature").split(/\s/)[0];
   return { root, env, tools, prHead, commands, read, git, state, originHead, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+const receipts = (w) => readFileSync(join(w.root, "work", "receipts.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); // crlf-ok: a file the test wrote, never checked out
+const ofKind = (w, kind) => receipts(w).filter((r) => r.kind === kind);
 
 const pass = (w, over = {}) => runPass({
   repo: "owner/name", toolsRoot: w.tools, workRoot: join(w.root, "work"), queueWorkspace: w.root, env: w.env,
@@ -388,4 +423,214 @@ test("a queue request that failed after the push is retried on the next pass", P
   assert.ok(!w.read("pr").labels.includes("needs-merge"));
   assert.equal(w.read("beads")[0].metadata.fixer_queue_status, "0");
   assert.equal(w.read("calls").filter((c) => c[0] === "queuePr").length, 1);
+});
+
+// --- Receipts, format v2 -----------------------------------------------------
+
+test("a pushed repair writes a repair line, a v2 pass line, and later a merged outcome", POSIX, async (t) => {
+  const w = world({ review: "No findings.\n- [P2] a nit\n- [P3] a style note\n" });
+  t.after(w.cleanup);
+  await pass(w);
+  const pushed = w.originHead();
+  const [rep] = ofKind(w, "repair");
+  assert.deepEqual(
+    { ...rep, durationsMs: undefined },
+    {
+      v: 2, kind: "repair", at: "2026-11-13T00:00:00Z", bead: "brwr-x1", pr: 7, attempt: 1, maxAttempts: 2, outcome: "pushed", code: "ok", // timing-ok: the injected clock
+      reason: `pushed ${pushed}`, files: ["a.txt"], changedFiles: 1, agent: "codex", agentVersion: "codex-cli 0.0.0-test", tokens: 1234,
+      durationsMs: undefined, review: { p1: 0, p2: 1, p3: 1 }, sha: pushed, queueStatus: 0, exhausted: false,
+    },
+  );
+  for (const k of ["agent", "review", "total"]) assert.ok(Number.isInteger(rep.durationsMs[k]) && rep.durationsMs[k] >= 0, k);
+  const [p] = ofKind(w, "pass");
+  assert.equal(p.v, 2);
+  assert.equal(p.outcome, "pushed");
+  assert.equal(p.code, undefined, "code only on refused and claim-refused");
+  assert.ok(Number.isInteger(p.durationMs));
+  assert.deepEqual(receipts(w).map((r) => r.kind), ["repair", "pass"], "the repair line comes before the pass line");
+  assert.equal(w.read("beads")[0].metadata.fixer_pushed_at, "2026-11-13T00:00:00Z"); // timing-ok: the injected clock
+
+  w.state("pr", { ...w.read("pr"), state: "MERGED", mergeCommit: { oid: "feedface" } });
+  // timing-ok: an injected clock 5.5 hours after the push; nothing compares it with the real time
+  await pass(w, { now: () => "2026-11-13T05:30:00Z" });
+  const outcomes = ofKind(w, "outcome");
+  assert.equal(outcomes.length, 1);
+  assert.deepEqual(outcomes[0], {
+    v: 2, kind: "outcome", at: "2026-11-13T05:30:00Z", bead: "brwr-x1", pr: 7, result: "merged", pushedSha: pushed, mergeCommit: "feedface", // timing-ok: the injected clock
+    attemptsUsed: 1, hoursSincePush: 5.5,
+  });
+  assert.equal(ofKind(w, "pass").at(-1).outcome, "closed");
+  assert.equal(ofKind(w, "pass").at(-1).closed, 1);
+});
+
+test("a PR closed unmerged after a push gets a closed-unmerged outcome; a never-pushed bead gets none", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  await pass(w);
+  w.state("pr", { ...w.read("pr"), state: "CLOSED" });
+  await pass(w);
+  const [o] = ofKind(w, "outcome");
+  assert.equal(o.result, "closed-unmerged");
+  assert.equal(o.mergeCommit, undefined);
+  assert.equal(o.hoursSincePush, 0);
+
+  const never = world({ agentResolves: false });
+  t.after(never.cleanup);
+  never.state("pr", { ...never.read("pr"), state: "CLOSED" });
+  await pass(never);
+  assert.deepEqual(ofKind(never, "outcome"), []);
+});
+
+test("failed repairs carry their fixed code: review-p1 with counts, exhausted on the last attempt", POSIX, async (t) => {
+  const w = world({ review: "- [P1] Drops main's line — a.txt:1\n- [P2] x\n" });
+  t.after(w.cleanup);
+  await pass(w);
+  await pass(w);
+  const reps = ofKind(w, "repair");
+  assert.deepEqual(reps.map((r) => [r.outcome, r.code, r.attempt, r.exhausted]), [["failed", "review-p1", 1, false], ["failed", "review-p1", 2, true]]);
+  assert.deepEqual(reps[0].review, { p1: 1, p2: 1, p3: 0 });
+  assert.equal(reps[0].sha, undefined);
+  assert.equal(reps[0].queueStatus, undefined);
+  assert.match(reps[0].reason, /P1/);
+  assert.ok(reps[0].reason.length <= 300);
+});
+
+test("an agent that cannot resolve is agent-unresolved, with no review and no changed-file count", POSIX, async (t) => {
+  const w = world({ agentResolves: false });
+  t.after(w.cleanup);
+  await pass(w);
+  const [r] = ofKind(w, "repair");
+  assert.equal(r.code, "agent-unresolved");
+  assert.equal(r.review, null);
+  assert.equal(r.changedFiles, null);
+  assert.equal(r.durationsMs.review, null);
+  assert.ok(Number.isInteger(r.durationsMs.agent));
+  assert.deepEqual(r.files, ["a.txt"]);
+});
+
+test("a PR that moves or leaves the queue mid-repair, or fails the privacy scan, has its own code", POSIX, async (t) => {
+  const moved = world();
+  t.after(moved.cleanup);
+  moved.commands.privacy = [process.execPath, ["-e", `const fs=require("fs"),p=require("path");const f=p.join(process.env.FAKE_ROOT,"pr.json");const s=JSON.parse(fs.readFileSync(f,"utf8"));s.headRefOid="${"f".repeat(40)}";fs.writeFileSync(f,JSON.stringify(s));`]];
+  await pass(moved);
+  assert.equal(ofKind(moved, "repair")[0].code, "pr-moved");
+
+  const out = world();
+  t.after(out.cleanup);
+  out.commands.privacy = [process.execPath, ["-e", `const fs=require("fs"),p=require("path");const f=p.join(process.env.FAKE_ROOT,"pr.json");const s=JSON.parse(fs.readFileSync(f,"utf8"));s.labels=s.labels.filter(l=>l!=="queue");fs.writeFileSync(f,JSON.stringify(s));`]];
+  await pass(out);
+  assert.equal(ofKind(out, "repair")[0].code, "pr-left-queue");
+
+  const privacy = world();
+  t.after(privacy.cleanup);
+  privacy.commands.privacy = [process.execPath, ["-e", "process.exit(1)"]];
+  await pass(privacy);
+  assert.equal(ofKind(privacy, "repair")[0].code, "privacy-failed");
+});
+
+test("an agent whose --version fails is recorded with a null version", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  const run = (cmd, args, o = {}) => {
+    if (args[0] === "--version") return { status: 127, stdout: "", stderr: "not found" };
+    const r = spawnSync(cmd, args, { ...o, encoding: "utf8" });
+    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  };
+  await pass(w, { run });
+  const [r] = ofKind(w, "repair");
+  assert.equal(r.code, "ok");
+  assert.equal(r.agentVersion, null);
+});
+
+test("a pushed bead chosen for repair again writes one reconflicted outcome", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  await pass(w);
+  const pushed = w.originHead();
+  // GitHub reports a conflict at the fixer's own head again (main moved).
+  w.state("pr", { ...w.read("pr"), headRefOid: pushed, mergeable: "CONFLICTING" });
+  await pass(w);
+  const [o] = ofKind(w, "outcome");
+  assert.equal(o.result, "reconflicted");
+  assert.equal(o.pushedSha, pushed);
+  assert.equal(o.attemptsUsed, 1);
+  assert.equal(w.read("beads")[0].metadata.fixer_outcome_logged, `${pushed}:reconflicted`);
+  // The second attempt has nothing to merge, so the agent commits nothing and writes no report.
+  assert.equal(ofKind(w, "repair")[1].code, "agent-no-report");
+  assert.equal(ofKind(w, "outcome").length, 1);
+
+  // A push on the last allowed attempt leaves the bead exhausted: its reconflict is still recorded, once.
+  const last = world();
+  t.after(last.cleanup);
+  await pass(last, { maxAttempts: 1 });
+  last.state("pr", { ...last.read("pr"), headRefOid: last.originHead(), mergeable: "CONFLICTING" });
+  await pass(last, { maxAttempts: 1 });
+  await pass(last, { maxAttempts: 1 });
+  assert.deepEqual(ofKind(last, "outcome").map((o) => o.result), ["reconflicted"]);
+  assert.deepEqual(ofKind(last, "pass").map((p) => p.outcome), ["pushed", "idle", "idle"]);
+});
+
+test("a queue retry that fails writes one requeue-failed outcome per pushed head", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  w.commands.queuePr = [process.execPath, ["-e", "process.exit(3)"]];
+  await pass(w);
+  w.state("pr", { ...w.read("pr"), headRefOid: w.originHead(), mergeable: "MERGEABLE" });
+  await pass(w);
+  await pass(w);
+  const outcomes = ofKind(w, "outcome");
+  assert.equal(outcomes.length, 1, "the marker stops a duplicate");
+  assert.equal(outcomes[0].result, "requeue-failed");
+  assert.equal(outcomes[0].pushedSha, w.originHead());
+  assert.deepEqual(ofKind(w, "pass").map((p) => p.outcome), ["pushed", "idle", "idle"]);
+});
+
+test("refused, claim-refused, dry-run and locked passes each write a v2 pass line", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  const secrets = join(w.root, "secrets");
+  mkdirSync(secrets);
+  writeFileSync(join(secrets, "env"), "GH_TOKEN=not-a-real-token\n");
+  await pass(w, { secretPaths: [secrets] });
+  await pass(w, { dryRun: true });
+  writeFileSync(join(w.root, "work", "pr-fixer.lock"), String(process.pid));
+  await pass(w);
+  rmSync(join(w.root, "work", "pr-fixer.lock"));
+  // A failing queue sync after the claim refuses it.
+  w.commands.sync = [process.execPath, ["-e", "process.exit(1)"]];
+  await pass(w);
+  const lines = ofKind(w, "pass");
+  assert.deepEqual(lines.map((p) => [p.outcome, p.code]), [["refused", "sandbox-refused"], ["dry-run", undefined], ["locked", undefined], ["claim-refused", "claim-refused"]]);
+  for (const p of lines) assert.ok(p.v === 2 && Number.isInteger(p.durationMs) && p.closed === 0 && p.queued === 0, JSON.stringify(p));
+  assert.deepEqual(ofKind(w, "repair"), [], "no repair started");
+});
+
+test("pruning happens only under the lock: a pass that finds the lock held leaves old run folders alone", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  const old = join(w.root, "work", "runs", "brwr-old-1-20200101T000000Z");
+  mkdirSync(old, { recursive: true });
+  const longAgo = new Date(Date.now() - 90 * 86_400_000); // timing-ok: an mtime far older than keepDays, set relative to now on purpose
+  utimesSync(old, longAgo, longAgo);
+  writeFileSync(join(w.root, "work", "pr-fixer.lock"), String(process.pid));
+  assert.equal((await pass(w)).outcome, "locked");
+  assert.ok(existsSync(old), "a locked pass must not prune a folder another pass may be using");
+  rmSync(join(w.root, "work", "pr-fixer.lock"));
+  await pass(w, { dryRun: true });
+  assert.ok(existsSync(old), "a dry run never prunes");
+  await pass(w);
+  assert.ok(!existsSync(old), "a pass holding the lock prunes old run folders");
+});
+
+test("end to end: the receipts a real pass writes are what pr-fixer-report summarizes", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  assert.equal((await pass(w)).outcome, "pushed");
+  const text = readFileSync(join(w.root, "work", "receipts.jsonl"), "utf8"); // crlf-ok: a file the test wrote, never checked out
+  const parsed = parseReceipts(text);
+  assert.equal(parsed.skipped, 0, "every line the fixer wrote parses");
+  const report = summarizeReceipts(parsed.entries, { since: "all" });
+  assert.equal(report.repairs.attempted, 1);
+  assert.equal(report.repairs.pushed, 1);
+  assert.equal(report.passes.byOutcome.pushed, 1);
 });
