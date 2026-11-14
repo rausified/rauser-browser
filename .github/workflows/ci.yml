@@ -90,16 +90,18 @@ jobs:
       # fails a change that commits a queue file here. The queue tools' own
       # tests are scripts, so a change to them is code and builds.
 
-  # Every platform runs the same steps from build-os.yml. macOS runs only for
-  # a change that can behave differently there (scripts/ci-macos.mjs: macOS
-  # paths, Unix-only host Rust and what it reads); Windows runs for every code
-  # change,
-  # and every push to main runs both, so main's own run catches anything a
-  # PR's skipped macOS build would have.
+  # Every platform runs the same steps from build-os.yml. Windows runs for
+  # every code change. macOS runs only on pushes to main (2026-11-14): GitHub
+  # bills macOS minutes at 10x on this private repository, and macOS was most
+  # of each PR's cost. PRs and Mergify's queue drafts skip it, and main's own
+  # run is the macOS gate. A red macOS run on main means the last merge broke
+  # macOS; fix it forward. scripts/ci-macos.mjs still classifies each PR, and
+  # its `macos "<path>": <reason>` log lines say which PRs main's run is
+  # checking for.
   build-macos:
     name: macOS
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.macos == 'true'
+    if: github.event_name == 'push' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.macos == 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: macos-15
@@ -274,7 +276,7 @@ jobs:
   # Branch protection requires a check named exactly "Build and check"; the
   # per-OS jobs report under their own names, so this job stands for all of
   # them. A code change passes with Windows and Accessibility passing, plus,
-  # when the classifier says the change needs macOS, the macos-15 build or,
+  # on a push to main when the classifier says the change needs macOS, the macos-15 build or,
   # only when that job was starved of a runner, the macos-15-intel (x64)
   # fallback; when it does not, macOS must have been skipped. A docs-only
   # change passes when the classifier ran, both builds were skipped as
@@ -290,7 +292,8 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
-          MACOS_NEEDED: ${{ needs.changes.outputs.macos }}
+          # macOS is a gate only on pushes to main (see build-macos).
+          MACOS_NEEDED: ${{ github.event_name == 'push' && needs.changes.outputs.macos || 'false' }}
           DOCS: ${{ needs.docs-checks.result }}
           A11Y: ${{ needs.a11y.result }}
           FUZZ: ${{ needs.fuzz-check.result }}
