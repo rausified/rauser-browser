@@ -69,3 +69,10 @@ test("merge_conditions differ from queue_conditions, so the rule is two-step and
   assert.match(rule(), /\n    max_checks_retries: [1-9]/);
   assert.match(MERGIFY, /\n  max_parallel_checks: [2-9]/);
 });
+
+test("review N1: the default rule sets checks_timeout explicitly, long enough for a Windows draft", () => {
+  const m = rule().match(/\n    checks_timeout: (\d+) min\n/);
+  assert.ok(m, "checks_timeout must be an explicit minute count, not auto (fitted to the old one-minute drafts)");
+  const minutes = Number(m[1]);
+  assert.ok(minutes >= 45 && minutes <= 90, `checks_timeout ${minutes} min: a gated draft takes 10-20 min; keep 45-90`);
+});
