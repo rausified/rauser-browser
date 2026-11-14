@@ -60,6 +60,15 @@ jobs:
         if: steps.seeded.outputs.seeded == 'true'
         env:
           BD_NON_INTERACTIVE: "1"
+          # Dolt clones outside checkout's credential scope. Pass a host-scoped
+          # helper through the process environment; never persist the token.
+          GH_TOKEN: ${{ github.token }}
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: ""
+          GIT_CONFIG_KEY_1: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_1: "!gh auth git-credential"
         run: |
           bd bootstrap
           python scripts/check_queue_consistency.py | tee "$RUNNER_TEMP/queue-check.txt"

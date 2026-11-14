@@ -199,7 +199,7 @@ Generators get no credentials in their environment.
 
 Shell traps and local habits (these cost several sessions time in 2026-11):
 
-- zsh does not word-split a variable, so `R="--repo x"; gh pr list $R` passes one argument; write `--repo rausified/rauser-browser` out in each command.
+- zsh does not word-split a variable, so `R="--repo x"; gh pr list $R` passes one argument; write `--repo webRauser/rauser-browser` out in each command.
 - A command that starts with `=` is a zsh filename expansion, so `echo ====` fails with "not found"; quote it or print another separator.
 - macOS has no `timeout` command; bound a wait with the tool's own timeout or a flag such as `pr-watch.mjs --max-minutes`.
 - Chain a gate and the push it guards with `&&`, never `;`, so a failing gate stops the push.
@@ -352,7 +352,7 @@ These rules exist because repeated review passes, main moving under open PRs, an
 - **Run the Codex review alongside CI**, not after it.
   Both start on the same pushed head.
 - **Merge through the Mergify queue; never merge main in just to be current.**
-  GitHub's own merge queue needs an organization-owned repository and `rausified` is a personal account, so main's queue is Mergify (`.mergify.yml`, one queue named `default`).
+  GitHub's own merge queue needs an organization-owned repository and `webRauser` is a personal account, so main's queue is Mergify (`.mergify.yml`, one queue named `default`).
   Enqueue a PR with both steps: `gh pr edit <n> --add-label queue`, then `gh pr comment <n> --body "@Mergifyio queue"`.
   The comment is what queues it: the label alone never does, even with `.mergify.yml`'s `merge_protections_settings.auto_merge_conditions` and Merge Protections activated (John activated it on 2026-11-03; #318 still sat at "Merge queue is ready" for an hour on the label alone on 2026-11-05), and a `pull_request_rules` `queue` action queues nothing on current Mergify either (#271).
   The label is still required: `queue_conditions` include `label = queue`, so a comment without it leaves a PR at "Waiting for queue conditions" (seen on #279, #284 and #289).
