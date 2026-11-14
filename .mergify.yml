@@ -44,10 +44,14 @@
 # Keep "Require branches to be up to date" off in branch protection: with it,
 # Mergify checks one batch at a time and bisection degrades (N = 1).
 #
-# Main's branch protection (required checks today: Build and check, PR owner,
-# Rust dependency policy) is also injected by Mergify as queue and merge
-# conditions; the list below names the same checks explicitly, plus
-# pr-hygiene's "Dev tools", which Mergify alone requires.
+# Branch protection is unavailable since the move to webRauser/rauser-browser
+# (2026-11-13): GitHub offers it, and rulesets, on a private repository only
+# with GitHub Pro ("Upgrade to GitHub Pro or make this repository public").
+# The queue conditions below are therefore the only merge gate. They name the
+# required checks explicitly (Build and check, PR owner, Rust dependency
+# policy, plus pr-hygiene's "Dev tools"), so they do not depend on protection
+# being injected. Nothing blocks a direct push to main or `gh pr merge`, which
+# is why AGENTS.md forbids both.
 
 merge_queue:
   max_parallel_checks: 2
