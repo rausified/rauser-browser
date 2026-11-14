@@ -176,6 +176,8 @@ Keep them apart.
   Any other conflict gets the `needs-merge` label and a comment listing the files; resolve those yourself, and the label clears on the next run.
   GitHub's own conflict check ignores the custom merge drivers, so a PR it calls conflicting can still merge cleanly here.
   Repairs are pushed only with the `PR_DOCTOR_TOKEN` secret (a fine-grained token with Contents and Pull requests write), because a push made with the workflow's `GITHUB_TOKEN` starts no CI; without it the doctor only reports.
+  The doctor runs as three jobs (brwr-p2a7): `doctor-plan` lists and fetches and hands a git bundle to `doctor-repair`, which merges main and runs the generators on its own runner with `permissions: {}` and no secret (the runner still has network and the Actions runtime token) (queue edits are only checked there, with `work_queue.py adopt --no-sync`); `doctor`, a fresh runner with its own checkout of main and main's tools, reads each PR's branch and head from the API, pushes a repaired commit only when its parents are the PR head and a commit of main and its tree is the merge publish derives itself (`git merge-tree`, the append-only Markdown rule and main's generators), re-applies queue edits in a fresh workspace per PR, and pushes with hooks and global git config off.
+  Credentialed steps get git access only in their own environment, from `scripts/pr-doctor-git-auth.sh`.
   `scripts/dev/pr-watch.mjs` waits up to 30 minutes for the doctor before telling you to merge.
   Opt a PR out with the `pr-doctor:skip` label (which also keeps it out of the Mergify queue).
   After a repair, pull before pushing again: your next push is rejected until you do.

@@ -277,6 +277,12 @@ function regenerateUncached(generator, { ours, other, cwd, trusted }) {
   const scratch = mkdtempSync(join(tmpdir(), "brauser-merge-"));
   try {
     const present = git(["ls-tree", "--name-only", tree, "--", ...generator.extract], { cwd }).stdout.split("\n").filter(Boolean);
+    // A symlink in the extract (#463 review I2) would let the generator read
+    // a file outside the scratch tree, or write an output through it: a
+    // conflict, before anything is extracted.
+    const links = git(["ls-tree", "-r", "-z", tree, "--", ...present, ...generator.outputs], { cwd }).stdout.split("\0")
+      .filter((entry) => entry.startsWith("120000 ")).map((entry) => entry.slice(entry.indexOf("\t") + 1));
+    if (links.length) return { ok: false, reason: `the merge has a symlink at ${links.join(", ")}, among the ${generator.name} generator's sources or outputs; a generator never runs over a symlink, so resolve it by hand` };
     if (present.length) {
       const archive = join(scratch, ".tree.tar");
       git(["archive", "--format=tar", "-o", archive, tree, "--", ...present], { cwd });
