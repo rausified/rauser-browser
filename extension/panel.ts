@@ -6,6 +6,7 @@ import {
   captureUrl,
   isHttpUrl,
   isPanelNotice,
+  leaseCompileFailureText,
   localTimestamp,
   type PanelNotice,
   type WorkerStatus,
@@ -1022,7 +1023,12 @@ function renderCaptureExplanation(): void {
   } else {
     const lease = capturePolicy.restore(leaseFor(config, session.revision));
     const compiled = lease && capturePolicy.compiledFor(lease);
-    if (!lease || !compiled) {
+    // A refused lease restores as null, so its failure is looked up by the
+    // revision the lease was built for.
+    const failure = compiled ? null : capturePolicy.failureFor(session.revision);
+    if (failure) {
+      reason = leaseCompileFailureText(failure);
+    } else if (!lease || !compiled) {
       reason = "Capture rules could not be read. Repair them in settings.";
     } else {
       const result = evaluate(compiled, currentPage.url, currentPage.title);

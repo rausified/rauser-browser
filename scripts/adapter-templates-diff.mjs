@@ -19,9 +19,9 @@
 // "seed 7 case 1234" reproduces with --seed 7 --only 1234.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { BINARY_NAME } from "../extension/brand.ts";
 import { decide, probe, REQUIRE_IPC_TESTS_ENV } from "./tests/ipc-guard.mjs";
@@ -768,4 +768,10 @@ export async function compare({ host = DEFAULT_HOST, seed, count, only }, {
   return 0;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = await main();
+// Compare real paths: argv[1] may go through a symlink (macOS /tmp ->
+// /private/tmp), and a plain comparison then runs nothing and prints nothing.
+function isEntryPoint() {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? "")).href; } catch { return false; }
+}
+
+if (isEntryPoint()) process.exitCode = await main();

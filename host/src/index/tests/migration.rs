@@ -50,6 +50,12 @@ impl V8 {
         assert_eq!(state["version"], 8);
         state["root"] = self.root.path().to_string_lossy().into_owned().into();
         state["root_identity"] = open_selected_root(self.root.path(), None).unwrap().1.into();
+        // The fixture was derived under `github_document(true)`, but its
+        // stored fingerprint is the older `Debug`-text form (brwr-8dlu). A
+        // real v8 cache with that form imports as one derived under another
+        // document (`an_import_under_another_document_dirties_adapter_dependent_files`);
+        // these tests are about the same document, so they get today's form.
+        state["adapters"] = adapters_fingerprint(&github_document(true)).into();
         serde_json::to_vec(&state).unwrap()
     }
 
