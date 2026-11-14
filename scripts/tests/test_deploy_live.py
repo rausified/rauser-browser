@@ -203,6 +203,24 @@ class Platform(unittest.TestCase):
             self.assertEqual(calls, [])
 
 
+class ImportsEverywhere(unittest.TestCase):
+    """Windows CI imports deploy-live to discover these tests; its signal
+    module has no SIGHUP, so the trap takes only the signals it has."""
+
+    def test_imports_without_sighup(self):
+        import types
+        fake = types.ModuleType("signal")
+        for name in dir(signal):
+            if name != "SIGHUP":
+                setattr(fake, name, getattr(signal, name))
+        loader = importlib.machinery.SourceFileLoader("deploy_live_nohup", str(SCRIPT))
+        module = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader("deploy_live_nohup", loader))
+        with mock.patch.dict(sys.modules, {"signal": fake, "deploy_live_nohup": module}):
+            loader.exec_module(module)
+        self.assertEqual(module.TRAPPED_SIGNALS, (signal.SIGTERM,))
+
+
 DARWIN_ONLY = unittest.skipUnless(
     sys.platform == "darwin",
     "deploy-live is macOS-only (LaunchAgents, the macOS Chrome native-messaging manifest, "

@@ -120,7 +120,9 @@ DRAIN_TIMEOUT_MAX = DRAIN_MAX - DRAIN_GRACE  # so the pause lasts through the pu
 LS_REMOTE_TIMEOUT = 30.0  # seconds; git ls-remote is read-only, so it never prompts
 # A deploy killed by one of these still runs main's finally (lifting the
 # drain pause) and exits 128 + the signal number; Ctrl-C (SIGINT) already does.
-TRAPPED_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+# Windows has no SIGHUP, and its CI imports this file to run the tests.
+TRAPPED_SIGNALS = tuple(getattr(signal, name) for name in ("SIGTERM", "SIGHUP")
+                        if hasattr(signal, name))
 
 
 class Signalled(BaseException):
