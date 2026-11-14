@@ -132,9 +132,12 @@ Synthetic equivalents of the recorded shapes (shared vectors
   Chrome profile; there is no account value in the URL to scope by.
 - `{_}` accepts any account-slot segment, not only digits.
 - An error or sign-in page on a folder's URL is recorded as a visit to that
-  folder with no title (`generic_titles`, above). A new interstitial title
-  Drive starts using would be recorded as the folder's name until it is
-  added to the list.
+  folder with no title, because its title is in `generic_titles` (above). A
+  folder tab Chrome never finished loading, whose title is the raw URL, also
+  records no title, but through the browser-placeholder rule
+  (`adapter-templates.md` §9.4), not the list. A new interstitial title Drive
+  starts using would be recorded as the folder's name until it is added to
+  `generic_titles`.
 - The ID template is frozen once shipped (`adapter-templates.md` §8.2).
 
 ## Live check still needed
