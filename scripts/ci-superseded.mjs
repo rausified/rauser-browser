@@ -9,7 +9,9 @@
 //   3. the tip's commit message has no skip marker, so GitHub runs workflows
 //      for it at all (a Mergify merge commit carries the PR title, and
 //      `[skip actions]` titles are used here, review I1);
-//   4. a CI push run for the tip exists, or appears within the wait.
+//   4. a CI push run for the tip exists, or appears within the wait, and is
+//      queued, running or finished, not cancelled or skipped (a cancelled
+//      replacement would leave both pushes unbuilt).
 // Writes `superseded=true` to $GITHUB_OUTPUT when it is superseded.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -19,6 +21,9 @@ import { pathToFileURL } from "node:url";
 const SKIP = /\[(skip ci|ci skip|no ci|skip actions|actions skip)\]/i;
 
 export const hasSkipMarker = (message) => SKIP.test(message);
+
+// Run conclusions that build nothing for the tip.
+const DEAD = new Set(["cancelled", "skipped", "stale", "startup_failure"]);
 
 const build = (reason) => ({ superseded: false, reason });
 
@@ -42,11 +47,12 @@ export function decideSuperseded({ sha, repo, run, sleep, waitSeconds = 60, poll
   if (msg.err) return build(`cannot read ${tip}'s message (${msg.err}): building`);
   if (hasSkipMarker(msg.out)) return build(`main's tip ${tip} carries a skip marker, so it gets no CI run: building`);
   const query = ["api", `repos/${repo}/actions/runs?head_sha=${tip}&event=push&per_page=50`,
-    "--jq", '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml")] | length'];
+    "--jq", '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml") | (.conclusion // "pending")] | join(" ")'];
   for (let waited = 0; ; waited += pollSeconds) {
     const runs = ask("gh", query);
     if (runs.err) return build(`cannot list ${tip}'s runs (${runs.err}): building`);
-    if (Number(runs.out.trim()) > 0) return { superseded: true, reason: `superseded: main is now ${tip}, which contains ${sha} and has its own CI push run` };
+    const live = runs.out.trim().split(/\s+/).filter((c) => c && !DEAD.has(c));
+    if (live.length > 0) return { superseded: true, reason: `superseded: main is now ${tip}, which contains ${sha} and has its own CI push run` };
     if (waited >= waitSeconds) return build(`main's tip ${tip} has no CI push run after ${waitSeconds}s: building`);
     sleep(pollSeconds);
   }

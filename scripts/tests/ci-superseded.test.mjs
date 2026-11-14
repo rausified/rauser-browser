@@ -12,7 +12,7 @@ const TIP = "b".repeat(40);
 const REPO = "owner/repo";
 
 /** A fake `run(cmd, args)` answering from a table keyed by the args' API path. */
-function fake({ tip = TIP, status = "ahead", message = "Merge pull request #2 from x/y\n\nfeat: thing", runs = [1], fail = [] } = {}) {
+function fake({ tip = TIP, status = "ahead", message = "Merge pull request #2 from x/y\n\nfeat: thing", runs = ["pending"], fail = [] } = {}) {
   const calls = [];
   let runCalls = 0;
   const run = (cmd, args) => {
@@ -62,13 +62,22 @@ test("I1: a tip whose commit message carries a skip marker gets no run, so this 
 });
 
 test("I1: no CI push run for the tip within the wait builds; one that appears late still supersedes", () => {
-  const none = fake({ runs: [0] });
+  const none = fake({ runs: [""] });
   assert.equal(decide(none, { waitSeconds: 30, pollSeconds: 10 }).superseded, false);
   assert.deepEqual(none.sleeps, [10, 10, 10]);
-  const late = fake({ runs: [0, 0, 1] });
+  const late = fake({ runs: ["", "", "pending"] });
   assert.equal(decide(late, { waitSeconds: 30, pollSeconds: 10 }).superseded, true);
   assert.deepEqual(late.sleeps, [10, 10]);
   assert.equal(decide(fake({ fail: ["runs"] }), { waitSeconds: 0 }).superseded, false);
+});
+
+test("Codex P2: a cancelled or skipped replacement run never supersedes; a finished one does", () => {
+  for (const runs of ["cancelled", "skipped", "cancelled skipped", "startup_failure"]) {
+    assert.equal(decide(fake({ runs: [runs] }), { waitSeconds: 0 }).superseded, false, runs);
+  }
+  for (const runs of ["pending", "success", "failure", "cancelled pending"]) {
+    assert.equal(decide(fake({ runs: [runs] }), { waitSeconds: 0 }).superseded, true, runs);
+  }
 });
 
 test("hasSkipMarker matches GitHub's markers only", () => {
