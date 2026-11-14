@@ -18,3 +18,7 @@ export const REFRESH_COMMENT = "@Mergifyio refresh";
 /** Cookie's driver holds a PR it must not merge yet (a follow-on, or red past its repair budget). */
 export const HELD_LABEL = "held";
 export const QUEUE_EXCLUSION_LABELS = Object.freeze([NEEDS_MERGE_LABEL, DOCTOR_SKIP_LABEL]);
+/** Whose marker comments the PR tools believe: the workflow's own bot. Callers add the
+ * PR_DOCTOR_TOKEN owner (trustedAuthors in scripts/dev/queue-pr.mjs). Anyone can post a
+ * `<!-- pr-doctor -->` comment on a public repository. */
+export const TRUSTED_AUTHORS = Object.freeze(["github-actions[bot]", "github-actions"]);
