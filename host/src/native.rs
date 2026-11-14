@@ -531,6 +531,27 @@ fn config_result(config: &mut ConfigStore, request_id: String) -> Response {
     })
 }
 
+/// Record the extension build a hello carried (`loaded_extension`), for
+/// deploy-live. A diagnostic: it never fails the hello.
+fn record_loaded_extension(config: &ConfigStore, build: &str) {
+    use crate::loaded_extension::{record, valid_build};
+    if !valid_build(build) {
+        tracing::warn!("hello extension_build is not 1-128 printable characters; not recorded");
+        return;
+    }
+    let recorded = config
+        .dir()
+        .map_err(|error| std::io::Error::other(error.to_string()))
+        .and_then(|dir| record(dir, build, time::OffsetDateTime::now_utc()));
+    match recorded {
+        Ok(()) => tracing::debug!(
+            extension_build = build,
+            "recorded the loaded extension build"
+        ),
+        Err(error) => tracing::warn!(error = %error, "could not record the loaded extension build"),
+    }
+}
+
 fn valid_request_id(id: &str) -> bool {
     !id.is_empty()
         && id.chars().count() <= MAX_REQUEST_ID_CHARS
@@ -578,6 +599,9 @@ fn dispatch(
             // refused layout migration once the user has moved the folder.
             let _ = config.refresh();
             config.migrate_layout_or_warn();
+            if let Some(build) = value.extension_build.as_deref() {
+                record_loaded_extension(config, build);
+            }
             Response::HelloResult(HelloResult {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -3974,6 +3998,80 @@ id = "work:{host}/{id}"
         }
     }
 
+    fn hello_with_build(build: Option<&str>) -> Request {
+        Request::Hello(HelloRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "hello".into(),
+            extension_build: build.map(str::to_owned),
+        })
+    }
+
+    fn answers(config: ConfigStore, requests: Vec<Request>) -> Vec<Response> {
+        let input: Vec<u8> = requests.into_iter().flat_map(encoded_request).collect();
+        let mut output = Vec::new();
+        serve_with_io(Cursor::new(input), &mut output, config).unwrap();
+        let mut reader = Cursor::new(output);
+        let mut responses = Vec::new();
+        while let Some(body) = read_frame(&mut reader).unwrap() {
+            responses.push(serde_json::from_slice::<Response>(&body).unwrap());
+        }
+        responses
+    }
+
+    #[test]
+    fn a_hello_with_an_extension_build_records_it_beside_config_toml() {
+        let folder = tempfile::tempdir().unwrap();
+        let config = ConfigStore::for_test(folder.path().join("config.toml"));
+        let responses = answers(config, vec![hello_with_build(Some("0.1.0+abcdef012345"))]);
+        assert!(
+            matches!(&responses[0], Response::HelloResult(_)),
+            "{responses:?}"
+        );
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                folder
+                    .path()
+                    .join(crate::loaded_extension::LOADED_EXTENSION_FILE),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["extension_build"], "0.1.0+abcdef012345");
+        assert!(record["said_hello_unix"].as_i64().unwrap() > 1_700_000_000);
+    }
+
+    #[test]
+    fn a_hello_without_or_with_a_bad_build_records_nothing_and_still_answers() {
+        for build in [None, Some(""), Some("a\nb")] {
+            let folder = tempfile::tempdir().unwrap();
+            let config = ConfigStore::for_test(folder.path().join("config.toml"));
+            let responses = answers(config, vec![hello_with_build(build)]);
+            assert!(
+                matches!(&responses[0], Response::HelloResult(_)),
+                "{build:?}"
+            );
+            assert!(
+                !folder
+                    .path()
+                    .join(crate::loaded_extension::LOADED_EXTENSION_FILE)
+                    .exists(),
+                "{build:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hello_whose_record_cannot_be_written_still_answers() {
+        // The config path's parent is missing, so the write fails.
+        let folder = tempfile::tempdir().unwrap();
+        let config = ConfigStore::for_test(folder.path().join("gone").join("config.toml"));
+        let responses = answers(config, vec![hello_with_build(Some("0.1.0+abcdef012345"))]);
+        assert!(
+            matches!(&responses[0], Response::HelloResult(_)),
+            "{responses:?}"
+        );
+    }
+
     #[test]
     fn an_unreadable_config_answers_hello_and_get_config_with_its_issue() {
         // The extension treats a failed hello as a missing host, so an
@@ -3986,6 +4084,7 @@ id = "work:{host}/{id}"
             Request::Hello(HelloRequest {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "hello".into(),
+                extension_build: None,
             }),
             Request::GetConfig(GetConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -4283,6 +4382,7 @@ id = "work:{host}/{id}"
         let request = Request::Hello(HelloRequest {
             protocol_version: PROTOCOL_VERSION + 1,
             request_id: "request-1".into(),
+            extension_build: None,
         });
         let mut output = Vec::new();
         serve_with_io(Cursor::new(encoded_request(request)), &mut output, config).unwrap();
@@ -8448,6 +8548,7 @@ id = "work:{host}/{id}"
         Request::Hello(HelloRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: id.into(),
+            extension_build: None,
         })
     }
 
@@ -13764,6 +13865,7 @@ id = "work:{host}/{id}"
             Request::Hello(HelloRequest {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "settings".into(),
+                extension_build: None,
             }),
             Request::GetConfig(GetConfigRequest {
                 protocol_version: PROTOCOL_VERSION,
@@ -13856,6 +13958,7 @@ id = "work:{host}/{id}"
                 let request = Request::Hello(brauser_protocol::HelloRequest {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "hello".into(),
+                    extension_build: None,
                 });
                 match self.call(config, request) {
                     Response::HelloResult(value) => value,

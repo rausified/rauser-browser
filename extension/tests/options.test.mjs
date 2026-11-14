@@ -527,6 +527,49 @@ test("the header names the host build and flags one from another commit", async 
     " · host 0123456789ab (not the extension's commit; rebuild both)");
 });
 
+test("hello names the build Chrome has loaded", async () => {
+  const state = install();
+  chrome.runtime.getManifest = () => ({ version: "0.1.0", version_name: " 0.1.0+abcdef012345 " });
+  await openSettings();
+  const hellos = state.requests.filter((request) => request.type === "hello");
+  assert.ok(hellos.length >= 1);
+  for (const hello of hellos) assert.equal(hello.extension_build, "0.1.0+abcdef012345");
+});
+
+test("hello leaves out a build the manifest does not name", async () => {
+  const state = install();
+  chrome.runtime.getManifest = () => ({ version: "0.1.0" });
+  await openSettings();
+  const hellos = state.requests.filter((request) => request.type === "hello");
+  assert.ok(hellos.length >= 1);
+  for (const hello of hellos) assert.equal("extension_build" in hello, false);
+});
+
+test("an older host that refuses extension_build gets a plain hello", async () => {
+  // Its deny_unknown_fields parse fails: parse_envelope's fixed text.
+  const state = install({ host: { hello: (request) => ("extension_build" in request
+    ? { type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" }
+    : { type: "hello_result", host_version: "0.1.0+0123456789ab", configured: true, config_issue: null }) } });
+  chrome.runtime.getManifest = () => ({ version: "0.1.0", version_name: "0.1.0+abcdef012345" });
+  await openSettings();
+  await until(() => env.elements.get("host-build").textContent !== "", "the host build");
+  assert.match(env.elements.get("host-build").textContent, /0123456789ab/);
+  const hellos = state.requests.filter((request) => request.type === "hello");
+  assert.equal(hellos[0].extension_build, "0.1.0+abcdef012345");
+  assert.equal("extension_build" in hellos[1], false);
+});
+
+test("any other hello refusal is not retried", async () => {
+  const state = install({ host: { hello: () => (
+    { type: "error", code: "invalid_request", message: "request_id must be 1–128 non-control characters" }) } });
+  chrome.runtime.getManifest = () => ({ version: "0.1.0", version_name: "0.1.0+abcdef012345" });
+  await openSettings({ connected: false });
+  assert.match(statusText(), /^Native host unavailable: request_id must be/);
+  const hellos = state.requests.filter((request) => request.type === "hello");
+  assert.ok(hellos.length >= 1);
+  assert.ok(hellos.every((hello) => hello.extension_build === "0.1.0+abcdef012345"), JSON.stringify(hellos));
+});
+
 test("a restarted host's build replaces the exited one's in the header", async () => {
   const state = install({ host: { hello: (_request, current) => ({
     type: "hello_result", host_version: `0.1.0+${current.connects === 1 ? "abc1234def56" : "0123456789ab"}`,

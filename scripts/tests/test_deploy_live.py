@@ -37,6 +37,11 @@ NEW = "abcdef012345abcdef012345abcdef012345abcd"
 MID = "5555555555555555555555555555555555555555"
 
 
+def built(commit: str) -> str:
+    """extension/dist's manifest version_name for a build of commit."""
+    return f"0.1.0 ({commit[:12]})"
+
+
 def frame(obj) -> bytes:
     body = json.dumps(obj).encode()
     return struct.pack("<I", len(body)) + body
@@ -71,7 +76,8 @@ class FakeRunner:
         self.history = [OLD, MID, NEW]  # origin/main, oldest first
         self.remote_head = NEW  # what git ls-remote reports for origin main
         self.refs: dict = {}  # ref name -> commit, for names that look like short SHAs
-        self.ls_remote_result = None  # a Result to answer git ls-remote with instead
+        self.ls_remote_result = None
+        self.on_register = None  # optional callable run during register-dev-host  # a Result to answer git ls-remote with instead
 
     # Calls whose first words match one of these act on the system.
     ACTING = ("pull", "fetch", "merge", "cargo", "npm", "node", "binary", "hygiene-apply",
@@ -108,6 +114,8 @@ class FakeRunner:
         if k == "rev-parse" and "--show-toplevel" in argv:
             text = f"{self.toplevel}\n{self.git_dir}\n{self.common_dir}\n"
             return dl.Result(0, text.encode())
+        if k == "rev-parse" and argv[-1] == "--git-common-dir":
+            return dl.Result(0, f"{self.common_dir}\n".encode())
         if k == "rev-parse" and argv[-1] == "HEAD":
             return dl.Result(0, (self.head + "\n").encode())
         if k == "rev-parse" and "--verify" in argv:
@@ -172,7 +180,11 @@ class FakeRunner:
             dist = self.repo / "extension" / "dist"
             dist.mkdir(parents=True, exist_ok=True)
             (dist / "build.txt").write_text(self.head)
+            (dist / "manifest.json").write_text(json.dumps(
+                {"version": "0.1.0", "version_name": built(self.head)}))
             return dl.Result(0)
+        if k == "node" and self.on_register:
+            self.on_register()
         if k == "binary":
             version = self.host_version or f"0.1.0+{self.head[:12]}"
             return dl.Result(0, frame({
@@ -247,6 +259,8 @@ class Fixture(unittest.TestCase):
         self.live.write_text("old binary")
         (self.repo / "extension" / "dist").mkdir(parents=True)
         (self.repo / "extension" / "dist" / "build.txt").write_text(OLD)
+        (self.repo / "extension" / "dist" / "manifest.json").write_text(json.dumps(
+            {"version": "0.1.0", "version_name": built(OLD)}))
         self.support = self.tmp / "support"
         (self.support / "runs").mkdir(parents=True)
         self.manifest = self.tmp / "com.rauser.brauser.json"
@@ -393,12 +407,12 @@ class HappyPath(Fixture):
         # The panel first; chrome://extensions only as the fallback.
         self.assertLess(out.index("side panel"), out.index("chrome://extensions only if"))
 
-    def test_the_loaded_build_is_said_to_be_undetected_never_guessed(self):
+    def test_with_no_hello_recorded_the_loaded_build_is_unavailable_never_guessed(self):
         for argv in ((), ("--dry-run",)):
             code, out = self.deploy(*argv)
             self.assertEqual(code, 0, out)
-            self.assertIn("loaded:    not detected", out)
-            self.assertNotIn("loaded:    yes", out)
+            self.assertIn("loaded:    ", out)
+            self.assertRegex(out, r"loaded:    (now )?unavailable: no hello has named a build")
 
     def test_a_refused_deploy_keeps_the_reload_hint_until_one_completes(self):
         # The extension is rebuilt, then a late run refuses the deploy; the
@@ -1198,6 +1212,87 @@ class Drain(Fixture):
         for bad in ("0", "-5", str(dl.DRAIN_TIMEOUT_MAX + 1), "x"):
             code, out = self.deploy("--drain", "--drain-timeout", bad)
             self.assertNotEqual(code, 0, out)
+
+
+class LoadedBuild(Fixture):
+    """Which extension build Chrome has loaded, from the host's record of
+    the last hello (host/src/loaded_extension.rs): loaded, pending reload
+    or unavailable, never a guess."""
+
+    def said_hello(self, build, at):
+        (self.support / dl.LOADED_FILE).write_text(json.dumps({
+            "version": 1, "extension_build": build, "said_hello_unix": int(at),
+            "said_hello_at": "ignored"}))
+
+    def test_loaded_when_the_last_hello_named_the_new_build(self):
+        self.said_hello(built(NEW), self.now - 5)
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"loaded:    loaded: Chrome has loaded {built(NEW)}", out)
+
+    def test_pending_reload_when_an_older_build_said_hello_after_the_publish(self):
+        self.runner.on_register = lambda: self.said_hello(built(OLD), self.now)
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"loaded:    pending reload: Chrome still runs {built(OLD)}", out)
+        self.assertIn(f"extension/dist is {built(NEW)}", out)
+        self.assertIn(dl.RELOAD_PLAINLY, out)
+        self.assertIn("click Reload Brauser in the side panel", out)
+
+    def test_unavailable_when_no_hello_since_the_publish(self):
+        self.said_hello(built(OLD), self.now - 100)
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertIn("loaded:    unavailable: no hello since the publish", out)
+        self.assertIn(built(OLD), out)
+
+    def test_an_unreadable_record_is_unavailable(self):
+        for text in ("", "{", "[]", '{"extension_build": 1, "said_hello_unix": 1}',
+                     '{"extension_build": "x", "said_hello_unix": "soon"}'):
+            (self.support / dl.LOADED_FILE).write_text(text)
+            code, out = self.deploy()
+            self.assertEqual(code, 0, out)
+            self.assertIn("loaded:    unavailable: no hello has named a build", out, text)
+
+    def test_the_publish_time_is_recorded_for_later_checks(self):
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(self.state.read_text())["published_unix"], int(self.now))
+
+    def test_loaded_flag_reports_each_state_and_acts_on_nothing(self):
+        state = json.loads(self.state.read_text())
+        self.state.write_text(json.dumps({**state, "published_unix": int(self.now) - 50}))
+        cases = [
+            (built(OLD), self.now - 10, 0, "loaded: Chrome has loaded"),
+            (built(MID), self.now - 10, 3, "pending reload: Chrome still runs"),
+            (built(MID), self.now - 100, 4, "unavailable: no hello since the publish"),
+        ]
+        for build, at, exit_code, said in cases:
+            with self.subTest(build=build, at=at):
+                self.said_hello(build, at)
+                self.runner.calls.clear()
+                code, out = self.deploy("--loaded")
+                self.assertEqual(code, exit_code, out)
+                self.assertIn(said, out)
+                self.assertEqual(self.runner.acting_calls(), [], out)
+                if exit_code == 3:
+                    self.assertIn(dl.RELOAD_PLAINLY, out)
+        (self.support / dl.LOADED_FILE).unlink()
+        code, out = self.deploy("--loaded")
+        self.assertEqual(code, 4, out)
+
+    def test_dry_run_reports_the_current_state(self):
+        self.said_hello(built(OLD), self.now - 10)
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"loaded:    now loaded: Chrome has loaded {built(OLD)}", out)
+
+    def test_the_record_name_matches_the_host(self):
+        source = (SCRIPT.parents[2] / "host" / "src" / "loaded_extension.rs").read_text(
+            encoding="utf-8").replace("\r\n", "\n")
+        self.assertIn(f'pub const LOADED_EXTENSION_FILE: &str = "{dl.LOADED_FILE}";', source)
+        for field in ('"extension_build"', '"said_hello_unix"'):
+            self.assertIn(field, source)
 
 
 class RemoteMain(Fixture):

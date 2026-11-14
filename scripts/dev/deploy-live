@@ -43,8 +43,16 @@ first failure:
   m. print a summary, including a "Reload Brauser" step (the side panel's
      button first, chrome://extensions as the fallback) when extension/dist
      changed in this deploy or a refused one before it, then clear the
-     pending reload. It says the build Chrome has loaded is not detected:
-     nothing outside Chrome records it yet (brwr-x622).
+     pending reload. It says which extension build Chrome has loaded, from
+     the record the host writes on each hello (<support dir>/
+     loaded-extension.json, host/src/loaded_extension.rs; brwr-x622):
+     "loaded" when that build is extension/dist's, "pending reload" when an
+     older build said hello at or after the publish, and "unavailable" when
+     no hello since the publish says either, never a guess.
+
+--loaded: only that last report, read-only, for after a reload (the side
+panel or settings must open once to say hello); exit 0 loaded, 3 pending
+reload, 4 unavailable.
 
 --drain (after step h): pause new runs with a marker the service honours
 (host/src/service/drain.rs), wait up to --drain-timeout for queued and
@@ -71,6 +79,7 @@ Usage:
   scripts/dev/deploy-live [--repo PATH] [--extension-id ID] [--allow-active-runs]
                           [--drain [--drain-timeout SECONDS]] [--expected-sha SHA]
                           [--support-dir PATH] [--native-host-manifest PATH] [--dry-run]
+  scripts/dev/deploy-live --loaded [--repo PATH] [--support-dir PATH]
 """
 
 from __future__ import annotations
@@ -117,6 +126,10 @@ DRAIN_MAX = 3600  # the service's own cap, and the largest --drain-timeout
 DRAIN_GRACE = 300  # pause kept past the wait for publish, register and hello
 DRAIN_POLL = 5  # seconds between run scans while draining
 DRAIN_TIMEOUT_MAX = DRAIN_MAX - DRAIN_GRACE  # so the pause lasts through the publish
+# The host's record of the extension build Chrome last said hello with
+# (LOADED_EXTENSION_FILE in host/src/loaded_extension.rs).
+LOADED_FILE = "loaded-extension.json"
+LOADED_EXIT = {"loaded": 0, "pending reload": 3, "unavailable": 4}  # --loaded's exit codes
 LS_REMOTE_TIMEOUT = 30.0  # seconds; git ls-remote is read-only, so it never prompts
 # A deploy killed by one of these still runs main's finally (lifting the
 # drain pause) and exits 128 + the signal number; Ctrl-C (SIGINT) already does.
@@ -644,6 +657,63 @@ def stage_copy(staged: Path, live: Path) -> Path:
     return tmp
 
 
+def dist_build(repo: Path) -> Optional[str]:
+    """extension/dist's build: its manifest's version_name, trimmed, the
+    value the extension's hello names once Chrome has loaded it."""
+    try:
+        name = json.loads((repo / "extension" / "dist" / "manifest.json")
+                          .read_text(encoding="utf-8")).get("version_name")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return name.strip() or None if isinstance(name, str) else None
+
+
+def read_loaded(support: Path) -> Optional[dict]:
+    """The host's record of the last hello's build, or None when absent or
+    not one."""
+    try:
+        value = json.loads((support / LOADED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    build, when = value.get("extension_build"), value.get("said_hello_unix")
+    if not isinstance(build, str) or not build.strip():
+        return None
+    if not isinstance(when, int) or isinstance(when, bool):
+        return None
+    return {"build": build.strip(), "at": when}
+
+
+def stamp(unix: float) -> str:
+    return datetime.datetime.fromtimestamp(unix, datetime.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%SZ")
+
+
+def loaded_state(record: Optional[dict], dist: Optional[str],
+                 published: Optional[float]) -> tuple[str, str]:
+    """(state, explanation): which extension build Chrome has loaded, from
+    the host's record only. published is when this (or the last) deploy
+    replaced the host binary, or None when unknown."""
+    if dist is None:
+        return "unavailable", "extension/dist names no build (no manifest version_name)"
+    if record is None:
+        return "unavailable", (f"no hello has named a build yet (extension/dist is {dist}); the "
+                               "side panel or settings says hello when it opens")
+    when = stamp(record["at"])
+    if record["build"] == dist:
+        return "loaded", f"Chrome has loaded {dist} (it said hello at {when})"
+    if published is not None and record["at"] >= int(published):
+        return "pending reload", (f"Chrome still runs {record['build']} (it said hello at {when}, "
+                                  f"after the publish); extension/dist is {dist}")
+    return "unavailable", (f"no hello since the publish says which build Chrome runs; the last, "
+                           f"at {when}, was from {record['build']}, and extension/dist is {dist}")
+
+
+RELOAD_PLAINLY = ("Chrome keeps running the old manifest and service worker until the unpacked "
+                  "extension is reloaded; a new build on disk is not loaded by itself.")
+
+
 def dist_digest(repo: Path) -> Optional[str]:
     dist = repo / "extension" / "dist"
     if not dist.is_dir():
@@ -730,6 +800,9 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
                         help=f"how long --drain waits (1 to {DRAIN_TIMEOUT_MAX}, default "
                              f"{DRAIN_TIMEOUT})")
     parser.add_argument("--dry-run", action="store_true", help="print the steps; change nothing")
+    parser.add_argument("--loaded", action="store_true",
+                        help="only report which extension build Chrome has loaded (read-only; "
+                             "exit 0 loaded, 3 pending reload, 4 unavailable)")
     # Set only by deploy-live itself when a pull changed it (step d).
     parser.add_argument("--resumed-from", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -745,6 +818,7 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
     support = args.support_dir or default_support_dir(home)
     manifest = args.native_host_manifest or default_manifest(home)
     drain_marker: Optional[Path] = None
+    published_at: Optional[float] = None
     d: Optional[Deploy] = None
     local_ancestry: Optional[bool] = None
     old_handlers = trap_signals()
@@ -765,6 +839,19 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         if not 1 <= drain_timeout <= DRAIN_TIMEOUT_MAX:
             raise DeployError(f"--drain-timeout needs whole seconds from 1 to {DRAIN_TIMEOUT_MAX}, "
                               f"not {args.drain_timeout!r}")
+
+        if args.loaded:
+            common = git_text(runner, repo, "rev-parse", "--path-format=absolute",
+                              "--git-common-dir")
+            published = read_state(Path(common)).get("published_unix")
+            state, why = loaded_state(read_loaded(support), dist_build(repo),
+                                      published if isinstance(published, (int, float)) else None)
+            d.say(f"  loaded:    {state}: {why}")
+            if state == "pending reload":
+                d.say(f"  {RELOAD_PLAINLY}")
+                d.say("  Reload Brauser: click Reload Brauser in the side panel, or reload it at "
+                      "chrome://extensions; then open the side panel and rerun --loaded.")
+            return LOADED_EXIT[state]
 
         d.step("checkout: main worktree, branch main, no tracked changes")
         git_dir = check_checkout(runner, repo)
@@ -956,8 +1043,10 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
                     if run not in active:
                         active.append(run)
                 os.replace(tmp, binary)
+                published_at = d.clock()
             finally:
                 tmp.unlink(missing_ok=True)
+            write_state(git_dir, {**read_state(git_dir), "published_unix": int(published_at)})
             d.say(f"    replaced {binary}")
 
         d.step("register the native host and service")
@@ -1009,14 +1098,21 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
             d.say(f"  extension: {ext_id}" + (", changed" if extension_changed else ", unchanged"))
         if stale:
             d.say("  stale runs: " + ", ".join(stale))
-        # Nothing outside Chrome records the build it has loaded (brwr-x622),
-        # so this says so rather than guess.
-        d.say("  loaded:    not detected: deploy-live cannot yet see which extension build "
-              "Chrome has loaded; the side panel shows it")
-        if extension_changed:
+        # Only the host's record of a hello says which build Chrome has
+        # loaded (brwr-x622); without one since the publish, it says so.
+        if args.dry_run:
+            published = read_state(git_dir).get("published_unix")
+            published = published if isinstance(published, (int, float)) else None
+        else:
+            published = published_at
+        loaded, why = loaded_state(read_loaded(support), dist_build(repo), published)
+        d.say(f"  loaded:    {'now ' if args.dry_run else ''}{loaded}: {why}")
+        if extension_changed or loaded == "pending reload":
+            d.say(f"  {RELOAD_PLAINLY}")
             d.say("  Reload Brauser: click Reload Brauser in the side panel (its \"Brauser was")
             d.say("  updated\" banner), then check the panel's extension and host IDs match;")
-            d.say("  reload at chrome://extensions only if the panel cannot.")
+            d.say("  reload at chrome://extensions only if the panel cannot. Then open the side")
+            d.say("  panel and run scripts/dev/deploy-live --loaded to confirm.")
         if active:
             d.say("  runs that were active: " + ", ".join(active))
         if not args.dry_run:
