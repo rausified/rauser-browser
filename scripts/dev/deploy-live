@@ -131,6 +131,19 @@ DRAIN_TIMEOUT_MAX = DRAIN_MAX - DRAIN_GRACE  # so the pause lasts through the pu
 LOADED_FILE = "loaded-extension.json"
 LOADED_EXIT = {"loaded": 0, "pending reload": 3, "unavailable": 4}  # --loaded's exit codes
 LS_REMOTE_TIMEOUT = 30.0  # seconds; git ls-remote is read-only, so it never prompts
+NETWORK_TIMEOUT = 300.0  # seconds, for git fetch and pull
+
+
+def network_env() -> dict:
+    """Env for a git call that reaches the remote: no credential prompt and
+    no ssh passphrase or host-key prompt (git and ssh read /dev/tty, so no
+    stdin stops them). A configured GIT_SSH_COMMAND is kept, made batch."""
+    ssh = os.environ.get("GIT_SSH_COMMAND", "").strip() or "ssh"
+    return {"GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": f"{ssh} -o BatchMode=yes"}
+
+
+def git_network(runner: "Runner", repo: Path, *args: str, timeout: float = NETWORK_TIMEOUT):
+    return runner(["git", "-C", str(repo), *args], cwd=repo, timeout=timeout, env=network_env())
 # A deploy killed by one of these still runs main's finally (lifting the
 # drain pause) and exits 128 + the signal number; Ctrl-C (SIGINT) already does.
 # Windows has no SIGHUP, and its CI imports this file to run the tests.
@@ -147,15 +160,30 @@ class Signalled(BaseException):
 
 
 def _raise_signalled(signum, _frame):
+    # One stop request is enough: a second signal must not interrupt the
+    # cleanup that lifts the pause.
+    for sig in TRAPPED_SIGNALS:
+        signal.signal(sig, signal.SIG_IGN)
     raise Signalled(signum)
 
 
 def trap_signals() -> dict:
     """Make SIGTERM and SIGHUP raise Signalled; return the old handlers (none
-    off the main thread, where Python cannot set them)."""
+    off the main thread, where Python cannot set them). A signal the process
+    inherited as ignored (nohup) stays ignored, so the deploy still runs on."""
     if threading.current_thread() is not threading.main_thread():
         return {}
-    return {sig: signal.signal(sig, _raise_signalled) for sig in TRAPPED_SIGNALS}
+    return {sig: signal.signal(sig, _raise_signalled) for sig in TRAPPED_SIGNALS
+            if signal.getsignal(sig) is not signal.SIG_IGN}
+
+
+def say_quietly(out, text: str) -> None:
+    """Print on the cleanup path, where a closed terminal (EIO, EPIPE) must
+    not turn the exit into a traceback."""
+    try:
+        print(text, file=out, flush=True)
+    except OSError:
+        pass
 
 
 def restore_signals(old: dict) -> None:
@@ -434,9 +462,11 @@ def write_drain(support: Path, until: float, now: float) -> Path:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(body)
         os.replace(tmp, path)
-    except OSError as exc:
+    except BaseException as exc:  # a signal mid-write too: no temporary left behind
         tmp.unlink(missing_ok=True)
-        raise DeployError(f"cannot write the drain marker {path}: {exc}") from exc
+        if isinstance(exc, OSError):
+            raise DeployError(f"cannot write the drain marker {path}: {exc}") from exc
+        raise
     return path
 
 
@@ -466,8 +496,8 @@ def remote_main(runner: Runner, repo: Path) -> tuple[Optional[str], str]:
     """origin main's commit by `git ls-remote` (reads, changes nothing), or
     (None, why not). Bounded and never prompting: an unreachable remote or
     one asking for credentials is "unavailable", not a hung deploy."""
-    res = runner(["git", "-C", str(repo), "ls-remote", "origin", "refs/heads/main"], cwd=repo,
-                 timeout=LS_REMOTE_TIMEOUT, env={"GIT_TERMINAL_PROMPT": "0"})
+    res = git_network(runner, repo, "ls-remote", "origin", "refs/heads/main",
+                      timeout=LS_REMOTE_TIMEOUT)
     if res.returncode != 0:
         return None, res.err or f"git ls-remote exit {res.returncode}"
     for line in res.text.splitlines():
@@ -496,7 +526,7 @@ def ancestry_note(found: Optional[bool]) -> str:
 def fast_forward_to(d: "Deploy", runner: Runner, repo: Path, old: str, expected: str) -> str:
     """Fetch origin main and fast-forward exactly to the expected commit;
     refuse one that is not on origin main or that HEAD is already past."""
-    res = git(runner, repo, "fetch", "origin", "main")
+    res = git_network(runner, repo, "fetch", "origin", "main")
     if res.returncode != 0:
         raise DeployError("git fetch origin main failed: " + (res.err or res.text.strip()))
     res = git(runner, repo, "rev-parse", "--verify", f"{expected}^{{commit}}")
@@ -947,7 +977,7 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
                     d.say(f"    origin main is at {remote[:COMMIT_LENGTH]}; deploying "
                           f"{new[:COMMIT_LENGTH]} as --expected-sha asks")
             else:
-                res = git(runner, repo, "pull", "--ff-only")
+                res = git_network(runner, repo, "pull", "--ff-only")
                 if res.returncode != 0:
                     raise DeployError("git pull --ff-only failed: " + (res.err or res.text.strip())
                                       + "\n(an index.lock kept above blocks the pull; see "
@@ -1018,7 +1048,10 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
                 d.say(f"    no {support}: no service has run, so there is nothing to drain")
             else:
                 now = d.clock()
-                drain_marker = write_drain(support, now + drain_timeout + DRAIN_GRACE, now)
+                # Named before it is written, so a signal just after it lands
+                # still lifts it (unlink copes with one never written).
+                drain_marker = support / DRAIN_FILE
+                write_drain(support, now + drain_timeout + DRAIN_GRACE, now)
                 d.say(f"    paused new runs ({drain_marker})")
                 # A start_run that passed the pause check just before the
                 # marker landed may not have written its status.json yet.
@@ -1125,17 +1158,18 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         return 1
     except Signalled as exc:
         name = signal.Signals(exc.signum).name
-        print(f"deploy-live: stopped by {name}", file=out)
+        say_quietly(out, f"deploy-live: stopped by {name}")  # the terminal may be gone
         return 128 + exc.signum
     finally:
         try:
             if drain_marker is not None:
                 try:
                     drain_marker.unlink(missing_ok=True)
-                    print(f"    lifted the pause on new runs ({drain_marker})", file=out)
                 except OSError as exc:
-                    print(f"deploy-live: warning: cannot remove {drain_marker}: {exc}; new runs "
-                          f"stay paused until it expires (at most {DRAIN_MAX}s)", file=out)
+                    say_quietly(out, f"deploy-live: warning: cannot remove {drain_marker}: {exc}; "
+                                     f"new runs stay paused until it expires (at most {DRAIN_MAX}s)")
+                else:
+                    say_quietly(out, f"    lifted the pause on new runs ({drain_marker})")
         finally:
             restore_signals(old_handlers)
 
