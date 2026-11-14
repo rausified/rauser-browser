@@ -545,6 +545,17 @@ test("hello leaves out a build the manifest does not name", async () => {
   for (const hello of hellos) assert.equal("extension_build" in hello, false);
 });
 
+test("hello leaves out a build outside the version_name alphabet", async () => {
+  for (const name of ["0.1.0 (\u202ecba)", "0.1.0\u200b", "\u001b[31m0.1.0", "0.1.0 (café)"]) {
+    const state = install();
+    chrome.runtime.getManifest = () => ({ version: "0.1.0", version_name: name });
+    await openSettings();
+    const hellos = state.requests.filter((request) => request.type === "hello");
+    assert.ok(hellos.length >= 1);
+    for (const hello of hellos) assert.equal("extension_build" in hello, false, JSON.stringify(name));
+  }
+});
+
 test("an older host that refuses extension_build gets a plain hello", async () => {
   // Its deny_unknown_fields parse fails: parse_envelope's fixed text.
   const state = install({ host: { hello: (request) => ("extension_build" in request

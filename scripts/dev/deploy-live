@@ -46,8 +46,8 @@ first failure:
      pending reload. It says which extension build Chrome has loaded, from
      the record the host writes on each hello (<support dir>/
      loaded-extension.json, host/src/loaded_extension.rs; brwr-x622):
-     "loaded" when that build is extension/dist's, "pending reload" when an
-     older build said hello at or after the publish, and "unavailable" when
+     "loaded" when that build is extension/dist's, "pending reload" when
+     another build said hello at or after the publish, and "unavailable" when
      no hello since the publish says either, never a guess.
 
 --loaded: only that last report, read-only, for after a reload (the side
@@ -129,6 +129,9 @@ DRAIN_TIMEOUT_MAX = DRAIN_MAX - DRAIN_GRACE  # so the pause lasts through the pu
 # The host's record of the extension build Chrome last said hello with
 # (LOADED_EXTENSION_FILE in host/src/loaded_extension.rs).
 LOADED_FILE = "loaded-extension.json"
+# The version_name alphabet the host records (valid_build); a hand-edited
+# record outside it is not read, so it cannot put escapes on the terminal.
+BUILD_NAME = re.compile(r"^[0-9A-Za-z .+()_-]{1,128}$")
 LOADED_EXIT = {"loaded": 0, "pending reload": 3, "unavailable": 4}  # --loaded's exit codes
 LS_REMOTE_TIMEOUT = 30.0  # seconds; git ls-remote is read-only, so it never prompts
 NETWORK_TIMEOUT = 300.0  # seconds, for git fetch and pull
@@ -708,7 +711,7 @@ def read_loaded(support: Path) -> Optional[dict]:
     if not isinstance(value, dict):
         return None
     build, when = value.get("extension_build"), value.get("said_hello_unix")
-    if not isinstance(build, str) or not build.strip():
+    if not isinstance(build, str) or not BUILD_NAME.fullmatch(build.strip()):
         return None
     if not isinstance(when, int) or isinstance(when, bool):
         return None

@@ -4,7 +4,8 @@
 //! Each `hello` that carries `extension_build` (the manifest `version_name`
 //! Chrome has loaded) replaces [`LOADED_EXTENSION_FILE`] beside
 //! `config.toml` (the support directory deploy-live reads) whole, through a
-//! sibling temporary file and a rename. The record is a diagnostic: a build
+//! sibling temporary file and a rename (no fsync: losing it to a crash only
+//! means "unavailable"). The record is a diagnostic: a build
 //! that fails [`valid_build`] is not recorded, and a failed write never
 //! fails the hello.
 
@@ -23,11 +24,15 @@ pub const LOADED_EXTENSION_FILE: &str = "loaded-extension.json";
 pub const MAX_BUILD_CHARS: usize = 128;
 
 /// Whether `build` is worth recording: 1 to [`MAX_BUILD_CHARS`] characters
-/// with no control characters (it is extension-supplied text).
+/// from the `version_name` alphabet (`[0-9A-Za-z .+()_-]`, the schema's
+/// pattern), since it is extension-supplied text that deploy-live prints to
+/// a terminal: no control, bidi, zero-width or other format characters.
 pub fn valid_build(build: &str) -> bool {
     !build.is_empty()
-        && build.chars().count() <= MAX_BUILD_CHARS
-        && !build.chars().any(char::is_control)
+        && build.len() <= MAX_BUILD_CHARS
+        && build
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b" .+()_-".contains(&b))
 }
 
 /// Replace the record in `dir` with `build`, said hello at `now`.
@@ -47,7 +52,9 @@ pub fn record(dir: &Path, build: &str, now: OffsetDateTime) -> io::Result<()> {
     let written = (|| {
         let mut file = fs::File::create_new(&temporary)?;
         file.write_all(format!("{body}\n").as_bytes())?;
-        file.sync_all()?;
+        // No fsync: this runs before every hello is answered, and a record
+        // lost to a crash only makes deploy-live say "unavailable". The
+        // rename alone keeps it whole.
         crate::fsutil::rename_or_copy(&temporary, &path)
     })();
     if written.is_err() {
@@ -98,7 +105,22 @@ mod tests {
     fn a_build_is_bounded_text() {
         assert!(valid_build("0.1.0+abcdef012345-dirty"));
         assert!(valid_build(&"x".repeat(MAX_BUILD_CHARS)));
-        for bad in ["", "a\nb", "a\u{7}", &"x".repeat(MAX_BUILD_CHARS + 1)] {
+        assert!(valid_build("0.1.0 (fe01752470be)"));
+        assert!(valid_build("0.1.0 (test_build-2.x)"));
+        // Only the version_name alphabet: no bidi overrides, zero-width or
+        // other format characters, terminal escapes, or non-ASCII letters.
+        for bad in [
+            "",
+            "a\nb",
+            "a\u{7}",
+            "0.1.0 (\u{202e}cba)",
+            "0.1.0\u{200b}",
+            "0.1.0\u{2066}x",
+            "\u{1b}[31m0.1.0",
+            "0.1.0 (café)",
+            "0.1.0/../x",
+            &"x".repeat(MAX_BUILD_CHARS + 1),
+        ] {
             assert!(!valid_build(bad), "{bad:?}");
         }
     }

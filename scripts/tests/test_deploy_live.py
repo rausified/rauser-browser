@@ -1247,8 +1247,13 @@ class LoadedBuild(Fixture):
         self.assertIn(built(OLD), out)
 
     def test_an_unreadable_record_is_unavailable(self):
+        # A hand-edited record cannot put terminal escapes or bidi text on
+        # the summary: only the version_name alphabet is read.
         for text in ("", "{", "[]", '{"extension_build": 1, "said_hello_unix": 1}',
-                     '{"extension_build": "x", "said_hello_unix": "soon"}'):
+                     '{"extension_build": "x", "said_hello_unix": "soon"}',
+                     '{"extension_build": "\\u001b[31mx", "said_hello_unix": 1}',
+                     '{"extension_build": "0.1.0 (\\u202ecba)", "said_hello_unix": 1}',
+                     '{"extension_build": "0.1.0\\u200b", "said_hello_unix": 1}'):
             (self.support / dl.LOADED_FILE).write_text(text)
             code, out = self.deploy()
             self.assertEqual(code, 0, out)

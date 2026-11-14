@@ -583,8 +583,13 @@ export class ConfigSession {
   }
 }
 
+/** The hello schema's `extension_build` pattern (host/src/loaded_extension.rs
+ * `valid_build`): the version_name alphabet, so no bidi, zero-width or
+ * control characters reach the host's record or deploy-live's terminal. */
+const BUILD_PATTERN = /^[0-9A-Za-z .+()_-]{1,128}$/;
+
 /** The build Chrome has loaded (the running manifest's `version_name`),
- * when it is short enough for the hello schema; null otherwise. */
+ * when it matches the hello schema; null otherwise. */
 function loadedBuild(): string | null {
   let build: string | null;
   try {
@@ -592,5 +597,5 @@ function loadedBuild(): string | null {
   } catch {
     return null;
   }
-  return build !== null && build.length <= 128 ? build : null;
+  return build !== null && BUILD_PATTERN.test(build) ? build : null;
 }

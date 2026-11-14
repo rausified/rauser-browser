@@ -536,7 +536,7 @@ fn config_result(config: &mut ConfigStore, request_id: String) -> Response {
 fn record_loaded_extension(config: &ConfigStore, build: &str) {
     use crate::loaded_extension::{record, valid_build};
     if !valid_build(build) {
-        tracing::warn!("hello extension_build is not 1-128 printable characters; not recorded");
+        tracing::warn!("hello extension_build is not 1-128 version_name characters; not recorded");
         return;
     }
     let recorded = config
