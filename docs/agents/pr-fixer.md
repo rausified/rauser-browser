@@ -18,12 +18,13 @@ Plan and design challenge: [docs/superpowers/plans/2026-11-13-pr-fixer.md](../su
      - the bead is exhausted (`fixer-exhausted`, or 2 attempts);
      - the PR is a fork, does not target main, or is labelled `held` or `pr-doctor:skip`;
      - the PR has no `queue` label: its owner took it out of the queue, and the fixer never puts it back.
-   - **Queue:** the fixer pushed the current head but `queue-pr.mjs` did not succeed then (`fixer_queue_status` is not 0), so it asks again.
+   - **Queue:** the fixer pushed the current head but `queue-pr.mjs` did not succeed then (`fixer_queue_status` is not 0), so it removes a leftover `needs-merge` and asks again, even after the attempt budget is spent.
+   - A PR merged into a branch other than main is skipped, not closed.
    - **Wait:** there is no conflict now, or GitHub has not computed mergeability yet.
    - **Repair:** the PR still conflicts with main.
      It repairs at most one PR per pass.
 3. **Sandbox probe.**
-   Before claiming, it runs a probe inside the agent sandbox and refuses the pass (`refused`) unless every secret path is hidden there.
+   Before claiming, it runs a probe inside the agent sandbox and refuses the pass (`refused`) unless every secret path, and the runner's own `/proc/<pid>/environ`, is hidden there.
    The sandbox is bubblewrap, and the secret paths are `~/.config/brauser-pr-fixer`, `~/.config/gh`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.ssh` and `~/.netrc`.
 4. **Claim.**
    It runs `bd --actor pr-fixer update <id> --claim`, counts the attempt (`fixer_attempts` metadata) and syncs the queue.
@@ -46,7 +47,7 @@ Plan and design challenge: [docs/superpowers/plans/2026-11-13-pr-fixer.md](../su
    - the report says resolved, with at least one focused check, all passed;
    - `codex exec review --base <main>`, scoped to the resolution, with no `[P1]`.
 8. **Publish.**
-   It re-reads the PR and stops if the head moved or the `queue` label is gone: a live owner's push or withdrawal always wins.
+   It re-reads the PR and stops if the head moved, the `queue` label is gone, or `held` or `pr-doctor:skip` was added: a live owner's push or withdrawal always wins.
    It checks that the PR body with the fixer's marked note (`<!-- pr-fixer -->`) still passes the PR owner check.
    The Owner line is unchanged: the fixer resolves the conflict, it does not take the PR.
    Then it pushes the merge, never forced, removes `needs-merge` (it has just verified the merge against main's tip) and runs `node scripts/dev/queue-pr.mjs <n> --head <sha>`.
@@ -65,7 +66,8 @@ The worktree itself is always removed.
 
 - The runner holds the push credential and makes every GitHub write, as Cookie's driver does.
   The agent runs as the same user, so an environment without the token is not enough.
-  The agent and the review therefore run under `bwrap --dev-bind / /`, with an empty tmpfs or an empty file over each secret path (`maskArgs`).
+  The agent and the review therefore run under `bwrap --dev-bind / / --unshare-pid --proc /proc` (`SANDBOX_ARGS`), with an empty tmpfs or an empty file over each secret path (`maskArgs`).
+  Their own PID namespace and procfs keep the runner's `/proc/<pid>/environ`, which holds `GH_TOKEN`, out of reach.
   The probe proves those paths are unreadable there before every repair, so a host without a working bubblewrap gets `refused` and nothing else happens.
   Their environment also has no `GH_TOKEN`, `GITHUB_TOKEN`, `PR_DOCTOR_TOKEN`, askpass, SSH agent socket or `credential.*` / `url.*.insteadOf` git config (`agentEnv`).
   Keep every credential the runner uses under one of the secret paths.

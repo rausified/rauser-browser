@@ -12,7 +12,7 @@ import test from "node:test";
 
 import {
   EXHAUSTED_LABEL, FIXER_ACTOR, NOTE_END, NOTE_MARKER, agentEnv, attemptsOf, conflictMarkers, decideBead,
-  maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
+  SANDBOX_ARGS, maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
 } from "../dev/pr-fixer.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
 
@@ -38,6 +38,8 @@ test("attemptsOf reads metadata as an object or a JSON string", () => {
 test("decideBead closes on a merged or closed PR, citing the merge commit", () => {
   assert.deepEqual(decideBead(bead(), pr({ state: "MERGED", mergeCommit: { oid: "abc123" } })), { action: "close", reason: "PR #7 merged into main as abc123" });
   assert.equal(decideBead(bead({ status: "in_progress", assignee: FIXER_ACTOR }), pr({ state: "CLOSED" })).action, "close");
+  // Merged somewhere else is not on main (AGENTS.md "Close only what is on main").
+  assert.equal(decideBead(bead(), pr({ state: "MERGED", baseRefName: "dev", mergeCommit: { oid: "abc" } })).action, "skip");
 });
 
 test("decideBead repairs only a conflicting PR it may own", () => {
@@ -74,6 +76,13 @@ test("decideBead retries the queue request for its own pushed head until queue-p
   assert.equal(decideBead(mine({ fixer_queue_status: "0" }), pr({ mergeable: "MERGEABLE" })).action, "wait");
   assert.equal(decideBead(mine({ fixer_queue_status: "3" }), pr({ mergeable: "MERGEABLE", headRefOid: "f".repeat(40) })).action, "wait");
   assert.equal(decideBead(mine({ fixer_queue_status: "3" }), pr({ mergeable: "MERGEABLE", labels: [] })).action, "skip");
+  // The attempt budget limits repairs, not the queue request for a head already pushed.
+  assert.equal(decideBead(mine({ fixer_attempts: "2", fixer_queue_status: "3" }), pr({ mergeable: "MERGEABLE" })).action, "queue");
+});
+
+test("the sandbox has its own PID namespace and procfs, so the runner's environ is out of reach", () => {
+  for (const flag of ["--unshare-pid", "--proc", "--die-with-parent"]) assert.ok(SANDBOX_ARGS.includes(flag), flag);
+  assert.equal(SANDBOX_ARGS[SANDBOX_ARGS.indexOf("--proc") + 1], "/proc");
 });
 
 test("maskArgs hides secret directories and files from the agent's sandbox", () => {
@@ -227,7 +236,7 @@ const r=require("child_process").spawnSync(A[i+1],A.slice(i+2),{cwd:A[c+1],stdio
 const pass = (w, over = {}) => runPass({
   repo: "owner/name", toolsRoot: w.tools, workRoot: join(w.root, "work"), queueWorkspace: w.root, env: w.env,
   // timing-ok: the injected clock only names run folders and stamps notes; nothing compares it with the real time
-  commands: w.commands, secretPaths: [], log: () => {}, now: () => "2026-11-13T00:00:00Z", ...over,
+  commands: w.commands, secretPaths: [], procProbe: [], log: () => {}, now: () => "2026-11-13T00:00:00Z", ...over,
 });
 
 test("a pass repairs a conflicting PR, pushes a merge and records it on the bead", POSIX, async (t) => {
@@ -326,6 +335,9 @@ test("a sandbox that lets the agent read a secret refuses the pass before any cl
   const result = await pass(w, { secretPaths: [secrets] });
   assert.equal(result.outcome, "refused");
   assert.match(result.reason, /sandbox/);
+  // The same for the runner's own environment seen through procfs (here a stand-in file).
+  writeFileSync(join(w.root, "environ"), "GH_TOKEN=not-a-real-token");
+  assert.equal((await pass(w, { procProbe: [join(w.root, "environ")] })).outcome, "refused");
   assert.ok(!w.read("calls").some((c) => c[0] === "bd" && c[1] === "update"), "nothing claimed");
   assert.equal(w.originHead(), w.prHead);
 });
@@ -341,6 +353,16 @@ test("an owner who takes the PR out of the queue mid-repair keeps it out", POSIX
   assert.ok(!w.read("calls").some((c) => c[0] === "queuePr"));
 });
 
+test("an opt-out label added mid-repair stops the push", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  w.commands.privacy = [process.execPath, ["-e", `const fs=require("fs"),p=require("path");const f=p.join(process.env.FAKE_ROOT,"pr.json");const s=JSON.parse(fs.readFileSync(f,"utf8"));s.labels.push("held");fs.writeFileSync(f,JSON.stringify(s));`]];
+  const result = await pass(w);
+  assert.equal(result.outcome, "failed");
+  assert.match(result.reason, /held/);
+  assert.equal(w.originHead(), w.prHead);
+});
+
 test("a queue request that failed after the push is retried on the next pass", POSIX, async (t) => {
   const w = world();
   t.after(w.cleanup);
@@ -349,8 +371,10 @@ test("a queue request that failed after the push is retried on the next pass", P
   assert.equal((await pass(w)).outcome, "pushed");
   assert.equal(w.read("beads")[0].metadata.fixer_queue_status, "3");
   w.commands.queuePr = good;
-  w.state("pr", { ...w.read("pr"), headRefOid: w.originHead(), mergeable: "MERGEABLE", labels: ["queue"] });
+  // The label removal failed too (it is back): the retry clears it before queueing.
+  w.state("pr", { ...w.read("pr"), headRefOid: w.originHead(), mergeable: "MERGEABLE", labels: ["queue", "needs-merge"] });
   assert.equal((await pass(w)).outcome, "queued");
+  assert.ok(!w.read("pr").labels.includes("needs-merge"));
   assert.equal(w.read("beads")[0].metadata.fixer_queue_status, "0");
   assert.equal(w.read("calls").filter((c) => c[0] === "queuePr").length, 1);
 });

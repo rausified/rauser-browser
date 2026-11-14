@@ -81,10 +81,10 @@ export function decideBead(bead, pr, { maxAttempts = MAX_ATTEMPTS } = {}) {
   if (!["open", "in_progress"].includes(bead.status)) return { action: "skip", reason: `status ${bead.status}` };
   if (!pr) return { action: "skip", reason: `PR #${ref.number} not found` };
   if (pr.number !== ref.number) return { action: "skip", reason: `bead names PR #${ref.number}, got #${pr.number}` };
+  if (pr.state === "MERGED" && pr.baseRefName !== "main") return { action: "skip", reason: `PR #${pr.number} merged into ${pr.baseRefName}, not main` };
   if (pr.state === "MERGED") return { action: "close", reason: `PR #${pr.number} merged into main as ${pr.mergeCommit?.oid ?? "unknown"}` };
   if (pr.state === "CLOSED") return { action: "close", reason: `PR #${pr.number} closed unmerged; nothing to repair` };
   if (bead.status === "in_progress" && bead.assignee && bead.assignee !== FIXER_ACTOR) return { action: "skip", reason: `claimed by ${bead.assignee}` };
-  if ((bead.labels ?? []).includes(EXHAUSTED_LABEL) || attemptsOf(bead) >= maxAttempts) return { action: "skip", reason: `exhausted after ${attemptsOf(bead)} attempt(s)` };
   if (pr.isCrossRepository) return { action: "skip", reason: "fork" };
   if (pr.baseRefName !== "main") return { action: "skip", reason: `base ${pr.baseRefName}` };
   for (const label of [HELD_LABEL, DOCTOR_SKIP_LABEL]) if (pr.labels.includes(label)) return { action: "skip", reason: `labelled ${label}` };
@@ -95,6 +95,8 @@ export function decideBead(bead, pr, { maxAttempts = MAX_ATTEMPTS } = {}) {
     && meta.fixer_queue_status !== undefined && String(meta.fixer_queue_status) !== "0" && pr.mergeable !== "CONFLICTING") {
     return { action: "queue", reason: `queue-pr exited ${meta.fixer_queue_status} after the push of ${pr.headRefOid.slice(0, 12)}; asking again` };
   }
+  // The attempt budget limits repairs only, so it comes after the queue retry for a pushed head.
+  if ((bead.labels ?? []).includes(EXHAUSTED_LABEL) || attemptsOf(bead) >= maxAttempts) return { action: "skip", reason: `exhausted after ${attemptsOf(bead)} attempt(s)` };
   if (pr.mergeable === "CONFLICTING") return { action: "repair", reason: `PR #${pr.number} conflicts with main at ${pr.headRefOid.slice(0, 12)}` };
   if (pr.mergeable === "MERGEABLE") return { action: "wait", reason: `no conflict with main at ${pr.headRefOid.slice(0, 12)}` };
   return { action: "wait", reason: "GitHub has not computed mergeability" };
@@ -131,6 +133,10 @@ export function maskArgs(paths, kindOf) {
   return paths.flatMap((p) => ({ dir: ["--tmpfs", p], file: ["--ro-bind", "/dev/null", p] })[kindOf(p)] ?? []);
 }
 const kindOfPath = (p) => { try { return statSync(p).isDirectory() ? "dir" : "file"; } catch { return null; } };
+
+/** bubblewrap's base: the host's filesystem, but its own PID namespace and procfs, so the
+ * agent cannot read the runner's environment through /proc/<pid>/environ. */
+export const SANDBOX_ARGS = Object.freeze(["--dev-bind", "/", "/", "--unshare-pid", "--proc", "/proc", "--die-with-parent"]);
 
 // Run inside the sandbox: exit 0 only when every path given is absent, empty or unreadable.
 const PROBE = `const fs=require("fs");for(const p of process.argv.slice(1)){let leak=false;try{const st=fs.statSync(p);leak=st.isDirectory()?fs.readdirSync(p).length>0:fs.readFileSync(p).length>0}catch{}if(leak){console.error("readable: "+p);process.exit(1)}}`;
@@ -244,11 +250,13 @@ export async function runPass(opts) {
     queuePr: [process.execPath, [join(toolsRoot, "scripts", "dev", "queue-pr.mjs")]],
     mergeDrivers: [process.execPath, [join(toolsRoot, "scripts", "dev", "setup-merge-drivers"), "--tools", join(toolsRoot, "scripts")]],
     // The agent and the review run in a bubblewrap sandbox that hides the host's credentials.
-    sandbox: ["bwrap", ["--dev-bind", "/", "/", "--die-with-parent"]],
+    sandbox: ["bwrap", [...SANDBOX_ARGS]],
     ...opts.commands,
   };
   const secretPaths = opts.secretPaths ?? defaultSecretPaths(env.HOME || homedir());
   const masks = maskArgs(secretPaths, kindOfPath);
+  // What the probe must find unreadable besides the secret paths: the runner's own environment.
+  const procProbe = opts.procProbe ?? [`/proc/${process.pid}/environ`];
   const wrap = (cmd, args, cwd) => [commands.sandbox[0], [...commands.sandbox[1], ...masks, "--chdir", cwd, "--", cmd, ...args]];
   mkdirSync(workRoot, { recursive: true });
   const lock = join(workRoot, "pr-fixer.lock");
@@ -287,6 +295,7 @@ export async function runPass(opts) {
       if (bd("close", d.bead.id, "--reason", d.reason).status === 0) closed++;
     }
     for (const d of decisions.filter((x) => x.action === "queue")) {
+      if (d.pr.labels.includes(NEEDS_MERGE_LABEL)) run("gh", ["pr", "edit", String(d.pr.number), "--repo", repo, "--remove-label", NEEDS_MERGE_LABEL], { env });
       const q = run(commands.queuePr[0], [...commands.queuePr[1], String(d.pr.number), "--head", d.pr.headRefOid, "--repo", repo], { cwd: toolsRoot, env });
       bd("update", d.bead.id, "--set-metadata", `fixer_queue_status=${q.status}`, "--append-notes", `${now()} ${FIXER_ACTOR}: queue-pr retried for ${d.pr.headRefOid.slice(0, 12)}, exited ${q.status}.`);
       if (q.status === 0) queued++;
@@ -298,7 +307,7 @@ export async function runPass(opts) {
     // Fail closed before claiming: the agent must not be able to read the host's credentials.
     const probeDir = join(workRoot, "probe");
     mkdirSync(probeDir, { recursive: true });
-    const [pcmd, pargs] = wrap(process.execPath, ["-e", PROBE, ...secretPaths], probeDir);
+    const [pcmd, pargs] = wrap(process.execPath, ["-e", PROBE, ...secretPaths, ...procProbe], probeDir);
     const probe = run(pcmd, pargs, { cwd: probeDir, env: agentEnv(env) });
     if (probe.status !== 0) return receipt({ outcome: "refused", reason: `the agent sandbox (${commands.sandbox[0]}) does not hide the host's credentials: ${clean(probe.stderr || probe.stdout || `exit ${probe.status}`)}` });
 
@@ -405,6 +414,7 @@ async function repair({ repo, pr, bead, attempt, toolsRoot, workRoot, agent, tim
     const note = `**Conflict repair** (scripts/dev/pr-fixer.mjs, repair bead ${bead.id}, ${now()}): merged main ${base.slice(0, 12)} into this branch as ${sha.slice(0, 12)}${files.length ? `, resolving ${files.map((f) => `\`${clean(f, 200)}\``).join(", ")}` : ""}. The agent's focused checks: ${checks.map((c) => `\`${c}\``).join(", ")}. codex review: no P1. The Owner above still owns this PR; the fixer only resolved the conflict.`;
     const current = viewPr(pr.number);
     if (!current || current.headRefOid !== head || current.state !== "OPEN") return { ok: false, reason: `the PR moved during the repair (now ${current ? `${current.state} at ${current.headRefOid.slice(0, 12)}` : "unreadable"}); its owner's work wins` };
+    for (const label of [HELD_LABEL, DOCTOR_SKIP_LABEL]) if (current.labels.includes(label)) return { ok: false, reason: `the PR was labelled ${label} during the repair; nothing is pushed` };
     if (!current.labels.includes(QUEUE_LABEL)) return { ok: false, reason: `the PR left the queue during the repair (no ${QUEUE_LABEL} label); its owner took it out, so nothing is pushed` };
     const body = upsertFixerNote(current.body, note);
     const owner = checkPrOwner({ body, title: current.title, head: { ref: current.headRefName } });
