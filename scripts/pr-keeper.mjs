@@ -32,9 +32,11 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { DOCTOR_SKIP_LABEL, HELD_LABEL, KEEPER_MARKER, NEEDS_MERGE_LABEL } from "./pr-constants.mjs";
-import { analyzeChecks, describe, fetchSnapshot, planQueue, QUEUE_COMMENT, REFRESH_COMMENT } from "./dev/queue-pr.mjs";
+import { DOCTOR_SKIP_LABEL, HELD_LABEL, KEEPER_MARKER, NEEDS_MERGE_LABEL, TRUSTED_AUTHORS } from "./pr-constants.mjs";
+import { analyzeChecks, describe, fetchSnapshot, planQueue, QUEUE_COMMENT, REFRESH_COMMENT, trustedAuthors, trustedComment } from "./dev/queue-pr.mjs";
 import { doctorComment } from "./dev/pr-watch.mjs";
+
+export { TRUSTED_AUTHORS, trustedComment };
 
 export const KEEPER_GREEN_MINUTES = 15;
 export const ISSUE_TITLE = "PR keeper alerts";
@@ -42,17 +44,6 @@ export const ISSUE_LABEL = "pr-keeper";
 export const repairRef = (n, head) => `gh-pr-${n}-${String(head ?? "").slice(0, 12)}`;
 
 const minutes = (from, to) => (Date.parse(to) - Date.parse(from)) / 60000;
-
-/** Whose marker comments the keeper believes: the workflow's own bot. keep() adds the
- * PR_DOCTOR_TOKEN owner. Anyone can post `<!-- pr-doctor -->` on a public repository. */
-export const TRUSTED_AUTHORS = Object.freeze(["github-actions[bot]", "github-actions"]);
-const authorOf = (c) => c.author ?? c.user?.login ?? "";
-
-/** The newest comment starting with `marker` from a trusted author, or null (GraphQL or REST shape). */
-export function trustedComment(comments, marker, trusted = TRUSTED_AUTHORS) {
-  return [...(comments ?? [])].sort((a, b) => String(a.createdAt ?? a.created_at ?? "").localeCompare(String(b.createdAt ?? b.created_at ?? "")))
-    .reverse().find((c) => (c.body ?? "").startsWith(marker) && trusted.includes(authorOf(c))) ?? null;
-}
 
 /** A file name from a comment, safe to quote: in a code span, with no backtick or "@". */
 const safeName = (file) => `\`${String(file).replace(/[`@]/g, "_")}\``;
@@ -92,11 +83,14 @@ export function decideKeeper(snap, { now = new Date().toISOString(), mergeTreeCl
     actions.push({ kind: "unlabel", label: NEEDS_MERGE_LABEL });
     unlabeled = true;
   }
-  // (e) the doctor gave up: file a repair bead (once per PR; see repairsToFile).
+  // (e) the doctor gave up: file a repair bead (once per PR; see repairsToFile). Not again once
+  // the keeper's own sticky comment names this head's bead: the bead step bootstraps the
+  // queue database on every run that requests one (brwr-mva0 6).
   const doctor = doctorComment(snap.comments, { trusted });
   if (needsMerge && mergeTreeClean !== true && doctor?.outcome === "needs-person") {
     const files = doctor.files.map(safeName);
-    actions.push({ kind: "repair", head: snap.headOid, files, ref: repairRef(n, snap.headOid) });
+    const ref = repairRef(n, snap.headOid);
+    if (!trustedComment(snap.comments, KEEPER_MARKER, trusted)?.body.includes(ref)) actions.push({ kind: "repair", head: snap.headOid, files, ref });
     alerts.push({ kind: "needs-person", text: `conflicts with main in files pr-doctor does not resolve${files.length ? ` (${files.join(", ")})` : ""}; a repair bead ${repairRef(n, snap.headOid)} is filed. Merge main into the branch by hand` });
   }
   // (d) states only a person can clear.
@@ -120,6 +114,7 @@ export function decideKeeper(snap, { now = new Date().toISOString(), mergeTreeCl
       }
     }
     if (plan.outcome === "refresh-ignored") alerts.push({ kind: "refresh-ignored", text: `is queued but Mergify still waits on checks GitHub reports passed, after a refresh: check the Mergify dashboard` });
+    if (plan.outcome === "queue-unanswered") alerts.push({ kind: "queue-unanswered", text: plan.message.replace(/^#\d+ /, "") });
     if (plan.outcome === "dequeued") alerts.push({ kind: "dequeued", text: `left the Mergify queue on its current head: ${reason ?? "see Mergify's comment"}. Push a fix (the keeper requeues a new head once it is green), or comment \`@mergifyio requeue\` for a flake` });
     notes.push(plan.message.replace(/^#\d+ /, ""));
   } else if (!snap.labeled) {
@@ -231,14 +226,7 @@ export function settleSeconds(retries, greenMinutes = KEEPER_GREEN_MINUTES) {
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-/** The workflow's bot plus the token's owner (PR_DOCTOR_TOKEN posts as a user). */
-function trustedAuthors() {
-  let owner = null;
-  try { owner = gh(["api", "user", "--jq", ".login"]).trim() || null; } catch { /* an installation token has no user */ }
-  return [...TRUSTED_AUTHORS, ...(owner ? [owner] : [])];
-}
-
-function keep({ repo, dryRun, settle = false, trusted = trustedAuthors() }) {
+function keep({ repo, dryRun, settle = false, trusted = trustedAuthors(repo, { run: gh }) }) {
   const now = new Date().toISOString();
   const list = JSON.parse(gh(["pr", "list", "--repo", repo, "--base", "main", "--state", "open", "--limit", "100", "--json", "number"]));
   const rows = [], repairs = [];

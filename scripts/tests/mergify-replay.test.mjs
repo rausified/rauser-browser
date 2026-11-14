@@ -44,7 +44,8 @@ function snapshotAt(t, { extraComments = [], removedLabels = [] } = {}) {
     mergeable: conflicting ? "CONFLICTING" : "MERGEABLE", mergeStateStatus: conflicting ? "DIRTY" : "CLEAN",
     headRefOid: head.oid, headRefName: "feat/example", baseRefName: "main", isCrossRepository: false, autoMergeRequest: null,
     labels: { nodes: [...labels].map((name) => ({ name })) }, comments: { nodes: comments },
-    commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: contexts } } } }] },
+    // The fixture's head time is its push: a lower bound for the committer date, as in GitHub.
+    commits: { nodes: [{ commit: { committedDate: head.at, statusCheckRollup: { contexts: { nodes: contexts } } } }] },
   } } });
 }
 
@@ -65,7 +66,7 @@ function watchReplay() {
   return POLLS.map((t) => {
     const snap = snapshotAt(t);
     track(state, snap, t);
-    return { t, snap, d: decide(snap, { now: t, dirtySince: state.dirtySince, idleSince: state.idleSince }) };
+    return { t, snap, d: decide(snap, { now: t, dirtySince: state.dirtySince, idleSince: state.idleSince, trusted: ["doctor-bot"] }) };
   });
 }
 const firstAt = (rows, pred) => rows.find(pred)?.t ?? null;
@@ -137,4 +138,44 @@ test("replay keeper: one repair bead per head while it conflicts, and needs-merg
   assert.ok(removedAt > "2026-11-10T03:52:43Z" && removedAt <= "2026-11-10T03:54:44Z", removedAt);
   // A person removed it at 05:02:46: the keeper saves about 68 minutes of this delay.
   assert.ok((ms("2026-11-10T05:02:46Z") - ms(removedAt)) / 60000 > 60);
+});
+
+test("replay keeper (brwr-mva0 8): its own comments fed back into later polls draw no second queue or refresh", () => {
+  const posted = [];
+  const perHead = new Map();
+  for (const t of POLLS) {
+    const snap = snapshotAt(t, { extraComments: posted });
+    const d = decideKeeper(snap, { now: t, mergeTreeClean: !inConflict(t), trusted: ["doctor-bot"] });
+    for (const a of d.actions) {
+      if (a.kind !== "queue" && a.kind !== "refresh") continue;
+      const key = `${snap.headOid}:${a.kind}`;
+      perHead.set(key, (perHead.get(key) ?? 0) + 1);
+      // Posted a second after the poll, as the keeper's gh call would be.
+      posted.push({ author: "keeper-bot", body: a.kind === "queue" ? "@Mergifyio queue" : "@Mergifyio refresh", createdAt: iso(ms(t) + 1000) });
+    }
+  }
+  for (const [key, count] of perHead) assert.equal(count, 1, `${key} posted ${count} times`);
+  assert.ok(posted.length >= 1, "the keeper queued at least once in #384's unqueued gaps");
+});
+
+test("replay #456 (brwr-5yy0): queued on the old head, pushed, then queue-pr queues the new head", () => {
+  // Synthetic replay of #456: a request Mergify answered on head A, a push of head B, and
+  // queue-pr run just after it, before Mergify's cancellation reply arrived.
+  // timing-ok: #456's recorded times, passed to planQueue as `now`; never compared with the clock
+  const at456 = (hms) => `2026-11-13T${hms}Z`;
+  const contexts = (at) => [done("Build and check", "SUCCESS", { required: true, startedAt: at, completedAt: at })];
+  const mk = (committedDate, comments) => snapshotFromGraphql({ repository: { pullRequest: {
+    number: 456, state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+    headRefOid: "b".repeat(40), headRefName: "docs/split", baseRefName: "main", isCrossRepository: false, autoMergeRequest: null,
+    labels: { nodes: [{ name: "queue" }] }, comments: { nodes: comments.map((c) => ({ author: { login: c.author }, body: c.body, createdAt: c.createdAt, updatedAt: c.createdAt })) },
+    commits: { nodes: [{ commit: { committedDate, statusCheckRollup: { contexts: { nodes: contexts(committedDate) } } } }] },
+  } } });
+  const waiting = TL.comments.flatMap((c) => c.versions).find((v) => /"state": "waiting"/.test(v.body));
+  assert.ok(waiting, "the #384 fixture has a waiting payload to reuse");
+  const before = [{ author: "dev-session", body: "@Mergifyio queue", createdAt: at456("12:42:46") },
+    { author: "mergify", body: waiting.body, createdAt: at456("12:42:53") }];
+  const plan = planQueue(mk(at456("12:53:42"), before), { now: at456("12:53:50") });
+  assert.deepEqual(plan.actions.map((a) => a.kind), ["queue"], plan.message);
+  const after = planQueue(mk(at456("12:53:42"), [...before, { author: "dev-session", body: "@Mergifyio queue", createdAt: at456("12:53:55") }]), { now: at456("12:54:00") });
+  assert.deepEqual(after.actions, []);
 });

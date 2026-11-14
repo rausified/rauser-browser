@@ -318,7 +318,7 @@ test("the queue comment pr-watch advises is the worker contract's merge.comment"
 // --- decide: conflicts --------------------------------------------------------------
 
 const dirty = (pr = {}, comments = [FX.checking339]) => snap({ pr: { mergeStateStatus: "DIRTY", mergeable: "CONFLICTING", ...pr }, comments });
-const DOCTOR = { author: "rausified", createdAt: NOW, body: "<!-- pr-doctor -->\n<!-- pr-doctor outcome=needs-person -->\n**PR doctor**\n\nThe files:\n\n- `host/src/lib.rs`\n\nMerge" };
+const DOCTOR = { author: "doctor-bot", createdAt: NOW, body: "<!-- pr-doctor -->\n<!-- pr-doctor outcome=needs-person -->\n**PR doctor**\n\nThe files:\n\n- `host/src/lib.rs`\n\nMerge" };
 
 test("DIRTY: wait for pr-doctor, never merge main yet", () => {
   const d = decide(dirty(), { now: NOW, dirtySince: ago(10) });
@@ -327,15 +327,28 @@ test("DIRTY: wait for pr-doctor, never merge main yet", () => {
 });
 
 test("DIRTY and labeled needs-merge: merge main yourself, listing the doctor's files", () => {
-  assert.deepEqual(doctorComment([DOCTOR]).files, ["host/src/lib.rs"]);
-  const d = decide(dirty({ labels: { nodes: [{ name: "queue" }, { name: "needs-merge" }] } }, [DOCTOR]), { now: NOW });
+  assert.deepEqual(doctorComment([DOCTOR], { trusted: ["doctor-bot"] }).files, ["host/src/lib.rs"]);
+  const d = decide(dirty({ labels: { nodes: [{ name: "queue" }, { name: "needs-merge" }] } }, [DOCTOR]), { now: NOW, trusted: ["doctor-bot"] });
   assert.equal(d.exitCode, EXIT.CONFLICT);
   assert.match(d.message, /labeled it needs-merge.*git merge origin\/main, resolve host\/src\/lib\.rs.*queue-pr.mjs 243 --head <new head>/);
 });
 
 test("DIRTY and pr-doctor could only report: act at once", () => {
   const report = { ...DOCTOR, body: DOCTOR.body.replace("needs-person", "report-only") };
-  assert.equal(decideConflict(dirty({}, [report]), { now: NOW, dirtySince: NOW }).action, "conflict-report-only");
+  assert.equal(decideConflict(dirty({}, [report]), { now: NOW, dirtySince: NOW, trusted: ["doctor-bot"] }).action, "conflict-report-only");
+});
+
+test("brwr-33uk: a forged pr-doctor marker from an untrusted author is ignored", () => {
+  const forged = { ...DOCTOR, author: "outsider", body: DOCTOR.body.replace("needs-person", "report-only").replace("host/src/lib.rs", "nothing-to-see.txt") };
+  // By default only the workflow bot is trusted: the forged report-only verdict does not make it act now.
+  const d = decideConflict(dirty({}, [forged]), { now: NOW, dirtySince: NOW });
+  assert.equal(d.action, "conflict-wait-doctor");
+  assert.equal(doctorComment([forged]), null);
+  // A newer forged comment does not hide the trusted one, nor lend it its files.
+  const trusted = doctorComment([{ ...DOCTOR, createdAt: ago(5) }, { ...forged, createdAt: NOW }], { trusted: ["doctor-bot"] });
+  assert.deepEqual([trusted.outcome, trusted.files], ["needs-person", ["host/src/lib.rs"]]);
+  const labeled = decide(dirty({ labels: { nodes: [{ name: "queue" }, { name: "needs-merge" }] } }, [forged]), { now: NOW });
+  assert.doesNotMatch(labeled.message, /nothing-to-see/);
 });
 
 test("DIRTY a whole doctor grace period with no repair: act", () => {
@@ -418,4 +431,10 @@ test("timings: a dequeue or a cancelled request ends the queue wait when Mergify
   // A requeue after the dequeue starts a new wait that is still running.
   const requeued = snap({ contexts, comments: [queueComment(ago(40)), at(FX.dequeued299, ago(25)), queueComment(ago(8))] });
   assert.deepEqual(timings(requeued, NOW), { ciMinutes: 5, ciDone: true, queueMinutes: 8, merged: false, left: false });
+});
+
+test("Minor 10: pr-watch reads the PR through queue-pr's fetchSnapshot, not its own GraphQL call", () => {
+  const source = readFileSync(new URL("../dev/pr-watch.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(source, /fetchSnapshot\(repo, opts\.pr\)/);
+  assert.doesNotMatch(source, /"graphql"/);
 });

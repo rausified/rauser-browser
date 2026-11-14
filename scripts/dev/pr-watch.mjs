@@ -14,15 +14,14 @@
 // closed; 14 draft; 15 a check was cancelled and nothing replaced it; 16 queued
 // but Mergify will not take it (exclusion label, stale condition, or stuck).
 
-import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { parseArgs as parseCli } from "node:util";
 import { pathToFileURL } from "node:url";
 
-import { DOCTOR_MARKER, DOCTOR_SKIP_LABEL, NEEDS_MERGE_LABEL } from "../pr-constants.mjs";
+import { DOCTOR_MARKER, DOCTOR_SKIP_LABEL, NEEDS_MERGE_LABEL, TRUSTED_AUTHORS } from "../pr-constants.mjs";
 import {
-  ADMIT_GRACE_MINUTES, FAILED, GATE, PASSED, QUERY, QUEUE_COMMENT, QUEUE_EXCLUSION_LABELS, QUEUE_LABEL, REFRESH_COMMENT,
-  analyzeChecks, latestChecks, mergifyStatus, snapshotFromGraphql, staleConditions,
+  ADMIT_GRACE_MINUTES, FAILED, GATE, PASSED, QUEUE_COMMENT, QUEUE_EXCLUSION_LABELS, QUEUE_LABEL, REFRESH_COMMENT,
+  analyzeChecks, fetchSnapshot, gh, latestChecks, mergifyStatus, snapshotFromGraphql, staleConditions, trustedAuthors, trustedComment,
 } from "./queue-pr.mjs";
 
 // The Mergify client and check reading live in queue-pr.mjs (one copy for pr-watch, pr-doctor and the keeper).
@@ -50,19 +49,19 @@ const minutes = (from, to) => (Date.parse(to) - Date.parse(from)) / 60000;
 const graceOver = (since, now) => !!since && minutes(since, now) >= ADMIT_GRACE_MINUTES;
 const act = (exitCode, action, message) => ({ exitCode, action, message, done: true });
 const wait = (action, message) => ({ exitCode: EXIT.WAITING, action, message, done: false });
-/** The pr-doctor sticky comment's outcome and listed files, or null. */
-export function doctorComment(comments, { trusted = null } = {}) {
-  // `trusted`: only these authors' marker comments count (anyone can post the marker on a public repo).
-  const comment = [...(comments ?? [])].reverse().find((c) => (c.body ?? "").startsWith(DOCTOR_MARKER) && (!trusted || trusted.includes(c.author)));
+/** The pr-doctor sticky comment's outcome and listed files, or null. Only `trusted` authors'
+ * marker comments count: anyone can post the marker on a public repo (brwr-33uk). */
+export function doctorComment(comments, { trusted = TRUSTED_AUTHORS } = {}) {
+  const comment = trustedComment(comments, DOCTOR_MARKER, trusted);
   if (!comment) return null;
   return { outcome: /pr-doctor outcome=([\w-]+)/.exec(comment.body)?.[1] ?? null, files: [...comment.body.matchAll(/^- `([^`]+)`$/gm)].map((m) => m[1]) };
 }
 
 /** DIRTY: pr-doctor repairs queue-file and append-only Markdown conflicts by itself; hand you
  * the merge only once it says it cannot (the needs-merge label, or no push token) or a cycle passed. */
-export function decideConflict(snap, { now, dirtySince = null } = {}) {
+export function decideConflict(snap, { now, dirtySince = null, trusted = TRUSTED_AUTHORS } = {}) {
   const n = snap.number;
-  const doctor = doctorComment(snap.comments);
+  const doctor = doctorComment(snap.comments, { trusted });
   const merge = `merge main yourself: git fetch origin && git merge origin/main, resolve ${doctor?.files.length ? short(doctor.files, 6) : "the conflicts"}, run the focused checks, push, then ${queuePrCommand(n, "<new head>")}`;
   if (snap.labels.includes(NEEDS_MERGE_LABEL)) return act(EXIT.CONFLICT, "conflict-labeled", `#${n} conflicts with main and pr-doctor labeled it ${NEEDS_MERGE_LABEL}: ${merge}`);
   if (doctor?.outcome === "report-only") return act(EXIT.CONFLICT, "conflict-report-only", `#${n} conflicts with main and pr-doctor reported without repairing (no push token): ${merge}`);
@@ -77,7 +76,7 @@ const disarmCommand = (snap) => `gh pr merge --disable-auto ${snap.number}`;
 
 /** One snapshot (+ what the shell gathered) -> { action, message, exitCode, done }. `idleSince`:
  * when the PR was first seen green with no queue run (it times the 12 and 16 exits). */
-export function decide(snap, { until = "merged", now = new Date().toISOString(), dirtySince = null, idleSince = null } = {}) {
+export function decide(snap, { until = "merged", now = new Date().toISOString(), dirtySince = null, idleSince = null, trusted = TRUSTED_AUTHORS } = {}) {
   const n = snap.number;
   const { state, step, unmet, reason, code } = snap.mergify;
   if (snap.state === "MERGED") return act(EXIT.DONE, "merged", `#${n} merged`);
@@ -98,7 +97,7 @@ export function decide(snap, { until = "merged", now = new Date().toISOString(),
     const first = checks.cancelled[0];
     return act(EXIT.CANCELLED, `cancelled:${first.name}`, `#${n} ${first.name} was cancelled on the current head and no newer run replaced it: ${first.runId ? `gh run rerun ${first.runId} --failed` : `gh pr checks ${n}`}`);
   }
-  if (dirty) return decideConflict(snap, { now, dirtySince });
+  if (dirty) return decideConflict(snap, { now, dirtySince, trusted });
   if (snap.autoMerge) return act(EXIT.ENQUEUE, "auto-merge-armed", `#${n} has GitHub auto-merge armed, which merges around the Mergify queue: ${disarmCommand(snap)}`);
   if (snap.blockers.length && (snap.labeled || queued)) {
     return act(EXIT.QUEUE_BLOCKED, `queue-blocked:${snap.blockers[0]}`, `#${n} is queued but Mergify will not take it while it carries ${snap.blockers.join(", ")} (.mergify.yml queue_conditions; pr-doctor clears ${NEEDS_MERGE_LABEL} once the PR merges cleanly): ${snap.blockers.map((l) => `gh pr edit ${n} --remove-label ${l}`).join(" && ")}`);
@@ -190,13 +189,6 @@ export function statusLine(snap, decision) {
 
 // --- I/O ----------------------------------------------------------------------
 
-function gh(args) {
-  const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`gh ${args.slice(0, 2).join(" ")} exited ${result.status}: ${(result.stderr || result.stdout).trim().split("\n")[0]}`);
-  return result.stdout;
-}
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const stamp = () => new Date().toISOString().slice(11, 19) + "Z";
 const USAGE = "usage: node scripts/dev/pr-watch.mjs <pr> [--until merged|green] [--interval 120] [--max-minutes N] [--repo owner/name] [--once]";
@@ -206,19 +198,17 @@ async function main() {
   try { opts = parseArgs(process.argv.slice(2)); } catch (error) { console.error(`${error.message}\n${USAGE}`); return EXIT.USAGE; }
   if (opts.help) { console.log(USAGE); return EXIT.DONE; }
   const repo = opts.repo ?? gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
-  const [owner, name] = repo.split("/");
+  const trusted = trustedAuthors(repo);
   const started = Date.now();
   const state = { dirtySince: null, idleSince: null };
   let lastLine = null, lastHead = null, lastAction = null;
   for (;;) {
     let snap, decision;
     try {
-      const data = JSON.parse(gh(["api", "graphql", "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `number=${opts.pr}`, "-f", `query=${QUERY}`]));
-      if (data.errors?.length) throw new Error(data.errors[0].message);
-      snap = snapshotFromGraphql(data.data);
+      snap = fetchSnapshot(repo, opts.pr);
       const now = new Date().toISOString();
       track(state, snap, now);
-      decision = decide(snap, { until: opts.until, now, dirtySince: state.dirtySince, idleSince: state.idleSince });
+      decision = decide(snap, { until: opts.until, now, dirtySince: state.dirtySince, idleSince: state.idleSince, trusted });
     } catch (error) {
       if (opts.once) { console.error(`pr-watch: ${error.message}`); return EXIT.ERROR; }
       console.error(`${stamp()} gh failed (${error.message}); retrying`);

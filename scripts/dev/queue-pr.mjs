@@ -34,10 +34,10 @@ import { parseArgs as parseCli } from "node:util";
 import { pathToFileURL } from "node:url";
 
 import {
-  DOCTOR_SKIP_LABEL, NEEDS_MERGE_LABEL, QUEUE_COMMENT, QUEUE_EXCLUSION_LABELS, QUEUE_LABEL, REFRESH_COMMENT,
+  DOCTOR_SKIP_LABEL, NEEDS_MERGE_LABEL, QUEUE_COMMENT, QUEUE_EXCLUSION_LABELS, QUEUE_LABEL, REFRESH_COMMENT, TRUSTED_AUTHORS,
 } from "../pr-constants.mjs";
 
-export { QUEUE_COMMENT, QUEUE_LABEL, REFRESH_COMMENT, QUEUE_EXCLUSION_LABELS };
+export { QUEUE_COMMENT, QUEUE_LABEL, REFRESH_COMMENT, QUEUE_EXCLUSION_LABELS, TRUSTED_AUTHORS };
 export const EXIT = Object.freeze({ OK: 0, ERROR: 1, USAGE: 2, HEAD_TIMEOUT: 3, PERSON: 10, CLOSED: 13 });
 /** Mergify normally lags GitHub by up to a minute; act on a stale view only after this. */
 export const ADMIT_GRACE_MINUTES = 5;
@@ -74,6 +74,33 @@ const isMergify = (author) => /^mergify(\[bot\])?$/.test(author ?? "");
 const at = (c) => c.createdAt ?? "";
 const byCreated = (comments) => [...(comments ?? [])].sort((a, b) => at(a).localeCompare(at(b)));
 const payloadOf = (body) => { try { return JSON.parse(PAYLOAD.exec(body ?? "")?.[1] ?? "null"); } catch { return null; } };
+const isQueueCommand = (c) => !isMergify(c.author) && /^\s*@mergifyio (queue|requeue)\b/i.test(c.body ?? "");
+const CANCELLED = /request has been cancelled|Queue command cancelled/;
+const later = (a, b) => (Date.parse(a) > Date.parse(b));
+/** Mergify's states that hold a request for the PR's head; a push ends each of them. */
+const LIVE = new Set(["requested", "waiting", "checking"]);
+
+/** The earliest time the head can have reached GitHub: its committer date (GitHub no longer
+ * reports push times: `pushedDate` is deprecated and null), but never after the head's first
+ * check started, which bounds a committer clock running ahead. Null without a committer date:
+ * check starts alone are no head time, since a rerun (after a PR body edit, say) starts long
+ * after the push (#421, 2026-11-13). */
+export function headTime(committedDate, checks) {
+  if (!committedDate) return null;
+  const starts = (checks ?? []).map((c) => c.startedAt).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b));
+  return starts.length && Date.parse(starts[0]) < Date.parse(committedDate) ? starts[0] : committedDate;
+}
+
+/** The newest queue command asked for the head at `headAt` that Mergify has not since cancelled,
+ * or null: the "once per head" key (brwr-mva0 1). Mergify cancels a command whose push event it
+ * processed late (#456 at 12:54:04Z), and that one may be asked again. Null without `headAt`. */
+export function askedOnHead(comments, headAt) {
+  if (!headAt) return null;
+  const sorted = byCreated(comments);
+  const ask = sorted.filter((c) => isQueueCommand(c) && !later(headAt, at(c))).at(-1);
+  if (!ask) return null;
+  return sorted.some((c) => isMergify(c.author) && later(at(c), at(ask)) && CANCELLED.test(c.body ?? "")) ? null : ask;
+}
 
 /** Mergify's view of the PR, from its comments in creation order: each queue request gets a new
  * status comment, and Mergify rewrites the old one as finished after it (#346), so the
@@ -81,11 +108,12 @@ const payloadOf = (body) => { try { return JSON.parse(PAYLOAD.exec(body ?? "")?.
  * command newer than every status comment is `requested` (Mergify answers in seconds), unless
  * Mergify replies that one is already running (#339). `unmet` lists what a waiting request lacks
  * (the payload's tree, else the checklist above <details>: a waiting payload's tree is empty). */
-export function mergifyStatus(comments) {
-  let status = { state: "none", unmet: [] }, live = status;
-  for (const { author, body = "" } of byCreated(comments)) {
+export function mergifyStatus(comments, { headAt = null } = {}) {
+  let status = { state: "none", unmet: [] }, live = status, requestAt = null, liveAt = null;
+  for (const comment of byCreated(comments)) {
+    const { author, body = "" } = comment;
     if (!isMergify(author)) {
-      if (/^\s*@mergifyio (queue|requeue)\b/i.test(body)) { live = status; status = { state: "requested", unmet: [] }; }
+      if (isQueueCommand(comment)) { live = status; liveAt = requestAt; status = { state: "requested", unmet: [] }; requestAt = at(comment); }
       continue;
     }
     const payload = payloadOf(body);
@@ -96,9 +124,13 @@ export function mergifyStatus(comments) {
       const unmet = payload.state === "waiting" ? [...new Set(leaves(payload.required_conditions).concat(fromList))]
         : payload.state === "dequeued" ? [...new Set(quoted)] : [];
       status = { state: payload.state, step: payload.step ?? null, unmet, reason: payload.dequeue_reason?.message ?? null, code: payload.dequeue_reason?.code ?? null };
-    } else if (/request has been cancelled|Queue command cancelled/.test(body)) status = { state: "cancelled", unmet: [] };
-    else if (/already running/.test(body) && status.state === "requested") status = live;
+      requestAt = at(comment);
+    } else if (CANCELLED.test(body)) status = { state: "cancelled", unmet: [] };
+    else if (/already running/.test(body) && status.state === "requested") { status = live; requestAt = liveAt; }
   }
+  // brwr-5yy0: a push cancels every request, but Mergify's reply can lag it (#456 reported
+  // "queued" from a request made before the push). A request older than the head is gone.
+  if (headAt && LIVE.has(status.state) && requestAt && later(headAt, requestAt)) return { state: "cancelled", unmet: [], stale: true };
   return status;
 }
 
@@ -121,13 +153,15 @@ export function snapshotFromGraphql(data) {
   const pr = data.repository.pullRequest;
   const labels = (pr.labels?.nodes ?? []).map((label) => label.name);
   const comments = (pr.comments?.nodes ?? []).map((c) => ({ author: c.author?.login ?? "", body: c.body ?? "", createdAt: c.createdAt, updatedAt: c.updatedAt }));
+  const head = pr.commits?.nodes?.[0]?.commit;
+  const checks = latestChecks(head?.statusCheckRollup?.contexts?.nodes);
+  const headAt = headTime(head?.committedDate ?? null, checks);
   return {
     number: pr.number, state: pr.state, mergedAt: pr.mergedAt ?? null, isDraft: !!pr.isDraft, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus,
     baseRefName: pr.baseRefName ?? "main", headRefName: pr.headRefName ?? "", isCrossRepository: !!pr.isCrossRepository,
     autoMerge: pr.autoMergeRequest != null, labels, labeled: labels.includes(QUEUE_LABEL),
     blockers: labels.filter((name) => QUEUE_EXCLUSION_LABELS.includes(name)),
-    headOid: pr.headRefOid, comments,
-    checks: latestChecks(pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes), mergify: mergifyStatus(comments),
+    headOid: pr.headRefOid, headAt, comments, checks, mergify: mergifyStatus(comments, { headAt }),
   };
 }
 
@@ -214,9 +248,19 @@ export function planQueue(snap, { now = new Date().toISOString(), ready = false,
     if (lagging) return result("refresh-ignored", EXIT.PERSON, `is queued and Mergify still waits on checks GitHub reports passed after a refresh; check https://dashboard.mergify.com`);
     return result("waiting", EXIT.OK, `is queued; Mergify is waiting for ${unmet.length ? unmet.map((c) => `\`${c}\``).join(", ") : "its conditions"}`);
   }
-  if (QUEUED.has(state)) return result(state, EXIT.OK, state === "checking" ? `is in the Mergify queue (${step ?? "checking"})` : state === "requested" ? "has a queue request Mergify has not answered yet" : "is merged by Mergify; GitHub will show it shortly");
+  if (state === "checking" || state === "merged") return result(state, EXIT.OK, state === "checking" ? `is in the Mergify queue (${step ?? "checking"})` : "is merged by Mergify; GitHub will show it shortly");
+  // One queue command per head (brwr-mva0 1): Mergify answering "already running" with no live
+  // request, or never answering at all (brwr-mva0 2), must not draw a comment on every run.
+  const ask = state === "requested" ? byCreated(snap.comments).filter(isQueueCommand).at(-1) : askedOnHead(snap.comments, snap.headAt);
+  if (ask) {
+    if (minutes(at(ask), now) >= graceMinutes) {
+      return result("queue-unanswered", EXIT.PERSON, `asked Mergify to queue this head ${Math.round(minutes(at(ask), now))} minutes ago (${ask.author || "unknown author"}) and Mergify holds no request for it: check https://dashboard.mergify.com, and that the comment's author can command Mergify (it ignores github-actions[bot])`);
+    }
+    return result("requested", EXIT.OK, "has a queue request for this head Mergify has not taken yet");
+  }
   actions.push({ kind: "queue" });
-  return result("queue", EXIT.OK, state === "cancelled" ? "lost its queue request to a push; queue it again" : "has no queue request; queue it");
+  return result("queue", EXIT.OK, snap.mergify.stale ? "has a queue request older than the current head, which the push cancelled; queue it again"
+    : state === "cancelled" ? "lost its queue request to a push; queue it again" : "has no queue request; queue it");
 }
 
 /** Comment `text` once GitHub reports `sha` as the PR's head, polling every `stepMs` for at
@@ -235,12 +279,20 @@ export function queueAfterPush({ sha, headOf, comment, wait, text = QUEUE_COMMEN
   return { settled, seen, commented: settled || force };
 }
 
+/** The newest comment starting with `marker` from a trusted author, or null (GraphQL or REST
+ * shape). Shared by the keeper and pr-watch (brwr-33uk): anyone can post a marker comment. */
+export function trustedComment(comments, marker, trusted = TRUSTED_AUTHORS) {
+  const authorOf = (c) => c.author ?? c.user?.login ?? "";
+  return [...(comments ?? [])].sort((a, b) => String(a.createdAt ?? a.created_at ?? "").localeCompare(String(b.createdAt ?? b.created_at ?? "")))
+    .reverse().find((c) => (c.body ?? "").startsWith(marker) && trusted.includes(authorOf(c))) ?? null;
+}
+
 // --- I/O ------------------------------------------------------------------------
 
 export const QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
  pullRequest(number:$number){ number state mergedAt isDraft mergeable mergeStateStatus headRefOid headRefName baseRefName isCrossRepository autoMergeRequest{enabledAt}
   labels(first:30){nodes{name}} comments(last:50){nodes{author{login} body createdAt updatedAt}}
-  commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{ __typename
+  commits(last:1){nodes{commit{committedDate statusCheckRollup{contexts(first:100){nodes{ __typename
    ... on CheckRun{name status conclusion startedAt completedAt isRequired(pullRequestNumber:$number) checkSuite{workflowRun{databaseId}}}
    ... on StatusContext{context state createdAt isRequired(pullRequestNumber:$number)}}}}}}}}}}`;
 
@@ -257,6 +309,15 @@ export function fetchSnapshot(repo, number) {
   const data = JSON.parse(gh(["api", "graphql", "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `number=${number}`, "-f", `query=${QUERY}`]));
   if (data.errors?.length) throw new Error(data.errors[0].message);
   return snapshotFromGraphql(data.data);
+}
+
+/** The workflow's bot, plus the account behind `gh` (PR_DOCTOR_TOKEN posts as its owner; locally,
+ * the session's own login) and the repository's owner (who owns that token on a personal repo). */
+export function trustedAuthors(repo, { run = gh } = {}) {
+  let user = null;
+  try { user = run(["api", "user", "--jq", ".login"]).trim() || null; } catch { /* an installation token has no user */ }
+  const owner = String(repo ?? "").split("/")[0] || null;
+  return [...new Set([...TRUSTED_AUTHORS, ...(owner ? [owner] : []), ...(user ? [user] : [])])];
 }
 
 /** Apply planQueue's actions with gh. `log` gets one line per action. */
