@@ -30,13 +30,15 @@ Commands (scripts/dev/queue is the entry point):
                     this database against the remote's refs/dolt/data, and
                     unpublished edits; prints the safe repair for each and
                     performs none. Exits 1 when it finds a problem.
-  adopt --from REF [--base REV] [--dry-run]
+  adopt --from REF [--base REV] [--dry-run | --no-sync]
                     apply the bead edits a branch committed in the old
                     .beads/issues.jsonl (REF's file against BASE's, default the
                     merge base with origin/main) to the database as field-level
                     updates through bd, then sync. A field this database also
                     changed differently, or a deleted bead, refuses the whole
-                    adopt with nothing applied. PR doctor runs this.
+                    adopt with nothing applied. --no-sync applies without
+                    any pull or sync (no network); run sync afterwards.
+                    PR doctor runs this.
   seed --remote URL --from JSONL [--extra JSONL]... [--yes]
                     one-shot: build a fresh database from JSONL plus extra rows
                     (each validated, ids unique), check it, and push it to a
@@ -540,8 +542,12 @@ def adopted_frame(repo: pathlib.Path, source: str, base: str, frame_path: pathli
 
 
 def adopt(repo: pathlib.Path, source: str, base: Optional[str], *, dry_run: bool,
-          frame_path: Optional[pathlib.Path] = None) -> int:
-    """Apply SOURCE's committed queue edits through bd, then sync. Returns beads changed."""
+          frame_path: Optional[pathlib.Path] = None, no_sync: bool = False) -> int:
+    """Apply SOURCE's committed queue edits through bd, then sync. Returns beads changed.
+
+    With no_sync it neither pulls first nor syncs after, so it makes no
+    network call: the PR doctor applies edits in a step with no credential
+    and syncs them in a later one that has it (brwr-p2a7)."""
     if base is None:
         found = git("merge-base", source, "origin/main", cwd=repo, check=False)
         if found.returncode != 0:
@@ -555,7 +561,7 @@ def adopt(repo: pathlib.Path, source: str, base: Optional[str], *, dry_run: bool
         print(f"queue: {source} has no queue or backlog edits against {base[:12]}; nothing to adopt")
         return 0
     ws = workspace(repo)
-    if not dry_run:
+    if not dry_run and not no_sync:
         bd("dolt", "pull", cwd=ws)
     current = export(repo).read_text(encoding="utf-8")
     if theirs is None or theirs == base_text:
@@ -594,6 +600,9 @@ def adopt(repo: pathlib.Path, source: str, base: Optional[str], *, dry_run: bool
                              + "; ".join(missing))
     if frame is not None:
         rb.write(frame_path, frame)
+    if no_sync:
+        print(f"queue: adopted {len(rows)} bead edit(s) from {source}, not synced{prose} (commit it in the branch; run sync to publish)")
+        return len(rows)
     sync(repo)
     print(f"queue: adopted {len(rows)} bead edit(s) from {source} and synced{prose} (commit it in the branch)")
     return len(rows)
@@ -705,7 +714,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     adopt_parser = sub.add_parser("adopt", help="apply a branch's committed queue edits through bd")
     adopt_parser.add_argument("--from", dest="source", required=True)
     adopt_parser.add_argument("--base")
-    adopt_parser.add_argument("--dry-run", action="store_true")
+    adopt_mode = adopt_parser.add_mutually_exclusive_group()
+    adopt_mode.add_argument("--dry-run", action="store_true")
+    adopt_mode.add_argument("--no-sync", action="store_true", help="apply locally; no pull, no sync (run sync later)")
     adopt_parser.add_argument("--frame", type=pathlib.Path, help="the frame to carry backlog prose into (default: the checkout's)")
     seed_parser = sub.add_parser("seed", help="one-shot: seed an empty Dolt remote")
     seed_parser.add_argument("--remote", required=True, help="git URL, e.g. https://github.com/webRauser/rauser-browser.git")
@@ -743,7 +754,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return queue_doctor.doctor(repo)
         elif args.command == "adopt":
             adopt(repo, args.source, args.base, dry_run=args.dry_run,
-                  frame_path=args.frame.resolve() if args.frame else None)
+                  frame_path=args.frame.resolve() if args.frame else None, no_sync=args.no_sync)
         elif args.command == "seed":
             seed(repo, args.remote, args.source.resolve(), [p.resolve() for p in args.extra], yes=args.yes)
         return 0

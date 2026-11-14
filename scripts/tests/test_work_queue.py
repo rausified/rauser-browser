@@ -447,6 +447,38 @@ class DoltIntegrationTests(unittest.TestCase):
         self.assertEqual(self.exported(a)["brwr-a1"]["status"], "blocked")
         self.assertEqual(self.dolt_head(), before)
 
+    def test_adopt_no_sync_applies_locally_without_touching_the_remote(self) -> None:
+        # brwr-p2a7: the PR doctor applies queue edits in a step with no
+        # credential and syncs them in a later step that has one. A fake bd
+        # fails every remote call, so any pull or sync fails the adopt.
+        self.seed(bead("brwr-a1"))
+        a = self.bootstrap(self.a)
+        base, _ = self.branch(a, [GATE, bead("brwr-a1")], [GATE, bead("brwr-a1", status="closed"), bead("brwr-p1")])
+        fake = self.tmp / "offline-bin"
+        fake.mkdir()
+        real = shutil.which("bd")
+        (fake / "bd").write_text(
+            f'#!/bin/sh\ncase "$1 $2" in sync*|"dolt pull"|"dolt push"|"dolt fetch") echo "offline: $*" >&2; exit 9;; esac\n'
+            f'exec {real} "$@"\n')
+        (fake / "bd").chmod(0o755)
+        before = self.dolt_head()
+        result = subprocess.run([sys.executable, str(SCRIPTS / "dev" / "queue"), "--repo", str(a), "adopt",
+                                 "--from", "HEAD", "--base", base, "--no-sync"],
+                                capture_output=True, text=True, env={**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("not synced", result.stdout)
+        got = self.exported(a)
+        self.assertEqual(got["brwr-a1"]["status"], "closed")
+        self.assertIn("brwr-p1", got)
+        self.assertEqual(self.dolt_head(), before, "--no-sync must push nothing")
+        self.ok(a, "sync")
+        self.assertNotEqual(self.dolt_head(), before)
+
+    def test_adopt_no_sync_and_dry_run_are_exclusive(self) -> None:
+        result = subprocess.run([sys.executable, str(SCRIPTS / "work_queue.py"), "adopt", "--from", "HEAD",
+                                 "--dry-run", "--no-sync"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+
     def test_sync_passes_bd_syncs_exit_status_through(self) -> None:
         self.seed(bead("brwr-a1"))
         a = self.bootstrap(self.a)
