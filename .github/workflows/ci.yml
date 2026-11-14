@@ -30,6 +30,10 @@ jobs:
   changes:
     name: Classify changes
     runs-on: ubuntu-24.04
+    # actions: read lets the supersede step look for the newer tip's CI run.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       macos: ${{ steps.classify.outputs.macos }}
@@ -69,23 +73,20 @@ jobs:
       # Mergify merges a batch's PRs into main seconds apart, one push each
       # (05:03:42Z and 05:03:47Z, 08:11:55Z and 08:11:59Z on 2026-11-14), and
       # each push used to build macOS (10x billing) and Windows (2x) in full.
-      # A push that main has already moved past is covered by the newer
-      # push's own run, which builds a tree containing this one (main only
-      # moves forward), so this run skips every build and its gate. The wait
-      # lets the rest of a batch land. The privacy scan and cargo-deny still
-      # run for this push.
+      # A push that main has moved past is covered by the newer push's own
+      # run, so this run skips every build and its gate, but only when the
+      # newer tip contains this push, carries no skip marker and has a CI
+      # push run of its own (scripts/ci-superseded.mjs; any doubt builds).
+      # The wait lets the rest of a batch land. The privacy scan and
+      # cargo-deny still run for this push.
       - name: Skip a main push a newer push replaced
         id: supersede
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           sleep 60
-          tip=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [ -n "$tip" ] && [ "$tip" != "$GITHUB_SHA" ]; then
-            echo "superseded: main is now $tip; that push's run builds $GITHUB_SHA's changes too"
-            echo "superseded=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "main is still $GITHUB_SHA: building"
-          fi
+          node scripts/ci-superseded.mjs
 
   docs-checks:
     name: Docs and queue checks
@@ -112,7 +113,7 @@ jobs:
       # tests are scripts, so a change to them is code and builds.
 
   # Every platform runs the same steps from build-os.yml. Windows runs for
-  # every code change on queue drafts and main (see build-windows). macOS runs only on pushes to main (2026-11-14): GitHub
+  # every code change. macOS runs only on pushes to main (2026-11-14): GitHub
   # bills macOS minutes at 10x on this private repository, and macOS was most
   # of each PR's cost. PRs and Mergify's queue drafts skip it, and main's own
   # run is the macOS gate. A red macOS run on main means the last merge broke
@@ -158,20 +159,10 @@ jobs:
           export CHROME_PATH
           npm run test:a11y
 
-  # Windows runs on Mergify's queue drafts (`mergify/merge-queue/<hex>`
-  # heads), on pushes to main and on merge groups, not on every PR push
-  # (2026-11-14, brwr-3zqd): Windows minutes bill at 2x, and PR pushes were
-  # 78% of them (42 PR runs against 11 drafts in a day). It still gates
-  # every merge: .mergify.yml's merge_conditions are checked on the draft,
-  # whose Build and check requires this job. A PR's own push runs only the
-  # Linux jobs; to try Windows before queueing, run build-os.yml by hand
-  # (`gh workflow run build-os.yml --ref <branch> -f os=windows-latest`).
   build-windows:
     name: Windows
     needs: changes
-    if: >-
-      needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.superseded != 'true' &&
-      (github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/'))
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.superseded != 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: windows-latest
@@ -307,8 +298,7 @@ jobs:
   # .mergify.yml's queue and merge conditions require a check named exactly
   # "Build and check" (on the PR, then on the queue draft); the
   # per-OS jobs report under their own names, so this job stands for all of
-  # them. A code change passes with Accessibility passing, Windows passing
-  # (skipped instead on a plain PR push, see build-windows), plus,
+  # them. A code change passes with Windows and Accessibility passing, plus,
   # on a push to main when the classifier says the change needs macOS, the macos-15 build or,
   # only when that job was starved of a runner, the macos-15-intel (x64)
   # fallback; when it does not, macOS must have been skipped. A docs-only
@@ -329,8 +319,6 @@ jobs:
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           # macOS is a gate only on pushes to main (see build-macos).
           MACOS_NEEDED: ${{ github.event_name == 'push' && needs.changes.outputs.macos || 'false' }}
-          # Windows is a gate everywhere but a plain PR push (see build-windows).
-          WINDOWS_NEEDED: ${{ (github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/')) && 'true' || 'false' }}
           DOCS: ${{ needs.docs-checks.result }}
           A11Y: ${{ needs.a11y.result }}
           FUZZ: ${{ needs.fuzz-check.result }}
@@ -341,18 +329,14 @@ jobs:
           FALLBACK: ${{ needs.build-macos-fallback.result }}
         run: |
           echo "classify: $CHANGES (docs only: ${DOCS_ONLY:-n/a}; macOS needed: ${MACOS_NEEDED:-n/a}); docs checks: $DOCS; accessibility: $A11Y; fuzz targets: $FUZZ; privacy scan: $PRIVACY"
-          echo "macos-15: $MACOS; windows: $WINDOWS (needed: $WINDOWS_NEEDED); macos-15 starved: ${STARVED:-n/a}; macos-15-intel fallback: $FALLBACK"
+          echo "macos-15: $MACOS; windows: $WINDOWS; macos-15 starved: ${STARVED:-n/a}; macos-15-intel fallback: $FALLBACK"
           test "$CHANGES" = success
           test "$PRIVACY" = success
           if [ "$DOCS_ONLY" = true ]; then
             test "$DOCS" = success && test "$MACOS" = skipped && test "$WINDOWS" = skipped && test "$FUZZ" = skipped
             exit 0
           fi
-          if [ "$WINDOWS_NEEDED" = true ]; then
-            test "$WINDOWS" = success
-          else
-            test "$WINDOWS" = skipped
-          fi
+          test "$WINDOWS" = success
           test "$A11Y" = success
           test "$FUZZ" = success
           if [ "$MACOS_NEEDED" != true ]; then

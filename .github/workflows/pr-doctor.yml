@@ -21,15 +21,15 @@ name: PR doctor
 # repaired commit would get no CI. Without the secret the doctor reports only.
 on:
   # Hourly (2026-11-14, brwr-3zqd; it was */15, and GitHub ran it only every
-  # 4-7 hours anyway). Pushes to main, needs-merge PR pushes and green CI
+  # 4-7 hours anyway). Pushes to main, needs-merge PR pushes and finished CI
   # completions below are what make the doctor and keeper prompt; the cron
   # is the backstop.
   schedule:
     - cron: "7 * * * *"
-  # CI finishing green is when a PR turns green: the keeper runs then (and
-  # waits out its green window once), since the cron above fires only every
-  # few hours on this repository. Only the keeper job runs for this event,
-  # and only for a successful run (see its `if`).
+  # CI finishing is when a PR turns green or red: the keeper runs then (and
+  # waits out its green window once, or alerts on a red queued PR), since the
+  # cron above fires only every few hours on this repository. Only the keeper
+  # job runs for this event, and never for a cancelled run (see its `if`).
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -307,13 +307,13 @@ jobs:
     # CI completions count only for pull_request runs on PR branches: a run on
     # main or on a Mergify batch draft turns no PR green, and each keeper run
     # may wait out the green window under the pr-keeper group (brwr-mva0 9).
-    # A failed or cancelled CI run turns no PR green either: the keeper's
-    # alerts for red queued PRs come from its cron and main-push runs.
+    # A cancelled run (usually superseded by a newer push) changes nothing
+    # the keeper acts on; a failed one is a red-queued alert, so it wakes it.
     if: >-
       always() && github.event_name != 'pull_request' &&
       (github.event_name != 'workflow_run' ||
        (github.event.workflow_run.event == 'pull_request' &&
-        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.conclusion != 'cancelled' &&
         !startsWith(github.event.workflow_run.head_branch, 'mergify/')))
     concurrency:
       group: pr-keeper
