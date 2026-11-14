@@ -1041,11 +1041,10 @@ function renderCaptureExplanation(): void {
           break;
         }
         case "no_adapter":
-          reason = "This site has no capture rules. Review Capture Site to choose which pages to remember.";
-          captureExplanationAction.textContent = "Review Capture Site";
-          captureExplanationAction.dataset.action = "capture-site";
-          captureExplanationAction.disabled ||= element<HTMLButtonElement>("capture-site").disabled;
-          break;
+          // The page actions already offer Capture Site beside Save Page.
+          captureExplanation.hidden = true;
+          captureExplanationText.textContent = "";
+          return;
         case "no_rule": {
           const miss = nearMiss(lease.adapters.artifacts, currentPage.url);
           const adapter = miss && lease.adapters.artifacts[miss.adapter];
@@ -2730,10 +2729,7 @@ function reenableSiteAccess(): void {
 
 settingsButton.addEventListener("click", openSettings);
 captureExplanationAction.addEventListener("click", () => {
-  if (captureExplanationAction.dataset.action === "capture-site") {
-    selectView("page");
-    element<HTMLButtonElement>("capture-site").click();
-  } else if (captureExplanationAction.dataset.action === "adapter-review" && pendingAdapterReview) {
+  if (captureExplanationAction.dataset.action === "adapter-review" && pendingAdapterReview) {
     openAdapterReview(pendingAdapterReview);
   } else openSettings();
 });
