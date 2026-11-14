@@ -11,10 +11,12 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  EXHAUSTED_LABEL, FIXER_ACTOR, NOTE_END, NOTE_MARKER, agentEnv, attemptsOf, conflictMarkers, decideBead, hoursBetween,
-  SANDBOX_ARGS, loggedOutcomesOf, maskArgs, parseRepairRef, parseTokens, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
+  EXHAUSTED_LABEL, FIXER_ACTOR, NOTE_END, NOTE_MARKER, agentEnv, attemptsOf, conflictMarkers, decideBead,
+  SANDBOX_ARGS, maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
 } from "../dev/pr-fixer.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
+// Receipts, format v2 (a separate import so it does not collide with other changes to the list above).
+import { hoursBetween, loggedOutcomesOf, parseTokens } from "../dev/pr-fixer.mjs";
 
 const HEAD = "0123456789abcdef0123456789abcdef01234567";
 const bead = (over = {}) => ({ id: "brwr-x1", status: "open", assignee: "", labels: ["pr-keeper"], external_ref: `gh-pr-7-${HEAD.slice(0, 12)}`, ...over });
