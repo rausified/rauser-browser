@@ -96,6 +96,19 @@ function fail(problems, file, message) {
   problems.push(`${file}: ${message}`);
 }
 
+/** A type's `docs` is joined onto the root and read, and the README links
+ * it by basename, so it must name a `.md` file directly inside
+ * docs/adapters/ (brwr-p2a7). True only for `docs/adapters/<name>.md` with
+ * no separator, backslash or leading dot in `<name>`, which also rules out
+ * `..`, `.` and absolute paths; the resolve check is a second guard. */
+function isContainedDocsPath(docs) {
+  if (typeof docs !== "string" || !/^docs\/adapters\/[^/\\.][^/\\]*\.md$/.test(docs)) return false;
+  const dir = path.resolve(DOCS_ADAPTERS_DIR);
+  return path.dirname(path.resolve(docs)) === dir;
+}
+
+const DOCS_PATH_RULE = `must name a file ${DOCS_ADAPTERS_DIR}/<name>.md`;
+
 /** Every key of `obj` not in `allowed` is an "unknown field" problem. */
 function checkKeys(problems, file, obj, allowed, where) {
   for (const key of Object.keys(obj)) {
@@ -626,7 +639,10 @@ function validateType(problems, file, type, where, origin) {
   validateSamples(problems, file, type, where, origin);
   validateVectors(problems, file, type, where, origin);
   if ("type" in type && typeof type.type !== "string") fail(problems, file, `${at(where, "type")} must be a string`);
-  if ("docs" in type && typeof type.docs !== "string") fail(problems, file, `${at(where, "docs")} must be a string`);
+  if ("docs" in type) {
+    if (typeof type.docs !== "string") fail(problems, file, `${at(where, "docs")} must be a string`);
+    else if (!isContainedDocsPath(type.docs)) fail(problems, file, `${at(where, "docs")} ${DOCS_PATH_RULE} (got ${JSON.stringify(type.docs)})`);
+  }
   if ("key" in type) {
     if (typeof type.key !== "string") fail(problems, file, `${at(where, "key")} must be a string`);
     else if (requiresOriginKey && !type.key.includes("{origin}")) {
@@ -1619,6 +1635,12 @@ export function checkRegistry(root, entries, starterShapesText) {
     if (!isPlainObject(family) || !Array.isArray(family.types)) continue;
     family.types.forEach((type, index) => {
       if (!isPlainObject(type) || typeof type.docs !== "string") return;
+      // checkRegistry also sees families that failed validation, so check
+      // containment again before the read.
+      if (!isContainedDocsPath(type.docs)) {
+        problems.push(`${file}: types[${index}].docs ${DOCS_PATH_RULE} (got ${JSON.stringify(type.docs)})`);
+        return;
+      }
       let docText;
       try {
         docText = readFileSync(path.join(root, type.docs), "utf8");

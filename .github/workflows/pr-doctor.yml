@@ -70,8 +70,12 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          # The push credential: the secret when set, so repaired commits get CI.
+          # The merge and regeneration run with no credential (brwr-p2a7): the
+          # token is only for this clone and stays out of .git/config. The
+          # steps that fetch, sync or push add one to their own environment
+          # (GIT_CONFIG_*), never to a file.
           token: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.14.0"
@@ -84,7 +88,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pr-doctor/dev"
           cp scripts/pr-doctor.mjs scripts/pr-constants.mjs scripts/work_queue.py scripts/render_backlog.py \
             scripts/check_queue_consistency.py scripts/merge-generated.mjs scripts/generate-starters.mjs \
-            scripts/generate-current-state.mjs \
+            scripts/generate-current-state.mjs scripts/pr-doctor-git-auth.sh \
             "$RUNNER_TEMP/pr-doctor/"
           # The generated-file merge driver runs only these copies of the generators.
           cp protocol/generate.py "$RUNNER_TEMP/pr-doctor/generate.py"
@@ -96,33 +100,50 @@ jobs:
       # never touches it. Without it (bd missing, queue not seeded, or a
       # transport failure) the doctor cannot apply queue edits and labels
       # such PRs needs-merge with instructions instead.
+      # Its clone keeps no credential either: the publish step syncs with one.
       - name: Bootstrap the work queue
         id: queue
         continue-on-error: true
         env:
           BD_NON_INTERACTIVE: "1"
+          DOCTOR_GIT_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
         run: |
+          . "$RUNNER_TEMP/pr-doctor/pr-doctor-git-auth.sh"
           sh scripts/install-bd.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           git ls-remote --exit-code origin refs/dolt/data > /dev/null
-          header=$(git config --get "http.https://github.com/.extraheader")
           ws="$RUNNER_TEMP/queue-ws"
-          git -c "http.https://github.com/.extraheader=$header" clone -q --depth 1 \
-            "https://github.com/$GITHUB_REPOSITORY.git" "$ws"
-          git -C "$ws" config "http.https://github.com/.extraheader" "$header"
+          git clone -q --depth 1 "https://github.com/$GITHUB_REPOSITORY.git" "$ws"
           git -C "$ws" config user.name "PR doctor"
           git -C "$ws" config user.email "pr-doctor@users.noreply.github.com"
           (cd "$ws" && "$RUNNER_TEMP/bin/bd" bootstrap)
           echo "workspace=$ws" >> "$GITHUB_OUTPUT"
-      - name: Run the PR doctor
+      # Three steps (scripts/pr-doctor.mjs "Phases"), so the one that merges
+      # main and runs the generators holds no credential at all: no token in
+      # its environment and none in either clone's .git/config.
+      - name: List and fetch the conflicting PRs
         env:
           GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          DOCTOR_GIT_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
           PR_DOCTOR_PUSH: ${{ secrets.PR_DOCTOR_TOKEN != '' && '1' || '0' }}
+        run: |
+          . "$RUNNER_TEMP/pr-doctor/pr-doctor-git-auth.sh"
+          node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor" --phase plan \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
+      - name: Merge main and regenerate, with no credential
+        env:
           PR_DOCTOR_PYTHON: python
           BRAUSER_QUEUE_WORKSPACE: ${{ steps.queue.outputs.workspace }}
-        run: >-
-          node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor"
-          ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor" --phase repair
+      - name: Sync the queue and push the repairs
+        env:
+          GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          DOCTOR_GIT_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          PR_DOCTOR_PYTHON: python
+          BRAUSER_QUEUE_WORKSPACE: ${{ steps.queue.outputs.workspace }}
+        run: |
+          . "$RUNNER_TEMP/pr-doctor/pr-doctor-git-auth.sh"
+          node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor" --phase publish
 
   keeper:
     name: PR keeper

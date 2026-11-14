@@ -28,11 +28,24 @@
 // (a token whose pushes start CI; the workflow's own GITHUB_TOKEN cannot);
 // otherwise the doctor reports what it would do.
 //
-// Usage: node scripts/pr-doctor.mjs --tools <dir> [--dry-run]
+// Usage: node scripts/pr-doctor.mjs --tools <dir> [--phase plan|repair|publish]
+//          [--state <file>] [--dry-run]
 //   <dir> holds main's work_queue.py, render_backlog.py,
 //   check_queue_consistency.py, merge-generated.mjs, generate-starters.mjs,
 //   generate-current-state.mjs and protocol/generate.py (as generate.py). Run from a full clone of the repo whose
-//   `origin` is GitHub; GH_TOKEN and GITHUB_REPOSITORY must be set.
+//   `origin` is GitHub.
+//
+// Phases (brwr-p2a7), so the merge and regeneration never run with a
+// credential: `plan` lists the PRs, settles mergeability, updates resolved
+// PRs and fetches each conflicting one (GH_TOKEN, GITHUB_REPOSITORY and a git
+// credential needed); `repair` merges main into each and regenerates, keeping
+// each result in refs/pr-doctor/<number> and applying queue edits to the
+// local bd database without syncing (no network, no credential); `publish`
+// syncs the queue, pushes the repairs, comments, labels and requeues (GH_TOKEN,
+// GITHUB_REPOSITORY and a git push credential). They hand over through
+// --state (default <dir>/doctor-state.json); `plan` records --dry-run and
+// PR_DOCTOR_PUSH there for the later phases. With no --phase, all three run
+// in turn in one process.
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -192,10 +205,19 @@ function workQueue(tools, args) {
 }
 
 /** `work_queue.py adopt` arguments: apply the PR's committed queue edits
- * (`from` against `base`) through bd and sync, or only check them (`push`
+ * (`from` against `base`) through bd locally, for the publish phase to sync
+ * (`push`; `--no-sync` makes no network call), or only check them (`push`
  * false, or `frame` given: a check against main's frame before the merge). */
 export function adoptArgs({ from, base, push, frame = null }) {
-  return ["adopt", "--from", from, "--base", base, ...(frame ? ["--frame", frame] : []), ...(push ? [] : ["--dry-run"])];
+  return ["adopt", "--from", from, "--base", base, ...(frame ? ["--frame", frame] : []), push ? "--no-sync" : "--dry-run"];
+}
+
+/** Main's queue tool `sync`: publishes the bead edits the repair phase
+ * applied (it pulls, checks, and runs bd sync). */
+export function syncQueue(tools) {
+  const result = workQueue(tools, ["sync"]);
+  const detail = (result.stdout + result.stderr).trim().split("\n").filter((line) => line && !line.startsWith("Warning:")).at(-1) ?? "";
+  return { ok: result.code === 0, detail };
 }
 
 function adopt(tools, args) {
@@ -237,11 +259,19 @@ function regeneratedFiles({ log, ours, other, tools }) {
   return out;
 }
 
-/** Merges main into the PR branch in this clone; { ok, files, sha? }.
- * Queue edits are synced to refs/dolt/data only when `canPush`. */
-export function tryRepair(pr, tools, canPush) {
+/** Fetches main and the PR branch, for `tryRepair` to merge (the plan phase:
+ * the repair phase has no credential to fetch with). */
+export function fetchForRepair(pr) {
   const branch = pr.headRefName;
   git(["fetch", "-q", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+}
+
+/** Merges main into the already-fetched PR branch in this clone, with no
+ * network call; { ok, files, sha?, adopted? }. When `canPush`, queue edits
+ * are applied to the local database (`adopted`, with the `carried` files)
+ * for `syncQueue` to publish; otherwise they are only checked. */
+export function tryRepair(pr, tools, canPush) {
+  const branch = pr.headRefName;
   git(["checkout", "-q", "-f", "-B", "pr-doctor/work", `origin/${branch}`]);
   git(["clean", "-qfd"]);
   // Main's merge rules apply even when the branch predates them.
@@ -318,7 +348,13 @@ export function tryRepair(pr, tools, canPush) {
     const kept = resolved.filter((file) => !/ \(/.test(file));
     const markers = kept.length === 0 ? "" : git(["grep", "-l", "-E", "^(<{7}|>{7}) (ours|theirs)", "--", ...kept], { check: false }).stdout.trim();
     if (markers) return { ok: false, files: markers.split("\n") };
-    return { ok: true, files: resolved.length ? resolved : ["(merged cleanly)"], sha: git(["rev-parse", "--short=12", "HEAD"]).stdout.trim() };
+    return {
+      ok: true,
+      files: resolved.length ? resolved : ["(merged cleanly)"],
+      sha: git(["rev-parse", "--short=12", "HEAD"]).stdout.trim(),
+      adopted: canPush && carried.length > 0,
+      carried,
+    };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -341,28 +377,30 @@ function report(repo, pr, body, { dryRun, label }) {
   if (!label && labelled) gh(["pr", "edit", String(pr.number), "--repo", repo, "--remove-label", LABEL]);
 }
 
-function main() {
-  const args = process.argv.slice(2);
-  const dryRun = args.includes("--dry-run");
-  const toolsAt = args.indexOf("--tools");
-  const tools = toolsAt >= 0 ? args[toolsAt + 1] : null;
-  const repo = process.env.GITHUB_REPOSITORY;
-  if (!tools || !repo) throw new Error("usage: GITHUB_REPOSITORY=owner/name node scripts/pr-doctor.mjs --tools <dir> [--dry-run]");
-  for (const file of ["work_queue.py", "render_backlog.py", "check_queue_consistency.py"]) readFileSync(join(tools, file));
-  const canPush = process.env.PR_DOCTOR_PUSH === "1" && !dryRun;
+const PHASES = Object.freeze(["plan", "repair", "publish"]);
+const STATE_VERSION = 1;
+const warn = (pr, error) => {
+  const line = String(error.message).split("\n")[0];
+  console.log(`::warning title=PR doctor #${pr.number}::${line}`);
+  return line;
+};
+
+/** Lists the PRs, settles each one's mergeability, updates a PR whose
+ * conflict is gone, and fetches each conflicting one. One item per PR, in
+ * list order: a finished `row`, or `repair: true` for the repair phase. */
+function planPhase({ repo, dryRun }) {
   if (!dryRun) {
     gh(["label", "create", LABEL, "--repo", repo, "--color", "d93f0b", "--force",
       "--description", "Conflicts with main; the PR doctor could not resolve it alone"], { check: false });
   }
-
-  const rows = [];
+  const items = [];
   for (let pr of listPrs(repo)) {
     try {
       if (classifyPr(pr) === "pending") pr = settle(repo, pr);
       const kind = classifyPr(pr);
       const queued = pr.autoMergeRequest != null || (pr.labels ?? []).some((item) => item.name === QUEUE_LABEL);
       if (kind === "skip" || kind === "pending") {
-        rows.push([pr.number, kind, ""]);
+        items.push({ pr, row: [pr.number, kind, ""] });
         continue;
       }
       if (kind === "clean") {
@@ -370,15 +408,69 @@ function main() {
         const comment = labelled || !dryRun ? stickyComment(repo, pr.number) : null;
         const stale = labelled || ["needs-person", "report-only"].includes(outcomeOf(comment));
         if (stale) report(repo, pr, commentBody({ outcome: "resolved" }), { dryRun, label: false });
-        rows.push([pr.number, stale ? "resolved" : "clean", ""]);
+        items.push({ pr, row: [pr.number, stale ? "resolved" : "clean", ""] });
         continue;
       }
+      fetchForRepair(pr);
+      items.push({ pr, queued, repair: true });
+    } catch (error) {
+      items.push({ pr, row: [pr.number, "error", warn(pr, error)] });
+    }
+  }
+  return items;
+}
+
+/** Merges main into each fetched PR and keeps the result in
+ * refs/pr-doctor/<number>. Makes no network call and needs no credential. */
+function repairPhase(items, { tools, canPush }) {
+  for (const item of items) {
+    if (!item.repair) continue;
+    const { pr } = item;
+    try {
       const result = tryRepair(pr, tools, canPush);
+      if (result.ok) {
+        result.head = git(["rev-parse", "HEAD"]).stdout.trim();
+        git(["update-ref", `refs/pr-doctor/${pr.number}`, result.head]);
+      }
+      item.result = result;
+    } catch (error) {
+      item.repair = false;
+      item.row = [pr.number, "error", warn(pr, error)];
+      git(["merge", "--abort"], { check: false });
+    }
+  }
+  git(["checkout", "-q", "-f", "--detach", "origin/main"], { check: false });
+  return items;
+}
+
+/** Syncs the applied queue edits, pushes each repair without force,
+ * comments, labels and requeues, and prints the summary table. */
+function publishPhase(items, { repo, tools, dryRun, canPush }) {
+  const adopted = items.filter((item) => item.repair && item.result?.ok && item.result.adopted);
+  if (canPush && adopted.length > 0) {
+    // A repair that dropped the queue files is pushed only once their bead
+    // edits are published.
+    const synced = syncQueue(tools);
+    if (!synced.ok) {
+      for (const item of adopted) {
+        item.result = { ok: false, files: item.result.carried.map((file) => `${file} (${synced.detail || "queue sync failed"})`) };
+      }
+    }
+  }
+  const rows = [];
+  for (const item of items) {
+    const { pr } = item;
+    if (!item.repair) {
+      rows.push(item.row);
+      continue;
+    }
+    try {
+      const { result, queued } = item;
       let outcome;
       if (!result.ok) outcome = canPush ? "needs-person" : "report-only";
       else if (!canPush) outcome = "report-only";
       else {
-        const push = git(["push", "-q", "origin", `HEAD:refs/heads/${pr.headRefName}`], { check: false });
+        const push = git(["push", "-q", "origin", `${result.head}:refs/heads/${pr.headRefName}`], { check: false });
         if (push.code !== 0) {
           rows.push([pr.number, "skipped", "the branch moved during the repair; next run retries"]);
           continue;
@@ -390,7 +482,7 @@ function main() {
       report(repo, pr, body, { dryRun, label: outcome !== "repaired" });
       let note = "";
       if (requeued) {
-        const sha = git(["rev-parse", "HEAD"]).stdout.trim();
+        const sha = result.head;
         const { settled, seen } = requeueAfterPush({
           sha,
           headOf: () => JSON.parse(gh(["api", `repos/${repo}/pulls/${pr.number}`]).stdout).head.sha,
@@ -402,16 +494,49 @@ function main() {
       }
       rows.push([pr.number, outcome + note + (outcome === "report-only" && result.ok ? " (resolvable)" : ""), result.files.join(", ")]);
     } catch (error) {
-      console.log(`::warning title=PR doctor #${pr.number}::${String(error.message).split("\n")[0]}`);
-      rows.push([pr.number, "error", String(error.message).split("\n")[0]]);
-      git(["merge", "--abort"], { check: false });
+      rows.push([pr.number, "error", warn(pr, error)]);
     }
   }
-  git(["checkout", "-q", "-f", "--detach", "origin/main"], { check: false });
 
   const table = ["| PR | Outcome | Files |", "|---|---|---|", ...rows.map(([n, o, f]) => `| #${n} | ${o} | ${f} |`)].join("\n");
   console.log(table);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## PR doctor${dryRun ? " (dry run)" : canPush ? "" : " (report only)"}\n\n${table}\n`);
+}
+
+function readState(file) {
+  const state = JSON.parse(readFileSync(file, "utf8"));
+  if (state.version !== STATE_VERSION) throw new Error(`${file}: state version ${state.version}, expected ${STATE_VERSION}`);
+  return state;
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  const option = (name) => {
+    const at = args.indexOf(name);
+    return at >= 0 ? args[at + 1] : null;
+  };
+  const tools = option("--tools");
+  const phase = option("--phase");
+  const repo = process.env.GITHUB_REPOSITORY;
+  const usage = "usage: GITHUB_REPOSITORY=owner/name node scripts/pr-doctor.mjs --tools <dir> [--phase plan|repair|publish] [--state <file>] [--dry-run]";
+  if (!tools || (phase !== null && !PHASES.includes(phase))) throw new Error(usage);
+  if (phase !== "repair" && !repo) throw new Error(usage);
+  const stateFile = option("--state") ?? join(tools, "doctor-state.json");
+  if (phase === null || phase === "repair") {
+    for (const file of ["work_queue.py", "render_backlog.py", "check_queue_consistency.py"]) readFileSync(join(tools, file));
+  }
+
+  let state;
+  if (phase === null || phase === "plan") {
+    const dryRun = args.includes("--dry-run");
+    const canPush = process.env.PR_DOCTOR_PUSH === "1" && !dryRun;
+    state = { version: STATE_VERSION, dryRun, canPush, items: planPhase({ repo, dryRun }) };
+  } else {
+    state = readState(stateFile);
+  }
+  if (phase === null || phase === "repair") state.items = repairPhase(state.items, { tools, canPush: state.canPush });
+  if (phase === null || phase === "publish") publishPhase(state.items, { repo, tools, dryRun: state.dryRun, canPush: state.canPush });
+  if (phase === "plan" || phase === "repair") writeFileSync(stateFile, JSON.stringify(state, null, 2));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();

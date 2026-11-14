@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { ipcDenied } from "./ipc-guard.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
 import { spawnSync as spawnSyncTop } from "node:child_process";
 
 import {
   MARKER, QUEUE_COMMENT, adoptArgs, classifyPr, commentBody, needsRequeue, requeueAfterPush,
-  resolveAppendOnly, tryRepair,
+  resolveAppendOnly, syncQueue, tryRepair,
 } from "../pr-doctor.mjs";
 
 // --- resolveAppendOnly: diff3 hunks whose base is empty ----------------------
@@ -135,8 +136,10 @@ test("a needs-person comment explains how to carry queue edits into bd", () => {
   assert.match(body, /docs\/backlog\/frame\.md/);
 });
 
-test("adopt syncs only when the doctor may push, and checks against a given frame", () => {
-  assert.deepEqual(adoptArgs({ from: "tip", base: "abc", push: true }), ["adopt", "--from", "tip", "--base", "abc"]);
+test("adopt applies without syncing only when the doctor may push, and checks against a given frame", () => {
+  // The repair step has no credential (brwr-p2a7): it applies the edits with
+  // --no-sync (no network) and the publish step syncs them (syncQueue).
+  assert.deepEqual(adoptArgs({ from: "tip", base: "abc", push: true }), ["adopt", "--from", "tip", "--base", "abc", "--no-sync"]);
   assert.deepEqual(adoptArgs({ from: "tip", base: "abc", push: false, frame: "/t/frame.md" }),
     ["adopt", "--from", "tip", "--base", "abc", "--frame", "/t/frame.md", "--dry-run"]);
 });
@@ -226,6 +229,13 @@ async function doctorRepair(t, { conflicting }) {
     git(root, "clone", "-q", origin, clone);
     process.chdir(clone);
     const result = tryRepair({ number: 9, headRefName: "feat/old" }, scripts, true);
+    if (!conflicting) {
+      assert.equal(result.adopted, true, JSON.stringify(result));
+      assert.deepEqual(result.carried, [".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md"]);
+      // Applied locally only; the publish phase's sync publishes it.
+      const synced = syncQueue(scripts);
+      assert.equal(synced.ok, true, synced.detail);
+    }
     if (conflicting) {
       assert.equal(result.ok, false, JSON.stringify(result));
       assert.match(result.files.join("\n"), /brwr-a1 status: database 'blocked', branch 'closed'/);
@@ -300,6 +310,104 @@ test("tryRepair regenerates a PR whose only conflicts are generated files", { sk
     Object.assign(process.env, saved);
     cleanup();
   }
+});
+
+// brwr-p2a7: the step that merges main and runs the generators holds no
+// credential. The repair phase runs with no token and an origin that does not
+// exist (any network call fails it); the publish phase pushes what it kept.
+test("the repair phase works offline with no token, and publish pushes its result", { skip: process.platform === "win32" }, async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const { chmodSync, cpSync, mkdirSync, readFileSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const { ENV, addFamily, commitAll, genStarters, git, makeFixture } = await import("./generated-fixture.mjs");
+  const scripts = join(fileURLToPath(import.meta.url), "..", "..");
+  const { root, repo, cleanup } = makeFixture();
+  t.after(cleanup);
+  for (const [branch, name] of [["main-next", "widgeta"], ["feat/family", "widgetb"]]) {
+    git(repo, ["checkout", "-q", "-b", branch, "main"]);
+    addFamily(repo, name);
+    assert.equal(genStarters(repo).code, 0);
+    commitAll(repo, `add ${name}`);
+  }
+  git(repo, ["checkout", "-q", "main"]);
+  git(repo, ["merge", "-q", "--ff-only", "main-next"]);
+  const origin = join(root, "origin.git");
+  git(root, ["clone", "-q", "--bare", repo, origin]);
+  const clone = join(root, "clone");
+  git(root, ["clone", "-q", origin, clone]);
+  const before = git(origin, ["rev-parse", "refs/heads/feat/family"]).out.trim();
+  const tools = join(root, "tools");
+  mkdirSync(join(tools, "dev"), { recursive: true });
+  for (const name of ["pr-doctor.mjs", "pr-constants.mjs", "work_queue.py", "render_backlog.py", "check_queue_consistency.py", "merge-generated.mjs", "generate-starters.mjs", "generate-current-state.mjs"]) {
+    cpSync(join(scripts, name), join(tools, name));
+  }
+  cpSync(join(scripts, "dev", "queue-pr.mjs"), join(tools, "dev", "queue-pr.mjs"));
+  cpSync(join(scripts, "..", "protocol", "generate.py"), join(tools, "generate.py"));
+  // The plan phase's hand-over: one conflicting PR, already fetched.
+  const state = join(root, "state.json");
+  const pr = { number: 7, headRefName: "feat/family", labels: [] };
+  writeFileSync(state, JSON.stringify({ version: 1, dryRun: false, canPush: true, items: [{ pr, queued: false, repair: true }] }));
+  const doctor = (phase, env) => spawnSync(process.execPath, [join(tools, "pr-doctor.mjs"), "--tools", tools, "--phase", phase, "--state", state],
+    { cwd: clone, encoding: "utf8", env });
+  const base = { ...ENV, PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR ?? "/tmp" };
+
+  git(clone, ["remote", "set-url", "origin", join(root, "no-such-origin.git")]);
+  const repaired = doctor("repair", base);
+  assert.equal(repaired.status, 0, repaired.stdout + repaired.stderr);
+  const item = JSON.parse(readFileSync(state, "utf8")).items[0];
+  assert.equal(item.result.ok, true, JSON.stringify(item));
+  assert.equal(git(clone, ["rev-parse", "refs/pr-doctor/7"]).out.trim(), item.result.head);
+  assert.equal(git(origin, ["rev-parse", "refs/heads/feat/family"]).out.trim(), before, "repair pushed nothing");
+
+  // Publish: a fake gh records its calls; the push reaches the real origin.
+  git(clone, ["remote", "set-url", "origin", origin]);
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  const calls = join(root, "gh-calls");
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$*" >> "${calls}"\ncase "$*" in *--paginate*) echo "[[]]";; *) echo "{}";; esac\n`);
+  chmodSync(join(bin, "gh"), 0o755);
+  const published = doctor("publish", { ...base, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "example/repo", GH_TOKEN: "not-a-real-token" });
+  assert.equal(published.status, 0, published.stdout + published.stderr);
+  assert.equal(git(origin, ["rev-parse", "refs/heads/feat/family"]).out.trim(), item.result.head);
+  assert.match(published.stdout, /\| #7 \| repaired \|/);
+  assert.match(readFileSync(calls, "utf8"), /repos\/example\/repo\/issues\/7\/comments/);
+});
+
+test("the doctor's merge step runs with no credential; only the plan, bootstrap and publish steps get one", () => {
+  const yml = readFileSync(new URL("../../.github/workflows/pr-doctor.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const doctor = yml.split("\n  doctor:\n")[1].split("\n  keeper:\n")[0];
+  const steps = doctor.split(/\n      - /).slice(1);
+  const step = (name) => steps.find((text) => text.startsWith(`name: ${name}`)) ?? assert.fail(`no step ${name}`);
+  assert.match(steps[0], /uses: actions\/checkout@/);
+  assert.match(steps[0], /persist-credentials: false/);
+  const repair = step("Merge main and regenerate, with no credential");
+  assert.match(repair, /--phase repair/);
+  assert.doesNotMatch(repair, /secrets\.|github\.token|GH_TOKEN|GIT_CONFIG|pr-doctor-git-auth/);
+  for (const name of ["Bootstrap the work queue", "List and fetch the conflicting PRs", "Sync the queue and push the repairs"]) {
+    assert.match(step(name), /\. "\$RUNNER_TEMP\/pr-doctor\/pr-doctor-git-auth\.sh"/, name);
+  }
+  assert.match(step("List and fetch the conflicting PRs"), /--phase plan/);
+  assert.match(step("Sync the queue and push the repairs"), /--phase publish/);
+  // No credential is ever written to a .git/config.
+  assert.doesNotMatch(doctor, /git (-C \S+ )?config [^\n]*extraheader/);
+  // The helper is sourced from main's copy, never from a checked-out PR branch.
+  assert.match(step("Keep main's tools outside the working tree"), /scripts\/pr-doctor-git-auth\.sh/);
+});
+
+test("pr-doctor-git-auth.sh adds the header through GIT_CONFIG_* and keeps existing entries", { skip: process.platform === "win32" }, async () => {
+  const { spawnSync } = await import("node:child_process");
+  const script = new URL("../pr-doctor-git-auth.sh", import.meta.url).pathname;
+  const result = spawnSync("sh", ["-c", `. "${script}" && echo "$GIT_CONFIG_COUNT|$GIT_CONFIG_KEY_1|$GIT_CONFIG_VALUE_1"`],
+    { encoding: "utf8", env: { PATH: process.env.PATH, DOCTOR_GIT_TOKEN: "tok", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "a.b", GIT_CONFIG_VALUE_0: "c" } });
+  assert.equal(result.status, 0, result.stderr);
+  const [count, key, value] = result.stdout.trim().split("\n").at(-1).split("|");
+  assert.deepEqual([count, key], ["2", "http.https://github.com/.extraheader"]);
+  assert.equal(value, `AUTHORIZATION: basic ${Buffer.from("x-access-token:tok").toString("base64")}`);
+  assert.match(result.stdout, /^::add-mask::/m);
+  const empty = spawnSync("sh", ["-c", `. "${script}"`], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  assert.notEqual(empty.status, 0);
 });
 
 test("scratch-repo git env turns background maintenance off and keeps existing entries", () => {

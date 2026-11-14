@@ -133,6 +133,69 @@ test("an unknown field names the file and field", async (t) => {
   assert.match(result.stdout + result.stderr, /protocol\/starters\/atlassian\.json:.*unknown field "lable"/);
 });
 
+// brwr-p2a7: a type's `docs` is joined onto the root and read, so it must
+// name a file directly inside docs/adapters/; `..`, an absolute path, a
+// nested or backslashed path, or a non-.md name is refused before any read.
+const ESCAPING_DOCS = [
+  "../outside.md",
+  "docs/adapters/../../outside.md",
+  "docs/adapters/../secret.md",
+  "/etc/outside.md",
+  "docs/other/jira.issue.md",
+  "docs/adapters/nested/jira.issue.md",
+  "docs/adapters\\jira.issue.md",
+  "docs/adapters/./jira.issue.md",
+  "docs/adapters/jira.issue.txt",
+  "docs/adapters/.md",
+];
+
+test("a docs path outside docs/adapters/ fails validation with the file and field (brwr-p2a7)", async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  // A file the escaping path names, whose placeholder section and Status
+  // line would each add a problem if the generator read it.
+  writeFileSync(path.join(root, "outside.md"), "# Outside\n\n## Research\n\nTODO\n\nStatus: nothing\n");
+  const atlassianPath = path.join(root, "protocol", "starters", "atlassian.json");
+  const atlassian = JSON.parse(readFileSync(atlassianPath, "utf8"));
+  atlassian.types[0].docs = "docs/adapters/../../outside.md";
+  writeFileSync(atlassianPath, JSON.stringify(atlassian, null, 2));
+  const result = run(["--check", "--root", root]);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1);
+  assert.match(output, /protocol\/starters\/atlassian\.json: types\[0\]\.docs must name a file docs\/adapters\/<name>\.md/);
+  assert.doesNotMatch(output, /outside\.md: (section|first Status)/);
+});
+
+test("validateFamily refuses every escaping docs path and accepts the shipped form (brwr-p2a7)", () => {
+  const family = loadFamilies(REPO).find((entry) => entry.types.some((type) => type.type === "jira.issue"));
+  for (const docs of ESCAPING_DOCS) {
+    const copy = structuredClone(family);
+    copy.types[0].docs = docs;
+    const problems = [];
+    validateFamily(problems, "protocol/starters/atlassian.json", copy);
+    assert.ok(
+      problems.some((line) => line.includes("types[0].docs must name a file docs/adapters/<name>.md")),
+      `${JSON.stringify(docs)} was accepted: ${problems.join("; ")}`,
+    );
+  }
+  const problems = [];
+  validateFamily(problems, "protocol/starters/atlassian.json", structuredClone(family));
+  assert.deepEqual(problems.filter((line) => line.includes(".docs")), []);
+});
+
+test("checkRegistry never reads an escaping docs path (brwr-p2a7)", (t) => {
+  const root = tmpRoot(t);
+  writeFileSync(path.join(root, "outside.md"), "# Outside\n\n## Research\n\nTODO\n\nStatus: nothing\n");
+  const entries = loadFamilyEntries(root);
+  const atlassian = entries.find((entry) => entry.file.endsWith("atlassian.json"));
+  for (const docs of ["../outside.md", path.join(root, "outside.md")]) {
+    atlassian.family.types[0].docs = docs;
+    const problems = checkRegistry(root, entries);
+    assert.ok(problems.some((line) => line.includes("must name a file docs/adapters/<name>.md")), problems.join("; "));
+    assert.ok(!problems.some((line) => /outside\.md: (section|first Status)/.test(line)), problems.join("; "));
+  }
+});
+
 test("an invalid JSON file names the file and the parse error", async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const root = tmpRoot(t);
