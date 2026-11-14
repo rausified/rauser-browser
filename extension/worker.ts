@@ -10,6 +10,7 @@ import {
   isHttpUrl,
   isPolicyLease,
   isQueuedVisit,
+  leaseCompileFailureText,
   leaseActive,
   localTimestamp,
   PANEL_NOTICE_KEY,
@@ -569,6 +570,9 @@ function legacyPolicyLease(value: unknown): LegacyPolicyLease | null {
   };
 }
 
+/** The stored lease revision whose compile failure was last logged. */
+let skewLoggedRevision: string | null = null;
+
 async function readPolicyState(): Promise<{
   lease: PolicyLease | null;
   legacyLease: LegacyPolicyLease | null;
@@ -576,6 +580,13 @@ async function readPolicyState(): Promise<{
   const stored = await chrome.storage.local.get(POLICY_KEY);
   const value = stored[POLICY_KEY];
   const lease = policyLeases.restore(value);
+  const revision = (value as { revision?: unknown } | undefined)?.revision;
+  const failure = typeof revision === "string" ? policyLeases.failureFor(revision) : null;
+  // Once per revision: a stored lease is re-read on every event.
+  if (failure && skewLoggedRevision !== revision) {
+    skewLoggedRevision = revision as string;
+    diag.error("policy lease compile failed", { ...failure, revision, stored: true });
+  }
   return {
     lease,
     // A well-formed lease from the previous extension version is renewed from
@@ -1033,7 +1044,11 @@ async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
     const hour = [...activity.totals].reverse().find((total) =>
       total.artifact_id === mapped.artifact_id);
     if (hour) {
-      hour.title = titleMatch.title ?? title;
+      // The raw tab title, as navigation and seeding record it: the host
+      // evaluates the event's title as a tab title (generic check, refs,
+      // §9.1 extraction), so an already-extracted title would be judged
+      // a second time.
+      hour.title = title;
       hour.url = mapped.url;
       hour.refs = [];
       for (const ref of titleMatch.refs ?? []) {
@@ -1073,8 +1088,18 @@ async function installPolicy(
   // the active revision. Otherwise the unchanged stored lease would reuse the
   // rejected message's matcher on its next read.
   if (typeof lease !== "object" || lease === null ||
-      typeof lease.expires_at !== "number" || lease.expires_at <= Date.now() ||
-      !policyLeases.install(lease)) {
+      typeof lease.expires_at !== "number" || lease.expires_at <= Date.now()) {
+    throw new Error("Host policy lease is invalid or expired");
+  }
+  if (!policyLeases.install(lease)) {
+    // A lease the host's engine accepted but this one refuses is version
+    // skew (an extension not reloaded after a host update): say so, and
+    // log it, rather than stopping capture with no reason.
+    const failure = policyLeases.failureFor(lease.revision);
+    if (failure) {
+      diag.error("policy lease compile failed", { ...failure, revision: lease.revision });
+      throw new Error(leaseCompileFailureText(failure));
+    }
     throw new Error("Host policy lease is invalid or expired");
   }
   // Record what the host holds before a pending pause can return early, so a

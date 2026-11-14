@@ -143,3 +143,17 @@ test("the latest title replaces refs that the host can no longer verify", () => 
   assert.deepEqual(state.totals[0].refs,
     [{ artifact_type: "jira.issue", value: "NEW-2" }]);
 });
+
+test("a navigation to the same artifact with no title keeps the hour's title and refs", () => {
+  const start = midHour();
+  const state = emptyActivityState(start);
+  recordNavigation(state, nav(1, "https://example.com/items/a", { title: "Plan" }),
+    { ...match("a", null, "Plan"), refs: [{ type: "jira.issue", value: "PRJ-1" }] }, start, uuid);
+  // A cross-document navigation to the same item, before its title loads.
+  recordNavigation(state, nav(1, "https://example.com/items/a", { transition: "reload" }),
+    match("a"), start + 1, uuid);
+
+  assert.equal(state.totals.length, 1);
+  assert.equal(state.totals[0].title, "Plan");
+  assert.deepEqual(state.totals[0].refs, [{ artifact_type: "jira.issue", value: "PRJ-1" }]);
+});

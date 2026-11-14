@@ -11,6 +11,7 @@ mod catch_up;
 mod choices;
 mod containers;
 mod database;
+mod fingerprint;
 mod focus;
 mod gaps;
 mod golden;

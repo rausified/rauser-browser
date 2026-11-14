@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { finishHostPause, withLatestHostState } = await import("../dist/coordination.js");
-const { MAX_QUEUE_BYTES, PolicyLeaseCache, emptyQueue, localTimestamp } = await import("../dist/model.js");
+const { MAX_QUEUE_BYTES, PolicyLeaseCache, emptyQueue, leaseCompileFailureText, localTimestamp } = await import("../dist/model.js");
 const { compileDocument } = await import("../dist/adapter-templates.js");
 const { storageKey } = await import("../dist/brand.js");
 const { isConfig, isResponseShape } = await import("../dist/protocol-shape.js");
@@ -262,6 +262,27 @@ test("a restored policy compiles once per revision while every install validates
   invalid.adapters.artifacts[0].match = [{ path: "/items/{id:missing}" }];
   assert.equal(policies.install(invalid), null);
   assert.equal(compilations, 4);
+});
+
+// The host validates every document it sends with its own engine, so an
+// extension engine that refuses one is a different build: the failure is
+// kept for its revision and worded as a reload, never dropped silently.
+test("a lease this engine cannot compile is kept as a build-mismatch reason", () => {
+  const policies = new PolicyLeaseCache();
+  const newer = lease("https://skew.example");
+  newer.adapters.artifacts[0].a_key_from_a_newer_host = ["x"];
+  assert.equal(policies.install(newer), null);
+  const failure = policies.failureFor(newer.revision);
+  assert.equal(failure?.code, "unknown_key");
+  assert.equal(failure?.adapter, 0);
+  assert.equal(policies.failureFor("another-revision"), null);
+  const text = leaseCompileFailureText(failure);
+  assert.match(text, /Reload Brauser/);
+  assert.match(text, /unknown_key in adapter 1/);
+
+  // A later good install clears it.
+  assert.ok(policies.install(lease("https://skew.example")));
+  assert.equal(policies.failureFor(newer.revision), null);
 });
 
 function visit(id, url) {
@@ -930,7 +951,9 @@ test("a generic title never replaces the live hour's title", async () => {
   onTabUpdated(9, { title: "Plan - Acme" }, { id: 9, url: `${origin}/items/a`, incognito: false });
   await flush();
   [live] = await send({ kind: "get_activity" });
-  assert.equal(live.title, "Plan");
+  // The raw tab title: the host evaluates it as one (generic check, refs,
+  // §9.1 extraction), so the worker never sends an already-extracted title.
+  assert.equal(live.title, "Plan - Acme");
 
   // A later sign-in page, the browser's host placeholder, or an empty title
   // keeps the real name.
@@ -938,7 +961,7 @@ test("a generic title never replaces the live hour's title", async () => {
     onTabUpdated(9, { title }, { id: 9, url: `${origin}/items/a`, incognito: false });
     await flush();
     [live] = await send({ kind: "get_activity" });
-    assert.equal(live.title, "Plan", title);
+    assert.equal(live.title, "Plan - Acme", title);
   }
 
   // A same-document navigation within the same artifact whose current title
@@ -950,7 +973,7 @@ test("a generic title never replaces the live hour's title", async () => {
   });
   await flush();
   [live] = await send({ kind: "get_activity" });
-  assert.equal(live.title, "Plan");
+  assert.equal(live.title, "Plan - Acme");
 });
 
 test("a stored visit without a dispatch flag is never patched", async () => {
@@ -1030,6 +1053,28 @@ test("matching navigations never serialize the adapter document", async () => {
 
   assert.equal(adapterSerializations, 0);
   assert.equal((await send({ kind: "get_activity" })).length, 2);
+});
+
+test("an install the extension engine refuses names the build mismatch and is logged", async () => {
+  values.clear();
+  sessionValues.clear();
+  const newer = lease("https://skew-install.example");
+  newer.adapters.artifacts[0].a_key_from_a_newer_host = ["x"];
+  const logged = [];
+  const realError = console.error;
+  console.error = (...args) => { logged.push(JSON.stringify(args)); };
+  try {
+    await assert.rejects(send({
+      kind: "install_policy",
+      lease: newer,
+      resume_after_confirmation: false,
+      resume_after_pause_token: null,
+    }), /different build.*Reload Brauser/s);
+  } finally {
+    console.error = realError;
+  }
+  assert.ok(logged.some((line) => /policy lease compile failed/.test(line) && /unknown_key/.test(line)),
+    JSON.stringify(logged));
 });
 
 test("an expired policy install cannot replace the active revision's compiled adapter", async () => {
@@ -1546,11 +1591,12 @@ test("a tab restored on a gate page never records the gate's generic title", asy
     sessionValues.clear();
     tabs.get(30).title = "Sign in - Acme";
     await rebuildActivityMap();
-    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan v2");
+    // The hour holds the raw tab title the update read (the host extracts).
+    assert.equal(sessionValues.get(storageKey("activity_session_v1")).tabs[30].title, "Plan v2 - Acme");
     Date.now = () => start + 7_200_000;
     await send({ kind: "get_activity" });
-    assert.ok(titles().every((title) => title === "Plan" || title === "Plan v2"), JSON.stringify(titles()));
-    assert.ok(titles().includes("Plan v2"), JSON.stringify(titles()));
+    assert.ok(titles().every((title) => title === "Plan" || title === "Plan v2 - Acme"), JSON.stringify(titles()));
+    assert.ok(titles().includes("Plan v2 - Acme"), JSON.stringify(titles()));
   } finally {
     Date.now = realNow;
   }

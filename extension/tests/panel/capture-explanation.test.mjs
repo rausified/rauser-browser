@@ -28,6 +28,11 @@ for (const [name, url, options, expected] of [
   ["configuration repair", "https://github.com/acme/repo/pull/12", { configIssue: "Bad config" }, /configuration is repaired/],
   ["adapter repair", "https://github.com/acme/repo/pull/12", { adapterIssue: "Unsupported format" }, /configuration is repaired/],
   ["credential-bearing address", "https://user:password@github.com/acme/repo/pull/12", {}, /sign-in credentials are excluded/],
+  // A host newer than this extension sends a key the extension's engine
+  // does not know: a build mismatch, worded as a reload (brwr-cgve M4).
+  ["build mismatch", "https://github.com/acme/repo/pull/12", { config: { ...GITHUB_SCOPED, adapters: {
+    format: 1, artifacts: GITHUB_SCOPED.adapters.artifacts.map((adapter) => ({ ...adapter, a_key_from_a_newer_host: ["x"] })),
+  } } }, /\(unknown_key in adapter 1\): the extension and the host are a different build\. Reload Brauser/],
 ]) {
   test(`capture explanation describes ${name} and opens settings without changing capture`, async () => {
     const page = await install({
