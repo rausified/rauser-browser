@@ -259,3 +259,12 @@ test("brwr-5yy0: the query asks for the head's committer date, and check starts 
   assert.equal(headTime(null, [{ startedAt: AT("10:51:11") }]), null);
   assert.equal(snap({ comments: [asked, waitingA], contexts: pushedB }).mergify.state, "waiting");
 });
+
+test("Codex P1: a status comment Mergify creates after the push, for a command made before it, is still stale", () => {
+  // #456 at 12:42: command, push, then Mergify's status payload a few seconds later.
+  const lateStatus = { ...FX.waiting339, createdAt: AT("10:30:40"), updatedAt: AT("10:30:40") };
+  const plan = planQueue(onB([command(QUEUE_COMMENT, AT("10:29:00")), lateStatus]), { now: AT("10:31:00") });
+  assert.deepEqual(kinds(plan), ["queue"], plan.message);
+  // With no command in view (an older one scrolled out), the status comment's own time is the request time.
+  assert.deepEqual(kinds(planQueue(onB([lateStatus]), { now: AT("10:31:00") })), []);
+});

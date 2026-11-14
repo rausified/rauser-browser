@@ -83,15 +83,13 @@ export function decideKeeper(snap, { now = new Date().toISOString(), mergeTreeCl
     actions.push({ kind: "unlabel", label: NEEDS_MERGE_LABEL });
     unlabeled = true;
   }
-  // (e) the doctor gave up: file a repair bead (once per PR; see repairsToFile). Not again once
-  // the keeper's own sticky comment names this head's bead: the bead step bootstraps the
-  // queue database on every run that requests one (brwr-mva0 6).
+  // (e) the doctor gave up: file a repair bead (once per PR; see repairsToFile, which reads the
+  // queue's own beads: an alert naming the ref is no proof one was filed).
   const doctor = doctorComment(snap.comments, { trusted });
   if (needsMerge && mergeTreeClean !== true && doctor?.outcome === "needs-person") {
     const files = doctor.files.map(safeName);
-    const ref = repairRef(n, snap.headOid);
-    if (!trustedComment(snap.comments, KEEPER_MARKER, trusted)?.body.includes(ref)) actions.push({ kind: "repair", head: snap.headOid, files, ref });
-    alerts.push({ kind: "needs-person", text: `conflicts with main in files pr-doctor does not resolve${files.length ? ` (${files.join(", ")})` : ""}; a repair bead ${repairRef(n, snap.headOid)} is filed. Merge main into the branch by hand` });
+    actions.push({ kind: "repair", head: snap.headOid, files, ref: repairRef(n, snap.headOid) });
+    alerts.push({ kind: "needs-person", text: `conflicts with main in files pr-doctor does not resolve${files.length ? ` (${files.join(", ")})` : ""}; a repair bead ${repairRef(n, snap.headOid)} is requested. Merge main into the branch by hand` });
   }
   // (d) states only a person can clear.
   if (snap.isDraft && snap.labeled) alerts.push({ kind: "draft-queued", text: `is labelled \`queue\` but is a draft, which Mergify never takes: \`gh pr ready ${n}\` when it is done` });

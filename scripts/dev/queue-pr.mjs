@@ -109,11 +109,13 @@ export function askedOnHead(comments, headAt) {
  * Mergify replies that one is already running (#339). `unmet` lists what a waiting request lacks
  * (the payload's tree, else the checklist above <details>: a waiting payload's tree is empty). */
 export function mergifyStatus(comments, { headAt = null } = {}) {
-  let status = { state: "none", unmet: [] }, live = status, requestAt = null, liveAt = null;
+  // requestAt: when the request behind `status` was asked for: its queue command, not Mergify's
+  // reply, which can come after a push that already cancelled it (#456 at 12:42:53Z).
+  let status = { state: "none", unmet: [] }, live = status, requestAt = null, liveAt = null, commandAt = null;
   for (const comment of byCreated(comments)) {
     const { author, body = "" } = comment;
     if (!isMergify(author)) {
-      if (isQueueCommand(comment)) { live = status; liveAt = requestAt; status = { state: "requested", unmet: [] }; requestAt = at(comment); }
+      if (isQueueCommand(comment)) { live = status; liveAt = requestAt; status = { state: "requested", unmet: [] }; requestAt = commandAt = at(comment); }
       continue;
     }
     const payload = payloadOf(body);
@@ -124,7 +126,7 @@ export function mergifyStatus(comments, { headAt = null } = {}) {
       const unmet = payload.state === "waiting" ? [...new Set(leaves(payload.required_conditions).concat(fromList))]
         : payload.state === "dequeued" ? [...new Set(quoted)] : [];
       status = { state: payload.state, step: payload.step ?? null, unmet, reason: payload.dequeue_reason?.message ?? null, code: payload.dequeue_reason?.code ?? null };
-      requestAt = at(comment);
+      requestAt = commandAt ?? at(comment);
     } else if (CANCELLED.test(body)) status = { state: "cancelled", unmet: [] };
     else if (/already running/.test(body) && status.state === "requested") { status = live; requestAt = liveAt; }
   }

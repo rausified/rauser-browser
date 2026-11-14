@@ -283,15 +283,15 @@ test("Minor 1: 'already running' with no live request: the keeper does not comme
   assert.deepEqual(kinds(decideKeeper(s, { now: AT("11:30:00") })), []);
 });
 
-test("Minor 6: no repair request when the keeper's own sticky comment already names this head's bead", () => {
+test("Minor 6 (Codex P2): the keeper's own alert naming the bead does not stop the request; the queue's beads decide", () => {
   const conflicting = { labels: ["queue", "needs-merge"], pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } };
   const first = decideKeeper(snap({ ...conflicting, comments: [DOCTOR] }), { now: NOW, mergeTreeClean: false, trusted: ["doctor-bot"] });
+  assert.match(first.alerts[0].text, /is requested/);
   const sticky = { author: "doctor-bot", createdAt: ago(20), body: alertBody(first.alerts) };
   const again = decideKeeper(snap({ ...conflicting, comments: [DOCTOR, sticky] }), { now: NOW, mergeTreeClean: false, trusted: ["doctor-bot"] });
-  assert.deepEqual([kinds(again), alertKinds(again)], [[], ["needs-person"]]);
-  // A sticky comment from anyone else does not count.
-  const forged = decideKeeper(snap({ ...conflicting, comments: [DOCTOR, { ...sticky, author: "outsider" }] }), { now: NOW, mergeTreeClean: false, trusted: ["doctor-bot"] });
-  assert.deepEqual(kinds(forged), ["repair"]);
+  assert.deepEqual(kinds(again), ["repair"]);
+  // A filing that never happened (no token, a transient failure) is retried: repairsToFile finds no bead.
+  assert.equal(repairsToFile([{ number: 243, ...again.actions[0] }], []).length, 1);
 });
 
 test("Minor 6: the bead step needs the push token, and says so instead of failing red without it", () => {
