@@ -1,0 +1,13 @@
+# Starts brauser-pr-fixer.service every 15 minutes. Shipped disabled; see
+# docs/agents/pr-fixer.md "Activation". The service is a oneshot under a host
+# lock, so a long repair simply delays the next pass.
+[Unit]
+Description=Brauser PR fixer every 15 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=15min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
