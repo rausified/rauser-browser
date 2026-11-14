@@ -14,9 +14,10 @@
 # How PRs are tested: Mergify builds a batch draft PR on a
 # `mergify/merge-queue/<hex>` branch (main plus up to 3 queued PRs), CI runs on
 # it through ordinary pull_request events, and every PR in the batch merges
-# (each with its own merge commit) once the checks below pass on that draft.
-# Mergify never pushes to a PR's own branch. A PR alone at the front of the
-# queue that already contains main's tip merges at once, with no extra CI run.
+# (each with its own merge commit) once merge_conditions pass on that draft.
+# queue_conditions are checked on each PR itself, before it enters. Mergify
+# never pushes to a PR's own branch, and never checks a PR in place (see
+# merge_conditions below).
 #
 # Throughput (2026-11-03: 7 PRs open, ~60 min per PR one at a time):
 # - `batch_size: 3`: one CI run (~40 min with macOS) validates up to 3 PRs.
@@ -47,10 +48,10 @@
 # Branch protection is unavailable since the move to webRauser/rauser-browser
 # (2026-11-13): GitHub offers it, and rulesets, on a private repository only
 # with GitHub Pro ("Upgrade to GitHub Pro or make this repository public").
-# The queue conditions below are therefore the only merge gate. They name the
-# required checks explicitly (Build and check, PR owner, Rust dependency
-# policy, plus pr-hygiene's "Dev tools"), so they do not depend on protection
-# being injected. Nothing blocks a direct push to main or `gh pr merge`, which
+# The queue and merge conditions below are therefore the only merge gate. They
+# name the required checks explicitly (Build and check, PR owner, Rust
+# dependency policy, plus pr-hygiene's "Dev tools"), so they do not depend on
+# protection being injected. Nothing blocks a direct push to main or `gh pr merge`, which
 # is why AGENTS.md forbids both.
 
 merge_queue:
@@ -62,6 +63,13 @@ queue_rules:
     batch_size: 3
     batch_max_wait_time: 3 min
     max_checks_retries: 1
+    # Explicit, not `auto` (review N1): `auto` sets the timeout from this
+    # queue's recent CI runtimes, and the recent drafts (#464 to #485) met
+    # their empty merge conditions in under a minute. A gated draft needs
+    # about 10-20 min (Windows), so `auto` could time it out, and a timeout
+    # is handled like a failure (retry, then split). 60 min is longer than
+    # any healthy draft and shorter than a hung one.
+    checks_timeout: 60 min
     queue_conditions:
       - base = main
       - label = queue
@@ -80,6 +88,25 @@ queue_rules:
       - or:
           - check-success = Dev tools
           - check-skipped = Dev tools
+    # Checked on the queue draft (main plus the batch), not on the PRs:
+    # with merge_conditions that differ from queue_conditions ("two-step
+    # CI"), Mergify evaluates them against the draft and holds the batch
+    # until they pass. Branch protection used to inject these checks as
+    # merge conditions (last seen on draft #455, 2026-11-13 11:29Z). The
+    # move to webRauser/rauser-browser lost protection, and from draft #464
+    # (2026-11-14 04:11Z) every draft read "No extra conditions" and closed
+    # within about a minute: nine drafts, #464 to #485, plus #473's direct
+    # merge, merged on the PRs' own checks alone. (Draft #483's red CI after
+    # it closed was a 0-step billing refusal, not a code failure.)
+    # Dev tools is never skipped on a draft, so it is plain check-success
+    # here. Mergify checks a PR in place, without a draft, only with
+    # batch_size 1, max_parallel_checks 1, mode serial, max_checks_retries 0
+    # and no separate merge_conditions; this rule fails four of the five.
+    merge_conditions:
+      - check-success = Build and check
+      - check-success = Rust dependency policy
+      - check-success = PR owner
+      - check-success = Dev tools
 
 # The `queue` label makes a PR eligible (queue_conditions above); it does not
 # queue it. Queue with an `@Mergifyio queue` comment, posted after the PR's
