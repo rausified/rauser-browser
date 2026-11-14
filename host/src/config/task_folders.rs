@@ -74,7 +74,7 @@ impl ConfigStore {
         self.change_task_folders(expected, move |folders| {
             // Recheck under the write lock, after checking the picker grant.
             open_selected_root(Path::new(&path), Some(&identity))
-                .context("checking selected task folder")?;
+                .context("The selected task folder could not be verified; choose it again.")?;
             if folders.iter().any(|folder| folder.path == path) {
                 bail!("this task folder is already configured");
             }

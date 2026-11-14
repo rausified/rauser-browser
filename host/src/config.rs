@@ -1505,7 +1505,7 @@ impl ConfigStore {
                     Some(expected) => {
                         let (_, actual) =
                             open_selected_root(Path::new(knowledge_base), Some(expected))
-                                .context("checking selected knowledge base folder")?;
+                                .context("The selected knowledge base folder could not be verified; choose it again.")?;
                         Some(actual)
                     }
                     // Unchanged: carry the recorded identity without touching

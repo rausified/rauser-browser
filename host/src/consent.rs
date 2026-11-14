@@ -199,8 +199,9 @@ impl ConsentAuthority {
         if grant.expires_at <= Instant::now() || grant.revision != revision || grant.root != path {
             bail!("folder selection is stale or does not match the proposed {noun}");
         }
-        open_selected_root(Path::new(path), Some(&grant.identity))
-            .with_context(|| format!("checking selected {noun}"))?;
+        open_selected_root(Path::new(path), Some(&grant.identity)).with_context(|| {
+            format!("The selected {noun} could not be verified; choose it again.")
+        })?;
         Ok(grant.identity.clone())
     }
 
