@@ -80,16 +80,34 @@ The worktree itself is always removed.
 
 ## Reviewing its activity
 
-- `~/.local/state/brauser-pr-fixer/receipts.jsonl`: one line per pass (`at`, `outcome`, and for a repair `bead`, `pr`, `sha` or the free-text `reason`).
+- `~/.local/state/brauser-pr-fixer/receipts.jsonl`: one JSON object per line, format v2 (older lines without `v` are v1 pass lines, which readers still accept).
+  Every v2 line has `v: 2`, `kind` and `at` (ISO-8601 UTC).
+  - `kind: "pass"`: one per pass, with `outcome` (locked, dry-run, idle, closed, queued, refused, claim-refused, pushed, failed), `closed`, `queued`, `durationMs`, and `code` for refused or claim-refused.
+  - `kind: "repair"`: one per repair attempt, written before its pass line.
+    It has `bead`, `pr`, `attempt`, `maxAttempts`, `outcome` (pushed or failed), `code` (a failure code, or `ok`), `reason` (at most 300 characters), `files` (the conflicted paths, at most 50), `changedFiles`, `agent`, `agentVersion`, `tokens` (or null), `durationsMs` {`agent`, `review`, `total`} (null for a step that did not run), `review` {`p1`, `p2`, `p3`} (or null), `exhausted`, and for a push `sha` and `queueStatus`.
+  - `kind: "outcome"`: what became of a bead the fixer pushed, written when a later pass sees it, once per bead, pushed sha and result.
+    It has `bead`, `pr`, `result` (merged; closed-unmerged; reconflicted, when the pushed PR conflicts with main again; requeue-failed, when a queue-pr retry failed), `pushedSha`, `mergeCommit` for a merge, `attemptsUsed` and `hoursSincePush`.
+  - The failure codes are fixed: sandbox-refused, claim-refused, unsafe-branch, head-moved, merge-failed, agent-timeout, agent-no-report, agent-unresolved, checks-failed, unmerged-paths, uncommitted-merge, dirty-tree, no-commit, history-rewritten, conflict-markers, main-moved, privacy-failed, review-incomplete, review-p1, pr-moved, pr-labelled, pr-left-queue, owner-check, push-failed, exception and ok.
 - `~/.local/state/brauser-pr-fixer/runs/<bead>-<attempt>-<time>/`: `run.log` (agent and review output), `report.json` (the agent's focused checks), `body.md`.
+  Each pass that is not a dry run first deletes run folders older than `--keep-days` (default 30) with `pruneRuns`, and logs how many it removed.
+  It never touches `receipts.jsonl`, and refuses symlinks and anything that resolves outside `runs/`.
 - The bead's notes and `fixer_*` metadata (`bd show <id>`).
 - `journalctl --user -u brauser-pr-fixer.service` on the host.
 
-These record what each run did, but not yet enough to calibrate the fixer.
-Nothing ties a pushed repair to whether its PR then merged, failed CI or conflicted again.
-Durations, token use, conflicted-file lists and failure codes are not structured.
-Nothing summarizes the receipts, and `runs/` is never pruned.
-The next work item, `brwr-lkdz`, covers these.
+To summarize the receipts, run this on the host:
+
+```sh
+node scripts/dev/pr-fixer-report.mjs [--work-root DIR] [--since 30d|12h|all|<ISO date>] [--json]
+```
+
+It prints passes by outcome; repairs attempted, pushed and failed; failure codes by count; the success rate; median and p90 agent, review and total durations; total tokens; the most conflicted files; and the re-conflict and requeue-failed counts.
+`--json` prints the same as JSON; unreadable lines are counted and skipped.
+`--since` (default 30 days) limits passes, repairs and outcomes to that window, while a pushed repair's fate is read from every outcome in the file.
+
+**The success measure is "merged without another repair", not "pushed".**
+A pushed repair succeeds when its bead later gets a `merged` outcome with no `reconflicted` outcome between the push and the merge.
+The rate is successes over decided pushes (merged, re-conflicted or closed unmerged); pushes with no outcome yet are reported as pending, outside the rate.
+Read it before tuning the attempt limit or the agent's timeout.
 
 ## Running it
 
@@ -98,8 +116,8 @@ BRAUSER_QUEUE_WORKSPACE=<bd workspace> node scripts/dev/pr-fixer.mjs --repo webR
 ```
 
 `--dry-run` prints each repair bead's decision and changes nothing.
-Other flags: `--agent claude`, `--max-attempts`, `--timeout-minutes`, `--work-root` (default `$XDG_STATE_HOME/brauser-pr-fixer`, else `~/.local/state/brauser-pr-fixer`).
-Tests: `node --test scripts/tests/pr-fixer.test.mjs`.
+Other flags: `--agent claude`, `--max-attempts`, `--timeout-minutes`, `--keep-days` (default 30), `--work-root` (default `$XDG_STATE_HOME/brauser-pr-fixer`, else `~/.local/state/brauser-pr-fixer`).
+Tests: `node --test scripts/tests/pr-fixer.test.mjs scripts/tests/pr-fixer-report.test.mjs`.
 It runs real git on temporary repositories, with fake `bd`, `gh`, `codex`, queue sync, privacy scan and queue-pr; nothing reaches GitHub or a real agent.
 
 ## Activation
