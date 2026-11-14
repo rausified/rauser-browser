@@ -141,8 +141,8 @@ export function summarizeReceipts(entries, { since, now = Date.now() } = {}) {
 /** Delete `<workRoot>/runs/*` folders whose mtime is more than keepDays old. Never touches
  * anything outside runs/ (receipts.jsonl lives beside it), refuses symlinks (a symlinked runs/
  * refuses the whole prune) and entries that resolve outside runs/. Returns { removed, refused }.
- * keepDays must be at least 1: runPass prunes before it takes the lock, so a shorter window could
- * delete the run folder (and worktree) of a pass that is still running. */
+ * keepDays must be at least 1. runPass prunes only while holding its lock, so no pass is running
+ * then; the floor still guards a manual run (a pass lasts about 65 minutes at most). */
 export function pruneRuns(workRoot, { keepDays = 30, now = Date.now() } = {}) {
   const days = Number(keepDays);
   if (!Number.isFinite(days) || days < 1) throw new Error(`bad keepDays: ${keepDays} (at least 1)`);

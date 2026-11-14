@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,6 +15,7 @@ import {
   SANDBOX_ARGS, maskArgs, parseRepairRef, renderPrompt, reportVerdict, reviewVerdict, runPass, upsertFixerNote,
 } from "../dev/pr-fixer.mjs";
 import { quietGitEnv } from "./git-test-env.mjs";
+import { parseReceipts, summarizeReceipts } from "../dev/pr-fixer-report.mjs";
 // Receipts, format v2 (a separate import so it does not collide with other changes to the list above).
 import { hoursBetween, loggedOutcomesOf, parseTokens } from "../dev/pr-fixer.mjs";
 
@@ -590,4 +591,34 @@ test("refused, claim-refused, dry-run and locked passes each write a v2 pass lin
   assert.deepEqual(lines.map((p) => [p.outcome, p.code]), [["refused", "sandbox-refused"], ["dry-run", undefined], ["locked", undefined], ["claim-refused", "claim-refused"]]);
   for (const p of lines) assert.ok(p.v === 2 && Number.isInteger(p.durationMs) && p.closed === 0 && p.queued === 0, JSON.stringify(p));
   assert.deepEqual(ofKind(w, "repair"), [], "no repair started");
+});
+
+test("pruning happens only under the lock: a pass that finds the lock held leaves old run folders alone", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  const old = join(w.root, "work", "runs", "brwr-old-1-20200101T000000Z");
+  mkdirSync(old, { recursive: true });
+  const longAgo = new Date(Date.now() - 90 * 86_400_000); // timing-ok: an mtime far older than keepDays, set relative to now on purpose
+  utimesSync(old, longAgo, longAgo);
+  writeFileSync(join(w.root, "work", "pr-fixer.lock"), String(process.pid));
+  assert.equal((await pass(w)).outcome, "locked");
+  assert.ok(existsSync(old), "a locked pass must not prune a folder another pass may be using");
+  rmSync(join(w.root, "work", "pr-fixer.lock"));
+  await pass(w, { dryRun: true });
+  assert.ok(existsSync(old), "a dry run never prunes");
+  await pass(w);
+  assert.ok(!existsSync(old), "a pass holding the lock prunes old run folders");
+});
+
+test("end to end: the receipts a real pass writes are what pr-fixer-report summarizes", POSIX, async (t) => {
+  const w = world();
+  t.after(w.cleanup);
+  assert.equal((await pass(w)).outcome, "pushed");
+  const text = readFileSync(join(w.root, "work", "receipts.jsonl"), "utf8"); // crlf-ok: a file the test wrote, never checked out
+  const parsed = parseReceipts(text);
+  assert.equal(parsed.skipped, 0, "every line the fixer wrote parses");
+  const report = summarizeReceipts(parsed.entries, { since: "all" });
+  assert.equal(report.repairs.attempted, 1);
+  assert.equal(report.repairs.pushed, 1);
+  assert.equal(report.passes.byOutcome.pushed, 1);
 });

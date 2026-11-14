@@ -291,11 +291,16 @@ export async function runPass(opts) {
   const procProbe = opts.procProbe ?? [`/proc/${process.pid}/environ`];
   const wrap = (cmd, args, cwd) => [commands.sandbox[0], [...commands.sandbox[1], ...masks, "--chdir", cwd, "--", cmd, ...args]];
   mkdirSync(workRoot, { recursive: true });
-  const { pruneRuns } = await import("./pr-fixer-report.mjs");
-  if (!dryRun) { const pruned = pruneRuns(workRoot, { keepDays: opts.keepDays ?? 30 }); if (pruned.removed.length || pruned.refused.length) log(`pruned ${pruned.removed.length} run folder(s) older than ${opts.keepDays ?? 30} days${pruned.refused.length ? `, refused ${pruned.refused.length}` : ""}`); }
   const lock = join(workRoot, "pr-fixer.lock");
   if (!takeLock(lock)) { log("another fixer holds the lock"); return receipt({ outcome: "locked" }); }
   try {
+    // Prune only while holding the lock, so no other pass can be using a folder being removed.
+    if (!dryRun) {
+      const { pruneRuns } = await import("./pr-fixer-report.mjs");
+      const keepDays = opts.keepDays ?? 30;
+      const pruned = pruneRuns(workRoot, { keepDays });
+      if (pruned.removed.length || pruned.refused.length) log(`pruned ${pruned.removed.length} run folder(s) older than ${keepDays} days${pruned.refused.length ? `, refused ${pruned.refused.length}` : ""}`);
+    }
     const qenv = { ...env, BD_NON_INTERACTIVE: "1", BRAUSER_QUEUE_WORKSPACE: queueWorkspace };
     const bd = (...args) => run("bd", ["--actor", FIXER_ACTOR, ...args], { cwd: queueWorkspace, env: qenv });
     const sync = () => {
