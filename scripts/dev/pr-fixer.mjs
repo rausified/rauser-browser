@@ -291,6 +291,8 @@ export async function runPass(opts) {
   const procProbe = opts.procProbe ?? [`/proc/${process.pid}/environ`];
   const wrap = (cmd, args, cwd) => [commands.sandbox[0], [...commands.sandbox[1], ...masks, "--chdir", cwd, "--", cmd, ...args]];
   mkdirSync(workRoot, { recursive: true });
+  const { pruneRuns } = await import("./pr-fixer-report.mjs");
+  if (!dryRun) { const pruned = pruneRuns(workRoot, { keepDays: opts.keepDays ?? 30 }); if (pruned.removed.length || pruned.refused.length) log(`pruned ${pruned.removed.length} run folder(s) older than ${opts.keepDays ?? 30} days${pruned.refused.length ? `, refused ${pruned.refused.length}` : ""}`); }
   const lock = join(workRoot, "pr-fixer.lock");
   if (!takeLock(lock)) { log("another fixer holds the lock"); return receipt({ outcome: "locked" }); }
   try {
@@ -528,19 +530,20 @@ async function main(argv) {
     options: {
       repo: { type: "string" }, "dry-run": { type: "boolean" }, agent: { type: "string", default: "codex" },
       "max-attempts": { type: "string", default: String(MAX_ATTEMPTS) }, "timeout-minutes": { type: "string", default: "50" },
-      "work-root": { type: "string" },
+      "work-root": { type: "string" }, "keep-days": { type: "string", default: "30" },
     },
   });
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
   const queueWorkspace = process.env.BRAUSER_QUEUE_WORKSPACE;
   if (!repo || !queueWorkspace || !["codex", "claude"].includes(values.agent)) {
-    console.error("usage: BRAUSER_QUEUE_WORKSPACE=<bd workspace> node scripts/dev/pr-fixer.mjs --repo owner/name [--dry-run] [--agent codex|claude] [--max-attempts 2] [--timeout-minutes 50] [--work-root DIR]");
+    console.error("usage: BRAUSER_QUEUE_WORKSPACE=<bd workspace> node scripts/dev/pr-fixer.mjs --repo owner/name [--dry-run] [--agent codex|claude] [--max-attempts 2] [--timeout-minutes 50] [--work-root DIR] [--keep-days 30]");
     return 2;
   }
   const toolsRoot = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim();
   const result = await runPass({
     repo, toolsRoot, queueWorkspace, dryRun: values["dry-run"], agent: values.agent, workRoot: values["work-root"],
     maxAttempts: Number(values["max-attempts"]), timeoutMs: Number(values["timeout-minutes"]) * 60_000,
+    keepDays: Number(values["keep-days"]),
   });
   console.log(`pr-fixer: ${result.outcome}${result.reason ? `: ${result.reason}` : ""}`);
   return 0;
