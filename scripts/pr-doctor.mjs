@@ -199,9 +199,9 @@ function settle(repo, pr) {
 const unmerged = () => git(["diff", "--name-only", "--diff-filter=U"]).stdout.split("\n").filter(Boolean);
 
 /** Main's copy of the queue tool, so no code from the PR branch runs here. */
-function workQueue(tools, args) {
+function workQueue(tools, args, repo = ".") {
   const python = process.env.PR_DOCTOR_PYTHON || "python3";
-  return sh(python, [join(tools, "work_queue.py"), "--repo", ".", ...args], { check: false });
+  return sh(python, [join(tools, "work_queue.py"), "--repo", repo, ...args], { check: false });
 }
 
 /** `work_queue.py adopt` arguments: apply the PR's committed queue edits
@@ -213,9 +213,10 @@ export function adoptArgs({ from, base, push, frame = null }) {
 }
 
 /** Main's queue tool `sync`: publishes the bead edits the repair phase
- * applied (it pulls, checks, and runs bd sync). */
-export function syncQueue(tools) {
-  const result = workQueue(tools, ["sync"]);
+ * applied (it pulls, checks, and runs bd sync), checking the queue against
+ * the frame and notes in `repo`. */
+export function syncQueue(tools, repo = ".") {
+  const result = workQueue(tools, ["sync"], repo);
   const detail = (result.stdout + result.stderr).trim().split("\n").filter((line) => line && !line.startsWith("Warning:")).at(-1) ?? "";
   return { ok: result.code === 0, detail };
 }
@@ -446,17 +447,7 @@ function repairPhase(items, { tools, canPush }) {
 /** Syncs the applied queue edits, pushes each repair without force,
  * comments, labels and requeues, and prints the summary table. */
 function publishPhase(items, { repo, tools, dryRun, canPush }) {
-  const adopted = items.filter((item) => item.repair && item.result?.ok && item.result.adopted);
-  if (canPush && adopted.length > 0) {
-    // A repair that dropped the queue files is pushed only once their bead
-    // edits are published.
-    const synced = syncQueue(tools);
-    if (!synced.ok) {
-      for (const item of adopted) {
-        item.result = { ok: false, files: item.result.carried.map((file) => `${file} (${synced.detail || "queue sync failed"})`) };
-      }
-    }
-  }
+  if (canPush) publishQueue(items, tools);
   const rows = [];
   for (const item of items) {
     const { pr } = item;
@@ -501,6 +492,33 @@ function publishPhase(items, { repo, tools, dryRun, canPush }) {
   const table = ["| PR | Outcome | Files |", "|---|---|---|", ...rows.map(([n, o, f]) => `| #${n} | ${o} | ${f} |`)].join("\n");
   console.log(table);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## PR doctor${dryRun ? " (dry run)" : canPush ? "" : " (report only)"}\n\n${table}\n`);
+}
+
+/** Syncs the bead edits the repair phase applied, once per PR that adopted
+ * some, in list order, each checked against that PR's repaired frame and
+ * notes (a temporary worktree of refs/pr-doctor/<number>; the working tree
+ * itself is back on main), as the single-step doctor's adopt did. A PR whose
+ * sync fails is not pushed: its outcome becomes needs-person. The first
+ * successful sync publishes every applied edit, so a later PR's failed
+ * check can leave its edits published without its push, the same window
+ * the single-step doctor had between its adopt and its push. */
+export function publishQueue(items, tools) {
+  for (const item of items) {
+    if (!item.repair || !item.result?.ok || !item.result.adopted) continue;
+    const tree = mkdtempSync(join(tmpdir(), "pr-doctor-sync-"));
+    let synced;
+    try {
+      git(["worktree", "add", "-q", "--detach", tree, item.result.head]);
+      synced = syncQueue(tools, tree);
+    } finally {
+      git(["worktree", "remove", "--force", tree], { check: false });
+      rmSync(tree, { recursive: true, force: true });
+    }
+    if (!synced.ok) {
+      item.result = { ok: false, files: item.result.carried.map((file) => `${file} (${synced.detail || "queue sync failed"})`) };
+    }
+  }
+  return items;
 }
 
 function readState(file) {

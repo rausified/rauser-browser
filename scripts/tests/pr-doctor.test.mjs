@@ -7,7 +7,7 @@ import { spawnSync as spawnSyncTop } from "node:child_process";
 
 import {
   MARKER, QUEUE_COMMENT, adoptArgs, classifyPr, commentBody, needsRequeue, requeueAfterPush,
-  resolveAppendOnly, syncQueue, tryRepair,
+  publishQueue, resolveAppendOnly, syncQueue, tryRepair,
 } from "../pr-doctor.mjs";
 
 // --- resolveAppendOnly: diff3 hunks whose base is empty ----------------------
@@ -179,8 +179,11 @@ async function doctorRepair(t, { conflicting }) {
   const git = (dir, ...args) => run("git", dir, ...args);
   const bead = (id, extra = {}) => JSON.stringify({ id, title: `Title of ${id}`, status: "open", priority: 2, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", ...extra });
   const block = (section, body = "") => `<!-- BEGIN GENERATED section=${section}: edit the beads, then run python3 scripts/render_backlog.py -->\n${body}<!-- END GENERATED section=${section} -->\n`;
-  const frame = (prose) => `# Backlog\n\n${prose}\n\n## Proposed\n\n${block("new")}\n## In Progress\n\n${block("in-progress")}\n## Shipped\n\n${block("shipped")}`;
-  const backlog = (prose, ids) => frame(prose).replace(block("new"), block("new", ids.map((id) => `- [ ] \`${id}\` **Title of ${id}.** _(P2)_\n`).join("")));
+  // `proposed` is hand-written Proposed prose: the queue check fails a closed
+  // bead named there.
+  const frame = (prose, proposed = "") => `# Backlog\n\n${prose}\n\n## Proposed\n\n${proposed}${block("new")}\n## In Progress\n\n${block("in-progress")}\n## Shipped\n\n${block("shipped")}`;
+  const cites = "Follow-up to `brwr-a1`.\n\n";
+  const backlog = (prose, ids, proposed = "") => frame(prose, proposed).replace(block("new"), block("new", ids.map((id) => `- [ ] \`${id}\` **Title of ${id}.** _(P2)_\n`).join("")));
   try {
     Object.assign(process.env, identity);
     delete process.env.BRAUSER_QUEUE_WORKSPACE;
@@ -191,7 +194,7 @@ async function doctorRepair(t, { conflicting }) {
     git(root, "init", "-q", "-b", "main", seed);
     mkdirSync(join(seed, ".beads"));
     writeFileSync(join(seed, ".beads/issues.jsonl"), `${bead("brwr-a1")}\n`);
-    writeFileSync(join(seed, "BOSUN_FEATURE_BACKLOG.md"), backlog("Intro.", ["brwr-a1"]));
+    writeFileSync(join(seed, "BOSUN_FEATURE_BACKLOG.md"), backlog("Intro.", ["brwr-a1"], cites));
     git(seed, "add", ".");
     git(seed, "commit", "-qm", "base");
     // The PR: a bead edit, new prose and an ordinary change.
@@ -205,7 +208,7 @@ async function doctorRepair(t, { conflicting }) {
     git(seed, "checkout", "-q", "main");
     git(seed, "rm", "-q", ".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md");
     mkdirSync(join(seed, "docs/backlog"), { recursive: true });
-    writeFileSync(join(seed, "docs/backlog/frame.md"), frame("Intro."));
+    writeFileSync(join(seed, "docs/backlog/frame.md"), frame("Intro.", cites));
     git(seed, "add", ".");
     git(seed, "commit", "-qm", "queue moved");
     git(seed, "push", "-q", origin, "main", "feat/old");
@@ -232,9 +235,15 @@ async function doctorRepair(t, { conflicting }) {
     if (!conflicting) {
       assert.equal(result.adopted, true, JSON.stringify(result));
       assert.deepEqual(result.carried, [".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md"]);
-      // Applied locally only; the publish phase's sync publishes it.
-      const synced = syncQueue(scripts);
-      assert.equal(synced.ok, true, synced.detail);
+      // Applied locally only; the publish phase syncs it, against the PR's
+      // repaired frame (Codex P2): the repair phase leaves the tree on main,
+      // whose frame still cites brwr-a1, which the PR closed.
+      const head = git(clone, "rev-parse", "HEAD");
+      git(clone, "checkout", "-q", "-f", "--detach", "origin/main");
+      assert.equal(syncQueue(scripts).ok, false, "main's frame fails the check");
+      const [item] = publishQueue([{ repair: true, result: { ...result, head } }], scripts);
+      assert.equal(item.result.ok, true, JSON.stringify(item.result));
+      git(clone, "checkout", "-q", "-f", head);
     }
     if (conflicting) {
       assert.equal(result.ok, false, JSON.stringify(result));
