@@ -25,7 +25,8 @@ use uuid::Uuid;
 use crate::brand::{APP_NAME, NAMESPACE};
 use crate::url_provenance::{StoredUrl, UrlProvenance};
 use crate::vault::{
-    TempFileCleanup, checked_relative_dir, open_selected_root, sync_directory, sync_directory_chain,
+    TempFileCleanup, checked_relative_dir, open_selected_root, root_identities_match,
+    sync_directory, sync_directory_chain,
 };
 
 const LOG_HEADER: &str = concat!("<!-- ", crate::namespace!(), ":daily-log v1 -->");
@@ -1393,7 +1394,7 @@ impl CaptureStore {
                     .any(|legacy| intent.entry_hash == sha256_hex(legacy.as_bytes()))
         };
         if exact {
-            if self.root_identity != intent.root_identity {
+            if !root_identities_match(&self.root, &self.root_identity, &intent.root_identity)? {
                 bail!("visit belongs to a previously selected home folder; do not append there");
             }
             if !payload_matches {
@@ -1442,7 +1443,7 @@ impl CaptureStore {
                 reason: "duplicate_event".into(),
             });
         }
-        if self.root_identity != intent.root_identity {
+        if !root_identities_match(&self.root, &self.root_identity, &intent.root_identity)? {
             bail!("visit belongs to a previously selected home folder; do not append there");
         }
         if !payload_matches {
@@ -1673,7 +1674,7 @@ impl CaptureStore {
             Err(error) => return Err(error.into()),
         };
         for relocation in read_log_relocations(&self.journal_dir)?.relocations {
-            if relocation.root_identity != root_identity {
+            if !root_identities_match(root, &relocation.root_identity, root_identity)? {
                 continue;
             }
             let Ok(rest) = relative_log.strip_prefix(&relocation.from) else {
@@ -1745,7 +1746,9 @@ impl CaptureStore {
             complete &= scan_log(&mut file, hash)?.duplicate;
         }
         if !complete {
-            if self.root_identity != intent.root_identity || metadata.len() < intent.offset {
+            if !root_identities_match(&self.root, &self.root_identity, &intent.root_identity)?
+                || metadata.len() < intent.offset
+            {
                 bail!("capture batch belongs to a changed home folder or log");
             }
             file.seek(SeekFrom::Start(intent.offset))?;
@@ -4350,6 +4353,150 @@ mod tests {
             record(&elsewhere, &visit),
             CaptureOutcome::Retryable { .. }
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn legacy_macos_root_identity(root: &Path, device_offset: u64) -> String {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::metadata(root).unwrap();
+        format!(
+            "unix:{:016x}:{:016x}",
+            metadata.dev().wrapping_add(device_offset),
+            metadata.ino()
+        )
+    }
+
+    /// A native reselection changes only the identity representation. Both a
+    /// visit and an exact summary must still finish their frozen append, even
+    /// when its log-relocation record uses the newly selected representation.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_single_intents_recover_after_stable_folder_reselection() {
+        for exact_summary in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let legacy_identity = legacy_macos_root_identity(root.path(), 0);
+            let old = CaptureStore::open_at(
+                &storage(root.path(), "log"),
+                Some(&legacy_identity),
+                state.path(),
+            )
+            .unwrap();
+            assert_eq!(old.root_identity, legacy_identity);
+            let page = page_summary("https://example.com/article");
+            let visit = VisitEvent {
+                event_id: page.event_id.clone(),
+                url: page.url.clone(),
+                title: Some(page.title.clone()),
+                occurred_at: page.occurred_at.clone(),
+                incognito: false,
+            };
+            let deliver = |store: &CaptureStore| {
+                if exact_summary {
+                    store.record_summary(open_policy(), &page).0
+                } else {
+                    record(store, &visit)
+                }
+            };
+            let CaptureOutcome::Persisted { relative_path } = deliver(&old) else {
+                panic!("expected the legacy fixture event to persist");
+            };
+            let journal = old.journal_path(&sha256_hex(page.event_id.as_bytes()));
+            let frozen_intent = fs::read(&journal).unwrap();
+            let intent: VisitIntent = serde_json::from_slice(&frozen_intent).unwrap();
+            let log = root.path().join(&relative_path);
+            let original = fs::read(&log).unwrap();
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&log)
+                .unwrap()
+                .set_len(intent.offset + 8)
+                .unwrap();
+            let torn = fs::read(&log).unwrap();
+            fs::rename(root.path().join("log"), root.path().join("logs")).unwrap();
+            let moved = root
+                .path()
+                .join("logs")
+                .join(relative_path.strip_prefix("log").unwrap());
+            drop(old);
+
+            let new =
+                CaptureStore::open_at(&storage(root.path(), "logs"), None, state.path()).unwrap();
+            assert_ne!(new.root_identity, legacy_identity);
+            record_log_relocation(state.path(), &new.root_identity, "log", "logs").unwrap();
+
+            // An equal inode is insufficient when an old device number no
+            // longer matches. Neither recovery nor a new selection blesses it.
+            let mut stale: serde_json::Value = serde_json::from_slice(&frozen_intent).unwrap();
+            stale["root_identity"] = legacy_macos_root_identity(root.path(), 1).into();
+            fs::write(&journal, serde_json::to_vec(&stale).unwrap()).unwrap();
+            assert!(matches!(deliver(&new), CaptureOutcome::Retryable { .. }));
+            assert_eq!(fs::read(&moved).unwrap(), torn);
+            fs::write(&journal, &frozen_intent).unwrap();
+
+            let outcome = deliver(&new);
+            assert!(
+                matches!(outcome, CaptureOutcome::Persisted { .. }),
+                "{outcome:?}"
+            );
+            assert_eq!(fs::read(&moved).unwrap(), original);
+            assert!(
+                matches!(deliver(&new), CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")
+            );
+            assert_eq!(fs::read(&moved).unwrap(), original);
+            assert_eq!(fs::read(&journal).unwrap(), frozen_intent);
+            assert!(!root.path().join("log").exists());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_batch_intent_recovers_after_stable_folder_reselection() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let selected_storage = storage(root.path(), "logs");
+        let legacy_identity = legacy_macos_root_identity(root.path(), 0);
+        let old =
+            CaptureStore::open_at(&selected_storage, Some(&legacy_identity), state.path()).unwrap();
+        let visit = event();
+        let batch_id = Uuid::new_v4().to_string();
+        let origins = ["https://example.com".into()];
+        let policy = CapturePolicy {
+            enabled: true,
+            origins: &origins,
+            strip_params: &[],
+        };
+        fixtures::INTERRUPT_BATCH_AFTER_SYNC.set(true);
+        let interrupted =
+            old.record_batch(policy, &batch_id, &[CaptureBatchEvent::Visit(&visit)], None);
+        assert!(matches!(
+            interrupted.events[0].1,
+            CaptureOutcome::Retryable { .. }
+        ));
+        let journal = old.batch_intent_path();
+        let intent = read_batch_intent(&journal).unwrap().unwrap();
+        assert_eq!(intent.root_identity, legacy_identity);
+        let log = root.path().join(&intent.relative_log);
+        let original = fs::read(&log).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_len(intent.offset + intent.entry.len() as u64 / 2)
+            .unwrap();
+        drop(old);
+
+        let new = CaptureStore::open_at(&selected_storage, None, state.path()).unwrap();
+        assert_ne!(new.root_identity, legacy_identity);
+        for _ in 0..2 {
+            let result =
+                new.record_batch(policy, &batch_id, &[CaptureBatchEvent::Visit(&visit)], None);
+            assert!(
+                matches!(&result.events[0].1, CaptureOutcome::Suppressed { reason } if reason == "duplicate_event")
+            );
+            assert_eq!(fs::read(&log).unwrap(), original);
+            assert!(!journal.exists());
+        }
     }
 
     #[test]

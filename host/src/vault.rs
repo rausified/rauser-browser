@@ -1029,6 +1029,18 @@ fn block_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
         .strip_prefix(": ")
 }
 
+/// A different directory was found, distinct from an unavailable directory.
+#[derive(Debug)]
+pub(crate) struct SelectedRootChanged;
+
+impl std::fmt::Display for SelectedRootChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("selected home folder changed; choose it again")
+    }
+}
+
+impl std::error::Error for SelectedRootChanged {}
+
 /// Open the selected directory as a capability, then identify that handle.
 /// Reopening a pathname must never silently authorize a replacement folder.
 pub(crate) fn open_selected_root(
@@ -1047,9 +1059,9 @@ pub(crate) fn open_selected_root(
     // cap-std confines subsequent paths to the opened directory.
     let root = Dir::open_ambient_dir(&canonical, ambient_authority())
         .with_context(|| format!("opening home folder {}", canonical.display()))?;
-    let identity = directory_identity(&root)?;
+    let identity = crate::folder_identity::directory_identity(&root, expected_identity)?;
     if expected_identity.is_some_and(|expected| expected != identity) {
-        bail!("selected home folder changed; choose it again");
+        return Err(SelectedRootChanged.into());
     }
     Ok((root, identity))
 }
@@ -1059,41 +1071,23 @@ pub(crate) fn selected_root_identity(chosen: &Path) -> Result<String> {
     Ok(identity)
 }
 
-fn directory_identity(dir: &Dir) -> Result<String> {
-    let metadata = dir
-        .try_clone()
-        .context("cloning home folder handle")?
-        .into_std_file()
-        .metadata()
-        .context("identifying home folder")?;
-    if !metadata.is_dir() {
-        bail!("selected home folder is not a directory");
+/// Compare recovery records only after the caller has checked this opened
+/// root. Different identity formats agree only when both independently name
+/// this very directory; an inode match alone never bridges a legacy device
+/// mismatch. Keep immutable recovery records in their original format.
+pub(crate) fn root_identities_match(root: &Dir, left: &str, right: &str) -> Result<bool> {
+    if left == right {
+        return Ok(true);
     }
-    #[cfg(unix)]
+    if !crate::folder_identity::has_known_shape(left)
+        || !crate::folder_identity::has_known_shape(right)
     {
-        use std::os::unix::fs::MetadataExt;
-        Ok(format!(
-            "unix:{:016x}:{:016x}",
-            metadata.dev(),
-            metadata.ino()
-        ))
+        return Ok(false);
     }
-    #[cfg(windows)]
-    {
-        // std's by-handle metadata accessors are unstable; winapi-util wraps
-        // GetFileInformationByHandle for the same volume and file IDs.
-        let handle = dir
-            .try_clone()
-            .context("cloning home folder handle")?
-            .into_std_file();
-        let info = winapi_util::file::information(&handle)
-            .context("identifying home folder on Windows")?;
-        Ok(format!(
-            "windows:{:08x}:{:016x}",
-            info.volume_serial_number(),
-            info.file_index()
-        ))
-    }
+    Ok(
+        crate::folder_identity::directory_identity(root, Some(left))? == left
+            && crate::folder_identity::directory_identity(root, Some(right))? == right,
+    )
 }
 
 /// True only for `<prefix><hyphenated UUID>.tmp`, the exact shape this host

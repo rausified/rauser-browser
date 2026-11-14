@@ -56,10 +56,10 @@ impl ConfigStore {
                 "This task folder was removed. Choose a working folder before running again.",
             )?;
         let path = Path::new(&folder.path);
-        let actual = selected_root_identity(path).context(
+        open_selected_root(path, Some(&folder.identity)).context(
             "This task folder is unavailable. Reconnect it or choose it again in settings.",
         )?;
-        if actual != folder.identity || fs::canonicalize(path)? != path {
+        if fs::canonicalize(path)? != path {
             bail!("This task folder changed. Remove it and choose it again in settings.");
         }
         Ok(path.to_path_buf())
@@ -73,9 +73,8 @@ impl ConfigStore {
     ) -> Result<bool> {
         self.change_task_folders(expected, move |folders| {
             // Recheck under the write lock, after checking the picker grant.
-            if selected_root_identity(Path::new(&path))? != identity {
-                bail!("selected task folder changed; choose it again");
-            }
+            open_selected_root(Path::new(&path), Some(&identity))
+                .context("checking selected task folder")?;
             if folders.iter().any(|folder| folder.path == path) {
                 bail!("this task folder is already configured");
             }
