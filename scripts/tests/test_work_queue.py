@@ -373,6 +373,20 @@ class DoltIntegrationTests(unittest.TestCase):
         self.ok(b, "sync")
         self.assertNotEqual(self.dolt_head(), before)
 
+    def test_queue_bootstrap_keeps_a_local_config_yaml_edit(self) -> None:
+        # A clone's uncommitted edit (a sync.remote, a comment) survives the
+        # real bd bootstrap byte for byte, not just the committed text.
+        self.seed(bead("brwr-a1"))
+        b = self.clone("b")
+        config = b / ".beads" / "config.yaml"
+        edited = (config.read_bytes() if config.exists() else b"") + (
+            f"\n# local edit kept\nsync.remote: {self.url}\n".encode())
+        config.write_bytes(edited)
+        out = self.ok(b, "bootstrap")
+        self.assertIn(f"Dolt remote origin: {self.url}", out)
+        self.assertEqual(config.read_bytes(), edited, out)
+        self.assertIn("brwr-a1", self.exported(b))
+
     def test_seed_without_a_committed_metadata_json_says_which_id_to_commit(self) -> None:
         self.git(self.a, "rm", "-q", ".beads/metadata.json")
         out = self.seed(bead("brwr-a1"))

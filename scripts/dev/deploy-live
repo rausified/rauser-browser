@@ -48,7 +48,10 @@ first failure:
 
 --drain (after step h): pause new runs with a marker the service honours
 (host/src/service/drain.rs), wait up to --drain-timeout for queued and
-running runs, then go on; the pause is lifted however the deploy ends.
+running runs, then go on; the pause is lifted however the deploy ends,
+including SIGTERM and SIGHUP (a closed terminal), which exit 128 + the
+signal. Only SIGKILL or a crash leaves the marker; the service ignores it an
+hour after it was written, or delete <support dir>/deploy-drain.json.
 --expected-sha SHA: in step d, fetch origin main and fast-forward exactly to
 SHA instead of pulling; refuse a SHA not on origin/main or behind HEAD.
 A queued or running run whose service_pid is no live process is stale: it
@@ -80,9 +83,11 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -112,6 +117,35 @@ DRAIN_MAX = 3600  # the service's own cap, and the largest --drain-timeout
 DRAIN_GRACE = 300  # pause kept past the wait for publish, register and hello
 DRAIN_POLL = 5  # seconds between run scans while draining
 DRAIN_TIMEOUT_MAX = DRAIN_MAX - DRAIN_GRACE  # so the pause lasts through the publish
+LS_REMOTE_TIMEOUT = 30.0  # seconds; git ls-remote is read-only, so it never prompts
+# A deploy killed by one of these still runs main's finally (lifting the
+# drain pause) and exits 128 + the signal number; Ctrl-C (SIGINT) already does.
+TRAPPED_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+class Signalled(BaseException):
+    """SIGTERM or SIGHUP arrived; raised from the handler so cleanup runs."""
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _raise_signalled(signum, _frame):
+    raise Signalled(signum)
+
+
+def trap_signals() -> dict:
+    """Make SIGTERM and SIGHUP raise Signalled; return the old handlers (none
+    off the main thread, where Python cannot set them)."""
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    return {sig: signal.signal(sig, _raise_signalled) for sig in TRAPPED_SIGNALS}
+
+
+def restore_signals(old: dict) -> None:
+    for sig, handler in old.items():
+        signal.signal(sig, handler)
 
 
 def honours_drain(binary: Path) -> bool:
@@ -163,17 +197,21 @@ class Result:
         return self.stderr.decode("utf-8", "replace").strip()
 
 
-# runner(argv, *, cwd, input=None, stream=False, timeout=None) -> Result.
-# stream=True lets a long build print straight to the terminal.
+# runner(argv, *, cwd, input=None, stream=False, timeout=None, env=None) -> Result.
+# stream=True lets a long build print straight to the terminal; env adds to
+# CHILD_ENV for this one call.
 Runner = Callable[..., Result]
 
 
-def system_runner(argv, *, cwd, input=None, stream=False, timeout=None) -> Result:
+def system_runner(argv, *, cwd, input=None, stream=False, timeout=None, env=None) -> Result:
+    child_env = {**CHILD_ENV, **(env or {})}
     try:
         if stream:
-            proc = subprocess.run(argv, cwd=cwd, env=CHILD_ENV, timeout=timeout)
+            proc = subprocess.run(argv, cwd=cwd, env=child_env, timeout=timeout)
             return Result(proc.returncode)
-        proc = subprocess.run(argv, cwd=cwd, env=CHILD_ENV, input=input, capture_output=True,
+        # A captured call has no terminal to answer from, so it gets no stdin.
+        proc = subprocess.run(argv, cwd=cwd, env=child_env, input=input, capture_output=True,
+                              stdin=subprocess.DEVNULL if input is None else None,
                               timeout=timeout)
         return Result(proc.returncode, proc.stdout, proc.stderr)
     except FileNotFoundError as exc:
@@ -411,8 +449,10 @@ def drain_runs(d: "Deploy", support: Path, timeout: int, allow: bool, late: str)
 
 def remote_main(runner: Runner, repo: Path) -> tuple[Optional[str], str]:
     """origin main's commit by `git ls-remote` (reads, changes nothing), or
-    (None, why not)."""
-    res = git(runner, repo, "ls-remote", "origin", "refs/heads/main")
+    (None, why not). Bounded and never prompting: an unreachable remote or
+    one asking for credentials is "unavailable", not a hung deploy."""
+    res = runner(["git", "-C", str(repo), "ls-remote", "origin", "refs/heads/main"], cwd=repo,
+                 timeout=LS_REMOTE_TIMEOUT, env={"GIT_TERMINAL_PROMPT": "0"})
     if res.returncode != 0:
         return None, res.err or f"git ls-remote exit {res.returncode}"
     for line in res.text.splitlines():
@@ -421,6 +461,21 @@ def remote_main(runner: Runner, repo: Path) -> tuple[Optional[str], str]:
                                                                               parts[0]):
             return parts[0], ""
     return None, "git ls-remote printed no refs/heads/main"
+
+
+def on_local_origin_main(runner: Runner, repo: Path, expected: str) -> Optional[bool]:
+    """Whether the expected commit is on the local origin/main ref (as of the
+    last fetch; read-only): True, False, or None when it is not a commit here."""
+    if git(runner, repo, "rev-parse", "--verify", "-q", f"{expected}^{{commit}}").returncode != 0:
+        return None
+    return git(runner, repo, "merge-base", "--is-ancestor", expected,
+               "origin/main").returncode == 0
+
+
+def ancestry_note(found: Optional[bool]) -> str:
+    return {True: "yes as of the last fetch",
+            False: "not as of the last fetch; the fetch decides",
+            None: "unknown: not a commit here until a fetch brings it"}[found]
 
 
 def fast_forward_to(d: "Deploy", runner: Runner, repo: Path, old: str, expected: str) -> str:
@@ -689,6 +744,8 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
     manifest = args.native_host_manifest or default_manifest(home)
     drain_marker: Optional[Path] = None
     d: Optional[Deploy] = None
+    local_ancestry: Optional[bool] = None
+    old_handlers = trap_signals()
     try:
         repo = (args.repo or default_repo(runner, Path(__file__).resolve().parent)).resolve()
         d = Deploy(runner, repo, out, args.dry_run, pid_alive, clock, sleep)
@@ -770,6 +827,8 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
             new = old
             if expected is not None:
                 e = expected[:COMMIT_LENGTH]
+                local_ancestry = on_local_origin_main(runner, repo, expected)
+                d.say(f"    on the local origin/main ref: {ancestry_note(local_ancestry)}")
                 if old.startswith(expected) and remote == old:
                     d.say(f"    would deploy {e}: it is checked out and origin main's tip")
                 elif old.startswith(expected):
@@ -925,7 +984,8 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
         d.say("")
         d.say("summary" + (" (dry run)" if args.dry_run else ""))
         if args.dry_run:
-            target = (f"would deploy {expected[:COMMIT_LENGTH]} if it is on origin/main"
+            target = (f"would deploy {expected[:COMMIT_LENGTH]} if it is on origin/main "
+                      f"({ancestry_note(local_ancestry)})"
                       if expected is not None else
                       "origin main unavailable, so what the pull brings is unknown"
                       if remote is None else
@@ -965,14 +1025,21 @@ def main(argv: Optional[list[str]] = None, runner: Optional[Runner] = None, out=
     except DeployError as exc:
         print(f"deploy-live: error: {exc}", file=out)
         return 1
+    except Signalled as exc:
+        name = signal.Signals(exc.signum).name
+        print(f"deploy-live: stopped by {name}", file=out)
+        return 128 + exc.signum
     finally:
-        if drain_marker is not None:
-            try:
-                drain_marker.unlink(missing_ok=True)
-                print(f"    lifted the pause on new runs ({drain_marker})", file=out)
-            except OSError as exc:
-                print(f"deploy-live: warning: cannot remove {drain_marker}: {exc}; new runs "
-                      f"stay paused until it expires (at most {DRAIN_MAX}s)", file=out)
+        try:
+            if drain_marker is not None:
+                try:
+                    drain_marker.unlink(missing_ok=True)
+                    print(f"    lifted the pause on new runs ({drain_marker})", file=out)
+                except OSError as exc:
+                    print(f"deploy-live: warning: cannot remove {drain_marker}: {exc}; new runs "
+                          f"stay paused until it expires (at most {DRAIN_MAX}s)", file=out)
+        finally:
+            restore_signals(old_handlers)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,9 @@ import io
 import json
 import os
 import shutil
+import signal
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -69,6 +71,7 @@ class FakeRunner:
         self.history = [OLD, MID, NEW]  # origin/main, oldest first
         self.remote_head = NEW  # what git ls-remote reports for origin main
         self.refs: dict = {}  # ref name -> commit, for names that look like short SHAs
+        self.ls_remote_result = None  # a Result to answer git ls-remote with instead
 
     # Calls whose first words match one of these act on the system.
     ACTING = ("pull", "fetch", "merge", "cargo", "npm", "node", "binary", "hygiene-apply",
@@ -95,9 +98,10 @@ class FakeRunner:
                 out.append(c)
         return out
 
-    def __call__(self, argv, *, cwd, input=None, stream=False, timeout=None):
+    def __call__(self, argv, *, cwd, input=None, stream=False, timeout=None, env=None):
         argv = [str(a) for a in argv]
-        self.calls.append({"argv": argv, "cwd": cwd, "input": input, "stream": stream})
+        self.calls.append({"argv": argv, "cwd": cwd, "input": input, "stream": stream,
+                           "timeout": timeout, "env": env})
         k = self.kind(argv)
         if k in self.fail:
             return dl.Result(1, b"", f"{k} failed".encode())
@@ -115,6 +119,8 @@ class FakeRunner:
                 return dl.Result(128, b"", b"fatal: Needed a single revision")
             return dl.Result(0, (found[0] + "\n").encode())
         if k == "ls-remote":
+            if self.ls_remote_result is not None:
+                return self.ls_remote_result
             return dl.Result(0, f"{self.remote_head}\trefs/heads/main\n".encode())
         if k == "merge-base":
             a, b = argv[-2], argv[-1]
@@ -1176,6 +1182,118 @@ class Drain(Fixture):
             self.assertNotEqual(code, 0, out)
 
 
+class RemoteMain(Fixture):
+    """git ls-remote is bounded and never prompts."""
+
+    def test_ls_remote_has_a_timeout_and_no_terminal_prompt(self):
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        call = self.call("ls-remote")
+        self.assertEqual(call["timeout"], dl.LS_REMOTE_TIMEOUT)
+        self.assertEqual(call["env"], {"GIT_TERMINAL_PROMPT": "0"})
+
+    def test_a_timed_out_ls_remote_is_unavailable_not_a_hang(self):
+        self.runner.ls_remote_result = dl.Result(124, b"", b"timed out after 30.0s")
+        code, out = self.deploy("--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("origin main: unavailable (timed out after 30.0s)", out)
+
+    def test_system_runner_adds_env_and_gives_captured_calls_no_stdin(self):
+        res = dl.system_runner(
+            [sys.executable, "-c",
+             "import os, sys; print(os.environ['DL_X'], os.environ['GIT_OPTIONAL_LOCKS'],"
+             " repr(sys.stdin.read()))"],
+            cwd=self.tmp, env={"DL_X": "y"}, timeout=30)
+        self.assertEqual(res.returncode, 0, res.err)
+        self.assertEqual(res.text.split(), ["y", "0", "''"])
+        self.assertNotIn("DL_X", dl.CHILD_ENV)
+
+
+class DryRunAncestry(Fixture):
+    """A dry run with --expected-sha checks it against the local origin/main
+    ref (read-only) and says so as of the last fetch."""
+
+    def test_on_origin_main_as_of_the_last_fetch(self):
+        code, out = self.deploy("--dry-run", "--expected-sha", MID)
+        self.assertEqual(code, 0, out)
+        self.assertIn("on the local origin/main ref: yes as of the last fetch", out)
+        self.assertIn(f"would deploy {MID[:12]} if it is on origin/main (yes as of the last "
+                      "fetch)", out)
+        self.assertEqual(self.runner.acting_calls(), [], out)
+
+    def test_not_on_origin_main_as_of_the_last_fetch(self):
+        self.runner.remote_head = MID  # the local origin/main stops before NEW
+        code, out = self.deploy("--dry-run", "--expected-sha", NEW)
+        self.assertEqual(code, 0, out)
+        self.assertIn("not as of the last fetch; the fetch decides", out)
+
+    def test_an_unknown_commit_is_said_unknown(self):
+        code, out = self.deploy("--dry-run", "--expected-sha", "9" * 40)
+        self.assertEqual(code, 0, out)
+        self.assertIn("unknown: not a commit here until a fetch brings it", out)
+
+
+class DrainSignals(Fixture):
+    """SIGTERM or SIGHUP (a closed terminal) still lifts the pause: a real
+    child deploy-live, paused mid-drain in its own temp dir, is killed."""
+
+    def run_child(self, sig):
+        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--drain-child"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            ready = json.loads(child.stdout.readline() or "{}")
+            self.assertIn("marker", ready, child.stderr.read() if child.poll() is not None else "")
+            marker = Path(ready["marker"])
+            self.addCleanup(shutil.rmtree, ready["tmp"], True)
+            self.assertTrue(marker.exists())
+            child.send_signal(sig)
+            rest, err = child.communicate(timeout=30)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+        self.assertEqual(child.returncode, 0, err)
+        result = json.loads(rest)
+        return marker, result
+
+    def test_sigterm_and_sighup_lift_the_pause_and_exit_128_plus_the_signal(self):
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=sig.name):
+                marker, result = self.run_child(sig)
+                self.assertFalse(marker.exists(), result["out"])
+                self.assertEqual(result["code"], 128 + sig, result["out"])
+                self.assertIn(f"stopped by {sig.name}", result["out"])
+                self.assertIn("lifted the pause on new runs", result["out"])
+                self.assertNotIn("publish", result["kinds"])
+
+    def test_the_trap_is_removed_after_the_deploy(self):
+        before = {sig: signal.getsignal(sig) for sig in dl.TRAPPED_SIGNALS}
+        code, out = self.deploy()
+        self.assertEqual(code, 0, out)
+        self.assertEqual({sig: signal.getsignal(sig) for sig in dl.TRAPPED_SIGNALS}, before)
+
+
+def _drain_child() -> None:
+    """--drain-child: start a --drain deploy that waits on a run which never
+    finishes, print the marker path, and block in the drain's sleep until
+    the parent test signals; then print the outcome as JSON."""
+    import time as real_time
+    case = Drain("test_drain_timeout_is_bounded")
+    case.setUp()
+    case.alive = {4321}
+    case.add_run("r-hold", "running", service_pid=4321)
+    told = []
+
+    def block():
+        if not told:
+            told.append(True)
+            print(json.dumps({"marker": str(case.marker()), "tmp": str(case.tmp)}), flush=True)
+        real_time.sleep(60)
+    case.on_sleep = block
+    code, out = case.deploy("--drain")
+    print(json.dumps({"code": code, "out": out, "kinds": case.kinds()}), flush=True)
+
+
 class DefaultRepo(Fixture):
     def test_main_worktree_of_the_scripts_repo(self):
         self.assertEqual(dl.default_repo(self.runner, Path("/anything")), self.repo)
@@ -1189,4 +1307,7 @@ class DefaultRepo(Fixture):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    if sys.argv[1:] == ["--drain-child"]:
+        _drain_child()
+    else:
+        unittest.main()
