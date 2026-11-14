@@ -25,7 +25,8 @@ Plan and design challenge: [docs/superpowers/plans/2026-11-13-pr-fixer.md](../su
      It repairs at most one PR per pass.
 3. **Sandbox probe.**
    Before claiming, it runs a probe inside the agent sandbox and refuses the pass (`refused`) unless every secret path, and the runner's own `/proc/<pid>/environ`, is hidden there.
-   The sandbox is bubblewrap, and the secret paths are `~/.config/brauser-pr-fixer`, `~/.config/gh`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.ssh` and `~/.netrc`.
+   The sandbox is bubblewrap, and the secret paths are all of `~/.config` (and `$XDG_CONFIG_HOME`), `~/.ssh`, `~/.git-credentials` and `~/.netrc`, plus each `--secret-path`.
+   On a shared VM, `~/.config` also holds other tools' tokens, such as a worker's GitHub token or a beacon's keys, so the whole directory is masked.
 4. **Claim.**
    It runs `bd --actor pr-fixer update <id> --claim`, counts the attempt (`fixer_attempts` metadata) and syncs the queue.
    If the sync fails, the claim is undone and nothing else happens.
@@ -118,7 +119,7 @@ BRAUSER_QUEUE_WORKSPACE=<bd workspace> node scripts/dev/pr-fixer.mjs --repo webR
 ```
 
 `--dry-run` prints each repair bead's decision and changes nothing.
-Other flags: `--agent claude`, `--max-attempts`, `--timeout-minutes`, `--keep-days` (default 30), `--work-root` (default `$XDG_STATE_HOME/brauser-pr-fixer`, else `~/.local/state/brauser-pr-fixer`).
+Other flags: `--agent claude`, `--max-attempts`, `--timeout-minutes`, `--keep-days` (default 30), `--secret-path <path>` (repeatable; a host-specific credential to hide from the agent), `--work-root` (default `$XDG_STATE_HOME/brauser-pr-fixer`, else `~/.local/state/brauser-pr-fixer`).
 Tests: `node --test scripts/tests/pr-fixer.test.mjs scripts/tests/pr-fixer-report.test.mjs`.
 It runs real git on temporary repositories, with fake `bd`, `gh`, `codex`, queue sync, privacy scan and queue-pr; nothing reaches GitHub or a real agent.
 
