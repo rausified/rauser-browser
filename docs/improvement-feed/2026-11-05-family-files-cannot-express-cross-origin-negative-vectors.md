@@ -33,3 +33,4 @@ existing `sample_origin` rule.
   fixtures pin every vector to the family's own `sample_origin`
   (`https://example.webex.com`) and have no slot for a positive confirmed on
   a different, real tenant host.
+- Review 2026-11-12: **Keep.** Let a starter's tests cover URLs on other origins, including negative cases and positive cases on another tenant host. Current fixtures discard evidence about where a starter should and should not apply.

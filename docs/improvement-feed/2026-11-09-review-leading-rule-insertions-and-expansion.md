@@ -12,3 +12,4 @@ regressions; tracked as `brwr-98mo`, discovered from `brwr-qbub`. Demonstrate
 the handoffs with real engine evaluations before choosing the review policy.
 
 - Done 2026-11-09: `brwr-98mo` and `brwr-nhwb` extend the positional host guard to every leading candidate with complete-prefix/disjoint-suffix proofs; 149 configuration tests pass, including real Splunk widening and coverage-changing save sequences. Driver publication pending.
+- Review 2026-11-12: **Done.** Guard new leading rules and expanded coverage from changing recorded identity; entry records brwr-98mo and brwr-nhwb completion.

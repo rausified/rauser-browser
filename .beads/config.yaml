@@ -7,7 +7,6 @@
 # If not set, bd init will auto-detect from directory name
 # Example: issue-prefix: "myproject" creates issues like "myproject-1", "myproject-2", etc.
 issue-prefix: "brwr"
-
 # Use no-db mode: JSONL-only, no Dolt database
 # When true, .beads/issues.jsonl is the only local store
 # no-db: false
@@ -82,3 +81,5 @@ issue-prefix: "brwr"
 # demand, outside .beads/ (target/queue/, git-ignored).
 export:
     auto: false
+sync:
+    remote: "git+https://github.com/webRauser/rauser-browser.git"

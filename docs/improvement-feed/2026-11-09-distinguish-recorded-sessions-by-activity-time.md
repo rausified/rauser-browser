@@ -10,3 +10,4 @@ identities but does not help a person find the meeting or work period they recal
 Where: The catalog in `host/src/index/focus.rs`, `FocusSession` catalog metadata
 in `protocol/schema.json`, and `renderWorklogSessions` in `extension/panel.ts`.
 Use the newest recorded activity, without reading unrelated session contents.
+- Review 2026-11-12: **Keep.** Show when a recorded session was active so users can choose among duplicate names; UUID suffixes alone are not meaningful.

@@ -12,3 +12,4 @@ than duplicating headings in another validator. Cover Unicode, long names and
 the extra-request heading. Keep explicit Save and Run as separate gestures.
 
 Tracked as `brwr-5wup`, discovered from `brwr-kqt4`.
+- Review 2026-11-12: **Keep.** Shows how much saved command text and extra request can fit before Run, avoiding commands that save but cannot execute.

@@ -5,3 +5,4 @@ Change: When pr-doctor's scheduled run finds a PR labelled `queue` whose "Mergif
 Why: Mergify missed check-run completions on #329 and #343 on 2026-11-09. Each PR sat green and labelled until someone commented a refresh. pr-watch now detects this and says so, but only a session that is still watching acts on it. An idle owner leaves the PR stuck, the same gap as a green PR that is never queued.
 
 Where: `scripts/pr-doctor.mjs` and `.github/workflows/pr-doctor.yml`, reusing the pr-watch helper and its tests.
+- Review 2026-11-12: **Revise.** Let doctor refresh a green queued PR when Mergify is stale; two PRs needed manual refresh. Rate-limit and ensure status has truly stalled before commenting.

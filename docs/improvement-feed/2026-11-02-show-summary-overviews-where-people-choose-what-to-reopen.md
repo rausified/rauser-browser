@@ -11,3 +11,4 @@ extension/summary-text.ts, extension/run-card.ts and the panel. Use the
 existing brwr-sm3 rather than create another proposal for the same work.
 
 - Done 2026-11-02: brwr-sm3 carries overview through events, views and run answers; panel, Recent and run cards show it with legacy fallbacks.
+- Review 2026-11-12: **Done.** Shows saved overview where a person decides what to reopen.

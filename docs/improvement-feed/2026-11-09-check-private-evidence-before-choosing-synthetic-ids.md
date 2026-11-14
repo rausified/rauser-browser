@@ -22,3 +22,4 @@ file locally (never shipped, never read in CI) and fails a commit/PR
 touching `protocol/`, `docs/adapters/`, or test fixtures if any token from
 that file's real URLs appears verbatim. Optional and local-only; must never
 ship the evidence file or its contents anywhere.
+- Review 2026-11-12: **Keep.** Locally compare replacement IDs and shortened variants against private source evidence; a supposedly synthetic replacement might still match real history. Keep evidence out of CI and repo.

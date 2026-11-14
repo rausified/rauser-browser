@@ -26,3 +26,4 @@ specific (longer-prefix) shape for the sample whose literal segments match
 it, instead of collapsing both samples into the single more general shape.
 That would let `figma.branch` and `vidcast.video`'s edit route keep
 `samples_shape: true` and drop the opt-out this batch needed twice.
+- Review 2026-11-12: **Keep.** Make the drafter distinguish routes that share an opening segment but diverge later. Today some real samples have to be excluded from structural tests; the proposed longer-prefix heuristic should be validated against both route families before adopting.

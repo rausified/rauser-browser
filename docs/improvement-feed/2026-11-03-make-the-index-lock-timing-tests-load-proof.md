@@ -13,3 +13,5 @@ a generous upper bound, or drive the timeout from an injected clock. Where:
 `host/src/index/db.rs`, `host/src/index/tests/reads.rs`.
 - +1 2026-11-03: failed on Windows too (PR #296, run 41743790598, host/src/index/tests/reads.rs:222); rerun passed.
 - +1 2026-11-04: brwr-gxag removes the reported year-delivery and two held-lock upper timing bounds while retaining work counters, one-wait outcomes and elapsed delivery diagnostics. Windows CI acceptance remains pending.
+- Review 2026-11-12: **Done or verify.** Replace load-sensitive time limits with outcome checks; the cited `brwr-gxag` change appears to have done this.
+- Done 2026-11-12: verified on main at 4cd617d; reported strict timing bounds removed by brwr-gxag.

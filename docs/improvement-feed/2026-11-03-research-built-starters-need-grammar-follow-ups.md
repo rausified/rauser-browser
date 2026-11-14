@@ -14,3 +14,4 @@ cannot express. In order of real impact on the graded history:
 
 Change: design a format 2 (or format 1 extensions behind a version check) covering at least
 1 and 2. Where: `adapter-templates.md`, `adapter-templates/`, `extension/adapter-templates.ts`.
+- Review 2026-11-12: **Keep.** Prioritize fragment matching and mode-specific title policy from measured misses; separate other three gaps by impact.

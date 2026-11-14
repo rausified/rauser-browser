@@ -6,3 +6,4 @@ pause during page extraction is not rechecked by `start_auto_summary`; an
 already-reading page can still start a run after capture is paused. Where:
 `host/src/native.rs` and its offline auto-summary regression tests. Explicit
 Summarize & log should stay available while capture is paused.
+- Review 2026-11-12: **Keep.** Rechecks capture pause when an automatic summary starts, preventing a run that began reading before Pause.

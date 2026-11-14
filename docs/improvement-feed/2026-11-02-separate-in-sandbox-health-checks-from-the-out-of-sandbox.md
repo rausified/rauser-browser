@@ -12,3 +12,4 @@ script (or a documented gate-vs-health split in TESTING.md) that names which
 commands are gate-only, so a new required-flag suite cannot stall the worker
 the same way. Where: `package.json`, TESTING.md "Accessibility checks in a real
 browser" and "Local IPC in sandboxes".
+- Review 2026-11-12: **Revise.** Separate checks that need unsandboxed Chromium from in-sandbox worker checks, so a known launch block does not consume cycles.

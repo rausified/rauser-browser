@@ -10,3 +10,4 @@ literals across `native.rs`, `capture_site.rs`, `service/server.rs`,
 none of which cared about the field; `capture_truncated` and `no_page` paid
 the same cost before it. Where: a `#[cfg(test)]` module in `host/src/service/`
 used by those test modules.
+- Review 2026-11-12: **Keep.** Put common test request fields in one helper so adding a protocol field does not require changing dozens of unrelated tests.

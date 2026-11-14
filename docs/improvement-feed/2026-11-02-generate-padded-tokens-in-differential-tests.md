@@ -9,3 +9,4 @@ body alphabet and cannot explore this supported grammar family. Fixed shared
 vectors now cover it; generated combinations would catch future drift with
 case modifiers, bounds and title structure. Where: the generator and
 `scripts/tests/adapter-templates-diff.test.mjs`; tracked as `brwr-ys8y`.
+- Review 2026-11-12: **Keep.** Generates valid and invalid padded IDs so Rust and TypeScript matchers stay aligned beyond fixed examples.

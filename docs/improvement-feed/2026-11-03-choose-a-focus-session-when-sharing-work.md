@@ -8,3 +8,5 @@ which deliberate block to share. Query direct activity by session ID and show an
 exact copy preview, retaining date bounds, omission notices and container
 exclusion. Extend `host/src/index/query.rs`, the panel's worklog curation and
 its focused tests; do not infer session membership from time windows.
+- Review 2026-11-12: **Done or verify.** Gives sharing an explicit focus-session choice, preventing same-day activities from being conflated.
+- Done 2026-11-12: verified on main at 4cd617d; `extension/panel.ts` offers recorded focus-session selection.

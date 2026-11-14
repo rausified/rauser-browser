@@ -12,3 +12,4 @@ markup, and a future timeout (empty Word content) will look the same as an
 unrendered document. Where: extension/summarize.ts `readTab`/`choosePage`,
 extension/diag.ts, protocol/schema.json (an optional field on `start_run` and
 `start_task`), host/src/service/capture_quality.rs for the log line.
+- Review 2026-11-12: **Keep.** Records which browser frame supplied page text and whether Word loading timed out, making failed summaries diagnosable.

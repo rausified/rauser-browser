@@ -13,3 +13,4 @@ Where: `host/src/service/summary_style.rs`, a narrow host read request,
 `extension/options.html` and `extension/options.ts`, with offline host/UI tests.
 
 Queue: `brwr-myn8`, discovered from `brwr-sm4`.
+- Review 2026-11-12: **Keep.** Shows effective SUMMARY_STYLE before a run so users can fix validation errors without spending a run.

@@ -12,3 +12,4 @@ can require rereading both long rows to identify what needs approval.
 Where: `extension/sharing-draft-panel.ts`, with inert comparison helpers and
 offline/keyboard cases for wording, measures, URLs and Unicode. Track the
 follow-up as `brwr-cc3h`, discovered from `brwr-1b6o`.
+- Review 2026-11-12: **Keep.** Mark changed words and URLs when reviewing a refreshed sharing entry; complete before/after rows make small changes hard to spot.

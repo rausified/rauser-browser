@@ -10,3 +10,4 @@ this class of regression when sandbox restrictions prevent Chromium from running
 
 - +1 2026-11-05: Cycle 8's external pagination gate failed twice because a new checkbox was focused inside a still-disabled fieldset. A test-scoped inherited-disabled focus mock reproduces the failure offline and verifies the ordering repair; extend the shared fake to cover ancestor fieldsets as well as controls' own disabled state (`brwr-tcd5`).
 - +1 2026-11-09: Independent review found that hiding More sessions during a delivery refresh or Reload sessions dropped keyboard focus without restoring it. The regressions must explicitly model focus moving to the body because the fake DOM's `hidden` field does not. Extend the shared focus model to hidden controls too; real-browser assertions now cover both refresh and reload.
+- Review 2026-11-12: **Keep.** Models disabled, hidden, and ancestor-fieldset focus loss so keyboard regressions are seen without a browser.

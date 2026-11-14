@@ -10,3 +10,4 @@ and the registration code can be tested against it before M5. Where:
 `extension/manifest.json`, `scripts/register-dev-host.mjs`, and the
 self-registration tests when that code is built.
 - Done 2026-11-02: `brwr-q0i4` (cycle commit prepared for driver).
+- Review 2026-11-12: **Done.** Gives the unpacked extension a stable ID for native host registration.

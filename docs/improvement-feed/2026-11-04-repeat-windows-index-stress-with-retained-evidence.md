@@ -12,3 +12,4 @@ distinguish acquisition from setup, statement or commit contention. Put the
 repeatable invocation and artifact retention in `.github/workflows/` with
 commands documented in `TESTING.md`; do not widen timeouts or weaken the
 existing zero-error/zero-busy assertions.
+- Review 2026-11-12: **Keep.** Runs repeated Windows concurrency tests with retained output to validate the index fix on the affected platform.

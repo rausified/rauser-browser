@@ -1,3 +1,4 @@
 ## 2026-11-09 — Offer scope extension from an out-of-scope page
 
 Change: On a configured starter site, let the capture explanation open a review prefilled with the current page's validated organization or workspace, then widen the existing adapter scope through the revision-checked save. Why: GitHub's `/anthropics/skills` already matches the repository route but can be outside the selected owner list; the corrected recurring-pages hint no longer offers an invalid new-rule draft, while the current Open settings action leaves the owner to find and edit the scope manually. Where: `extension/panel.ts`, `extension/site-coverage.ts`, the Settings adapter review, and the panel tests for out-of-scope pages.
+- Review 2026-11-12: **Keep.** Open a prefilled scope edit from a recognized but excluded page; users currently have to find the scope field manually.

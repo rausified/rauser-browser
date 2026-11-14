@@ -12,3 +12,4 @@ explicit, preserve the selected session independently of catalog paging, and
 test equal timestamps, same-name sessions and a changing history snapshot.
 
 - Done 2026-11-09: brwr-t4gf adds snapshot-bound catalog paging and explicit More sessions, retaining selected identity and checked work; focused host/wire/panel gates pass.
+- Review 2026-11-12: **Done.** Pages through recorded sessions while retaining explicit selection.

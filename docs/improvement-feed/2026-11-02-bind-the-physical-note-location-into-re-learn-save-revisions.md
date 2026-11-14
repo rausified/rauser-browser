@@ -14,3 +14,4 @@ recovery. This belongs to the assigned brwr-dbp work.
 - Done 2026-11-03: `brwr-c1bq` integrates physical ownership and history-bound
   revisions into the shared native note path. Applied-history publication and
   panel integration remain assigned under `brwr-dbp`/`brwr-6x2`.
+- Review 2026-11-12: **Done.** Ties note saves to the actual file selected through re-learning, preventing a save to the wrong file.

@@ -1,3 +1,4 @@
 ## 2026-11-03 — Verify a worker's backlog through one documented field
 
 Change: Document the `/v1/remote-workers/backlogs` response shape (`backlog_sections[].title/body`, `backlog_error`) next to the worker-contract `backlog` key in AGENTS.md, and add a `scripts/dev/queue backlog --verify-served <worker>` check that confirms Backstaff serves the rendered `.bosun_queue_backlog.md`. Why: during the Cookie v0.3.2 relaunch, a probe read a `content` key that doesn't exist and reported "0 chars" for a backlog that was being served (6 sections, 233 KB). That nearly sent us into an unneeded beacon reinstall. Where: AGENTS.md queue section; scripts/dev/queue.
+- Review 2026-11-12: **Revise.** Document actual response fields and add a simple served-content check; avoid treating a wrong probe key as a service outage.

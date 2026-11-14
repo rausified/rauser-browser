@@ -1,3 +1,4 @@
 ## 2026-11-09 — Show recorded routes in site review
 
 Change: show the starter family's recorded URL examples for each selected kind in the site review, including the important alternate routes, and label examples that are synthetic. Why: the new Settings site review evaluates one generated example per kind, based on its first rule or `example_path`. It makes the result of a complete selection visible, but a Google document's multi-account and legacy routes, or a Box item's alternate routes, are not shown there. The starter source files already hold recorded samples that could support a more representative preview. Where: `protocol/starters/*.json`, `scripts/generate-starters.mjs`, `extension/options.ts`, and `extension/tests/options.test.mjs`.
+- Review 2026-11-12: **Keep.** Preview alternate starter routes and label synthetic examples; one generated example per kind hides important routes.

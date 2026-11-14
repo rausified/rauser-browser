@@ -13,3 +13,4 @@ drop the "not enabled today" sentence from AGENTS.md "Review and merge cadence".
 `scripts/dev/pr-watch.mjs` already prints the queue-aware arm command once
 GitHub reports a queue. Where: GitHub repository settings, AGENTS.md.
 - Done 2026-11-03: not possible as written. `rausified` is a personal account and GitHub offers merge queues only to organization-owned repositories. John confirmed main does not require branches to be up to date, so BEHIND PRs already merge once green; AGENTS.md "Review and merge cadence" now says that instead of assuming a queue. Moving the repo to an organization remains an option if conflicts, not currency, keep stalling PRs.
+- Review 2026-11-12: **Retire.** GitHub's native queue is unavailable for this personal-account repo; current Mergify process supersedes it.

@@ -10,3 +10,4 @@ instead. Any change that shows or hides something by class rather than the
 `hidden` attribute has the same blind spot. Where: `harness.mjs` (`FakeElement`
 and the id scan), then move the page-area check in
 `extension/tests/panel/page-summary.test.mjs` onto it.
+- Review 2026-11-12: **Keep.** Models CSS classes in panel tests so tests can detect when a control is visually shown or hidden.

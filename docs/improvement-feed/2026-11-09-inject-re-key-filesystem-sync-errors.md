@@ -11,3 +11,4 @@ existing post-operation interruption callbacks alone cannot prove that an
 operation's own error leaves the correct recoverable state.
 
 - +1 2026-11-09: Added injected history, config-parent and cleanup sync failures, including exact recovery after a private prepare reappears. Extend the same focused fixtures to file writes, renames and failed prepare hard-link publication; directory callback errors still cannot exercise those distinct failure states.
+- Review 2026-11-12: **Keep.** Inject failures at remaining write, rename and publication steps; existing sync regressions cover some barriers but callbacks after operations cannot prove error recovery.

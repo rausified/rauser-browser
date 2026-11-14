@@ -23,3 +23,4 @@ and the future panel Re-learn review under brwr-6x2. Tracked as brwr-pgxz
   resembles a different artifact's new ID. Use the host-derived projection in
   `host/src/relearn.rs` and the future panel review; never infer a new mapping
   from display text.
+- Review 2026-11-12: **Keep.** Shows conflicting origins, notes, and before/after links when a re-learn review cannot be approved, giving users enough evidence to resolve it safely.

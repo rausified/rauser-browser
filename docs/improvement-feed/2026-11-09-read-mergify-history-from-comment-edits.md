@@ -17,3 +17,4 @@ have missed the #339 stall (brwr-69tz).
 
 Where: TESTING.md, `scripts/tests/fixtures/mergify-comments.json`,
 `scripts/dev/pr-watch.mjs` `mergifyStatus`.
+- Review 2026-11-12: **Keep.** Record Mergify's edited status comment when diagnosing queue behavior; current comment and check runs omit prior waiting details.

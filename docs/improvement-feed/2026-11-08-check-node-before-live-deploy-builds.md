@@ -7,3 +7,4 @@ Why: The 2026-11-08 live refresh stopped at `npm run build:extension` under Node
 Where: `scripts/dev/deploy-live`, its tests in `scripts/tests/test_deploy_live.py`, and the local setup guidance in `README.md`.
 
 - Done 2026-11-09: PR #345, deployed at 75a00a714fc6.
+- Review 2026-11-12: **Done.** Check the Node runtime before staging a live build, so an unsupported version fails early with a useful instruction.

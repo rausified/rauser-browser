@@ -7,3 +7,4 @@ still says only “Runs in your knowledge base”; a person choosing among multi
 note/project folders cannot see the actual working location before Run. Extend
 `extension/panel.ts`'s task context and its built panel tests, retaining setup
 hints and leaving the separate per-task chooser (`brwr-zla`) for later.
+- Review 2026-11-12: **Keep.** Names the actual folder before Run so users know where the agent will work.

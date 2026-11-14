@@ -31,3 +31,5 @@ the platform split per-test.
 
 Where: `extension/tests/a11y/fixture.mjs` (new `selectByKeyboard` export),
 `extension/tests/a11y/keyboard.test.mjs` (three tests updated to call it).
+- Review 2026-11-12: **Done.** Use Playwright selection on macOS for native select controls; raw CDP keys did not change their value. Entry describes implementation; confirm merge before marking Done.
+- Done 2026-11-12: verified on main at 4cd617d; `selectByKeyboard` uses the macOS fallback.

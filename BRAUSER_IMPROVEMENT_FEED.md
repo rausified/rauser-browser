@@ -31,4 +31,4 @@ runs it through `scripts/check_current_state.py`).
 ## Read the feed
 
 By date, oldest first: `cat docs/improvement-feed/*.md`. Open entries only:
-`grep -L '^- Done ' docs/improvement-feed/*.md`.
+`grep -LE '^- (Done|Retired|Superseded) ' docs/improvement-feed/*.md`.

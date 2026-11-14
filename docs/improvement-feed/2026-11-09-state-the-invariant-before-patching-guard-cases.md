@@ -7,3 +7,4 @@ Why: PR #362 (brwr-qps4, Splunk container-first order) took five review rounds. 
 Where: `AGENTS.md` "Review and merge cadence"; the reviewer brief convention for guard changes; `host/src/config.rs` test conventions.
 
 - +1 2026-11-09: `brwr-98mo`/`brwr-nhwb` confirmed that the model's rule variant changed path text without changing modeled coverage. It now derives coverage from real exact URL rules, changes it on edit, checks full identity through both guards and requires safe narrowing/widening acceptance and unsafe-edit rejection. Require those generator reachability assertions in future guard model reviews.
+- Review 2026-11-12: **Keep.** Write the identity invariant and test reachable edit sequences before patching cases; five review rounds exposed neighboring gaps.
