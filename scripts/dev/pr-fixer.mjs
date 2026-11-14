@@ -136,7 +136,10 @@ export const defaultSecretPaths = (home, env = {}, extra = []) => [
 /** bubblewrap mounts that hide each existing secret: an empty tmpfs over a directory,
  * an empty file over a file. `kindOf(path)` -> "dir" | "file" | null (absent). */
 export function maskArgs(paths, kindOf) {
-  return paths.flatMap((p) => ({ dir: ["--tmpfs", p], file: ["--ro-bind", "/dev/null", p] })[kindOf(p)] ?? []);
+  const dirs = paths.filter((p) => kindOf(p) === "dir");
+  // A path inside a masked directory is already hidden (the probe still checks it).
+  const covered = (p) => dirs.some((d) => d !== p && p.startsWith(`${d.replace(/\/+$/, "")}/`));
+  return paths.filter((p) => !covered(p)).flatMap((p) => ({ dir: ["--tmpfs", p], file: ["--ro-bind", "/dev/null", p] })[kindOf(p)] ?? []);
 }
 const kindOfPath = (p) => { try { return statSync(p).isDirectory() ? "dir" : "file"; } catch { return null; } };
 

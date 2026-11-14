@@ -96,6 +96,9 @@ test("defaultSecretPaths hides the whole config directory, not a list of known t
 test("maskArgs hides secret directories and files from the agent's sandbox", () => {
   const kinds = { "/h/.config/gh": "dir", "/h/.git-credentials": "file", "/h/.ssh": null };
   assert.deepEqual(maskArgs(Object.keys(kinds), (p) => kinds[p]), ["--tmpfs", "/h/.config/gh", "--ro-bind", "/dev/null", "/h/.git-credentials"]);
+  // A path inside a masked directory is already hidden: mounting it again would fail under the tmpfs.
+  const nested = { "/h/.config": "dir", "/h/.config/xdg": "dir", "/h/.config-other": "dir", "/h/.config/tok": "file" };
+  assert.deepEqual(maskArgs(Object.keys(nested), (p) => nested[p]), ["--tmpfs", "/h/.config", "--tmpfs", "/h/.config-other"]);
 });
 
 test("agentEnv removes every GitHub credential and credential helper", () => {
