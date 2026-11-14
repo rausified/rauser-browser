@@ -18,3 +18,4 @@ have caught it when the scorecard was written.
 Where: the scorecard method in `docs/research/blind/` and the starter plan
 template's "Open decisions" ("resolved" needs an engine result for any rule
 it fixes).
+- Review 2026-11-12: **Keep.** Run a proposed starter rule through the actual engine before describing it as resolved. This catches grammar errors while the research and plan can still change.

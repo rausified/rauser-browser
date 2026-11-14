@@ -12,3 +12,4 @@ the regression now covers a real revision-checked save.
 Where: the generated save model and scoped-mode regression in
 `host/src/config.rs`; the existing mode/scope fixtures in
 `adapter-templates/src/document.rs` show the supported grammar.
+- Review 2026-11-12: **Keep.** Generate scope and mode edits in save tests; exact-path cases missed valid scoped saves being rejected.

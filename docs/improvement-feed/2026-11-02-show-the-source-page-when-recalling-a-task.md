@@ -7,3 +7,4 @@ its original page; page-specific instructions deserve a visible distinction
 before Run. Keep the draft, current-page context and Enter/Run boundary intact;
 never navigate automatically. Where: `extension/task-recall.ts`, the task-bar
 context in `extension/panel.ts`, and `extension/tests/panel/task-bar.test.mjs`.
+- Review 2026-11-12: **Keep.** Shows the original page for a recalled instruction so a page-specific task is not accidentally run on the current page.

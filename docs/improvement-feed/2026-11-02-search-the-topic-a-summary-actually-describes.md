@@ -7,3 +7,4 @@ now delivers the useful one-sentence description to each retained run, but
 a decision described by the summary does not find its run. Where:
 `extension/task-history.ts`, `extension/tasks.ts`, their tests, and brwr-khqi
 (discovered from brwr-sm3).
+- Review 2026-11-12: **Keep.** Searches summary overview text in Tasks so users can find a remembered decision without knowing its page title.

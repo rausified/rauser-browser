@@ -10,3 +10,4 @@ selection changes, hidden tabs and polling. This would prevent an alert for a
 result the person has already read.
 
 Tracked as `brwr-8v4w`; keep this separate from notification delivery.
+- Review 2026-11-12: **Keep.** Mark a completed task alert read when its report is visibly selected in Tasks. This prevents a later alert for a result already viewed; a hidden tab must not count.

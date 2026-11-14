@@ -12,3 +12,4 @@ recorded scope rather than inference from overview text.
 - +1 2026-11-04: `brwr-divh` reproduced a run claiming whole reading and a sign-in wall while reporting success with no saved summary. Fresh-answer validation now refuses that contradiction. Carry the surviving validated scope into saved-summary choices (`brwr-30xv`) so a partial or viewer-only overview does not imply full reading after its run card is gone.
 
 - Done 2026-11-04: `brwr-30xv` (complete local gate and independent in-session review; driver publication pending).
+- Review 2026-11-12: **Done.** Labels summaries as full, partial, or viewer-only at selection time so readers know what was covered.

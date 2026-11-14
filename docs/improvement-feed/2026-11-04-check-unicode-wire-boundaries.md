@@ -6,3 +6,4 @@ The saved-command catalogue accepted 256 Unicode characters in Rust but
 rejected descriptions over 256 UTF-16 units in the extension, disconnecting
 the host for valid emoji-containing descriptions. This review fixes that
 field; shared fixtures would catch the same mismatch in future wire fields.
+- Review 2026-11-12: **Keep.** Shares emoji boundary fixtures between Rust and extension validators, avoiding valid host values disconnecting the UI.

@@ -15,3 +15,5 @@ auto-export also rewrites the file in its own order. Where: render the
 backlog's blocks on `main` after merge (a workflow like the PR doctor) and
 have PRs leave them alone, and for the queue either one file per bead or a
 `bd` export the PRs do not commit.
+- Review 2026-11-12: **Retire.** Queue files have since left Git; no longer need a change to stop committing them.
+- Retired 2026-11-12: queue exports and the rendered backlog have left Git; the proposed per-PR change is obsolete.

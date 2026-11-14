@@ -15,3 +15,4 @@ Change: add `field.maxLength = input.maxLength;` to `renderScopeField` in
 Where: `extension/options.ts`.
 
 - Done 2026-11-03: 2355e26
+- Review 2026-11-12: **Done.** Caps Settings scope input at the same length as Capture Site.

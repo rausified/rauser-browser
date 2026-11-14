@@ -16,3 +16,4 @@ legacy answers without scope.
   after the agent retrieves it. The run-card projection is pending held PR #249.
 
 - Done 2026-11-02: `brwr-rr93` (cycle commit prepared for driver).
+- Review 2026-11-12: **Done.** Shows reading coverage next to summary overview so a viewer-only result is not mistaken for complete reading.

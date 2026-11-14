@@ -6,3 +6,4 @@ DESIGN.md's cache-directory table lists matches a cache file name constant in
 constant appears in the table. Why: `index-open.lock` reached the code
 (8ad206a) without reaching DESIGN.md, and only a manual docs pass caught it.
 Where: `scripts/check_current_state.py`, `DESIGN.md` cache-directory table.
+- Review 2026-11-12: **Revise.** Add a narrow check of cache filenames to catch documentation drift; avoid brittle prose matching.

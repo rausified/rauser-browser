@@ -15,3 +15,4 @@ and `host/src/native/task_note.rs`, with an injected opener and no automatic
 navigation or writes to recovery copies.
 
 - +1 2026-11-03: Independent review reproduced a 4,096-character instruction losing its final 96 characters in the saved note; the rendering now uses the shared task limit and has a save/load regression. Opening the combined note would also let users verify persisted content after copying a report.
+- Review 2026-11-12: **Keep.** Adds Open note after Save to note so users can inspect the actual persisted report.

@@ -12,3 +12,4 @@ Hello/GetConfig ignore refresh errors while presenting `config_issue`. Test
 these entry points together when the universal recovery gate and replay-aware
 readers land. Locations: `host/src/config.rs`, `host/src/native.rs`,
 `host/src/relearn/transaction/tests.rs`, and the staged Re-learn plan.
+- Review 2026-11-12: **Keep.** Test interrupted re-key recovery through actual startup and reads; a direct recovery-unit test missed nested lock and inconsistent snapshot behavior.

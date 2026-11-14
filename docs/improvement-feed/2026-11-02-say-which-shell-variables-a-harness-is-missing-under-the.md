@@ -16,3 +16,4 @@ program as `claude`, not its version: Claude runs log `program: "2.1.316"` in
 and the settings harness section.
 
 - Done 2026-11-02: `host/src/service/shell_env.rs` and `LineChild::spawn_as` (this PR, branch `feat/harness-env-hint`).
+- Review 2026-11-12: **Done.** Names missing variable names after setup fails so users can repair launchd configuration.

@@ -6,3 +6,4 @@ Why: PR #346 ("Dequeued — conflict with base branch") and #349 ("Dequeued — 
 
 Where: `scripts/dev/pr-watch.mjs` (`mergifyQueueStatus`, `decide`), its phase table in `scripts/tests/pr-watch.test.mjs`, and the title list in AGENTS.md "Review and merge cadence".
 - Done 2026-11-09: #364
+- Review 2026-11-12: **Done.** Recognize neutral Mergify dequeues so the watch tool gives a repair action; entry records #364 completion.

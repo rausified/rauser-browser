@@ -5,3 +5,4 @@ Change: Show which startup step is waiting after the native hello, and put a bou
 Why: On the live `e03dbf476a5e` build, both the side panel and settings page displayed “Connecting to native host…” after each had already shown the host version. The host log shows `hello` and `get_config` completed promptly at 19:30:11 UTC; the pages did not reach their ready state until about 19:35 UTC. The generic message made a responsive native host look disconnected. A subsequent settings load and capture status were healthy, so this observation does not establish which worker step waited.
 
 Where: `extension/panel.ts`, `extension/options.ts`, `extension/settings.ts`, and their startup tests. Capture step timing before changing locking or worker behavior, so the eventual fix targets the measured wait.
+- Review 2026-11-12: **Keep.** Name and time each startup step, then offer retry after a deadline; a five-minute apparent native-host connection hang obscured which step stalled.

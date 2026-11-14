@@ -9,3 +9,4 @@ which is impossible for a click that needs a 1 s poll. A printed "opened
 after 80 ms with 0 clicks" would have pointed straight at the wrong panel
 document. Where: `waitUntil`/`waitFor` and `step()` in
 `scripts/smoke-macos.mjs`.
+- Review 2026-11-12: **Keep.** Print wait durations and click counts on smoke failure; CI timestamps were needed to find a wrong panel document.

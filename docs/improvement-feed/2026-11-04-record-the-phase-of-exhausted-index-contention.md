@@ -11,3 +11,5 @@ distinguish opening/recovery, BEGIN, statement and commit failures.
 
 Where: `host/src/index/db.rs`, its database tests and
 `host/src/index/tests/mp_harness.rs`. Follow-up: `brwr-bszr`.
+- Review 2026-11-12: **Done or verify.** Adds phase and SQLite details to index contention diagnostics so a future Windows failure can be located.
+- Done 2026-11-12: verified on main at 4cd617d; `host/src/index/db.rs` logs phase, SQLite code, elapsed time and attempts.

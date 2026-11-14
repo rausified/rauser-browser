@@ -8,3 +8,4 @@ useful supported rules. Compare supported-format values only; keep future
 formats opaque and say when a comparison is unavailable. Add this review to
 `extension/adapter-repair-settings.ts` and its offline settings tests, retaining
 the revision gate and explicit replacement action.
+- Review 2026-11-12: **Keep.** Shows rules that repair will retain, add, change, and remove before saving, reducing accidental loss.

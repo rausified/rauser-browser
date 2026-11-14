@@ -9,3 +9,4 @@ even though fresh installs recognize the new route. Old history alone does
 not identify the most recently shipped version.
 
 Where: `scripts/generate-starters.mjs`, its tests and `protocol/starters/*.json`.
+- Review 2026-11-12: **Keep.** Compare changed starter match rules with the previous shipped version and require history so existing saved adapters can upgrade.

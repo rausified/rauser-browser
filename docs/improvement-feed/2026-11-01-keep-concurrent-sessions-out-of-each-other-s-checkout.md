@@ -14,3 +14,4 @@ is not `main` or another session's branch is checked out there. Where: the
 
 - Also logged in the AMOS Improvement Feed on 2026-11-01, before this feed
   existed.
+- Review 2026-11-12: **Keep.** Starts agents in separate worktrees so one session cannot move another session's branch or overwrite the live host build.

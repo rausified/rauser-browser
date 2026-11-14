@@ -10,3 +10,4 @@ so the axe gate never measures those surfaces and visual checks need DOM
 injection by hand. Where: `extension/tests/a11y/fixture.mjs` and
 `pages.test.mjs`; the same state would let a screenshot check compare the
 panel against the design.
+- Review 2026-11-12: **Keep.** Audits the actual artifact, summary, and running task panel states in both themes, closing a coverage hole.

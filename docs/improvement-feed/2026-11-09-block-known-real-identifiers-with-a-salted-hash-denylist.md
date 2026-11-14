@@ -6,3 +6,5 @@ Why: The repository is public and its rule is synthetic data only, yet real orga
 
 Where: `scripts/check_identifiers.py` (new), `.github/workflows/ci.yml`, an optional `.githooks/pre-commit`, and `TESTING.md`. Exempt vendor product text (for example a vendor's own page title such as `Example Meetings`) through a small allowlist of plain values, since those are public by definition.
 - Done 2026-11-11: brwr-la7i, `scripts/privacy-scan.mjs` with `scripts/privacy-denylist.sha256` and the `Privacy scan` CI job
+- Review 2026-11-12: **Revise.** Screen examples for known private identifiers before publishing; real identifiers reached public fixtures. A committed salt and hashes can still reveal low-entropy values by guessing, so keep the private list local and make CI check only safe synthetic patterns.
+- Preservation 2026-11-13: The dated review came from an older source snapshot and does not reopen the completion recorded above. Later published completion evidence takes precedence for implementation status.

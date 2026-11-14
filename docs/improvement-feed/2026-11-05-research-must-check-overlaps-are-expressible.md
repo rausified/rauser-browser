@@ -23,3 +23,4 @@ of blocking a finished plan's task list.
 
 Where: the research checklist (`docs/research/blind/` README/checklist) and
 `AGENTS.md` "Adding a starter".
+- Review 2026-11-12: **Keep.** During research, run the draft family through the generator and overlap check. This catches unexpressible rule relationships before a starter plan is considered ready.

@@ -1,3 +1,4 @@
 ## 2026-11-09 — Keep setup outside performance timers
 
 Change: when a test compares elapsed time with a budget, start the timer right before the call the budget names and stop it right after, and add a check that budgets only sit on cases the harness times. Why: brwr-0d25's Windows flake (eval.bounds.64x16_none, 54.5 ms over 50 ms) came from the TS vector harness timing fixture compilation of 1,024 rules along with the 0.5 ms evaluation, while the Rust harness timed only the evaluation; the two engines' budgets meant different things. Where: extension/tests/adapter-templates.test.mjs and adapter-templates/tests/vectors.rs; AGENTS.md testing rules could state it for every timed test, such as the remaining `< 500` and `< 200` checks in the same TS file.
+- Review 2026-11-12: **Keep.** Time only the operation a budget claims to measure; one TypeScript test included compiling fixtures and flaked on Windows.

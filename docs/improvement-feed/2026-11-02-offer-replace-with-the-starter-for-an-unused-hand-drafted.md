@@ -11,3 +11,4 @@ activity, notes or summaries, offer **Replace with the <tool> starter**. It
 removes the adapter without recording its contract and adds the starter in one
 revision-checked save. Where: `extension/starter-adapters.ts`, the settings
 gallery, and a host check that the adapter has no records.
+- Review 2026-11-12: **Keep.** Offers a reviewed migration from an unused hand-drafted rule to a starter, avoiding manual config and contract edits.

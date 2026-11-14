@@ -14,3 +14,4 @@ draft store keyed to the home folder, and the panel tests. Reopening must
 start no agent, change no source content, and copy nothing automatically.
 
 - Done 2026-11-09: `brwr-1b6o` implements immutable browser-local drafts and explicit original-identity evidence review; complete local gates pass. Driver commit/review/publication pending.
+- Review 2026-11-12: **Done.** Save a selected-work preview locally so it can be reopened and explicitly compared later. This preserves careful curation after panel closure.

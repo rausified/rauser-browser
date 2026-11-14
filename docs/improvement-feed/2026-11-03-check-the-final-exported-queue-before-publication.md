@@ -7,3 +7,4 @@ the backlog included them and the cycle recorded a green gate. Restoring the
 exact rows from local commit `39d78f88` cleared all six reported violations.
 Put the check after the last export or queue rewrite in the cycle closeout
 path, so earlier successful checks cannot mask an incomplete final snapshot.
+- Review 2026-11-12: **Merge.** Same action as “validate committed queue export”; make one publication gate against final data.

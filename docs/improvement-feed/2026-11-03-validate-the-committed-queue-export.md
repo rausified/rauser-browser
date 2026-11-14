@@ -10,3 +10,5 @@ restored exactly those two rows without changing any existing issue.
 
 Where: the overnight publication driver and
 `scripts/check_queue_consistency.py --issues <committed-export> --backlog <committed-backlog>`.
+- Review 2026-11-12: **Merge.** Same final queue validation as the other 11-03 item.
+- Superseded 2026-11-12: consolidated into `2026-11-03-check-the-final-exported-queue-before-publication.md`; validate the final published Dolt queue state there.

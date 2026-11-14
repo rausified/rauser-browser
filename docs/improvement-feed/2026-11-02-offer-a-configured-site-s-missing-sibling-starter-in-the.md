@@ -15,3 +15,4 @@ shipped `confluence.page` starter, which would then need re-learning. Where:
 from `starterOffers` and `hasAdapter`), the `no_rule` case of
 renderCaptureExplanation in extension/panel.ts, and `recurringHint` in
 extension/capture-site.ts (skip shapes a missing sibling starter matches).
+- Review 2026-11-12: **Keep.** Offers the missing starter for a recognized site's other page type, reducing manual Settings navigation.

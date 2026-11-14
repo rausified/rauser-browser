@@ -9,3 +9,4 @@ selection controls. Keep newly viewed rows unchecked and Copy equal to the
 checked preview; do not silently include omitted work.
 
 - Done 2026-11-05: brwr-p71k; explicit snapshot-bound Load more, unchecked append and exact Copy, full local gates passed.
+- Review 2026-11-12: **Done.** Lets people reach work beyond the capped first page before sharing it.
