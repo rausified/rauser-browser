@@ -9,7 +9,6 @@ description = "Adapter-template engine: parsing, validation, and linear-time mat
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-url = "2.5"
-
-[dev-dependencies]
+# `Value::canonical_json` uses its string and number encoding.
 serde_json = "1"
+url = "2.5"

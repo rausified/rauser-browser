@@ -48,6 +48,10 @@ whose title is one of them, ASCII case aside, or is empty or the bare host,
 records no title, so the artifact keeps the title it already has ("Untitled"
 for a new one).
 
+One list covers both the title the template extracts and the whole-title
+fallback (§9.4), so an item whose own name is `Figma` also records no title.
+No recorded title had such a name when the list was set.
+
 ## What each rule covers
 
 1. **Editor route, no slug**, `/<route>/<main key>/branch/<branch key>`. The

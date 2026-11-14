@@ -6,9 +6,10 @@ import {
   validateDocument,
   type CompiledDocument,
   type CompileResult,
+  type ValidationError,
 } from "./adapter-templates.js";
 import { isFocusSession } from "./focus-session.js";
-import { storageKey } from "./brand.js";
+import { APP_NAME, storageKey } from "./brand.js";
 
 export const POLICY_LEASE_MS = 24 * 60 * 60 * 1_000;
 export const MAX_QUEUED_VISITS = 256;
@@ -241,15 +242,29 @@ type AdapterCompiler = (adapters: unknown) => CompileResult;
  */
 export class PolicyLeaseCache {
   private cached: { revision: string; doc: CompiledDocument } | null = null;
+  private failure: { revision: string; error: ValidationError } | null = null;
 
   constructor(private readonly compile: AdapterCompiler = compileDocument) {}
 
   install(value: unknown): PolicyLease | null {
     if (!isPolicyLeaseShape(value)) return null;
     const compiled = this.compile(value.adapters);
-    if (!compiled.ok) return null;
+    if (!compiled.ok) {
+      this.failure = { revision: value.revision, error: compiled.error };
+      return null;
+    }
+    this.failure = null;
     this.cached = { revision: value.revision, doc: compiled.doc };
     return value;
+  }
+
+  /** Why this engine refused the lease for `revision`, if it did. The host
+   * validates every document it sends with its own engine, so a refusal
+   * means the extension and host engines differ: a build mismatch, such as
+   * an extension not reloaded after the host gained an adapter key
+   * (adapter-templates.md §13). See {@link leaseCompileFailureText}. */
+  failureFor(revision: string): ValidationError | null {
+    return this.failure?.revision === revision ? this.failure.error : null;
   }
 
   restore(value: unknown): PolicyLease | null {
@@ -264,6 +279,16 @@ export class PolicyLeaseCache {
   compiledFor(lease: PolicyLease): CompiledDocument | null {
     return this.cached?.revision === lease.revision ? this.cached.doc : null;
   }
+}
+
+/** The reason shown when this extension's engine refuses a lease the host
+ * sent (see {@link PolicyLeaseCache.failureFor}): capture is off until the
+ * two builds match, and the fix is a reload, not a settings repair. */
+export function leaseCompileFailureText(error: ValidationError): string {
+  const where = error.adapter === null ? "" : ` in adapter ${error.adapter + 1}`;
+  return `This browser's ${APP_NAME} extension cannot read the capture rules the native host sent ` +
+    `(${error.code}${where}): the extension and the host are a different build. ` +
+    `Reload ${APP_NAME} to finish the update; capture stays off until then.`;
 }
 
 export function isQueuedVisit(value: unknown): value is QueuedVisit {

@@ -503,9 +503,7 @@ impl ArtifactIndex {
     fn adapters_fingerprint(&self) -> String {
         self.adapters
             .as_deref()
-            .map_or_else(String::new, |document| {
-                sha256_hex(format!("{document:?}").as_bytes())
-            })
+            .map_or_else(String::new, adapters_fingerprint)
     }
 
     pub fn record_activity(&self, event: &ActivityEvent, strip_params: &[String]) -> Result<()> {
@@ -1256,6 +1254,19 @@ fn normalized_activity(event: &ActivityEvent, strip_params: &[String]) -> Result
         }
     }
     Ok(event)
+}
+
+/// The index's record of which adapter document derived it: a hash of the
+/// document's content ([`Document::canonical_json`]), never of how a Rust
+/// type prints. A changed fingerprint refolds the journal once
+/// (`rebuild::adapter_change`), so it must change exactly when the content
+/// does: a new optional adapter field, or a `Debug` change, leaves it alone.
+/// The `adapters content/v1` prefix names the input form, so a later change of form
+/// is visible as one.
+pub(crate) fn adapters_fingerprint(document: &Document) -> String {
+    let mut input = String::from("adapters content/v1\n");
+    input.push_str(document.canonical_json());
+    sha256_hex(input.as_bytes())
 }
 
 fn sha256_hex(value: &[u8]) -> String {

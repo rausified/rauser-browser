@@ -186,8 +186,10 @@ export function recordNavigation(
         (a, b) => a.mode === b.mode, 3);
     }
   }
-  if (total && !(generic && total.title !== null)) {
-    total.title = title ?? null;
+  // No title is not a new title either: a cross-document navigation that
+  // reaches the same artifact with none keeps the hour's title and refs.
+  if (total && title != null && !(generic && total.title !== null)) {
+    total.title = title;
     // Refs are evidence from the latest title carried by this event. Keeping
     // refs from an older title would make the host correctly reject the
     // aggregate when it re-evaluates only the event's latest URL and title.

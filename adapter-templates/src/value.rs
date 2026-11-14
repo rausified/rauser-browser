@@ -52,6 +52,57 @@ impl Value {
     }
 }
 
+impl Value {
+    /// The value's content as canonical JSON: table keys sorted by their
+    /// UTF-8 bytes at every level, no white space, strings and numbers in
+    /// `serde_json`'s encoding. Two values with the same content give the
+    /// same text whatever order their source wrote the keys in, and the text
+    /// never depends on how a Rust type prints itself (`Debug`), so it is a
+    /// stable input for a content hash (`Document::canonical_json`).
+    pub fn canonical_json(&self) -> String {
+        let mut out = String::new();
+        self.write_canonical(&mut out);
+        out
+    }
+
+    fn write_canonical(&self, out: &mut String) {
+        match self {
+            Value::Null => out.push_str("null"),
+            Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Value::Int(n) => out.push_str(&n.to_string()),
+            // A non-finite float encodes as `null`, as serde_json does.
+            Value::Float(f) => out.push_str(&serde_json::Value::from(*f).to_string()),
+            Value::String(s) => out.push_str(&serde_json::Value::from(s.as_str()).to_string()),
+            Value::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    item.write_canonical(out);
+                }
+                out.push(']');
+            }
+            Value::Table(entries) => {
+                // Keys are unique (deserialization refuses duplicates), so
+                // the sorted order is total.
+                let mut sorted: Vec<&(String, Value)> = entries.iter().collect();
+                sorted.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+                out.push('{');
+                for (i, (key, value)) in sorted.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::Value::from(key.as_str()).to_string());
+                    out.push(':');
+                    value.write_canonical(out);
+                }
+                out.push('}');
+            }
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for Value {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_any(ValueVisitor)
@@ -151,6 +202,34 @@ mod tests {
                 Value::Float(1.5)
             ]
         );
+    }
+
+    #[test]
+    fn canonical_json_sorts_keys_at_every_level() {
+        let a: Value =
+            serde_json::from_str(r#"{"b": {"z": 1, "y": [2.5, "q\""]}, "a": null, "c": true}"#)
+                .unwrap();
+        let b: Value =
+            serde_json::from_str(r#"{"c": true, "a": null, "b": {"y": [2.5, "q\""], "z": 1}}"#)
+                .unwrap();
+        assert_eq!(
+            a.canonical_json(),
+            r#"{"a":null,"b":{"y":[2.5,"q\""],"z":1},"c":true}"#
+        );
+        assert_eq!(a.canonical_json(), b.canonical_json());
+    }
+
+    #[test]
+    fn canonical_json_tells_content_apart() {
+        let text = |json: &str| {
+            serde_json::from_str::<Value>(json)
+                .unwrap()
+                .canonical_json()
+        };
+        assert_ne!(text(r#"{"a": [1, 2]}"#), text(r#"{"a": [2, 1]}"#));
+        assert_ne!(text(r#"{"a": "1"}"#), text(r#"{"a": 1}"#));
+        assert_ne!(text(r#"{"a": 1}"#), text(r#"{"a": 1, "b": null}"#));
+        assert_eq!(text(r#"{"k": "é\u0001"}"#), "{\"k\":\"é\\u0001\"}");
     }
 
     #[test]

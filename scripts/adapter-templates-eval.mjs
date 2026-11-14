@@ -13,7 +13,8 @@
 // the document fails validation. Importing this file does not read stdin.
 
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 const { compileDocument, evaluate } = await import("../extension/dist/adapter-templates.js");
 
@@ -58,7 +59,13 @@ export async function evalLines(input, output) {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Compare real paths: argv[1] may go through a symlink (macOS /tmp ->
+// /private/tmp), and a plain comparison then runs nothing and prints nothing.
+function isEntryPoint() {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? "")).href; } catch { return false; }
+}
+
+if (isEntryPoint()) {
   if (process.argv.length > 2) {
     console.error("Usage: node scripts/adapter-templates-eval.mjs < requests.jsonl");
     process.exit(2);
