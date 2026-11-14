@@ -32,15 +32,17 @@ export function rollup(overrides = [], base = greenChecks()) {
   return [...base.filter((node) => !names.has(node.name ?? node.context)), ...overrides];
 }
 const gql = (c) => ({ author: { login: c.author }, body: c.body, createdAt: c.createdAt, updatedAt: c.updatedAt ?? c.createdAt });
-export function graphql({ pr = {}, contexts = greenChecks(), comments = [], labels = ["queue"] } = {}) {
+/** `committedDate`: the head commit's committer date; `checkSuites`: its check suites' creation
+ * times (set at the push). With neither, the head's time is unknown: no head-time checks. */
+export function graphql({ pr = {}, contexts = greenChecks(), comments = [], labels = ["queue"], committedDate = null, checkSuites = [] } = {}) {
   return { repository: { pullRequest: {
     number: 243, state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
     headRefOid: "6629a6b3a95ba330a0a564eb5f22a0e9fe7a843a", headRefName: "feat/example", baseRefName: "main", isCrossRepository: false, autoMergeRequest: null,
     labels: { nodes: labels.map((name) => ({ name })) }, comments: { nodes: comments.map(gql) },
-    commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: contexts } } } }] },
+    commits: { nodes: [{ commit: { committedDate, checkSuites: { nodes: checkSuites.map((createdAt) => ({ createdAt })) }, statusCheckRollup: { contexts: { nodes: contexts } } } }] },
     ...pr,
   } } };
 }
-export const snap = (opts) => snapshotFromGraphql(graphql(opts));
+export const snap = (opts) => snapshotFromGraphql(graphql(opts), { now: opts?.now });
 /** A queue command from a (synthetic) session. */
 export const command = (body, createdAt, author = "dev-session") => ({ author, body, createdAt, updatedAt: createdAt });

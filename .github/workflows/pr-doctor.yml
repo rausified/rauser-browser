@@ -128,8 +128,14 @@ jobs:
     name: PR keeper
     needs: doctor
     # After the doctor when it ran; alone when it was skipped (workflow_run).
+    # CI completions count only for pull_request runs on PR branches: a run on
+    # main or on a Mergify batch draft turns no PR green, and each keeper run
+    # may wait out the green window under the pr-keeper group (brwr-mva0 9).
     if: >-
-      always() && github.event_name != 'pull_request'
+      always() && github.event_name != 'pull_request' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.event == 'pull_request' &&
+        !startsWith(github.event.workflow_run.head_branch, 'mergify/')))
     concurrency:
       group: pr-keeper
       cancel-in-progress: false
@@ -166,7 +172,13 @@ jobs:
         env:
           BD_NON_INTERACTIVE: "1"
           GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          # Filing pushes refs/dolt/data, which the workflow's read-only token cannot.
+          HAS_PUSH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN != '' }}
         run: |
+          if [ "$HAS_PUSH_TOKEN" != "true" ]; then
+            echo "::warning title=PR keeper::repair beads not filed: PR_DOCTOR_TOKEN is not set; the alerts name them"
+            exit 0
+          fi
           gh auth setup-git
           sh scripts/install-bd.sh "$RUNNER_TEMP/bin"
           export PATH="$RUNNER_TEMP/bin:$PATH"
