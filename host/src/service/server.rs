@@ -1688,6 +1688,7 @@ mod tests {
         let (code, message) = error_of(world.call(&Request::Hello(HelloRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: "hello".into(),
+            extension_build: None,
         })));
         assert_eq!(code, ErrorCode::InvalidRequest);
         assert_eq!(message, "not a service request");

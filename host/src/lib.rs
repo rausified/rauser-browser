@@ -36,6 +36,7 @@ pub mod index;
 #[doc(hidden)]
 pub mod ipc_test_guard;
 mod layout;
+pub mod loaded_extension;
 pub(crate) mod markdown;
 #[cfg(test)]
 mod markdown_corpus;
