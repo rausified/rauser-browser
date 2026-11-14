@@ -328,9 +328,16 @@ jobs:
         with:
           arguments: --all-features --locked
 
+  # GitHub's dependency review needs the dependency graph, which a private
+  # repository owned by a free user account does not get. Since the move to
+  # webRauser/rauser-browser (private, 2026-11-13) the action failed on every
+  # PR ("Dependency review is not supported on this repository"). The job is
+  # outside the Build and check gate, so it is skipped while private; cargo-deny
+  # (Rust dependency policy, required) and `npm audit --audit-level=high` in
+  # build-os.yml still check every dependency change.
   dependency-review:
     name: Review new dependencies
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && !github.event.repository.private
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
