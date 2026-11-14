@@ -30,11 +30,16 @@ jobs:
   changes:
     name: Classify changes
     runs-on: ubuntu-24.04
+    # actions: read lets the supersede step look for the newer tip's CI run.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       macos: ${{ steps.classify.outputs.macos }}
       dev_tools: ${{ steps.classify.outputs.dev_tools }}
       base: ${{ steps.base.outputs.base }}
+      superseded: ${{ steps.supersede.outputs.superseded }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,11 +70,28 @@ jobs:
             exit 0
           fi
           node scripts/ci-changes.mjs "$BASE" HEAD
+      # Mergify merges a batch's PRs into main seconds apart, one push each
+      # (05:03:42Z and 05:03:47Z, 08:11:55Z and 08:11:59Z on 2026-11-14), and
+      # each push used to build macOS (10x billing) and Windows (2x) in full.
+      # A push that main has moved past is covered by the newer push's own
+      # run, so this run skips every build and its gate, but only when the
+      # newer tip contains this push, carries no skip marker and has a CI
+      # push run of its own (scripts/ci-superseded.mjs; any doubt builds).
+      # The wait lets the rest of a batch land. The privacy scan and
+      # cargo-deny still run for this push.
+      - name: Skip a main push a newer push replaced
+        id: supersede
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 60
+          node scripts/ci-superseded.mjs
 
   docs-checks:
     name: Docs and queue checks
     needs: changes
-    if: needs.changes.outputs.docs_only == 'true'
+    if: needs.changes.outputs.docs_only == 'true' && needs.changes.outputs.superseded != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,7 +123,7 @@ jobs:
   build-macos:
     name: macOS
     needs: changes
-    if: github.event_name == 'push' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.macos == 'true'
+    if: github.event_name == 'push' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.macos == 'true' && needs.changes.outputs.superseded != 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: macos-15
@@ -116,7 +138,7 @@ jobs:
   a11y:
     name: Accessibility
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.superseded != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,7 +162,7 @@ jobs:
   build-windows:
     name: Windows
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.superseded != 'true'
     uses: ./.github/workflows/build-os.yml
     with:
       os: windows-latest
@@ -157,7 +179,7 @@ jobs:
   fuzz-check:
     name: Fuzz targets compile
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.superseded != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -273,7 +295,8 @@ jobs:
       os: macos-15-intel
       dev_tools: ${{ needs.changes.outputs.dev_tools != 'false' }}
 
-  # Branch protection requires a check named exactly "Build and check"; the
+  # .mergify.yml's queue and merge conditions require a check named exactly
+  # "Build and check" (on the PR, then on the queue draft); the
   # per-OS jobs report under their own names, so this job stands for all of
   # them. A code change passes with Windows and Accessibility passing, plus,
   # on a push to main when the classifier says the change needs macOS, the macos-15 build or,
@@ -285,7 +308,9 @@ jobs:
   build-gate:
     name: Build and check
     needs: [changes, docs-checks, a11y, fuzz-check, privacy-scan, build-macos, build-windows, macos-starvation-check, build-macos-fallback]
-    if: always()
+    # A superseded main push (see changes) reports no gate at all, rather
+    # than a green one for builds that never ran.
+    if: always() && needs.changes.outputs.superseded != 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Require every platform build to pass
