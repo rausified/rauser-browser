@@ -23,7 +23,7 @@
 // one, or a "TODO" placeholder) is reported the same way, file and field
 // named, and stops generation before anything is written.
 
-import { readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -100,11 +100,45 @@ function fail(problems, file, message) {
  * it by basename, so it must name a `.md` file directly inside
  * docs/adapters/ (brwr-p2a7). True only for `docs/adapters/<name>.md` with
  * no separator, backslash or leading dot in `<name>`, which also rules out
- * `..`, `.` and absolute paths; the resolve check is a second guard. */
+ * `..`, `.` and absolute paths; the normalized-path check is a second guard.
+ * This checks the text only: `docsFileProblem` checks the file itself. */
 function isContainedDocsPath(docs) {
   if (typeof docs !== "string" || !/^docs\/adapters\/[^/\\.][^/\\]*\.md$/.test(docs)) return false;
-  const dir = path.resolve(DOCS_ADAPTERS_DIR);
-  return path.dirname(path.resolve(docs)) === dir;
+  return path.posix.dirname(path.posix.normalize(docs)) === DOCS_ADAPTERS_DIR;
+}
+
+const lstatOrNull = (file) => {
+  try {
+    return lstatSync(file);
+  } catch {
+    return null;
+  }
+};
+
+/** Why `<root>/<docs>` must not be read, or null (#463 review I1): a
+ * contained path can still name a symlink (a PR can commit one), or sit
+ * under a docs/adapters that is one. Compares real paths, so neither a
+ * symlinked folder nor a symlinked file leads outside root. A missing file
+ * is null here: the caller reports it as missing. */
+function docsFileProblem(root, docs) {
+  const dir = path.join(root, DOCS_ADAPTERS_DIR);
+  const dirStat = lstatOrNull(dir);
+  if (dirStat === null) return null;
+  if (dirStat.isSymbolicLink() || realpathSync(dir) !== path.join(realpathSync(root), DOCS_ADAPTERS_DIR)) {
+    return `${DOCS_ADAPTERS_DIR} must not be a symlink`;
+  }
+  const file = path.join(root, docs);
+  const stat = lstatOrNull(file);
+  if (stat === null) return null;
+  if (stat.isSymbolicLink()) return `${docs} must not be a symlink`;
+  if (!stat.isFile() || path.dirname(realpathSync(file)) !== realpathSync(dir)) return `${docs} must be a file in ${DOCS_ADAPTERS_DIR}`;
+  return null;
+}
+
+/** The generated outputs among `files` that are symlinks (#463 review I2):
+ * write mode never writes through one, which could reach outside root. */
+function symlinkedOutputs(root, files) {
+  return files.filter((file) => lstatOrNull(file)?.isSymbolicLink()).map((file) => path.relative(root, file).split(path.sep).join("/"));
 }
 
 const DOCS_PATH_RULE = `must name a file ${DOCS_ADAPTERS_DIR}/<name>.md`;
@@ -1641,6 +1675,11 @@ export function checkRegistry(root, entries, starterShapesText) {
         problems.push(`${file}: types[${index}].docs ${DOCS_PATH_RULE} (got ${JSON.stringify(type.docs)})`);
         return;
       }
+      const unsafe = docsFileProblem(root, type.docs);
+      if (unsafe !== null) {
+        problems.push(`${file}: types[${index}].docs: ${unsafe}`);
+        return;
+      }
       let docText;
       try {
         docText = readFileSync(path.join(root, type.docs), "utf8");
@@ -1900,6 +1939,8 @@ function main(argv) {
   const lockProblems = checkLock(families, extendedLock);
   const problems = [...baseProblems, ...lockProblems];
 
+  const outputs = [tsPath, catalogPath, starterShapesPath, starterVectorsPath, adaptersIndexPath, path.join(root, LOCK_FILE)];
+  for (const output of symlinkedOutputs(root, outputs)) problems.push(`${output} is a symlink; refusing to write through it`);
   if (problems.length) {
     for (const problem of problems) console.log(problem);
     return 1;

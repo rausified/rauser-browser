@@ -50,8 +50,16 @@ permissions:
   issues: write
 
 jobs:
-  doctor:
-    name: PR doctor
+  # Three jobs (scripts/pr-doctor.mjs "Phases", brwr-p2a7). The merge and
+  # regeneration run in doctor-repair, on its own runner with no secret and a
+  # token with no permissions, from a bundle of main and the PR branches. It
+  # hands its results back as an artifact that the publish job (`doctor`,
+  # a fresh runner with its own checkout of main and main's tools) treats as
+  # untrusted data: it re-reads each PR from the API and checks each repaired
+  # commit before pushing. Separate jobs, not steps: a step shares its
+  # runner's memory, environment files, tools and git config with the next.
+  doctor-plan:
+    name: PR doctor (list)
     # Fork PRs get no secrets and no write token; the doctor ignores them anyway.
     if: >-
       github.event_name != 'workflow_run' &&
@@ -64,16 +72,16 @@ jobs:
       group: pr-doctor
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    outputs:
+      repairs: ${{ steps.plan.outputs.repairs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
-          # The merge and regeneration run with no credential (brwr-p2a7): the
-          # token is only for this clone and stays out of .git/config. The
-          # steps that fetch, sync or push add one to their own environment
-          # (GIT_CONFIG_*), never to a file.
+          # The token is for this clone only and stays out of .git/config; a
+          # step that fetches gets it in its own environment (GIT_CONFIG_*).
           token: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -83,24 +91,146 @@ jobs:
         with:
           python-version: "3.11"
       - name: Keep main's tools outside the working tree
-        # The repair checks out PR branches; only main's copies ever run.
+        # The repair job runs only these copies (main's), never a PR's.
+        run: |
+          tools="$RUNNER_TEMP/doctor-input/tools"
+          mkdir -p "$tools/dev"
+          cp scripts/pr-doctor.mjs scripts/pr-constants.mjs scripts/work_queue.py scripts/render_backlog.py \
+            scripts/check_queue_consistency.py scripts/merge-generated.mjs scripts/generate-starters.mjs \
+            scripts/generate-current-state.mjs scripts/pr-doctor-git-auth.sh scripts/install-bd.sh \
+            "$tools/"
+          # The generated-file merge driver runs only these copies of the generators.
+          cp protocol/generate.py "$tools/generate.py"
+          # pr-doctor.mjs imports these; keep their relative layout.
+          cp scripts/dev/queue-pr.mjs "$tools/dev/"
+      # A separate clone holds the bd database (it caches no credential: the
+      # header is only ever in this step's environment). The repair job gets
+      # a copy to check queue edits against. Without it (bd missing, queue not
+      # seeded, or a transport failure) the doctor cannot apply queue edits
+      # and labels such PRs needs-merge with instructions instead.
+      - name: Bootstrap the work queue
+        id: queue
+        continue-on-error: true
+        env:
+          BD_NON_INTERACTIVE: "1"
+          DOCTOR_GIT_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+        run: |
+          . "$RUNNER_TEMP/doctor-input/tools/pr-doctor-git-auth.sh"
+          sh scripts/install-bd.sh "$RUNNER_TEMP/bin"
+          git ls-remote --exit-code origin refs/dolt/data > /dev/null
+          ws="$RUNNER_TEMP/queue-ws"
+          git clone -q --depth 1 "https://github.com/$GITHUB_REPOSITORY.git" "$ws"
+          git -C "$ws" config user.name "PR doctor"
+          git -C "$ws" config user.email "pr-doctor@users.noreply.github.com"
+          (cd "$ws" && "$RUNNER_TEMP/bin/bd" bootstrap)
+          tar -C "$RUNNER_TEMP" -cf "$RUNNER_TEMP/doctor-input/queue-ws.tar" queue-ws
+      - name: List and fetch the conflicting PRs
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          DOCTOR_GIT_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          PR_DOCTOR_PUSH: ${{ secrets.PR_DOCTOR_TOKEN != '' && '1' || '0' }}
+        run: |
+          . "$RUNNER_TEMP/doctor-input/tools/pr-doctor-git-auth.sh"
+          in="$RUNNER_TEMP/doctor-input"
+          node "$in/tools/pr-doctor.mjs" --tools "$in/tools" --phase plan \
+            --state "$in/state.json" --bundle-out "$in/repo.bundle" \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.plan.outputs.repairs != '0'
+        with:
+          name: doctor-input
+          path: ${{ runner.temp }}/doctor-input
+          retention-days: 1
+          if-no-files-found: error
+
+  doctor-repair:
+    name: PR doctor (merge, no credential)
+    needs: doctor-plan
+    if: needs.doctor-plan.outputs.repairs != '' && needs.doctor-plan.outputs.repairs != '0'
+    # No secret is referenced in this job and its token can do nothing.
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: doctor-input
+          path: ${{ runner.temp }}/doctor-input
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Unpack main, the PR branches and the work queue
+        id: unpack
+        run: |
+          in="$RUNNER_TEMP/doctor-input"
+          git init -q -b doctor "$RUNNER_TEMP/repo"
+          cd "$RUNNER_TEMP/repo"
+          git fetch -q --no-tags "$in/repo.bundle" '+refs/remotes/origin/*:refs/remotes/origin/*'
+          git checkout -q --detach origin/main
+          git config user.name "PR doctor"
+          git config user.email "pr-doctor@users.noreply.github.com"
+          if [ -f "$in/queue-ws.tar" ]; then
+            sh "$in/tools/install-bd.sh" "$RUNNER_TEMP/bin"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+            tar -C "$RUNNER_TEMP" -xf "$in/queue-ws.tar"
+            echo "workspace=$RUNNER_TEMP/queue-ws" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Merge main and regenerate
+        working-directory: ${{ runner.temp }}/repo
+        env:
+          PR_DOCTOR_PYTHON: python
+          BRAUSER_QUEUE_WORKSPACE: ${{ steps.unpack.outputs.workspace }}
+        run: |
+          in="$RUNNER_TEMP/doctor-input"
+          out="$RUNNER_TEMP/doctor-repaired"
+          mkdir -p "$out"
+          node "$in/tools/pr-doctor.mjs" --tools "$in/tools" --phase repair \
+            --state "$in/state.json" --bundle-out "$out/repaired.bundle"
+          cp "$in/state.json" "$out/state.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: doctor-repaired
+          path: ${{ runner.temp }}/doctor-repaired
+          retention-days: 1
+          if-no-files-found: error
+
+  doctor:
+    name: PR doctor
+    needs: [doctor-plan, doctor-repair]
+    if: needs.doctor-repair.result == 'success'
+    concurrency:
+      group: pr-doctor-publish
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # A fresh runner: nothing the repair job wrote is here but the artifact,
+      # which is read as data (scripts/pr-doctor.mjs publishPhase).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Keep main's tools outside the working tree
         run: |
           mkdir -p "$RUNNER_TEMP/pr-doctor/dev"
           cp scripts/pr-doctor.mjs scripts/pr-constants.mjs scripts/work_queue.py scripts/render_backlog.py \
             scripts/check_queue_consistency.py scripts/merge-generated.mjs scripts/generate-starters.mjs \
             scripts/generate-current-state.mjs scripts/pr-doctor-git-auth.sh \
             "$RUNNER_TEMP/pr-doctor/"
-          # The generated-file merge driver runs only these copies of the generators.
           cp protocol/generate.py "$RUNNER_TEMP/pr-doctor/generate.py"
-          # pr-doctor.mjs imports these; keep their relative layout.
           cp scripts/dev/queue-pr.mjs "$RUNNER_TEMP/pr-doctor/dev/"
-          git config user.name "PR doctor"
-          git config user.email "pr-doctor@users.noreply.github.com"
-      # A separate clone holds the bd database, so checking out PR branches
-      # never touches it. Without it (bd missing, queue not seeded, or a
-      # transport failure) the doctor cannot apply queue edits and labels
-      # such PRs needs-merge with instructions instead.
-      # Its clone keeps no credential either: the publish step syncs with one.
       - name: Bootstrap the work queue
         id: queue
         continue-on-error: true
@@ -111,39 +241,38 @@ jobs:
           . "$RUNNER_TEMP/pr-doctor/pr-doctor-git-auth.sh"
           sh scripts/install-bd.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          git ls-remote --exit-code origin refs/dolt/data > /dev/null
           ws="$RUNNER_TEMP/queue-ws"
           git clone -q --depth 1 "https://github.com/$GITHUB_REPOSITORY.git" "$ws"
           git -C "$ws" config user.name "PR doctor"
           git -C "$ws" config user.email "pr-doctor@users.noreply.github.com"
           (cd "$ws" && "$RUNNER_TEMP/bin/bd" bootstrap)
           echo "workspace=$ws" >> "$GITHUB_OUTPUT"
-      # Three steps (scripts/pr-doctor.mjs "Phases"), so the one that merges
-      # main and runs the generators holds no credential at all: no token in
-      # its environment and none in either clone's .git/config.
-      - name: List and fetch the conflicting PRs
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: doctor-repaired
+          path: ${{ runner.temp }}/doctor-repaired
+      - name: Check, sync the queue and push the repairs
         env:
           GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
           DOCTOR_GIT_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
           PR_DOCTOR_PUSH: ${{ secrets.PR_DOCTOR_TOKEN != '' && '1' || '0' }}
+          PR_DOCTOR_PYTHON: python
+          BRAUSER_QUEUE_WORKSPACE: ${{ steps.queue.outputs.workspace }}
+          # No global or system git config over the untrusted bundle (hooks
+          # are off per command too).
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
         run: |
+          git config user.name "PR doctor"
+          git config user.email "pr-doctor@users.noreply.github.com"
           . "$RUNNER_TEMP/pr-doctor/pr-doctor-git-auth.sh"
-          node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor" --phase plan \
+          repaired="$RUNNER_TEMP/doctor-repaired"
+          bundle=""
+          if [ -f "$repaired/repaired.bundle" ]; then bundle="--bundle $repaired/repaired.bundle"; fi
+          # shellcheck disable=SC2086
+          node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor" --phase publish \
+            --state "$repaired/state.json" $bundle \
             ${{ inputs.dry_run && '--dry-run' || '' }}
-      - name: Merge main and regenerate, with no credential
-        env:
-          PR_DOCTOR_PYTHON: python
-          BRAUSER_QUEUE_WORKSPACE: ${{ steps.queue.outputs.workspace }}
-        run: node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor" --phase repair
-      - name: Sync the queue and push the repairs
-        env:
-          GH_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
-          DOCTOR_GIT_TOKEN: ${{ secrets.PR_DOCTOR_TOKEN || github.token }}
-          PR_DOCTOR_PYTHON: python
-          BRAUSER_QUEUE_WORKSPACE: ${{ steps.queue.outputs.workspace }}
-        run: |
-          . "$RUNNER_TEMP/pr-doctor/pr-doctor-git-auth.sh"
-          node "$RUNNER_TEMP/pr-doctor/pr-doctor.mjs" --tools "$RUNNER_TEMP/pr-doctor" --phase publish
 
   keeper:
     name: PR keeper

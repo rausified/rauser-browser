@@ -35,20 +35,34 @@
 //   generate-current-state.mjs and protocol/generate.py (as generate.py). Run from a full clone of the repo whose
 //   `origin` is GitHub.
 //
-// Phases (brwr-p2a7), so the merge and regeneration never run with a
-// credential: `plan` lists the PRs, settles mergeability, updates resolved
-// PRs and fetches each conflicting one (GH_TOKEN, GITHUB_REPOSITORY and a git
-// credential needed); `repair` merges main into each and regenerates, keeping
-// each result in refs/pr-doctor/<number> and applying queue edits to the
-// local bd database without syncing (no network, no credential); `publish`
-// syncs the queue, pushes the repairs, comments, labels and requeues (GH_TOKEN,
-// GITHUB_REPOSITORY and a git push credential). They hand over through
-// --state (default <dir>/doctor-state.json); `plan` records --dry-run and
-// PR_DOCTOR_PUSH there for the later phases. With no --phase, all three run
-// in turn in one process.
+// Phases (brwr-p2a7), one workflow job each, so the merge and regeneration
+// run in a job that has no secret and a token with no permissions, and
+// nothing that job leaves behind (files, environment, git config, tools)
+// reaches the job that pushes:
+//   plan     (token) lists the PRs, settles mergeability, updates PRs whose
+//            conflict is gone, fetches each conflicting one, and writes the
+//            state and, with --bundle-out, a git bundle of main and those
+//            branches for the repair job.
+//   repair   (no credential, no network) merges main into each, regenerates,
+//            keeps each result in refs/pr-doctor/<number>, checks queue
+//            edits against its copy of the database, and writes the state
+//            and, with --bundle-out, a bundle of those refs.
+//   publish  (token, a fresh runner with its own checkout of main) treats
+//            the repair job's state and bundle as untrusted data: it reads
+//            each PR's branch and head from the API, refuses main, accepts a
+//            repaired commit only when its parents are the PR head (or a
+//            commit that only drops the queue files from it) and a commit
+//            of main, and only when every file that differs from both
+//            parents is Markdown or a generated output; it re-applies queue
+//            edits with main's tools, one PR at a time (pull, apply, compare
+//            the frame with the repaired one, sync), then pushes without
+//            force, with hooks and global and system git config off,
+//            comments, labels and requeues.
+// The phases hand over through --state (default <dir>/doctor-state.json).
+// With no --phase, all three run in turn in one process.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -66,6 +80,7 @@ export const QUEUE_PATH = ".beads/issues.jsonl";
 export const BACKLOG_PATH = "BOSUN_FEATURE_BACKLOG.md";
 export const QUEUE_FILES = Object.freeze([QUEUE_PATH, BACKLOG_PATH]);
 export const FRAME_PATH = "docs/backlog/frame.md";
+export const NOTES_DIR = "docs/backlog/notes";
 const QUEUE_HELP = "the work queue is no longer in git (it lives in bd's Dolt database): note the branch tip and its merge base with main, `git rm` both queue files and commit, `git merge -Xfind-renames=100% origin/main` (exact renames only, or git pairs the old backlog with the new frame), then run `scripts/dev/queue adopt --from <old tip> --base <merge base>`: it applies the PR's bead edits through bd and carries its backlog prose into docs/backlog/frame.md; commit the frame";
 
 // --- Pure parts (scripts/tests/pr-doctor.test.mjs) ---------------------------
@@ -232,6 +247,14 @@ function stage(number, file) {
   return result.code === 0 ? result.stdout : null;
 }
 
+const isSymlink = (file) => {
+  try {
+    return lstatSync(file).isSymbolicLink();
+  } catch {
+    return false;
+  }
+};
+
 const exists = (spec) => git(["cat-file", "-e", spec], { check: false }).code === 0;
 
 /** After a merge, the files the generated-file driver resolved (its log),
@@ -239,7 +262,7 @@ const exists = (spec) => git(["cat-file", "-e", spec], { check: false }).code ==
  * generator's outputs are written from the same regeneration and staged:
  * git takes an output only one side changed without asking the driver, and
  * that side's copy can be stale against the merged sources. */
-function regeneratedFiles({ log, ours, other, tools }) {
+function regeneratedFiles({ log, ours, other, tools, refused = [] }) {
   let lines = [];
   try {
     lines = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => line.split("\t"));
@@ -253,6 +276,11 @@ function regeneratedFiles({ log, ours, other, tools }) {
     if (!result.ok) continue;
     for (const [path, text] of Object.entries(result.files)) {
       if (lines.some(([logged]) => logged === path)) continue;
+      // Never write through a symlink the branch committed (#463 review I2).
+      if (isSymlink(path)) {
+        refused.push(path);
+        continue;
+      }
       writeFileSync(path, text);
       git(["add", "--", path]);
     }
@@ -307,7 +335,12 @@ export function tryRepair(pr, tools, canPush) {
     // Exact renames only: main's frame is most of the old backlog's text, and
     // git would otherwise pair them and conflict on the frame.
     const merge = git(["-c", "merge.conflictStyle=diff3", "merge", "-q", "--no-ff", "--no-commit", "-Xfind-renames=100%", "-m", message, "origin/main"], { check: false, env: driverEnv });
-    const resolved = regeneratedFiles({ log: driverLog, ours, other, tools });
+    const refused = [];
+    const resolved = regeneratedFiles({ log: driverLog, ours, other, tools, refused });
+    if (refused.length) {
+      git(["merge", "--abort"], { check: false });
+      return { ok: false, files: refused.map((file) => `${file} (a symlink; the doctor never writes through one)`) };
+    }
     if (merge.code !== 0) {
       const files = unmerged();
       if (files.length === 0) {
@@ -379,12 +412,22 @@ function report(repo, pr, body, { dryRun, label }) {
 }
 
 const PHASES = Object.freeze(["plan", "repair", "publish"]);
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 const warn = (pr, error) => {
   const line = String(error.message).split("\n")[0];
   console.log(`::warning title=PR doctor #${pr.number}::${line}`);
   return line;
 };
+/** Git calls the publish phase makes over data the repair job produced: no
+ * hooks, no global or system config (GIT_CONFIG_GLOBAL and
+ * GIT_CONFIG_NOSYSTEM are set on the step too). */
+const safeGit = (args, opts) => git(["-c", "core.hooksPath=/dev/null", ...args], opts);
+
+function summary(title, rows) {
+  const table = ["| PR | Outcome | Files |", "|---|---|---|", ...rows.map(([n, o, f]) => `| #${n} | ${o} | ${f} |`)].join("\n");
+  console.log(table);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## ${title}\n\n${table}\n`);
+}
 
 /** Lists the PRs, settles each one's mergeability, updates a PR whose
  * conflict is gone, and fetches each conflicting one. One item per PR, in
@@ -399,7 +442,6 @@ function planPhase({ repo, dryRun }) {
     try {
       if (classifyPr(pr) === "pending") pr = settle(repo, pr);
       const kind = classifyPr(pr);
-      const queued = pr.autoMergeRequest != null || (pr.labels ?? []).some((item) => item.name === QUEUE_LABEL);
       if (kind === "skip" || kind === "pending") {
         items.push({ pr, row: [pr.number, kind, ""] });
         continue;
@@ -413,7 +455,7 @@ function planPhase({ repo, dryRun }) {
         continue;
       }
       fetchForRepair(pr);
-      items.push({ pr, queued, repair: true });
+      items.push({ pr: { number: pr.number, headRefName: pr.headRefName }, repair: true });
     } catch (error) {
       items.push({ pr, row: [pr.number, "error", warn(pr, error)] });
     }
@@ -429,11 +471,8 @@ function repairPhase(items, { tools, canPush }) {
     const { pr } = item;
     try {
       const result = tryRepair(pr, tools, canPush);
-      if (result.ok) {
-        result.head = git(["rev-parse", "HEAD"]).stdout.trim();
-        git(["update-ref", `refs/pr-doctor/${pr.number}`, result.head]);
-      }
-      item.result = result;
+      if (result.ok) git(["update-ref", `refs/pr-doctor/${pr.number}`, "HEAD"]);
+      item.result = { ok: result.ok, files: result.files };
     } catch (error) {
       item.repair = false;
       item.row = [pr.number, "error", warn(pr, error)];
@@ -444,87 +483,198 @@ function repairPhase(items, { tools, canPush }) {
   return items;
 }
 
-/** Syncs the applied queue edits, pushes each repair without force,
- * comments, labels and requeues, and prints the summary table. */
-function publishPhase(items, { repo, tools, dryRun, canPush }) {
-  if (canPush) publishQueue(items, tools);
-  const rows = [];
-  for (const item of items) {
-    const { pr } = item;
-    if (!item.repair) {
-      rows.push(item.row);
-      continue;
+/** A file name from the untrusted repair state, made safe to quote in a
+ * comment: one line, no backticks or mentions, bounded. */
+export function cleanFile(text) {
+  return String(text).replace(/[\u0000-\u001f\u007f`@<>|]/g, " ").slice(0, 200);
+}
+
+/** The files a merge commit changed relative to both its parents. */
+function changedFromBoth(commit, [first, second]) {
+  const names = (parent) => new Set(safeGit(["diff", "--name-only", "--no-renames", parent, commit]).stdout.split("\n").filter(Boolean));
+  const fromSecond = names(second);
+  return [...names(first)].filter((file) => fromSecond.has(file));
+}
+
+const GENERATED_OUTPUTS = new Set(GENERATORS.flatMap((generator) => generator.outputs));
+
+/** Whether `commit` (from the repair job) is a merge of the PR head `head`
+ * and a commit of `main` that only resolved what the doctor resolves:
+ * { ok: true, first, second, carried } or { ok: false, reason }. The first
+ * parent is `head`, or a commit whose only parent is `head` and which only
+ * deletes the queue files (the drop commit). */
+export function verifyRepair({ commit, head, main }) {
+  const parents = safeGit(["rev-list", "--parents", "-n", "1", commit]).stdout.trim().split(" ").slice(1);
+  if (parents.length !== 2) return { ok: false, reason: "the repaired commit is not a two-parent merge" };
+  const [first, second] = parents;
+  if (safeGit(["merge-base", "--is-ancestor", second, main], { check: false }).code !== 0) {
+    return { ok: false, reason: "the repaired commit's second parent is not a commit of main" };
+  }
+  let carried = [];
+  if (first !== head) {
+    const dropParents = safeGit(["rev-list", "--parents", "-n", "1", first]).stdout.trim().split(" ").slice(1);
+    const changes = safeGit(["diff", "--name-status", "--no-renames", head, first]).stdout.split("\n").filter(Boolean);
+    const onlyDrops = changes.length > 0 && changes.every((line) => QUEUE_FILES.some((file) => line === `D\t${file}`));
+    if (dropParents.length !== 1 || dropParents[0] !== head || !onlyDrops) {
+      return { ok: false, reason: "the repaired commit is not based on the PR's current head (the branch moved, or the merge is not the doctor's)" };
     }
+    carried = changes.map((line) => line.slice(2));
+  }
+  const unexpected = changedFromBoth(commit, parents).filter((file) =>
+    !file.endsWith(".md") && !GENERATED_OUTPUTS.has(file));
+  if (unexpected.length) return { ok: false, reason: `the repaired commit changes ${unexpected.slice(0, 5).map(cleanFile).join(", ")} beyond what the doctor resolves` };
+  return { ok: true, first, second, carried };
+}
+
+/** Re-applies the PR's queue edits with main's tools in a fresh database
+ * (pull, apply, check the frame it computes against the repaired commit's,
+ * then sync against the repaired frame and notes): { ok, detail }. The
+ * repaired files come out with `git show` into a no-checkout worktree, so
+ * no PR file is checked out with the token in the environment. */
+export function adoptAndSync({ tools, head, base, commit }) {
+  const scratch = mkdtempSync(join(tmpdir(), "pr-doctor-adopt-"));
+  const tree = join(scratch, "tree");
+  try {
+    safeGit(["worktree", "add", "-q", "--no-checkout", "--detach", tree, commit]);
+    const show = (spec) => safeGit(["show", spec], { check: false });
+    const write = (file, text) => {
+      mkdirSync(join(tree, file, ".."), { recursive: true });
+      writeFileSync(join(tree, file), text);
+    };
+    const repairedFrame = show(`${commit}:${FRAME_PATH}`);
+    if (repairedFrame.code !== 0) return { ok: false, detail: `the repaired commit has no ${FRAME_PATH}` };
+    write(FRAME_PATH, repairedFrame.stdout);
+    const notes = safeGit(["ls-tree", "-z", "--name-only", `${commit}:${NOTES_DIR}`], { check: false });
+    if (notes.code === 0) {
+      for (const name of notes.stdout.split("\0").filter(Boolean)) {
+        if (!/^[\w.-]+\.md$/.test(name)) continue;
+        const blob = show(`${commit}:${NOTES_DIR}/${name}`);
+        if (blob.code === 0) write(`${NOTES_DIR}/${name}`, blob.stdout);
+      }
+    }
+    const mainFrame = join(scratch, "frame.md");
+    writeFileSync(mainFrame, safeGit(["show", `origin/main:${FRAME_PATH}`]).stdout);
+    const ws = process.env.BRAUSER_QUEUE_WORKSPACE;
+    if (!ws) return { ok: false, detail: "no work-queue workspace" };
+    const pulled = sh("bd", ["dolt", "pull"], { cwd: ws, check: false });
+    if (pulled.code !== 0) return { ok: false, detail: `bd dolt pull failed: ${(pulled.stderr || pulled.stdout).trim().split("\n").at(-1)}` };
+    const applied = adopt(tools, { from: head, base, push: true, frame: mainFrame });
+    if (!applied.ok) return { ok: false, detail: applied.detail || "adopt failed" };
+    if (readFileSync(mainFrame, "utf8") !== repairedFrame.stdout) {
+      return { ok: false, poisoned: true, detail: `the repaired ${FRAME_PATH} is not what main's adopt computes` };
+    }
+    const synced = syncQueue(tools, tree);
+    return synced.ok ? { ok: true } : { ok: false, poisoned: true, detail: synced.detail || "queue sync failed" };
+  } finally {
+    git(["worktree", "remove", "--force", tree], { check: false });
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** The PR as the API reports it now, or a reason to leave it alone. */
+function livePr(repo, number) {
+  const pr = JSON.parse(gh(["api", `repos/${repo}/pulls/${number}`]).stdout);
+  const headRefName = pr.head?.ref;
+  if (typeof headRefName !== "string" || headRefName === "" || headRefName === "main") return { reason: "refused: the PR's head branch is main" };
+  if (pr.base?.ref !== "main" || pr.head?.repo?.full_name !== repo || pr.state !== "open") return { reason: "skipped: no longer an open same-repo PR into main" };
+  return {
+    pr: {
+      number: Number(number),
+      headRefName,
+      labels: (pr.labels ?? []).map((label) => ({ name: label.name })),
+      autoMergeRequest: pr.auto_merge ?? null,
+    },
+    head: pr.head.sha,
+  };
+}
+
+/** Pushes the repairs the repair phase made, after checking each one, and
+ * comments, labels and requeues. Nothing in `items` but the PR numbers and
+ * the repair's ok and files is believed, and those files only as text. */
+function publishPhase(items, { repo, tools, dryRun, canPush, bundle }) {
+  const rows = [];
+  let poisoned = false;
+  const numbers = [...new Set(items.filter((item) => item?.repair).map((item) => Number(item.pr?.number)))]
+    .filter((number) => Number.isInteger(number) && number > 0);
+  for (const number of numbers) {
+    const claimed = items.find((item) => item?.repair && Number(item.pr?.number) === number).result ?? {};
     try {
-      const { result, queued } = item;
+      const live = livePr(repo, number);
+      if (!live.pr) {
+        rows.push([number, live.reason, ""]);
+        continue;
+      }
+      const { pr, head } = live;
+      const queued = pr.autoMergeRequest != null || pr.labels.some((item) => item.name === QUEUE_LABEL);
+      let result = { ok: false, files: (Array.isArray(claimed.files) ? claimed.files : ["(no file list)"]).slice(0, 50).map(cleanFile) };
       let outcome;
-      if (!result.ok) outcome = canPush ? "needs-person" : "report-only";
-      else if (!canPush) outcome = "report-only";
-      else {
-        const push = git(["push", "-q", "origin", `${result.head}:refs/heads/${pr.headRefName}`], { check: false });
-        if (push.code !== 0) {
-          rows.push([pr.number, "skipped", "the branch moved during the repair; next run retries"]);
+      if (claimed.ok === true) {
+        git(["fetch", "-q", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main", `+refs/heads/${pr.headRefName}:refs/remotes/origin/${pr.headRefName}`]);
+        const ref = `refs/pr-doctor/${number}`;
+        if (bundle) safeGit(["fetch", "-q", "--no-tags", bundle, `+${ref}:${ref}`]);
+        const commit = safeGit(["rev-parse", "--verify", `${ref}^{commit}`]).stdout.trim();
+        const main = safeGit(["rev-parse", "origin/main"]).stdout.trim();
+        const verified = verifyRepair({ commit, head, main });
+        if (!verified.ok) {
+          rows.push([number, "skipped", verified.reason]);
           continue;
         }
-        outcome = "repaired";
+        result = { ok: true, files: result.files, sha: commit.slice(0, 12) };
+        const queueMoved = !exists(`origin/main:${QUEUE_PATH}`) && exists(`origin/main:${FRAME_PATH}`);
+        if (verified.carried.length > 0 && (!queueMoved || QUEUE_FILES.some((file) => exists(`${commit}:${file}`)))) {
+          rows.push([number, "skipped", "the repaired commit's queue files do not match main's layout"]);
+          continue;
+        }
+        if (canPush && verified.carried.length > 0) {
+          const base = safeGit(["merge-base", head, verified.second]).stdout.trim();
+          const synced = poisoned
+            ? { ok: false, detail: "an earlier PR's queue edits failed to publish in this run; the next run retries" }
+            : adoptAndSync({ tools, head, base, commit });
+          if (synced.poisoned) poisoned = true;
+          if (!synced.ok) result = { ok: false, files: verified.carried.map((file) => `${file} (${cleanFile(synced.detail)})`) };
+        }
+        if (result.ok && canPush) {
+          const push = safeGit(["push", "-q", "origin", `${commit}:refs/heads/${pr.headRefName}`], { check: false });
+          if (push.code !== 0) {
+            rows.push([number, "skipped", "the branch moved during the repair; next run retries"]);
+            continue;
+          }
+          outcome = "repaired";
+        }
       }
+      if (!outcome) outcome = !result.ok && canPush ? "needs-person" : "report-only";
       const requeued = needsRequeue(pr, outcome);
       const body = commentBody({ outcome, files: result.files, sha: result.sha, queued, resolvable: result.ok, requeued });
       report(repo, pr, body, { dryRun, label: outcome !== "repaired" });
       let note = "";
       if (requeued) {
-        const sha = result.head;
+        const sha = safeGit(["rev-parse", `refs/pr-doctor/${number}`]).stdout.trim();
         const { settled, seen } = requeueAfterPush({
           sha,
-          headOf: () => JSON.parse(gh(["api", `repos/${repo}/pulls/${pr.number}`]).stdout).head.sha,
-          comment: (text) => gh(["api", "-X", "POST", `repos/${repo}/issues/${pr.number}/comments`, "-f", `body=${text}`]),
+          headOf: () => JSON.parse(gh(["api", `repos/${repo}/pulls/${number}`]).stdout).head.sha,
+          comment: (text) => gh(["api", "-X", "POST", `repos/${repo}/issues/${number}/comments`, "-f", `body=${text}`]),
           wait: sleep,
         });
-        if (!settled) console.log(`::warning title=PR doctor #${pr.number}::GitHub still showed ${seen ?? "no head"}, not ${sha.slice(0, 12)}, after 60s; requeued anyway`);
+        if (!settled) console.log(`::warning title=PR doctor #${number}::GitHub still showed ${seen ?? "no head"}, not ${sha.slice(0, 12)}, after 60s; requeued anyway`);
         note = " (requeued)";
       }
-      rows.push([pr.number, outcome + note + (outcome === "report-only" && result.ok ? " (resolvable)" : ""), result.files.join(", ")]);
+      rows.push([number, outcome + note + (outcome === "report-only" && result.ok ? " (resolvable)" : ""), result.files.join(", ")]);
     } catch (error) {
-      rows.push([pr.number, "error", warn(pr, error)]);
+      rows.push([number, "error", warn({ number }, error)]);
     }
   }
-
-  const table = ["| PR | Outcome | Files |", "|---|---|---|", ...rows.map(([n, o, f]) => `| #${n} | ${o} | ${f} |`)].join("\n");
-  console.log(table);
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## PR doctor${dryRun ? " (dry run)" : canPush ? "" : " (report only)"}\n\n${table}\n`);
-}
-
-/** Syncs the bead edits the repair phase applied, once per PR that adopted
- * some, in list order, each checked against that PR's repaired frame and
- * notes (a temporary worktree of refs/pr-doctor/<number>; the working tree
- * itself is back on main), as the single-step doctor's adopt did. A PR whose
- * sync fails is not pushed: its outcome becomes needs-person. The first
- * successful sync publishes every applied edit, so a later PR's failed
- * check can leave its edits published without its push, the same window
- * the single-step doctor had between its adopt and its push. */
-export function publishQueue(items, tools) {
-  for (const item of items) {
-    if (!item.repair || !item.result?.ok || !item.result.adopted) continue;
-    const tree = mkdtempSync(join(tmpdir(), "pr-doctor-sync-"));
-    let synced;
-    try {
-      git(["worktree", "add", "-q", "--detach", tree, item.result.head]);
-      synced = syncQueue(tools, tree);
-    } finally {
-      git(["worktree", "remove", "--force", tree], { check: false });
-      rmSync(tree, { recursive: true, force: true });
-    }
-    if (!synced.ok) {
-      item.result = { ok: false, files: item.result.carried.map((file) => `${file} (${synced.detail || "queue sync failed"})`) };
-    }
-  }
-  return items;
+  return rows;
 }
 
 function readState(file) {
   const state = JSON.parse(readFileSync(file, "utf8"));
-  if (state.version !== STATE_VERSION) throw new Error(`${file}: state version ${state.version}, expected ${STATE_VERSION}`);
+  if (state.version !== STATE_VERSION || !Array.isArray(state.items)) throw new Error(`${file}: not a version ${STATE_VERSION} doctor state`);
   return state;
+}
+
+function writeBundle(file, refs) {
+  if (refs.length === 0) return;
+  git(["bundle", "create", "-q", file, ...refs]);
 }
 
 function main() {
@@ -536,24 +686,42 @@ function main() {
   const tools = option("--tools");
   const phase = option("--phase");
   const repo = process.env.GITHUB_REPOSITORY;
-  const usage = "usage: GITHUB_REPOSITORY=owner/name node scripts/pr-doctor.mjs --tools <dir> [--phase plan|repair|publish] [--state <file>] [--dry-run]";
+  const usage = "usage: GITHUB_REPOSITORY=owner/name node scripts/pr-doctor.mjs --tools <dir> [--phase plan|repair|publish] [--state <file>] [--bundle-out <file>] [--bundle <file>] [--dry-run]";
   if (!tools || (phase !== null && !PHASES.includes(phase))) throw new Error(usage);
   if (phase !== "repair" && !repo) throw new Error(usage);
   const stateFile = option("--state") ?? join(tools, "doctor-state.json");
+  const bundleOut = option("--bundle-out");
   if (phase === null || phase === "repair") {
     for (const file of ["work_queue.py", "render_backlog.py", "check_queue_consistency.py"]) readFileSync(join(tools, file));
   }
+  const dryRun = args.includes("--dry-run");
+  // The plan and publish phases each take these from their own job, never
+  // from a state file another job wrote.
+  const canPush = process.env.PR_DOCTOR_PUSH === "1" && !dryRun;
 
   let state;
   if (phase === null || phase === "plan") {
-    const dryRun = args.includes("--dry-run");
-    const canPush = process.env.PR_DOCTOR_PUSH === "1" && !dryRun;
-    state = { version: STATE_VERSION, dryRun, canPush, items: planPhase({ repo, dryRun }) };
+    state = { version: STATE_VERSION, canPush, items: planPhase({ repo, dryRun }) };
+    const finished = state.items.filter((item) => !item.repair).map((item) => item.row);
+    summary(`PR doctor: listed${dryRun ? " (dry run)" : ""}`, finished);
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `repairs=${state.items.filter((item) => item.repair).length}\n`);
+    if (phase === "plan" && bundleOut) {
+      const branches = state.items.filter((item) => item.repair).map((item) => `refs/remotes/origin/${item.pr.headRefName}`);
+      writeBundle(bundleOut, branches.length ? ["refs/remotes/origin/main", ...branches] : []);
+    }
   } else {
     state = readState(stateFile);
   }
-  if (phase === null || phase === "repair") state.items = repairPhase(state.items, { tools, canPush: state.canPush });
-  if (phase === null || phase === "publish") publishPhase(state.items, { repo, tools, dryRun: state.dryRun, canPush: state.canPush });
+  if (phase === null || phase === "repair") {
+    state.items = repairPhase(state.items, { tools, canPush: state.canPush === true });
+    if (phase === "repair" && bundleOut) {
+      writeBundle(bundleOut, state.items.filter((item) => item.repair && item.result?.ok).map((item) => `refs/pr-doctor/${item.pr.number}`));
+    }
+  }
+  if (phase === null || phase === "publish") {
+    const rows = publishPhase(state.items, { repo, tools, dryRun, canPush, bundle: option("--bundle") });
+    summary(`PR doctor${dryRun ? " (dry run)" : canPush ? "" : " (report only)"}`, rows);
+  }
   if (phase === "plan" || phase === "repair") writeFileSync(stateFile, JSON.stringify(state, null, 2));
 }
 

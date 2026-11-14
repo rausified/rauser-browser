@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,6 +194,43 @@ test("checkRegistry never reads an escaping docs path (brwr-p2a7)", (t) => {
     assert.ok(problems.some((line) => line.includes("must name a file docs/adapters/<name>.md")), problems.join("; "));
     assert.ok(!problems.some((line) => /outside\.md: (section|first Status)/.test(line)), problems.join("; "));
   }
+});
+
+// #463 review I1: the path text can be fine and the file a symlink out.
+test("a docs file that is a symlink, or under a symlinked docs/adapters, is never read (brwr-p2a7)", { skip: process.platform === "win32" }, (t) => {
+  const root = tmpRoot(t);
+  const outside = path.join(root, "outside.md");
+  writeFileSync(outside, "# Outside\n\n## Research\n\nTODO\n\nStatus: nothing\n");
+  const doc = path.join(root, "docs", "adapters", "jira.issue.md");
+  rmSync(doc);
+  symlinkSync(outside, doc);
+  const entries = loadFamilyEntries(root);
+  let problems = checkRegistry(root, entries);
+  assert.ok(problems.some((line) => line.includes("docs/adapters/jira.issue.md must not be a symlink")), problems.join("; "));
+  assert.ok(!problems.some((line) => /jira\.issue\.md: (section|first Status)/.test(line)), problems.join("; "));
+
+  // The whole folder moved elsewhere behind a symlink.
+  rmSync(doc);
+  const adapters = path.join(root, "docs", "adapters");
+  const moved = path.join(root, "elsewhere");
+  renameSync(adapters, moved);
+  symlinkSync(moved, adapters);
+  problems = checkRegistry(root, entries);
+  assert.ok(problems.some((line) => line.includes("docs/adapters must not be a symlink")), problems.join("; "));
+});
+
+test("write mode refuses to write a generated output through a symlink (brwr-p2a7)", { skip: process.platform === "win32" }, async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const root = tmpRoot(t);
+  const outside = path.join(root, "outside.txt");
+  writeFileSync(outside, "keep me\n");
+  const output = path.join(root, GENERATED_TS);
+  rmSync(output);
+  symlinkSync(outside, output);
+  const result = run(["--root", root]);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /extension\/starter-families\.generated\.ts is a symlink; refusing to write through it/);
+  assert.equal(readFileSync(outside, "utf8"), "keep me\n");
 });
 
 test("an invalid JSON file names the file and the parse error", async (t) => {

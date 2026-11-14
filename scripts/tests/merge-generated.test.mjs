@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -210,6 +210,28 @@ test("a conflict in a family file leaves ordinary conflicts, never a side", scra
     assert.match(read(dir, file), /^<{7} ours$/m, `${file} keeps conflict markers`);
   }
   assert.ok(left.includes("extension/starter-families.generated.ts"), left.join(","));
+});
+
+// brwr-p2a7 (#463 review I2): a symlink a PR commits inside a generator's
+// extract would let the generator read, or write through it, a file outside
+// the scratch tree. Any symlink there is a conflict; the generator never runs.
+test("a symlink in a generator's extract is a conflict, and nothing outside is read", scratch, async (t) => {
+  if (await ipcDenied(t, "child-pipe")) return;
+  const { root, repo, cleanup } = makeFixture();
+  t.after(cleanup);
+  twoFamilyBranches(repo);
+  const outside = join(root, "outside.md");
+  writeFileSync(outside, "# Outside\n\n## Research\n\nTODO-OUTSIDE-MARKER\n\nStatus: outside\n");
+  git(repo, ["checkout", "-q", "b"]);
+  rmSync(join(repo, "docs/adapters/widgetb.board.md"));
+  symlinkSync(outside, join(repo, "docs/adapters/widgetb.board.md"));
+  commitAll(repo, "doc becomes a symlink");
+  git(repo, ["checkout", "-q", "main"]);
+  const dir = cloneAt(root, repo, "symlink", "a");
+  const merge = git(dir, ["merge", "-q", "origin/b"], { ok: [1] });
+  assert.match(merge.out, /symlink at docs\/adapters\/widgetb\.board\.md/);
+  assert.doesNotMatch(merge.out, /TODO-OUTSIDE-MARKER|outside\.md/);
+  assert.ok(unmerged(dir).includes("extension/starter-families.generated.ts"), unmerged(dir).join(","));
 });
 
 test("merged sources the generator rejects stop the merge, even where the text merges", scratch, async (t) => {

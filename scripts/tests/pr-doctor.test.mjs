@@ -7,7 +7,7 @@ import { spawnSync as spawnSyncTop } from "node:child_process";
 
 import {
   MARKER, QUEUE_COMMENT, adoptArgs, classifyPr, commentBody, needsRequeue, requeueAfterPush,
-  publishQueue, resolveAppendOnly, syncQueue, tryRepair,
+  adoptAndSync, cleanFile, resolveAppendOnly, syncQueue, tryRepair, verifyRepair,
 } from "../pr-doctor.mjs";
 
 // --- resolveAppendOnly: diff3 hunks whose base is empty ----------------------
@@ -239,10 +239,38 @@ async function doctorRepair(t, { conflicting }) {
       // repaired frame (Codex P2): the repair phase leaves the tree on main,
       // whose frame still cites brwr-a1, which the PR closed.
       const head = git(clone, "rev-parse", "HEAD");
+      const prHead = git(clone, "rev-parse", "origin/feat/old");
+      const verified = verifyRepair({ commit: head, head: prHead, main: git(clone, "rev-parse", "origin/main") });
+      assert.equal(verified.ok, true, JSON.stringify(verified));
+      assert.deepEqual(verified.carried.sort(), [".beads/issues.jsonl", "BOSUN_FEATURE_BACKLOG.md"]);
       git(clone, "checkout", "-q", "-f", "--detach", "origin/main");
       assert.equal(syncQueue(scripts).ok, false, "main's frame fails the check");
-      const [item] = publishQueue([{ repair: true, result: { ...result, head } }], scripts);
-      assert.equal(item.result.ok, true, JSON.stringify(item.result));
+      // The publish job: a fresh database, main's tools, the repaired commit
+      // as data (#463 review C1, M1, M2).
+      const base = git(clone, "merge-base", prHead, verified.second);
+      const fresh = (name) => {
+        const dir = join(root, name);
+        git(root, "clone", "-q", origin, dir);
+        run("bd", dir, "bootstrap");
+        return dir;
+      };
+      const dolt = () => git(clone, "ls-remote", origin, "refs/dolt/data");
+      // A repaired frame main's adopt would not compute is refused before any sync.
+      git(clone, "checkout", "-q", "-f", head);
+      writeFileSync(join(clone, "docs/backlog/frame.md"), "# Not the doctor's frame\n");
+      git(clone, "commit", "-qam", "forged frame");
+      const forged = git(clone, "rev-parse", "HEAD");
+      git(clone, "checkout", "-q", "-f", "--detach", "origin/main");
+      process.env.BRAUSER_QUEUE_WORKSPACE = fresh("ws-forged");
+      const beforeForged = dolt();
+      const refused = adoptAndSync({ tools: scripts, head: prHead, base, commit: forged });
+      assert.equal(refused.ok, false);
+      assert.match(refused.detail, /is not what main's adopt computes/);
+      assert.equal(dolt(), beforeForged, "nothing synced");
+      process.env.BRAUSER_QUEUE_WORKSPACE = fresh("ws-publish");
+      const published = adoptAndSync({ tools: scripts, head: prHead, base, commit: head });
+      assert.equal(published.ok, true, JSON.stringify(published));
+      assert.equal(git(clone, "status", "--porcelain").split("\n").filter((line) => line && line !== "?? target/").join("\n"), "", "nothing checked out in the main tree");
       git(clone, "checkout", "-q", "-f", head);
     }
     if (conflicting) {
@@ -321,10 +349,10 @@ test("tryRepair regenerates a PR whose only conflicts are generated files", { sk
   }
 });
 
-// brwr-p2a7: the step that merges main and runs the generators holds no
-// credential. The repair phase runs with no token and an origin that does not
-// exist (any network call fails it); the publish phase pushes what it kept.
-test("the repair phase works offline with no token, and publish pushes its result", { skip: process.platform === "win32" }, async (t) => {
+// brwr-p2a7 (#463 review C1): the repair job has no credential and no
+// remote, only a bundle; the publish job, a fresh clone, believes nothing in
+// the repair job's state or bundle it can check against the API and main.
+test("repair runs from a bundle with no remote; publish checks the repaired commit before pushing", { skip: process.platform === "win32" }, async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const { chmodSync, cpSync, mkdirSync, readFileSync, writeFileSync } = await import("node:fs");
   const { join } = await import("node:path");
@@ -344,9 +372,8 @@ test("the repair phase works offline with no token, and publish pushes its resul
   git(repo, ["merge", "-q", "--ff-only", "main-next"]);
   const origin = join(root, "origin.git");
   git(root, ["clone", "-q", "--bare", repo, origin]);
-  const clone = join(root, "clone");
-  git(root, ["clone", "-q", origin, clone]);
   const before = git(origin, ["rev-parse", "refs/heads/feat/family"]).out.trim();
+  const mainSha = git(origin, ["rev-parse", "refs/heads/main"]).out.trim();
   const tools = join(root, "tools");
   mkdirSync(join(tools, "dev"), { recursive: true });
   for (const name of ["pr-doctor.mjs", "pr-constants.mjs", "work_queue.py", "render_backlog.py", "check_queue_consistency.py", "merge-generated.mjs", "generate-starters.mjs", "generate-current-state.mjs"]) {
@@ -354,55 +381,128 @@ test("the repair phase works offline with no token, and publish pushes its resul
   }
   cpSync(join(scripts, "dev", "queue-pr.mjs"), join(tools, "dev", "queue-pr.mjs"));
   cpSync(join(scripts, "..", "protocol", "generate.py"), join(tools, "generate.py"));
-  // The plan phase's hand-over: one conflicting PR, already fetched.
+  const env = { ...ENV, PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR ?? "/tmp" };
+  const doctor = (cwd, phase, extra, more = []) => spawnSync(process.execPath,
+    [join(tools, "pr-doctor.mjs"), "--tools", tools, "--phase", phase, ...more], { cwd, encoding: "utf8", env: { ...env, ...extra } });
+
+  // The plan job's hand-over: a bundle of main and the branch, and the state.
+  const plan = join(root, "plan");
+  git(root, ["clone", "-q", origin, plan]);
+  const inBundle = join(root, "repo.bundle");
+  git(plan, ["bundle", "create", "-q", inBundle, "refs/remotes/origin/main", "refs/remotes/origin/feat/family"]);
   const state = join(root, "state.json");
-  const pr = { number: 7, headRefName: "feat/family", labels: [] };
-  writeFileSync(state, JSON.stringify({ version: 1, dryRun: false, canPush: true, items: [{ pr, queued: false, repair: true }] }));
-  const doctor = (phase, env) => spawnSync(process.execPath, [join(tools, "pr-doctor.mjs"), "--tools", tools, "--phase", phase, "--state", state],
-    { cwd: clone, encoding: "utf8", env });
-  const base = { ...ENV, PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR ?? "/tmp" };
+  writeFileSync(state, JSON.stringify({ version: 2, canPush: true, items: [{ pr: { number: 7, headRefName: "feat/family" }, repair: true }] }));
 
-  git(clone, ["remote", "set-url", "origin", join(root, "no-such-origin.git")]);
-  const repaired = doctor("repair", base);
+  // The repair job: a repository with no remote at all.
+  const work = join(root, "repair");
+  git(root, ["init", "-q", "-b", "doctor", work]);
+  git(work, ["fetch", "-q", "--no-tags", inBundle, "+refs/remotes/origin/*:refs/remotes/origin/*"]);
+  git(work, ["checkout", "-q", "--detach", "origin/main"]);
+  const outBundle = join(root, "repaired.bundle");
+  const repaired = doctor(work, "repair", {}, ["--state", state, "--bundle-out", outBundle]);
   assert.equal(repaired.status, 0, repaired.stdout + repaired.stderr);
-  const item = JSON.parse(readFileSync(state, "utf8")).items[0];
-  assert.equal(item.result.ok, true, JSON.stringify(item));
-  assert.equal(git(clone, ["rev-parse", "refs/pr-doctor/7"]).out.trim(), item.result.head);
-  assert.equal(git(origin, ["rev-parse", "refs/heads/feat/family"]).out.trim(), before, "repair pushed nothing");
+  assert.equal(JSON.parse(readFileSync(state, "utf8")).items[0].result.ok, true);
+  const commit = git(work, ["rev-parse", "refs/pr-doctor/7"]).out.trim();
 
-  // Publish: a fake gh records its calls; the push reaches the real origin.
-  git(clone, ["remote", "set-url", "origin", origin]);
+  // The publish job: a fresh clone, and a fake gh whose PR view says what the API would.
   const bin = join(root, "bin");
   mkdirSync(bin);
   const calls = join(root, "gh-calls");
-  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$*" >> "${calls}"\ncase "$*" in *--paginate*) echo "[[]]";; *) echo "{}";; esac\n`);
+  writeFileSync(join(bin, "gh"), `#!/bin/sh
+echo "$*" >> "${calls}"
+case "$*" in
+  "api repos/example/repo/pulls/7") printf '{"head":{"ref":"%s","sha":"%s","repo":{"full_name":"example/repo"}},"base":{"ref":"main"},"state":"open","labels":[]}' "$FAKE_HEAD_REF" "${before}";;
+  *--paginate*) echo "[[]]";;
+  *) echo "{}";;
+esac
+`);
   chmodSync(join(bin, "gh"), 0o755);
-  const published = doctor("publish", { ...base, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "example/repo", GH_TOKEN: "not-a-real-token" });
+  const publish = (bundle, headRef = "feat/family") => {
+    const dir = join(root, `publish-${Math.random().toString(36).slice(2)}`);
+    git(root, ["clone", "-q", origin, dir]);
+    return doctor(dir, "publish", { PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "example/repo", GH_TOKEN: "not-a-real-token", PR_DOCTOR_PUSH: "1", FAKE_HEAD_REF: headRef },
+      ["--state", state, "--bundle", bundle]);
+  };
+  const branchTip = () => git(origin, ["rev-parse", "refs/heads/feat/family"]).out.trim();
+  const forge = (name, makeCommit) => {
+    const sha = makeCommit();
+    git(work, ["update-ref", "refs/pr-doctor/7", sha]);
+    const file = join(root, `${name}.bundle`);
+    git(work, ["bundle", "create", "-q", file, "refs/pr-doctor/7"]);
+    git(work, ["update-ref", "refs/pr-doctor/7", commit]);
+    return file;
+  };
+
+  // The API names main as the head branch: refused, whatever the state says.
+  const toMain = publish(outBundle, "main");
+  assert.equal(toMain.status, 0, toMain.stdout + toMain.stderr);
+  assert.match(toMain.stdout, /\| #7 \| refused: the PR's head branch is main \|/);
+  assert.equal(git(origin, ["rev-parse", "refs/heads/main"]).out.trim(), mainSha);
+
+  // Parents that are not (the PR head, a commit of main).
+  const tree = git(work, ["rev-parse", `${commit}^{tree}`]).out.trim();
+  const wrongParents = forge("parents", () => {
+    const stranger = git(work, ["commit-tree", tree, "-m", "not on main"]).out.trim();
+    return git(work, ["commit-tree", tree, "-p", before, "-p", stranger, "-m", "forged"]).out.trim();
+  });
+  const parents = publish(wrongParents);
+  assert.match(parents.stdout, /\| #7 \| skipped \| the repaired commit's second parent is not a commit of main \|/);
+  assert.equal(branchTip(), before);
+
+  // A file outside what the doctor resolves, changed from both parents.
+  const extra = forge("extra", () => {
+    git(work, ["checkout", "-q", "-f", "--detach", commit]);
+    writeFileSync(join(work, "scripts/merge-generated.mjs"), `${readFileSync(join(work, "scripts/merge-generated.mjs"), "utf8")}// forged\n`);
+    git(work, ["add", "scripts/merge-generated.mjs"]);
+    const forgedTree = git(work, ["write-tree"]).out.trim();
+    git(work, ["checkout", "-q", "-f", "--detach", "origin/main"]);
+    return git(work, ["commit-tree", forgedTree, "-p", before, "-p", mainSha, "-m", "forged"]).out.trim();
+  });
+  const beyond = publish(extra);
+  assert.match(beyond.stdout, /\| #7 \| skipped \| the repaired commit changes scripts\/merge-generated\.mjs beyond what the doctor resolves \|/);
+  assert.equal(branchTip(), before);
+
+  // The real repair passes the checks and is pushed.
+  const published = publish(outBundle);
   assert.equal(published.status, 0, published.stdout + published.stderr);
-  assert.equal(git(origin, ["rev-parse", "refs/heads/feat/family"]).out.trim(), item.result.head);
+  assert.equal(branchTip(), commit);
   assert.match(published.stdout, /\| #7 \| repaired \|/);
   assert.match(readFileSync(calls, "utf8"), /repos\/example\/repo\/issues\/7\/comments/);
 });
 
-test("the doctor's merge step runs with no credential; only the plan, bootstrap and publish steps get one", () => {
+test("cleanFile keeps an untrusted file name to one quiet line", () => {
+  assert.equal(cleanFile("a`b@c\nd<e>|f"), "a b c d e  f");
+  assert.equal(cleanFile("x".repeat(500)).length, 200);
+});
+
+test("the merge runs in its own job with no permissions and no secret; publish is a fresh job over main", () => {
   const yml = readFileSync(new URL("../../.github/workflows/pr-doctor.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  const doctor = yml.split("\n  doctor:\n")[1].split("\n  keeper:\n")[0];
-  const steps = doctor.split(/\n      - /).slice(1);
-  const step = (name) => steps.find((text) => text.startsWith(`name: ${name}`)) ?? assert.fail(`no step ${name}`);
-  assert.match(steps[0], /uses: actions\/checkout@/);
-  assert.match(steps[0], /persist-credentials: false/);
-  const repair = step("Merge main and regenerate, with no credential");
+  const job = (name) => yml.split(`\n  ${name}:\n`)[1].split(/\n  [\w-]+:\n/)[0];
+  const repair = job("doctor-repair");
+  assert.match(repair, /\n    permissions: \{\}\n/);
+  assert.doesNotMatch(repair, /secrets\.|github\.token|GH_TOKEN|GIT_CONFIG|pr-doctor-git-auth|actions\/checkout/);
   assert.match(repair, /--phase repair/);
-  assert.doesNotMatch(repair, /secrets\.|github\.token|GH_TOKEN|GIT_CONFIG|pr-doctor-git-auth/);
-  for (const name of ["Bootstrap the work queue", "List and fetch the conflicting PRs", "Sync the queue and push the repairs"]) {
-    assert.match(step(name), /\. "\$RUNNER_TEMP\/pr-doctor\/pr-doctor-git-auth\.sh"/, name);
-  }
-  assert.match(step("List and fetch the conflicting PRs"), /--phase plan/);
-  assert.match(step("Sync the queue and push the repairs"), /--phase publish/);
+  assert.match(repair, /download-artifact@[0-9a-f]{40}/);
+  const plan = job("doctor-plan");
+  assert.match(plan, /persist-credentials: false/);
+  assert.match(plan, /--phase plan/);
+  const publish = job("doctor");
+  assert.match(publish, /needs: \[doctor-plan, doctor-repair\]/);
+  assert.match(publish, /actions\/checkout@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+ref: main/);
+  assert.match(publish, /persist-credentials: false/);
+  assert.match(publish, /GIT_CONFIG_GLOBAL: \/dev\/null/);
+  assert.match(publish, /GIT_CONFIG_NOSYSTEM: "1"/);
+  assert.match(publish, /--phase publish/);
+  // Publish runs its own checkout's copies of the tools, never the artifact's.
+  assert.match(publish, /cp scripts\/pr-doctor\.mjs [^\n]*"\$RUNNER_TEMP\/pr-doctor\/"|cp scripts\/pr-doctor\.mjs/);
+  assert.doesNotMatch(publish, /doctor-input/);
   // No credential is ever written to a .git/config.
-  assert.doesNotMatch(doctor, /git (-C \S+ )?config [^\n]*extraheader/);
-  // The helper is sourced from main's copy, never from a checked-out PR branch.
-  assert.match(step("Keep main's tools outside the working tree"), /scripts\/pr-doctor-git-auth\.sh/);
+  assert.doesNotMatch(yml.split("\n  keeper:\n")[0], /git (-C \S+ )?config [^\n]*extraheader/);
+  for (const name of ["doctor-plan", "doctor"]) {
+    for (const text of job(name).split(/\n      - /).filter((text) => /GH_TOKEN|DOCTOR_GIT_TOKEN/.test(text))) {
+      assert.match(text, /\. "\$RUNNER_TEMP\/(doctor-input\/tools|pr-doctor)\/pr-doctor-git-auth\.sh"|GH_TOKEN/, name);
+    }
+  }
 });
 
 test("pr-doctor-git-auth.sh adds the header through GIT_CONFIG_* and keeps existing entries", { skip: process.platform === "win32" }, async () => {
