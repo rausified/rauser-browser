@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/rausified/rauser-browser/blob/main/protocol/schema.json",
+  "$id": "https://github.com/webRauser/rauser-browser/blob/main/protocol/schema.json",
   "title": "Brauser native messaging protocol",
   "description": "Version 8 messages exchanged by the Chrome extension and native host. Host-owned configuration, adapter policy, the config revision, and host-minted folder tokens gate capture and writes. Task-bar runs carry the user's typed instruction, with the page as untrusted context; the host chooses their kind and record key.",
   "oneOf": [

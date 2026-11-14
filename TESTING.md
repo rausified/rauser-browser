@@ -2294,7 +2294,7 @@ steps have never run.*
    API, create a team key with the **Developer** role. Note its **Key ID** and
    the **Issuer ID**, and download `AuthKey_<KEYID>.p8` (it downloads once).
 3. Add five repository secrets (Settings, Secrets and variables, Actions), or
-   `gh secret set <NAME> --repo rausified/rauser-browser`:
+   `gh secret set <NAME> --repo webRauser/rauser-browser`:
 
    | Secret | Value |
    |---|---|
@@ -2316,7 +2316,7 @@ steps have never run.*
 5. For a release: push a tag `v<version>`, or dispatch with
    `-f draft_release=true`. The release job attests SLSA build provenance for
    the image and SBOMs (`actions/attest-build-provenance`; check with `gh
-   attestation verify Brauser-<version>.dmg --repo rausified/rauser-browser`),
+   attestation verify Brauser-<version>.dmg --repo webRauser/rauser-browser`),
    adds the provenance bundle, and creates a **draft** release. Publish it only
    after the install, move, update and removal checks (DESIGN.md §11).
 
