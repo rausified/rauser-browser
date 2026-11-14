@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
-  EXIT, QUEUE_COMMENT, REFRESH_COMMENT, analyzeChecks, applyActions, commandSince, parseArgs, planQueue, queueAfterPush, staleConditions, statusComment,
+  EXIT, QUERY, QUEUE_COMMENT, REFRESH_COMMENT, TRUSTED_AUTHORS, analyzeChecks, headTime, trustedAuthors, applyActions, commandSince, parseArgs, planQueue, queueAfterPush, staleConditions, statusComment,
 } from "../dev/queue-pr.mjs";
 import { FX, NOW, ago, command, done, graphql, greenChecks, rollup, run, snap } from "./pr-fixtures.mjs";
 import { snapshotFromGraphql } from "../dev/queue-pr.mjs";
@@ -189,4 +189,119 @@ test("queue-pr never merges, pushes or force-pushes", () => {
 test("the snapshot carries the PR's branch fields for the keeper", () => {
   const s = snapshotFromGraphql(graphql({ pr: { headRefName: "mergify/merge-queue/abc", isCrossRepository: true } }));
   assert.deepEqual([s.headRefName, s.baseRefName, s.isCrossRepository, s.headOid], ["mergify/merge-queue/abc", "main", true, HEAD]);
+});
+
+// --- A request older than the head is stale (brwr-5yy0), one queue command per head (brwr-mva0 1, 2) --
+
+// The #456 sequence, synthetic: queued on head A (Mergify answered "waiting"), then head B was
+// pushed. Mergify cancels a request on any push, but its reply can lag the push.
+// timing-ok: fixture times, passed to planQueue as `now`; never compared with the clock
+const AT = (hhmmss) => `2026-11-09T${hhmmss}Z`;
+const waitingA = { ...FX.waiting339, createdAt: AT("09:57:09"), updatedAt: AT("09:57:09") };
+const asked = command(QUEUE_COMMENT, AT("09:57:00"));
+// Head B's checks all started after its push; Build and check still runs.
+const pushedB = rollup([run("Build and check", "IN_PROGRESS", null, { required: true, startedAt: AT("10:30:20") })],
+  greenChecks(AT("10:30:50")).map((c) => ({ ...c, startedAt: AT("10:30:25") })));
+// Head B: committed at 10:30:00, pushed at 10:30:10 (its first check suite).
+const onB = (comments, more = {}) => snap({ comments, contexts: pushedB, committedDate: AT("10:30:00"), checkSuites: [AT("10:30:12"), AT("10:30:10")], ...more });
+const cancelledReply = (createdAt) => ({ ...FX.pr329[1], createdAt, updatedAt: createdAt });
+const ignoredReply = (createdAt) => ({ ...FX.ignored339, createdAt, updatedAt: createdAt });
+const statusAt = (createdAt) => ({ ...FX.waiting339, createdAt, updatedAt: createdAt });
+
+test("#456: a queue request older than the head's push is stale; queue the new head", () => {
+  const plan = planQueue(onB([asked, waitingA]), { now: AT("10:31:00") });
+  assert.deepEqual(kinds(plan), ["queue"], plan.message);
+  assert.match(plan.message, /older than the current head/);
+  // Before the push it was a live request: nothing to do.
+  assert.deepEqual(kinds(planQueue(snap({ comments: [asked, waitingA], checkSuites: [AT("09:50:00")], contexts: rollup([run("Build and check", "IN_PROGRESS", null, { required: true })]) }), { now: AT("09:58:00") })), []);
+});
+
+test("review I1: committed, then gates, then pushed: a request between the commit and the push is stale", () => {
+  // Head B committed at 10:00, the old head queued at 10:10, B pushed at 10:20.
+  const s = snap({ comments: [command(QUEUE_COMMENT, AT("10:10:00")), statusAt(AT("10:10:09"))], contexts: pushedB, committedDate: AT("10:00:00"), checkSuites: [AT("10:20:00")] });
+  assert.equal(s.headAt, AT("10:20:00"));
+  const plan = planQueue(s, { now: AT("10:21:00") });
+  assert.deepEqual(kinds(plan), ["queue"], plan.message);
+});
+
+test("#456: once the new head is asked for, nothing more until Mergify answers", () => {
+  const plan = planQueue(onB([asked, waitingA, command(QUEUE_COMMENT, AT("10:31:05"))]), { now: AT("10:31:30") });
+  assert.deepEqual(kinds(plan), []);
+  assert.equal(plan.outcome, "requested");
+});
+
+test("Minor 1: Mergify answers 'already running' with no live request: never a second queue comment for this head", () => {
+  const comments = [asked, waitingA, command(QUEUE_COMMENT, AT("10:31:05")), ignoredReply(AT("10:31:12"))];
+  const soon = planQueue(onB(comments), { now: AT("10:32:00") });
+  assert.deepEqual(kinds(soon), [], soon.message);
+  assert.equal(soon.exitCode, EXIT.OK);
+  // Minor 2: past the grace, a person must look; still no second comment.
+  const late = planQueue(onB(comments), { now: AT("10:40:00") });
+  assert.deepEqual(kinds(late), []);
+  assert.equal(late.outcome, "queue-unanswered");
+  assert.equal(late.exitCode, EXIT.PERSON);
+  assert.match(late.message, /dashboard/);
+  // Review I2: the message names when it asked, not how long ago, so it reads the same on every run.
+  assert.match(late.message, /at \S+10:31:05Z/);
+  assert.equal(planQueue(onB(comments), { now: AT("10:55:00") }).message, late.message);
+});
+
+test("Minor 2: a queue request Mergify never answers is reported after the grace", () => {
+  const ask = command(QUEUE_COMMENT, AT("10:31:05"));
+  assert.equal(planQueue(onB([ask]), { now: AT("10:33:00") }).outcome, "requested");
+  const late = planQueue(onB([ask]), { now: AT("10:40:00") });
+  assert.deepEqual([late.outcome, late.exitCode, kinds(late)], ["queue-unanswered", EXIT.PERSON, []]);
+});
+
+test("review M2: only an author who can command Mergify uses up the once-per-head slot", () => {
+  // Mergify ignores github-actions[bot]: its command is no ask, so queue as someone Mergify obeys.
+  const bot = command(QUEUE_COMMENT, AT("10:31:05"), "github-actions[bot]");
+  assert.deepEqual(kinds(planQueue(onB([bot]), { now: AT("10:40:00") })), ["queue"]);
+  // With a trusted list, an untrusted author's command is no ask either; a trusted one's is.
+  const outsider = command(QUEUE_COMMENT, AT("10:31:05"), "outsider");
+  assert.deepEqual(kinds(planQueue(onB([outsider]), { now: AT("10:32:00"), trusted: ["keeper-bot"] })), ["queue"]);
+  const keeper = command(QUEUE_COMMENT, AT("10:31:05"), "keeper-bot");
+  assert.deepEqual(kinds(planQueue(onB([keeper]), { now: AT("10:32:00"), trusted: ["keeper-bot"] })), []);
+});
+
+test("Minor 1: a request Mergify acknowledged on this head and then cancelled (its push event lagged) may be asked again", () => {
+  const comments = [asked, waitingA, command(QUEUE_COMMENT, AT("10:30:30")), statusAt(AT("10:30:35")), cancelledReply(AT("10:31:12"))];
+  assert.deepEqual(kinds(planQueue(onB(comments), { now: AT("10:32:00") })), ["queue"]);
+});
+
+test("review M1: a cancel reply Mergify sends the old request after the new head's ask does not void that ask", () => {
+  const comments = [asked, waitingA, command(QUEUE_COMMENT, AT("10:30:30")), cancelledReply(AT("10:30:40"))];
+  const soon = planQueue(onB(comments), { now: AT("10:31:00") });
+  assert.deepEqual([kinds(soon), soon.outcome], [[], "requested"]);
+  const late = planQueue(onB(comments), { now: AT("10:50:00") });
+  assert.deepEqual([kinds(late), late.outcome], [[], "queue-unanswered"]);
+});
+
+test("head time: the earliest check suite, else the committer date capped at now; the query asks for both", () => {
+  assert.match(QUERY, /commits\(last:1\)\{nodes\{commit\{committedDate checkSuites\(first:\d+\)\{nodes\{createdAt\}\}/);
+  assert.equal(headTime(AT("10:00:00"), [AT("10:20:05"), AT("10:20:00")], AT("10:30:00")), AT("10:20:00"));
+  assert.equal(headTime(AT("10:00:00"), [], AT("10:30:00")), AT("10:00:00"));
+  // Review M3: a committer clock ahead of GitHub's, before any suite exists, never dates the head in the future.
+  assert.equal(headTime(AT("11:00:00"), [], AT("10:30:00")), AT("10:30:00"));
+  assert.equal(snap({ committedDate: AT("11:00:00"), now: AT("10:30:00") }).headAt, AT("10:30:00"));
+  assert.equal(headTime(null, [], AT("10:30:00")), null);
+  // A check rerun (after a body edit, #421) does not move the head's time: check starts are not read.
+  assert.equal(onB([], { contexts: rollup([done("PR owner", "SUCCESS", { required: true, startedAt: AT("10:51:11") })], pushedB) }).headAt, AT("10:30:10"));
+  assert.equal(snap({ comments: [asked, waitingA], contexts: pushedB }).mergify.state, "waiting");
+});
+
+test("review M4: trustedAuthors joins the workflow bot, the repository owner and the gh account", () => {
+  assert.deepEqual(trustedAuthors("owner-x/repo", { run: () => "session-user\n" }), [...TRUSTED_AUTHORS, "owner-x", "session-user"]);
+  assert.deepEqual(trustedAuthors("owner-x/repo", { run: () => "owner-x\n" }), [...TRUSTED_AUTHORS, "owner-x"]);
+  // An installation token has no user: `gh api user` fails, and the rest still stands.
+  assert.deepEqual(trustedAuthors("owner-x/repo", { run: () => { throw new Error("gh api user exited 1"); } }), [...TRUSTED_AUTHORS, "owner-x"]);
+});
+
+test("Codex P1: a status comment Mergify creates after the push, for a command made before it, is still stale", () => {
+  // #456 at 12:42: command, push, then Mergify's status payload a few seconds later.
+  const lateStatus = { ...FX.waiting339, createdAt: AT("10:30:40"), updatedAt: AT("10:30:40") };
+  const plan = planQueue(onB([command(QUEUE_COMMENT, AT("10:29:00")), lateStatus]), { now: AT("10:31:00") });
+  assert.deepEqual(kinds(plan), ["queue"], plan.message);
+  // With no command in view (an older one scrolled out), the status comment's own time is the request time.
+  assert.deepEqual(kinds(planQueue(onB([lateStatus]), { now: AT("10:31:00") })), []);
 });

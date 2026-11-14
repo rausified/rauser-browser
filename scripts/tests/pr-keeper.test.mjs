@@ -47,7 +47,8 @@ test("(a) never labels: an unlabelled PR is its owner's to queue", () => {
 
 test("(a) already requested, waiting or checking: nothing; idempotent after its own comment", () => {
   for (const comments of [[command(QUEUE_COMMENT, ago(1))], [FX.checking339], FX.pr329]) {
-    assert.deepEqual(kinds(decideKeeper(snap({ comments }), { now: NOW })), []);
+    // The command's author is the keeper's own token owner, which keep() trusts.
+    assert.deepEqual(kinds(decideKeeper(snap({ comments }), { now: NOW, trusted: ["dev-session"] })), []);
   }
 });
 
@@ -259,4 +260,63 @@ test("the doctor's copied tools include every module pr-doctor.mjs imports, tran
   };
   visit("pr-doctor.mjs");
   assert.ok(seen.has("dev/queue-pr.mjs") && seen.has("pr-constants.mjs"));
+});
+
+// brwr-mva0 follow-ups from the #427 review.
+
+// timing-ok: fixture times, passed to decideKeeper as `now`; never compared with the clock
+const AT = (hhmmss) => `2026-11-09T${hhmmss}Z`;
+const pushed = greenChecks(AT("10:31:00")).map((c) => ({ ...c, startedAt: AT("10:30:25") }));
+
+test("Minor 2: a queue request Mergify never answers is an alert after the grace, and never a second comment", () => {
+  const trusted = ["keeper-bot"];
+  const s = snap({ comments: [command(QUEUE_COMMENT, AT("10:40:00"), "keeper-bot")], contexts: pushed, checkSuites: [AT("10:30:10")] });
+  const soon = decideKeeper(s, { now: AT("10:42:00"), trusted });
+  assert.deepEqual([kinds(soon), alertKinds(soon)], [[], []]);
+  const late = decideKeeper(s, { now: AT("11:30:00"), trusted });
+  assert.deepEqual([kinds(late), alertKinds(late)], [[], ["queue-unanswered"]]);
+  assert.match(late.alerts[0].text, /keeper-bot/);
+  assert.doesNotMatch(alertBody(late.alerts).replace(/`[^`]*`/g, ""), /@/);
+  // Review I2: two runs minutes apart write the same sticky comment, so the keeper edits nothing.
+  const later = decideKeeper(s, { now: AT("11:47:00"), trusted });
+  assert.equal(alertBody(later.alerts, { hadComment: true }), alertBody(late.alerts, { hadComment: true }));
+  // Review M2: a github-actions[bot] command (Mergify ignores it) is no ask: the keeper queues as itself.
+  const bot = snap({ comments: [command(QUEUE_COMMENT, AT("10:40:00"), "github-actions[bot]")], contexts: pushed, checkSuites: [AT("10:30:10")] });
+  assert.deepEqual(kinds(decideKeeper(bot, { now: AT("11:30:00"), trusted: ["github-actions[bot]", "keeper-bot"] })), ["queue"]);
+});
+
+test("Minor 1: 'already running' with no live request: the keeper does not comment again on this head", () => {
+  const ignored = { ...FX.ignored339, createdAt: AT("10:40:10"), updatedAt: AT("10:40:10") };
+  const s = snap({ comments: [command(QUEUE_COMMENT, AT("10:40:00"), "keeper-bot"), ignored], contexts: pushed, checkSuites: [AT("10:30:10")] });
+  assert.deepEqual(kinds(decideKeeper(s, { now: AT("11:30:00"), trusted: ["keeper-bot"] })), []);
+});
+
+test("Minor 6 (Codex P2): the keeper's own alert naming the bead does not stop the request; the queue's beads decide", () => {
+  const conflicting = { labels: ["queue", "needs-merge"], pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } };
+  const first = decideKeeper(snap({ ...conflicting, comments: [DOCTOR] }), { now: NOW, mergeTreeClean: false, trusted: ["doctor-bot"] });
+  assert.match(first.alerts[0].text, /is requested/);
+  const sticky = { author: "doctor-bot", createdAt: ago(20), body: alertBody(first.alerts) };
+  const again = decideKeeper(snap({ ...conflicting, comments: [DOCTOR, sticky] }), { now: NOW, mergeTreeClean: false, trusted: ["doctor-bot"] });
+  assert.deepEqual(kinds(again), ["repair"]);
+  // A filing that never happened (no token, a transient failure) is retried: repairsToFile finds no bead.
+  assert.equal(repairsToFile([{ number: 243, ...again.actions[0] }], []).length, 1);
+});
+
+test("Minor 6: the bead step needs the push token, and says so instead of failing red without it", () => {
+  const yml = readFileSync(new URL("../../.github/workflows/pr-doctor.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const step = yml.split("- name: File repair beads")[1];
+  assert.match(step, /HAS_PUSH_TOKEN: \$\{\{ secrets\.PR_DOCTOR_TOKEN != '' \}\}/);
+  assert.match(step, /::warning title=PR keeper::/);
+});
+
+test("Minor 9: CI completions run the keeper only for pull_request runs on PR branches, not Mergify drafts or main", () => {
+  const yml = readFileSync(new URL("../../.github/workflows/pr-doctor.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const cond = yml.split("\n  keeper:\n")[1].split("concurrency:")[0];
+  assert.match(cond, /github\.event\.workflow_run\.event == 'pull_request'/);
+  assert.match(cond, /!startsWith\(github\.event\.workflow_run\.head_branch, 'mergify\/'\)/);
+});
+
+test("brwr-33uk: one trusted-author list, shared by the keeper and pr-watch", async () => {
+  const constants = await import("../pr-constants.mjs");
+  assert.equal(TRUSTED_AUTHORS, constants.TRUSTED_AUTHORS);
 });
