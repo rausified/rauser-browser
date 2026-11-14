@@ -1,0 +1,25 @@
+# Brauser PR fixer: one pass of scripts/dev/pr-fixer.mjs (docs/agents/pr-fixer.md).
+# A systemd *user* unit on the fixer VM (requires Linger=yes), started by
+# brauser-pr-fixer.timer. Shipped disabled: installing and enabling it is an
+# activation that needs John's approval (docs/agents/pr-fixer.md "Activation").
+[Unit]
+Description=Brauser PR fixer (one repair bead per run)
+
+[Service]
+Type=oneshot
+# A dedicated clone of main; the fixer runs this checkout's tools, never a PR's.
+WorkingDirectory=%h/brauser-pr-fixer/main
+# Names only, values live in this file (mode 0600, outside every repository):
+# GH_TOKEN, BRAUSER_QUEUE_WORKSPACE, the agent's provider variables, PATH.
+EnvironmentFile=%h/.config/brauser-pr-fixer/env
+Environment=GIT_OPTIONAL_LOCKS=0
+Environment=BD_NON_INTERACTIVE=1
+# Only main's tools: fast-forward the clone first, refusing anything else.
+ExecStartPre=/usr/bin/git pull --ff-only --quiet origin main
+ExecStart=/usr/bin/env node scripts/dev/pr-fixer.mjs --repo webRauser/rauser-browser
+Nice=19
+CPUQuota=150%
+MemoryMax=6G
+# The agent's own limit is 50 minutes and the review's 15; this is the backstop.
+TimeoutStartSec=80min
+KillMode=control-group
