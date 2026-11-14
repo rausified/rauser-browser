@@ -4,7 +4,7 @@ import test from "node:test";
 
 import {
   ADMIT_GRACE_MINUTES, DOCTOR_GRACE_MINUTES, EXIT, QUEUE_COMMENT, REFRESH_COMMENT,
-  analyzeChecks, decide, decideConflict, doctorComment, enqueueCommand, formatTimings, latestChecks, mergifyStatus, parseArgs, snapshotFromGraphql, statusLine, timings,
+  analyzeChecks, decide, decideConflict, doctorComment, enqueueCommand, formatTimings, isTransient, latestChecks, mergifyStatus, parseArgs, snapshotFromGraphql, startupTrusted, statusLine, timings, withRetry,
 } from "../dev/pr-watch.mjs";
 
 // Mergify's own comments, recorded from this repository (fixtures/mergify-comments.json `_source`).
@@ -437,4 +437,49 @@ test("Minor 10: pr-watch reads the PR through queue-pr's fetchSnapshot, not its 
   const source = readFileSync(new URL("../dev/pr-watch.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(source, /fetchSnapshot\(repo, opts\.pr\)/);
   assert.doesNotMatch(source, /"graphql"/);
+});
+
+test("withRetry rides out transient gh failures at startup and gives up with the last error", async () => {
+  const slept = [];
+  const sleep = async (ms) => { slept.push(ms); };
+  let calls = 0;
+  const flaky = () => { calls++; if (calls < 3) throw new Error("net/http: TLS handshake timeout"); return "webRauser/rauser-browser"; };
+  assert.equal(await withRetry(flaky, { attempts: 5, delayMs: 10, sleep, log: () => {} }), "webRauser/rauser-browser");
+  assert.equal(calls, 3);
+  assert.deepEqual(slept, [10, 20], "backs off between attempts");
+  let tries = 0;
+  await assert.rejects(withRetry(() => { tries++; throw new Error(`connection reset ${tries}`); }, { attempts: 3, delayMs: 1, sleep, log: () => {} }), /connection reset 3/);
+  assert.equal(tries, 3);
+});
+
+test("startupTrusted retries a failed user lookup instead of silently dropping the token's own login", async () => {
+  let calls = 0;
+  const run = (args) => {
+    assert.deepEqual(args.slice(0, 2), ["api", "user"]);
+    calls++;
+    if (calls < 2) throw new Error("net/http: TLS handshake timeout");
+    return "jrausercisco\n";
+  };
+  const trusted = await startupTrusted("webRauser/rauser-browser", { run, sleep: async () => {}, log: () => {}, delayMs: 1 });
+  assert.ok(trusted.includes("jrausercisco"), `token user kept: ${trusted}`);
+  assert.ok(trusted.includes("webRauser"), "repo owner kept");
+  assert.equal(calls, 2);
+});
+
+test("startupTrusted keeps the owner fallback when the token has no user (installation token), without retrying", async () => {
+  let calls = 0;
+  const run = () => { calls++; throw new Error("gh: Resource not accessible by integration (HTTP 403)"); };
+  const trusted = await startupTrusted("webRauser/rauser-browser", { run, sleep: async () => { throw new Error("must not wait"); }, log: () => {}, delayMs: 1 });
+  assert.equal(calls, 1, "a permanent failure is not retried");
+  assert.ok(trusted.includes("webRauser"));
+});
+
+test("withRetry fails fast on a non-transient error and retries only network-type ones", async () => {
+  let n = 0;
+  await assert.rejects(withRetry(() => { n++; throw new Error("HTTP 404: Not Found"); }, { attempts: 4, delayMs: 1, sleep: async () => {}, log: () => {} }), /404/);
+  assert.equal(n, 1);
+  for (const msg of ["net/http: TLS handshake timeout", "read: connection reset by peer", "HTTP 502: Bad Gateway", "dial tcp: lookup api.github.com: i/o timeout", "error connecting to api.github.com"]) {
+    assert.equal(isTransient(new Error(msg)), true, msg);
+  }
+  assert.equal(isTransient(new Error("HTTP 401: Bad credentials")), false);
 });
