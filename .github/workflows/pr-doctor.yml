@@ -20,11 +20,16 @@ name: PR doctor
 # made with the workflow's own GITHUB_TOKEN starts no workflows, so the
 # repaired commit would get no CI. Without the secret the doctor reports only.
 on:
+  # Hourly (2026-11-14, brwr-3zqd; it was */15, and GitHub ran it only every
+  # 4-7 hours anyway). Pushes to main, needs-merge PR pushes and finished CI
+  # completions below are what make the doctor and keeper prompt; the cron
+  # is the backstop.
   schedule:
-    - cron: "*/15 * * * *"
-  # CI finishing is when a PR turns green: the keeper runs then (and waits out
-  # its green window once), since the cron above fires only every few hours
-  # on this repository. Only the keeper job runs for this event.
+    - cron: "7 * * * *"
+  # CI finishing is when a PR turns green or red: the keeper runs then (and
+  # waits out its green window once, or alerts on a red queued PR), since the
+  # cron above fires only every few hours on this repository. Only the keeper
+  # job runs for this event, and never for a cancelled run (see its `if`).
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -32,7 +37,7 @@ on:
     branches: [main]
   # A push to a PR the doctor labelled needs-merge (usually the fix for the
   # conflict) runs it at once, so the label that keeps the PR out of
-  # Mergify's queue clears within a minute. The */20 cron above runs only
+  # Mergify's queue clears within a minute. The cron above used to run only
   # every 4-7 hours on this repository (2026-11-09), and #384 waited an hour
   # on the label after its conflict was fixed. The job's `if` skips other PRs.
   pull_request:
@@ -302,10 +307,13 @@ jobs:
     # CI completions count only for pull_request runs on PR branches: a run on
     # main or on a Mergify batch draft turns no PR green, and each keeper run
     # may wait out the green window under the pr-keeper group (brwr-mva0 9).
+    # A cancelled run (usually superseded by a newer push) changes nothing
+    # the keeper acts on; a failed one is a red-queued alert, so it wakes it.
     if: >-
       always() && github.event_name != 'pull_request' &&
       (github.event_name != 'workflow_run' ||
        (github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.conclusion != 'cancelled' &&
         !startsWith(github.event.workflow_run.head_branch, 'mergify/')))
     concurrency:
       group: pr-keeper
